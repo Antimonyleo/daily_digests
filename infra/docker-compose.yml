@@ -1,0 +1,71 @@
+version: '3.9'
+
+services:
+  freshrss:
+    image: freshrss/freshrss:latest
+    container_name: dailydigest-freshrss
+    restart: unless-stopped
+    networks:
+      - internal
+    volumes:
+      - freshrss_data:/var/www/FreshRSS/data
+      - freshrss_extensions:/var/www/FreshRSS/extensions
+    environment:
+      TZ: ${TZ:-UTC}
+      CRON_MIN: ${CRON_MIN:-30}
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/api/greader.php"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    depends_on:
+      - caddy
+
+  rsshub:
+    image: rsshub/rsshub:latest
+    container_name: dailydigest-rsshub
+    restart: unless-stopped
+    networks:
+      - internal
+    environment:
+      NODE_ENV: production
+      CACHE_EXPIRE: 3600
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:1200/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    depends_on:
+      - caddy
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: dailydigest-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    networks:
+      - internal
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    environment:
+      FRESHRSS_DOMAIN: ${FRESHRSS_DOMAIN}
+      RSSHUB_DOMAIN: ${RSSHUB_DOMAIN}
+      ACME_EMAIL: ${ACME_EMAIL}
+      RSSHUB_BASIC_AUTH_USER: ${RSSHUB_BASIC_AUTH_USER}
+      RSSHUB_BASIC_AUTH_HASH: ${RSSHUB_BASIC_AUTH_HASH}
+
+networks:
+  internal:
+    driver: bridge
+
+volumes:
+  freshrss_data:
+  freshrss_extensions:
+  caddy_data:
+  caddy_config:

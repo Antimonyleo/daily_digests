@@ -1,0 +1,273 @@
+# Source feeds grouped by section. Sections drive the email template grouping.
+# `kind` selects the ingest adapter. Supported kinds:
+#   rss, biorxiv, arxiv, openalex, pubmed, fda_api, clinicaltrials.
+# EMA does not have a stable JSON API, so it is wired in as a plain `rss` entry
+# below rather than as its own adapter class.
+
+research:
+  - name: Nature
+    kind: rss
+    url: https://www.nature.com/nature.rss
+  - name: Nature Biotechnology
+    kind: rss
+    url: https://www.nature.com/nbt.rss
+  - name: Nature Methods
+    kind: rss
+    url: https://www.nature.com/nmeth.rss
+  - name: Nature Medicine
+    kind: rss
+    url: https://www.nature.com/nm.rss
+  - name: Science
+    kind: rss
+    url: https://www.science.org/rss/news_current.xml
+  - name: Cell
+    kind: rss
+    url: https://www.cell.com/cell/current.rss
+  - name: NEJM
+    kind: rss
+    url: https://www.nejm.org/action/showFeed?type=etoc&feed=rss&jc=nejm
+  - name: The Lancet
+    kind: rss
+    url: https://www.thelancet.com/rssfeed/lancet_current.xml
+  - name: PNAS
+    kind: rss
+    url: https://www.pnas.org/action/showFeed?type=etoc&feed=rss&jc=pnas
+  - name: eLife
+    kind: rss
+    url: https://elifesciences.org/rss/recent.xml
+  - name: bioRxiv (recent)
+    kind: biorxiv
+    server: biorxiv
+  - name: medRxiv (recent)
+    kind: biorxiv
+    server: medrxiv
+  - name: arXiv q-bio.QM
+    kind: arxiv
+    category: q-bio.QM
+  - name: arXiv cs.LG
+    kind: arxiv
+    category: cs.LG
+  - name: OpenAlex (biotech)
+    kind: openalex
+    query: biotechnology OR therapeutic OR clinical trial OR drug discovery
+    polite_email: noreply@example.com
+  - name: PubMed (clinical/biotech)
+    kind: pubmed
+    # Simplified: the prior topic AND-clause filtered everything out (0 hits in 2-day window).
+    # This broader query reliably returns 20+ items in the 2-day reldate window.
+    query: clinical trial[pt] AND 2024:2026[dp]
+
+  # --- Nature family (high-impact) ---
+  - name: Nature Nanotechnology
+    kind: rss
+    url: https://www.nature.com/nnano.rss
+  - name: Nature Materials
+    kind: rss
+    url: https://www.nature.com/nmat.rss
+  - name: Nature Chemistry
+    kind: rss
+    url: https://www.nature.com/nchem.rss
+  - name: Nature Physics
+    kind: rss
+    url: https://www.nature.com/nphys.rss
+  - name: Nature Photonics
+    kind: rss
+    url: https://www.nature.com/nphoton.rss
+  - name: Nature Catalysis
+    kind: rss
+    url: https://www.nature.com/natcatal.rss
+  - name: Nature Energy
+    kind: rss
+    url: https://www.nature.com/nenergy.rss
+  - name: Nature Sustainability
+    kind: rss
+    url: https://www.nature.com/natsustain.rss
+  - name: Nature Communications
+    kind: rss
+    url: https://www.nature.com/ncomms.rss
+
+  # --- Nature Reviews (review journals; can be split to a separate section later) ---
+  - name: Nature Reviews Drug Discovery
+    kind: rss
+    url: https://www.nature.com/nrd.rss
+  - name: Nature Reviews Chemistry
+    kind: rss
+    url: https://www.nature.com/natrevchem.rss
+  - name: Nature Reviews Materials
+    kind: rss
+    url: https://www.nature.com/natrevmats.rss
+  - name: Nature Reviews Genetics
+    kind: rss
+    url: https://www.nature.com/nrg.rss
+  - name: Nature Reviews Cancer
+    kind: rss
+    url: https://www.nature.com/nrc.rss
+  - name: Nature Reviews Microbiology
+    kind: rss
+    url: https://www.nature.com/nrmicro.rss
+
+  # --- Science family ---
+  - name: Science Advances
+    kind: rss
+    url: https://www.science.org/action/showFeed?type=etoc&feed=rss&jc=sciadv
+  - name: Science Robotics
+    kind: rss
+    url: https://www.science.org/action/showFeed?type=etoc&feed=rss&jc=scirobotics
+  - name: Science Translational Medicine
+    kind: rss
+    url: https://www.science.org/action/showFeed?type=etoc&feed=rss&jc=stm
+  - name: Science Immunology
+    kind: rss
+    url: https://www.science.org/action/showFeed?type=etoc&feed=rss&jc=sciimmunol
+  - name: Science Signaling
+    kind: rss
+    url: https://www.science.org/action/showFeed?type=etoc&feed=rss&jc=signaling
+
+  # --- Cell family ---
+  - name: Cell Reports
+    kind: rss
+    url: https://www.cell.com/cell-reports/current.rss
+  - name: Cell Stem Cell
+    kind: rss
+    url: https://www.cell.com/cell-stem-cell/current.rss
+  - name: Cell Metabolism
+    kind: rss
+    url: https://www.cell.com/cell-metabolism/current.rss
+  - name: Cell Host and Microbe
+    kind: rss
+    url: https://www.cell.com/cell-host-microbe/current.rss
+  - name: Cancer Cell
+    kind: rss
+    url: https://www.cell.com/cancer-cell/current.rss
+  - name: Immunity
+    kind: rss
+    url: https://www.cell.com/immunity/current.rss
+  - name: Neuron
+    kind: rss
+    url: https://www.cell.com/neuron/current.rss
+  - name: Cell Chemical Biology
+    kind: rss
+    url: https://www.cell.com/cell-chemical-biology/current.rss
+  - name: Cell Systems
+    kind: rss
+    url: https://www.cell.com/cell-systems/current.rss
+  - name: Molecular Cell
+    kind: rss
+    url: https://www.cell.com/molecular-cell/current.rss
+  - name: Cell Genomics
+    kind: rss
+    url: https://www.cell.com/cell-genomics/current.rss
+  - name: Med (Cell Press)
+    kind: rss
+    url: https://www.cell.com/med/current.rss
+  - name: Chem (Cell Press)
+    kind: rss
+    url: https://www.cell.com/chem/current.rss
+
+  # --- ACS flagships ---
+  - name: JACS (J. Am. Chem. Soc.)
+    kind: rss
+    url: https://pubs.acs.org/action/showFeed?type=etoc&feed=rss&jc=jacsat
+  - name: ACS Nano
+    kind: rss
+    url: https://pubs.acs.org/action/showFeed?type=etoc&feed=rss&jc=ancac3
+  - name: Nano Letters
+    kind: rss
+    url: https://pubs.acs.org/action/showFeed?type=etoc&feed=rss&jc=nalefd
+  - name: ACS Catalysis
+    kind: rss
+    url: https://pubs.acs.org/action/showFeed?type=etoc&feed=rss&jc=accacs
+  - name: Chemistry of Materials
+    kind: rss
+    url: https://pubs.acs.org/action/showFeed?type=etoc&feed=rss&jc=cmatex
+  - name: ACS Central Science
+    kind: rss
+    url: https://pubs.acs.org/action/showFeed?type=etoc&feed=rss&jc=acscii
+  - name: ACS Chemical Biology
+    kind: rss
+    url: https://pubs.acs.org/action/showFeed?type=etoc&feed=rss&jc=acbcct
+
+  # --- RSC flagships ---
+  - name: Chemical Science
+    kind: rss
+    url: http://feeds.rsc.org/rss/sc
+  - name: Chem. Soc. Rev.
+    kind: rss
+    url: http://feeds.rsc.org/rss/cs
+  - name: Energy and Environmental Science
+    kind: rss
+    url: http://feeds.rsc.org/rss/ee
+
+  # --- Wiley flagships ---
+  - name: Angew. Chem. Int. Ed.
+    kind: rss
+    url: https://onlinelibrary.wiley.com/feed/15213773/most-recent
+  - name: Advanced Materials
+    kind: rss
+    url: https://onlinelibrary.wiley.com/feed/15214095/most-recent
+  - name: Advanced Functional Materials
+    kind: rss
+    url: https://onlinelibrary.wiley.com/feed/16163028/most-recent
+  - name: Advanced Science
+    kind: rss
+    url: https://onlinelibrary.wiley.com/feed/21983844/most-recent
+  - name: Small (Wiley)
+    kind: rss
+    url: https://onlinelibrary.wiley.com/feed/16136829/most-recent
+
+  # --- Other high-impact ---
+  - name: Nucleic Acids Research
+    kind: rss
+    url: https://academic.oup.com/rss/site_5127/3091.xml
+
+industry:
+  - name: Endpoints News
+    kind: rss
+    url: https://endpts.com/feed/
+  - name: FierceBiotech
+    kind: rss
+    url: https://www.fiercebiotech.com/rss/xml
+  - name: STAT News
+    kind: rss
+    url: https://www.statnews.com/feed/
+  - name: BioPharma Dive
+    kind: rss
+    url: https://www.biopharmadive.com/feeds/news/
+
+regulatory:
+  - name: FDA Press Announcements
+    kind: rss
+    url: https://www.fda.gov/about-fda/contact-fda/stay-informed/rss-feeds/press-releases/rss.xml
+  - name: FDA Drug Approvals (CDER)
+    kind: rss
+    url: https://www.fda.gov/about-fda/contact-fda/stay-informed/rss-feeds/drugs/rss.xml
+  # openFDA: default 2-day date-range query 500s intermittently. Constrain to approved
+  # submissions only via `query` (consumed by FDASource as the raw `search` clause).
+  - name: openFDA Drug Approvals
+    kind: fda_api
+    endpoint: drug/drugsfda.json
+    query: submissions.submission_status:AP
+  - name: ClinicalTrials.gov (recent updates)
+    kind: clinicaltrials
+  # EMA: all known RSS endpoints (rss.xml, en/rss.xml, en/news/rss.xml,
+  # en/news-events/news/rss) currently return 404 or 429 (anti-bot). No working
+  # public RSS at the time of writing. Re-enable once EMA publishes a stable URL.
+  # TODO: monitor https://www.ema.europa.eu/en/news-events/news for an RSS link.
+  # - name: EMA News
+  #   kind: rss
+  #   url: https://www.ema.europa.eu/en/news-events/news/rss
+
+world:
+  # Reuters' public feed often returns 0 items; replaced with Al Jazeera as a working alternative.
+  - name: Al Jazeera (World)
+    kind: rss
+    url: https://www.aljazeera.com/xml/rss/all.xml
+  - name: BBC World
+    kind: rss
+    url: https://feeds.bbci.co.uk/news/world/rss.xml
+  - name: MIT Technology Review
+    kind: rss
+    url: https://www.technologyreview.com/feed/
+  - name: Hacker News (front)
+    kind: rss
+    url: https://hnrss.org/frontpage

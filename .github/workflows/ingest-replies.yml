@@ -1,0 +1,65 @@
+# DailyDigest inbound reply ingestion (Phase 7a)
+#
+# Hourly IMAP poll that fetches unread DailyDigest replies and records votes
+# from their bodies. Offset 15min from the digest cron (which runs at :00).
+#
+# Required secrets (add in Settings -> Secrets and variables -> Actions):
+#   IMAP_HOST       — IMAP server (e.g., imap.gmail.com)
+#   IMAP_USER       — IMAP login (e.g., you@gmail.com)
+#   IMAP_PASSWORD   — IMAP password (Gmail: an App Password, not your account password)
+#   REPLY_TO_EMAIL  — address used as Reply-To on outbound digests (often == IMAP_USER)
+
+name: Ingest Replies
+on:
+  schedule:
+    - cron: '15 * * * *'  # hourly, offset from digest cron at :00
+  workflow_dispatch:
+
+concurrency:
+  group: ingest-replies
+  cancel-in-progress: false
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Download digest-db artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: digest-db
+          path: data/
+        continue-on-error: true
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Ingest replies
+        env:
+          IMAP_HOST: ${{ secrets.IMAP_HOST }}
+          IMAP_PORT: '993'
+          IMAP_USER: ${{ secrets.IMAP_USER }}
+          IMAP_PASSWORD: ${{ secrets.IMAP_PASSWORD }}
+          IMAP_MAILBOX: 'INBOX'
+          REPLY_TO_EMAIL: ${{ secrets.REPLY_TO_EMAIL }}
+        run: uv run dd ingest-replies
+
+      - name: Upload digest-db artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: digest-db
+          path: data/digest.db
+          retention-days: 30

@@ -1,0 +1,184 @@
+{% extends "_base.html.j2" %}
+{% block title %}Brewing your morning tea…{% endblock %}
+{% block extra_styles %}
+  .card { padding: 36px 24px; text-align: center; }
+  h1 { font-size: 22px; margin: 8px 0 4px 0; }
+  .lede { color: var(--muted); font-size: 13px; margin-bottom: 24px; }
+  .cup {
+    position: relative; width: 80px; height: 80px; margin: 0 auto 18px;
+  }
+  .cup .body {
+    position: absolute; bottom: 0; left: 10px; width: 60px; height: 50px;
+    background: #fff; border: 3px solid var(--accent); border-radius: 0 0 14px 14px;
+  }
+  .cup .handle {
+    position: absolute; right: 0; top: 30px; width: 18px; height: 24px;
+    border: 3px solid var(--accent); border-radius: 0 12px 12px 0;
+    border-left: none;
+  }
+  .cup .steam {
+    position: absolute; top: -2px; width: 4px; height: 18px;
+    background: var(--accent); opacity: 0.45; border-radius: 4px;
+    animation: steam 2.4s ease-in-out infinite;
+  }
+  .cup .steam.s1 { left: 28px; animation-delay: 0s; }
+  .cup .steam.s2 { left: 38px; animation-delay: 0.5s; }
+  .cup .steam.s3 { left: 48px; animation-delay: 1s; }
+  @keyframes steam {
+    0%   { transform: translateY(0) scaleY(0.6); opacity: 0; }
+    35%  { opacity: 0.45; }
+    100% { transform: translateY(-22px) scaleY(1); opacity: 0; }
+  }
+  ul.stages {
+    list-style: none; padding: 0; margin: 0 auto; max-width: 360px;
+    text-align: left;
+  }
+  ul.stages li {
+    padding: 10px 14px; border-bottom: 1px solid #f1f1f4;
+    font-size: 14px; display: flex; align-items: center; gap: 10px;
+    color: var(--muted);
+  }
+  ul.stages li:last-child { border-bottom: none; }
+  ul.stages li.active { color: var(--text); font-weight: 600; }
+  ul.stages li.done { color: var(--up); }
+  ul.stages li .marker {
+    display: inline-block; width: 18px; text-align: center; font-weight: 700;
+  }
+  ul.stages li.done .marker::before { content: "✓"; color: var(--up); }
+  ul.stages li.active .marker::before { content: "•"; color: var(--accent);
+    animation: pulse 1.2s ease-in-out infinite; }
+  ul.stages li:not(.active):not(.done) .marker::before { content: "·"; }
+  @keyframes pulse { 0%,100% { opacity: 0.3; } 50% { opacity: 1; } }
+  .err { color: var(--down); margin-top: 16px; font-size: 13px; }
+{% endblock %}
+{% block body %}
+<div class="card">
+  <div class="cup">
+    <div class="steam s1"></div>
+    <div class="steam s2"></div>
+    <div class="steam s3"></div>
+    <div class="body"></div>
+    <div class="handle"></div>
+  </div>
+  <h1>Brewing your morning tea ☕</h1>
+  <p class="lede">This usually takes 30–90 seconds. Hang tight.</p>
+
+  <ul class="stages" id="stages">
+    <li data-stage="ingest"><span class="marker"></span><span class="text">Fetching from sources…</span></li>
+    <li data-stage="dedupe"><span class="marker"></span><span class="text">Deduplicating…</span></li>
+    <li data-stage="rank"><span class="marker"></span><span class="text">Ranking against your interests…</span></li>
+    <li data-stage="summarize"><span class="marker"></span><span class="text">Summarizing top picks…</span></li>
+    <li data-stage="render"><span class="marker"></span><span class="text">Rendering digest…</span></li>
+    <li data-stage="done"><span class="marker"></span><span class="text">Done!</span></li>
+  </ul>
+
+  <div class="err" id="err" hidden></div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+(function () {
+  const RUN_ID = {{ run_id|tojson }};
+  const stagesEl = document.getElementById("stages");
+  const errEl = document.getElementById("err");
+
+  // Order; "ingest" stage covers ingest_start + ingest_done.
+  const order = ["ingest", "dedupe", "rank", "summarize", "render", "done"];
+  // Map backend stage -> UI stage key.
+  const STAGE_MAP = {
+    ingest_start: "ingest",
+    ingest_done: "ingest",
+    dedupe_done: "dedupe",
+    rank_done: "rank",
+    summarize_start: "summarize",
+    summarize_done: "summarize",
+    render_done: "render",
+    done: "done",
+  };
+  // Stages whose arrival means the *previous* UI stage completed.
+  const COMPLETES_PREV = {
+    dedupe_done: "ingest",
+    rank_done: "dedupe",
+    summarize_start: "rank",
+    summarize_done: "summarize",
+    render_done: "summarize",
+    done: "render",
+  };
+
+  function setStage(uiKey, cls) {
+    const li = stagesEl.querySelector(`li[data-stage="${uiKey}"]`);
+    if (!li) return;
+    li.classList.remove("active", "done");
+    if (cls) li.classList.add(cls);
+  }
+  function markActive(uiKey) {
+    // Remove active from all then set this one active.
+    stagesEl.querySelectorAll("li.active").forEach((l) => l.classList.remove("active"));
+    setStage(uiKey, "active");
+  }
+  function markDone(uiKey) {
+    setStage(uiKey, "done");
+  }
+  function annotateText(uiKey, text) {
+    const li = stagesEl.querySelector(`li[data-stage="${uiKey}"]`);
+    if (li) li.querySelector(".text").textContent = text;
+  }
+
+  // Kick off the run, then connect SSE.
+  fetch("/run/start", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ run_id: RUN_ID }),
+  }).catch(() => { /* SSE will surface errors */ });
+
+  const es = new EventSource(`/run/stream?run_id=${encodeURIComponent(RUN_ID)}`);
+  es.onmessage = (ev) => {
+    let data;
+    try { data = JSON.parse(ev.data); } catch (_) { return; }
+    const stage = data.stage;
+    const payload = data.payload || {};
+    const uiKey = STAGE_MAP[stage];
+    if (!uiKey) return;
+
+    const prev = COMPLETES_PREV[stage];
+    if (prev) markDone(prev);
+
+    // Live text for ingest progress.
+    if (stage === "ingest_start") {
+      annotateText("ingest", `Fetching from ${payload.sources || "?"} sources…`);
+      markActive("ingest");
+    } else if (stage === "ingest_done") {
+      annotateText("ingest", `Fetched ${payload.raw_items || 0} items from ${payload.sources || "?"} sources.`);
+    } else if (stage === "dedupe_done") {
+      annotateText("dedupe", `Deduplicated to ${payload.english || payload.deduped || 0} items.`);
+      markActive("rank");
+    } else if (stage === "rank_done") {
+      annotateText("rank", `Picked ${payload.picked || 0} top items.`);
+      markActive("summarize");
+    } else if (stage === "summarize_start") {
+      annotateText("summarize", `Summarizing ${payload.items || 0} items via ${payload.backend || "extractive"}…`);
+      markActive("summarize");
+    } else if (stage === "summarize_done") {
+      annotateText("summarize", `Summarized ${payload.items || 0} items.`);
+      markActive("render");
+    } else if (stage === "render_done") {
+      annotateText("render", `Rendered ${(payload.html_bytes || 0).toLocaleString()} bytes.`);
+      markActive("done");
+    } else if (stage === "done") {
+      markDone("done");
+      es.close();
+      const did = encodeURIComponent(payload.digest_id || "");
+      const n = payload.total_items || 0;
+      setTimeout(() => {
+        window.location.href = `/done?digest_id=${did}&n=${n}`;
+      }, 600);
+    } else if (stage === "error") {
+      es.close();
+      errEl.hidden = false;
+      errEl.textContent = "Pipeline failed: " + (payload.message || "unknown error");
+    }
+  };
+  es.onerror = () => { /* leave stream; auto-reconnects */ };
+})();
+</script>
+{% endblock %}

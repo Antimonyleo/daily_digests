@@ -1,0 +1,38 @@
+# Personal interest profile. Used to build a vector for ranking.
+# Edit freely; the embedder reads `bio` + each `keywords` entry.
+
+bio: |
+  Postdoc researcher with interests in biomolecular design (with protein and nucleis acids mostly) and engineering,
+  nucleic acid nanotechnology broadly, soft matter and colloidal self-assembly, and computational biology involving AI for biomolecular design and applications.
+  I follow developments in mRNA therapeutics, nucleic acid delivery, gene and cell therapies, superlattice materials, photonic crystals, AI-for-science, and FDA approvals
+  affecting the broader biotech industry.
+
+keywords:
+  - DNA nanotechnology
+  - RNA nanotechnology
+  - mRNA therapeutics
+  - protein design
+  - biomolecular design
+  - protein structure prediction
+  - AlphaFold
+  - colloidal self-assembly
+  - gene therapies
+  - soft matter
+  - framework materials
+  - photonic crystals
+  - spatial patterning
+  - proximity based technology
+  - foundation models for biology and materials sciences
+  - clinical trials phase 3
+  - FDA approval
+  - biotech IPO
+  - synthetic biology
+  - single-cell RNA sequencing
+  - AI in biology
+  - machine learning for biomolecular design
+
+# Soft penalties applied during ranking to push items down even if embedding-similar.
+downweight:
+  - cryptocurrency
+  - stock market predictions
+  - celebrity news

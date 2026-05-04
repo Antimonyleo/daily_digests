@@ -1,0 +1,12 @@
+{$FRESHRSS_DOMAIN} {
+	tls {$ACME_EMAIL}
+	reverse_proxy freshrss:80
+}
+
+{$RSSHUB_DOMAIN} {
+	tls {$ACME_EMAIL}
+	basicauth / {
+		{$RSSHUB_BASIC_AUTH_USER} {$RSSHUB_BASIC_AUTH_HASH}
+	}
+	reverse_proxy rsshub:1200
+}

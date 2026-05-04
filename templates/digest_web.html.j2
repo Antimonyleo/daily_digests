@@ -1,0 +1,161 @@
+{% extends "_base.html.j2" %}
+{% block title %}DailyDigest {{ digest_id }}{% endblock %}
+{% block extra_styles %}
+  .wrap { max-width: 640px; }
+  .header .actions button {
+    font-size: 12px; padding: 6px 10px; margin-left: 6px;
+    background: #fff; border: 1px solid var(--border); border-radius: 6px; cursor: pointer;
+    color: var(--text);
+  }
+  .header .actions button:hover { background: #f0f0f3; }
+  .section-title {
+    font-size: 16px; margin: 0; padding: 18px 24px 6px 24px;
+    border-bottom: 1px solid #efeff4; color: #111;
+  }
+  .item {
+    position: relative;
+    padding: 12px 24px 14px 24px;
+    border-bottom: 1px solid #f6f6f8;
+  }
+  .item:last-child { border-bottom: none; }
+  .item .label-pill {
+    display: inline-block; font-weight: 700; color: var(--accent);
+    background: var(--accent-soft); border-radius: 4px;
+    padding: 1px 6px; font-family: Menlo, Consolas, monospace; font-size: 11px;
+    margin-right: 6px;
+  }
+  .item a.title-link {
+    color: var(--accent); text-decoration: none; font-weight: 600; font-size: 14px;
+    line-height: 1.45;
+  }
+  .item a.title-link:hover { text-decoration: underline; }
+  .item .meta { font-size: 11px; color: var(--muted); margin-top: 3px; }
+  .item .summary { font-size: 13px; line-height: 1.5; margin-top: 6px; color: #333; }
+  .vote-row {
+    position: absolute; top: 10px; right: 16px;
+    display: flex; gap: 4px;
+  }
+  .vote-btn {
+    font-size: 14px; line-height: 1; padding: 4px 7px;
+    background: #fafafa; border: 1px solid var(--border); border-radius: 5px;
+    cursor: pointer; color: #555;
+  }
+  .vote-btn:hover { background: #f0f0f3; }
+  .vote-btn.active.up   { background: #e2f4e6; border-color: var(--up); color: var(--up); }
+  .vote-btn.active.neut { background: #ececec; border-color: var(--neutral); color: var(--neutral); }
+  .vote-btn.active.down { background: #fbe6e4; border-color: var(--down); color: var(--down); }
+  .item.flash { background: var(--flash); transition: background 0.4s; }
+  body.compact .summary { display: none; }
+  body.compact .item { padding-top: 8px; padding-bottom: 8px; }
+  .empty { padding: 48px 24px; text-align: center; color: var(--muted); font-size: 14px; line-height: 1.6; }
+  #refresh-status { font-size: 11px; color: var(--muted); margin-right: 8px; }
+{% endblock %}
+{% block body %}
+  <div class="card">
+    <div class="header">
+      <div>
+        <div class="title">DailyDigest</div>
+        <div class="digest-id">{{ digest_id }}</div>
+      </div>
+      <div class="actions">
+        <span id="refresh-status"></span>
+        <button id="compact-btn" type="button">Compact</button>
+        <button id="refresh-btn" type="button">Refresh</button>
+      </div>
+    </div>
+
+    {% if empty %}
+    <div class="empty">
+      No digest generated for today yet.<br>
+      Run <code>dd run-all --dry-run</code> in a terminal, or click <strong>Refresh</strong>.
+    </div>
+    {% else %}
+      {% for section in sections %}
+      <h2 class="section-title">
+        <span style="margin-right:6px;">{{ section.emoji }}</span>{{ section.title }}
+      </h2>
+      {% for item in section.entries %}
+      <div class="item" data-item-id="{{ item.id }}">
+        <div class="vote-row">
+          <button class="vote-btn up{% if item.current_vote == 1 %} active up{% endif %}"
+                  data-value="1" type="button" title="Upvote">👍</button>
+          <button class="vote-btn neut{% if item.current_vote == 0 %} active neut{% endif %}"
+                  data-value="0" type="button" title="Neutral">😐</button>
+          <button class="vote-btn down{% if item.current_vote == -1 %} active down{% endif %}"
+                  data-value="-1" type="button" title="Downvote">👎</button>
+        </div>
+        <div>
+          <span class="label-pill">{{ item.label }}</span>
+          <a class="title-link" href="{{ item.url }}" target="_blank" rel="noopener">{{ item.title }}</a>
+        </div>
+        <div class="meta">
+          {{ item.source }}{% if item.published %} &middot; {{ item.published }}{% endif %}
+        </div>
+        {% if item.summary %}
+        <div class="summary">{{ item.summary }}</div>
+        {% endif %}
+      </div>
+      {% endfor %}
+      {% endfor %}
+    {% endif %}
+
+    <div class="footer">
+      Local UI &middot; votes write to <code>data/digest.db</code> &middot; loopback only.
+    </div>
+  </div>
+{% endblock %}
+{% block scripts %}
+<script>
+(function () {
+  const VALUE_CLASS = { "1": "up", "0": "neut", "-1": "down" };
+
+  function setActive(itemEl, value) {
+    itemEl.querySelectorAll(".vote-btn").forEach((b) => {
+      const v = b.dataset.value;
+      b.classList.toggle("active", v === String(value));
+      ["up", "neut", "down"].forEach((c) => b.classList.remove(c));
+      b.classList.add(VALUE_CLASS[v]);
+    });
+  }
+
+  function flash(itemEl) {
+    itemEl.classList.add("flash");
+    setTimeout(() => itemEl.classList.remove("flash"), 600);
+  }
+
+  document.querySelectorAll(".item").forEach((itemEl) => {
+    itemEl.querySelectorAll(".vote-btn").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const id = itemEl.dataset.itemId;
+        const value = btn.dataset.value;
+        try {
+          const r = await fetch(`/vote/${id}/${value}`, { method: "POST" });
+          if (!r.ok) throw new Error("HTTP " + r.status);
+          setActive(itemEl, value);
+        } catch (e) {
+          flash(itemEl);
+        }
+      });
+    });
+  });
+
+  const compactBtn = document.getElementById("compact-btn");
+  if (localStorage.getItem("dd-compact") === "1") document.body.classList.add("compact");
+  compactBtn.addEventListener("click", () => {
+    const on = document.body.classList.toggle("compact");
+    localStorage.setItem("dd-compact", on ? "1" : "0");
+  });
+
+  const refreshBtn = document.getElementById("refresh-btn");
+  const status = document.getElementById("refresh-status");
+  refreshBtn.addEventListener("click", async () => {
+    refreshBtn.disabled = true;
+    status.textContent = "Generating...";
+    try {
+      await fetch("/refresh", { method: "POST" });
+    } catch (e) { /* ignore */ }
+    setTimeout(() => window.location.reload(), 5000);
+  });
+})();
+</script>
+{% endblock %}

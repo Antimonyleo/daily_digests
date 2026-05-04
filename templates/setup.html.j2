@@ -1,0 +1,247 @@
+{% extends "_base.html.j2" %}
+{% block title %}Set up DailyDigest{% endblock %}
+{% block extra_styles %}
+  .card { padding: 24px; }
+  h1 { font-size: 22px; margin: 0 0 4px 0; }
+  .lede { color: var(--muted); margin: 0 0 20px 0; font-size: 13px; }
+  .step { margin-bottom: 28px; }
+  .step h2 { font-size: 14px; letter-spacing: 0.06em; text-transform: uppercase;
+             color: var(--muted); margin: 0 0 8px 0; }
+  label { display: block; font-size: 13px; font-weight: 600; margin: 12px 0 4px; }
+  textarea, input[type="text"], input[type="url"], input[type="password"], select {
+    width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px;
+    font-size: 13px; font-family: inherit; background: #fff; color: var(--text);
+  }
+  textarea { min-height: 110px; resize: vertical; line-height: 1.5; }
+  .hint { font-size: 11px; color: var(--muted); margin-top: 4px; }
+  .chip-input {
+    border: 1px solid var(--border); border-radius: 6px; padding: 6px;
+    background: #fff; display: flex; flex-wrap: wrap; gap: 4px; align-items: center;
+    min-height: 38px;
+  }
+  .chip {
+    background: var(--accent-soft); color: var(--accent); border-radius: 4px;
+    padding: 3px 8px; font-size: 12px; cursor: pointer; user-select: none;
+  }
+  .chip:hover { background: #d8e7f5; }
+  .chip-input input {
+    border: none; outline: none; flex: 1; min-width: 100px; font-size: 13px;
+    padding: 4px 6px; background: transparent;
+  }
+  .backends { display: grid; gap: 8px; }
+  .backend-opt {
+    border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px;
+    cursor: pointer; background: #fff;
+  }
+  .backend-opt.selected { border-color: var(--accent); background: var(--accent-soft); }
+  .backend-opt input[type="radio"] { margin-right: 8px; }
+  .backend-opt .desc { font-size: 11px; color: var(--muted); margin-top: 2px;
+                       margin-left: 22px; }
+  .badge { display: inline-block; font-size: 10px; padding: 1px 6px;
+           border-radius: 4px; margin-left: 6px; vertical-align: middle; }
+  .badge.ok { background: #e2f4e6; color: var(--up); }
+  .badge.bad { background: #fbe6e4; color: var(--down); }
+  .api-fields, .cli-fields { margin-top: 8px; padding: 10px;
+                              background: #fafafb; border-radius: 6px;
+                              border: 1px dashed var(--border); }
+  .api-fields[hidden], .cli-fields[hidden] { display: none; }
+  .errors { background: var(--flash); color: var(--down); padding: 10px 12px;
+            border-radius: 6px; font-size: 13px; margin-bottom: 16px; }
+  button.brew {
+    width: 100%; padding: 14px 18px; font-size: 16px; font-weight: 600;
+    background: var(--accent); color: #fff; border: none; border-radius: 8px;
+    cursor: pointer; margin-top: 8px;
+  }
+  button.brew:hover { background: #084d96; }
+{% endblock %}
+{% block body %}
+<div class="card">
+  <h1>Welcome to DailyDigest ☕</h1>
+  <p class="lede">Tell us about you, pick how to summarize, then brew.</p>
+
+  {% if errors %}
+  <div class="errors">
+    {% for e in errors %}<div>{{ e }}</div>{% endfor %}
+  </div>
+  {% endif %}
+
+  <form method="post" action="/setup">
+    <div class="step">
+      <h2>1 &middot; About you</h2>
+      <label for="bio">Your bio (3–6 sentences)</label>
+      <textarea id="bio" name="bio" placeholder="What do you research? What topics matter most to you?">{{ form.bio }}</textarea>
+      <div class="hint">Used to build a vector that ranks items against your interests.</div>
+
+      <label>Interest keywords</label>
+      <div class="chip-input" id="kw-input">
+        <input type="text" id="kw-text" placeholder="Type and press comma or Enter…">
+      </div>
+      <input type="hidden" name="keywords" id="kw-hidden" value="{{ form.keywords }}">
+      <div class="hint">Examples: CRISPR, mRNA therapeutics, FDA approval.</div>
+
+      <label>Downweight terms (push these down)</label>
+      <div class="chip-input" id="dw-input">
+        <input type="text" id="dw-text" placeholder="Type and press comma or Enter…">
+      </div>
+      <input type="hidden" name="downweight" id="dw-hidden" value="{{ form.downweight }}">
+      <div class="hint">Soft penalty applied at ranking time.</div>
+    </div>
+
+    <div class="step">
+      <h2>2 &middot; Summarizer backend</h2>
+      <div class="backends">
+        <label class="backend-opt" data-value="extractive">
+          <input type="radio" name="llm_backend" value="extractive"
+                 {% if form.llm_backend == "extractive" %}checked{% endif %}>
+          <strong>Extractive</strong> — no setup, first 2 sentences.
+          <div class="desc">Free. No external service. Works offline.</div>
+        </label>
+
+        <label class="backend-opt" data-value="claude_code">
+          <input type="radio" name="llm_backend" value="claude_code"
+                 {% if form.llm_backend == "claude_code" %}checked{% endif %}>
+          <strong>Claude Code</strong> — local <code>claude</code> CLI.
+          {% if cli_status.claude %}
+            <span class="badge ok">✓ installed</span>
+          {% else %}
+            <span class="badge bad">✗ not found</span>
+          {% endif %}
+          <div class="desc">
+            Uses your Anthropic subscription via the local CLI.
+            {% if not cli_status.claude %}
+              <a href="https://docs.claude.com/" target="_blank" rel="noopener">Install Claude Code</a> first.
+            {% endif %}
+          </div>
+        </label>
+
+        <label class="backend-opt" data-value="codex">
+          <input type="radio" name="llm_backend" value="codex"
+                 {% if form.llm_backend == "codex" %}checked{% endif %}>
+          <strong>Codex</strong> — local <code>codex</code> CLI.
+          {% if cli_status.codex %}
+            <span class="badge ok">✓ installed</span>
+          {% else %}
+            <span class="badge bad">✗ not found</span>
+          {% endif %}
+          <div class="desc">
+            Uses your OpenAI subscription via the local CLI.
+            {% if not cli_status.codex %}
+              <a href="https://github.com/openai/codex" target="_blank" rel="noopener">Install Codex</a> first.
+            {% endif %}
+          </div>
+        </label>
+
+        <label class="backend-opt" data-value="api">
+          <input type="radio" name="llm_backend" value="api"
+                 {% if form.llm_backend == "api" %}checked{% endif %}>
+          <strong>OpenAI-compatible API</strong> — any provider.
+          <div class="desc">NanoGPT, OpenAI, Ollama, vLLM, etc.</div>
+        </label>
+      </div>
+
+      <div class="cli-fields" id="claude-fields" hidden>
+        <label for="claude_model">Claude model (optional pin)</label>
+        <select id="claude_model" name="claude_cli_model">
+          <option value="" {% if not form.claude_cli_model %}selected{% endif %}>Use CLI default (don't pass --model)</option>
+          <option value="claude-haiku-4-5-20251001" {% if form.claude_cli_model == "claude-haiku-4-5-20251001" %}selected{% endif %}>claude-haiku-4-5 (fast)</option>
+          <option value="claude-sonnet-4-6" {% if form.claude_cli_model == "claude-sonnet-4-6" %}selected{% endif %}>claude-sonnet-4-6 (balanced)</option>
+          <option value="claude-opus-4-7" {% if form.claude_cli_model == "claude-opus-4-7" %}selected{% endif %}>claude-opus-4-7 (best, expensive)</option>
+        </select>
+      </div>
+
+      <div class="cli-fields" id="codex-fields" hidden>
+        <label for="codex_model">Codex model (optional pin)</label>
+        <select id="codex_model" name="codex_cli_model">
+          <option value="" {% if not form.codex_cli_model %}selected{% endif %}>Use CLI default (don't pass --model)</option>
+          <option value="gpt-5-mini" {% if form.codex_cli_model == "gpt-5-mini" %}selected{% endif %}>gpt-5-mini (fast/cheap)</option>
+          <option value="gpt-5-codex" {% if form.codex_cli_model == "gpt-5-codex" %}selected{% endif %}>gpt-5-codex (default)</option>
+          <option value="gpt-5" {% if form.codex_cli_model == "gpt-5" %}selected{% endif %}>gpt-5 (best)</option>
+        </select>
+      </div>
+
+      <div class="api-fields" id="api-fields" hidden>
+        <label for="llm_base_url">Base URL</label>
+        <input type="url" id="llm_base_url" name="llm_base_url"
+               placeholder="https://api.openai.com/v1" value="{{ form.llm_base_url }}">
+        <label for="llm_api_key">API key</label>
+        <input type="password" id="llm_api_key" name="llm_api_key"
+               placeholder="sk-..." value="{{ form.llm_api_key }}">
+        <label for="llm_model">Model</label>
+        <input type="text" id="llm_model" name="llm_model"
+               placeholder="gpt-4o-mini" value="{{ form.llm_model }}">
+      </div>
+    </div>
+
+    <button class="brew" type="submit">Brew my morning tea ☕</button>
+  </form>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+(function () {
+  function makeChipInput(wrapId, textId, hiddenId) {
+    const wrap = document.getElementById(wrapId);
+    const text = document.getElementById(textId);
+    const hidden = document.getElementById(hiddenId);
+    const chips = [];
+
+    function render() {
+      wrap.querySelectorAll(".chip").forEach((c) => c.remove());
+      chips.forEach((val, idx) => {
+        const c = document.createElement("span");
+        c.className = "chip";
+        c.textContent = val + " ✕";
+        c.title = "Click to remove";
+        c.addEventListener("click", () => { chips.splice(idx, 1); render(); });
+        wrap.insertBefore(c, text);
+      });
+      hidden.value = chips.join(",");
+    }
+
+    function add(val) {
+      const v = (val || "").trim();
+      if (v && !chips.includes(v)) chips.push(v);
+      text.value = "";
+      render();
+    }
+
+    text.addEventListener("keydown", (e) => {
+      if (e.key === "," || e.key === "Enter") {
+        e.preventDefault();
+        add(text.value);
+      } else if (e.key === "Backspace" && !text.value && chips.length) {
+        chips.pop(); render();
+      }
+    });
+    text.addEventListener("blur", () => { if (text.value.trim()) add(text.value); });
+
+    // Seed from initial hidden value (server-rendered).
+    const init = (hidden.value || "").split(",").map((s) => s.trim()).filter(Boolean);
+    init.forEach((v) => chips.push(v));
+    render();
+  }
+
+  makeChipInput("kw-input", "kw-text", "kw-hidden");
+  makeChipInput("dw-input", "dw-text", "dw-hidden");
+
+  // Backend reveal logic.
+  const apiFields = document.getElementById("api-fields");
+  const claudeFields = document.getElementById("claude-fields");
+  const codexFields = document.getElementById("codex-fields");
+  const radios = document.querySelectorAll('input[name="llm_backend"]');
+
+  function refresh() {
+    const sel = document.querySelector('input[name="llm_backend"]:checked');
+    const v = sel ? sel.value : "extractive";
+    apiFields.hidden = v !== "api";
+    claudeFields.hidden = v !== "claude_code";
+    codexFields.hidden = v !== "codex";
+    document.querySelectorAll(".backend-opt").forEach((opt) => {
+      opt.classList.toggle("selected", opt.dataset.value === v);
+    });
+  }
+  radios.forEach((r) => r.addEventListener("change", refresh));
+  refresh();
+})();
+</script>
+{% endblock %}

@@ -1,0 +1,32 @@
+# Personal interest profile. Used to build a vector for ranking.
+# Edit freely; the embedder reads `bio` + each `keywords` entry.
+
+bio: |
+  Biotech researcher with interests in molecular biology, drug discovery,
+  CRISPR-based gene editing, and computational biology. I follow developments
+  in mRNA therapeutics, cell therapies, AI-for-science, and FDA approvals
+  affecting the broader biotech industry.
+
+keywords:
+  - CRISPR
+  - gene editing
+  - mRNA therapeutics
+  - cell therapy
+  - cancer immunotherapy
+  - protein structure prediction
+  - AlphaFold
+  - drug discovery
+  - clinical trials phase 3
+  - FDA approval
+  - biotech IPO
+  - synthetic biology
+  - single-cell RNA sequencing
+  - structural biology
+  - AI in biology
+  - machine learning for drug discovery
+
+# Soft penalties applied during ranking to push items down even if embedding-similar.
+downweight:
+  - cryptocurrency
+  - stock market predictions
+  - celebrity news

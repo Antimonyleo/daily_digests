@@ -1,0 +1,49 @@
+# DailyDigest nightly prune workflow
+#
+# Runs daily at 03:15 UTC (off-peak).
+# Deletes items older than RETENTION_DAYS (configured in PROFILE_PATH or defaults to 30).
+# Updates digest.db artifact for next digest run.
+
+name: Prune
+on:
+  schedule:
+    - cron: '15 3 * * *'  # 03:15 UTC daily
+  workflow_dispatch:
+
+jobs:
+  prune:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Download digest-db artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: digest-db
+          path: data/
+        continue-on-error: true
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Prune old items
+        run: uv run dd prune
+
+      - name: Upload digest-db artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: digest-db
+          path: data/digest.db
+          retention-days: 30
