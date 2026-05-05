@@ -1,18 +1,10 @@
-# DailyDigest inbound reply ingestion (Phase 7a)
+# DailyDigest inbound reply ingestion (Phase 7a) — disabled
 #
-# Hourly IMAP poll that fetches unread DailyDigest replies and records votes
-# from their bodies. Offset 15min from the digest cron (which runs at :00).
-#
-# Required secrets (add in Settings -> Secrets and variables -> Actions):
-#   IMAP_HOST       — IMAP server (e.g., imap.gmail.com)
-#   IMAP_USER       — IMAP login (e.g., you@gmail.com)
-#   IMAP_PASSWORD   — IMAP password (Gmail: an App Password, not your account password)
-#   REPLY_TO_EMAIL  — address used as Reply-To on outbound digests (often == IMAP_USER)
+# IMAP-based vote ingestion is not in use (local web UI voting is used instead).
+# Schedule removed. Re-enable by adding a cron trigger and configuring IMAP secrets.
 
 name: Ingest Replies
 on:
-  schedule:
-    - cron: '15 * * * *'  # hourly, offset from digest cron at :00
   workflow_dispatch:
 
 concurrency:
@@ -26,16 +18,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-          cache: 'pip'
-
       - name: Setup uv
         uses: astral-sh/setup-uv@v3
         with:
           enable-cache: true
+          python-version: '3.12'
 
       - name: Download digest-db artifact
         uses: actions/download-artifact@v4

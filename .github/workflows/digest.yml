@@ -1,23 +1,11 @@
-# DailyDigest hourly digest workflow
+# DailyDigest digest workflow — manual trigger only (local-first mode)
 #
-# Runs hourly UTC; self-gates on USER_TZ to send only at 8am local time.
-# Persists SQLite database across runs via GitHub Actions artifacts.
-#
-# Required secrets (add in Settings → Secrets and variables → Actions):
-#   LLM_BASE_URL          — LLM API endpoint (e.g., https://api.openai.com/v1)
-#   LLM_API_KEY           — LLM API key
-#   LLM_MODEL             — LLM model name (e.g., gpt-4o-mini)
-#   RESEND_API_KEY        — Resend email API key
-#   DIGEST_FROM           — sender email (e.g., onboarding@resend.dev or custom domain)
-#   DIGEST_TO             — recipient email
-#   USER_TZ               — user's timezone (e.g., US/Eastern, Europe/London)
-#   DIGEST_HOUR           — hour to send (0-23, in USER_TZ)
-#   PROFILE_PATH          — path to profile YAML (e.g., config/profile.yaml)
+# Email delivery is not in use. This workflow is kept for CI reference;
+# run it manually via workflow_dispatch if you want a dry-run on a GH runner.
+# Schedule is intentionally disabled — run locally with `dd start`.
 
 name: Digest
 on:
-  schedule:
-    - cron: '0 * * * *'  # every hour UTC
   workflow_dispatch:
 
 concurrency:
@@ -31,16 +19,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-          cache: 'pip'
-
       - name: Setup uv
         uses: astral-sh/setup-uv@v3
         with:
           enable-cache: true
+          python-version: '3.12'
 
       - name: Download digest-db artifact
         uses: actions/download-artifact@v4
@@ -52,18 +35,11 @@ jobs:
       - name: Install dependencies
         run: uv sync
 
-      - name: Run digest pipeline
+      - name: Run digest pipeline (dry-run)
         env:
-          LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
-          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
-          LLM_MODEL: ${{ secrets.LLM_MODEL }}
-          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
-          DIGEST_FROM: ${{ secrets.DIGEST_FROM }}
-          DIGEST_TO: ${{ secrets.DIGEST_TO }}
-          USER_TZ: ${{ secrets.USER_TZ }}
-          DIGEST_HOUR: ${{ secrets.DIGEST_HOUR }}
-          PROFILE_PATH: ${{ secrets.PROFILE_PATH }}
-        run: uv run dd run-all --gate
+          LLM_BACKEND: extractive
+          PROFILE_PATH: config/profile.yaml
+        run: uv run dd run-all --dry-run
 
       - name: Upload digest-db artifact
         uses: actions/upload-artifact@v4
@@ -71,13 +47,3 @@ jobs:
           name: digest-db
           path: data/digest.db
           retention-days: 30
-
-      - name: Report failure
-        if: failure()
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh issue create \
-            --title "Digest workflow failed" \
-            --body "Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
-            --repo "${{ github.repository }}"
