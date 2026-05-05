@@ -48,7 +48,6 @@
   body.compact .summary { display: none; }
   body.compact .item { padding-top: 8px; padding-bottom: 8px; }
   .empty { padding: 48px 24px; text-align: center; color: var(--muted); font-size: 14px; line-height: 1.6; }
-  #refresh-status { font-size: 11px; color: var(--muted); margin-right: 8px; }
 {% endblock %}
 {% block body %}
   <div class="card">
@@ -58,9 +57,9 @@
         <div class="digest-id">{{ digest_id }}</div>
       </div>
       <div class="actions">
-        <span id="refresh-status"></span>
         <button id="compact-btn" type="button">Compact</button>
         <button id="refresh-btn" type="button">Refresh</button>
+        <button onclick="window.location.href='/setup'" type="button">Settings</button>
       </div>
     </div>
 
@@ -147,14 +146,8 @@
   });
 
   const refreshBtn = document.getElementById("refresh-btn");
-  const status = document.getElementById("refresh-status");
-  refreshBtn.addEventListener("click", async () => {
-    refreshBtn.disabled = true;
-    status.textContent = "Generating...";
-    try {
-      await fetch("/refresh", { method: "POST" });
-    } catch (e) { /* ignore */ }
-    setTimeout(() => window.location.reload(), 5000);
+  refreshBtn.addEventListener("click", () => {
+    window.location.href = "/run";
   });
 })();
 </script>

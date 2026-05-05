@@ -16,8 +16,10 @@ from sqlalchemy import (
     UniqueConstraint,
     create_engine,
     delete,
+    event,
     select,
 )
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import DeclarativeBase, Session, relationship, sessionmaker
 
 from .config import SETTINGS, ensure_data_dir
@@ -54,7 +56,7 @@ class VoteRow(Base):
     __tablename__ = "votes"
 
     id = Column(Integer, primary_key=True)
-    item_id = Column(Integer, ForeignKey("items.id"), nullable=False, index=True)
+    item_id = Column(Integer, ForeignKey("items.id", ondelete="CASCADE"), nullable=False, index=True)
     value = Column(Integer, nullable=False)  # +1 / -1
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
@@ -101,6 +103,13 @@ def _engine():
     if _ENGINE is None:
         ensure_data_dir()
         _ENGINE = create_engine(f"sqlite:///{SETTINGS.db_path}", future=True)
+
+        @event.listens_for(_ENGINE, "connect")
+        def _set_sqlite_pragma(dbapi_conn, _record):
+            cur = dbapi_conn.cursor()
+            cur.execute("PRAGMA foreign_keys=ON")
+            cur.close()
+
     return _ENGINE
 
 
@@ -137,19 +146,17 @@ def session_scope():
 def upsert_items(items: Iterable[Item]) -> int:
     """Insert items, skipping duplicates on (source, external_id). Returns count inserted."""
     init_db()
+    seen_keys: set[tuple[str, str]] = set()
     inserted = 0
     with session_scope() as s:
         for it in items:
-            existing = s.execute(
-                select(ItemRow.id).where(
-                    ItemRow.source == it.source,
-                    ItemRow.external_id == it.external_id,
-                )
-            ).first()
-            if existing:
+            key = (it.source, it.external_id)
+            if key in seen_keys:
                 continue
-            s.add(
-                ItemRow(
+            seen_keys.add(key)
+            stmt = (
+                sqlite_insert(ItemRow)
+                .values(
                     source=it.source,
                     section=it.section,
                     external_id=it.external_id,
@@ -159,8 +166,11 @@ def upsert_items(items: Iterable[Item]) -> int:
                     authors=it.authors,
                     published_at=it.published_at,
                 )
+                .on_conflict_do_nothing(index_elements=["source", "external_id"])
             )
-            inserted += 1
+            result = s.execute(stmt)
+            if result.rowcount:
+                inserted += 1
     return inserted
 
 

@@ -9,6 +9,9 @@ def dedupe_by_url(items: list[Item]) -> list[Item]:
     out: list[Item] = []
     for it in items:
         canon = canonicalize_url(it.url)
+        if not canon:
+            out.append(it)
+            continue
         if canon in seen:
             continue
         seen.add(canon)

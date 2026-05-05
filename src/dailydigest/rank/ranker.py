@@ -20,9 +20,13 @@ from .embed import embed_texts
 logger = logging.getLogger(__name__)
 
 DOWNWEIGHT_PENALTY = 0.05
-LR_WEIGHTS_PATH = Path("data/lr_ranker.npz")
 HYBRID_COSINE_W = 0.5
 HYBRID_LR_W = 0.5
+
+
+def _lr_weights_path() -> Path:
+    from ..config import get_settings
+    return Path(get_settings().db_path).parent / "lr_ranker.npz"
 
 
 def _item_text(row: ItemRow) -> str:
@@ -69,22 +73,26 @@ class LRRanker:
         self.coef_ = model.coef_.astype(np.float32, copy=False)
         self.intercept_ = float(model.intercept_[0])
 
-        LR_WEIGHTS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        target = _lr_weights_path()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        tmp = target.with_suffix(".npz.tmp")
         np.savez(
-            LR_WEIGHTS_PATH,
+            tmp,
             coef=self.coef_,
             intercept=np.asarray([self.intercept_], dtype=np.float32),
             classes=self._classes,
         )
-        logger.info("LRRanker: saved weights to %s", LR_WEIGHTS_PATH)
+        tmp.replace(target)
+        logger.info("LRRanker: saved weights to %s", target)
 
     # ---- persistence --------------------------------------------------------
 
     def load(self) -> bool:
-        if not LR_WEIGHTS_PATH.exists():
+        path = _lr_weights_path()
+        if not path.exists():
             return False
         try:
-            data = np.load(LR_WEIGHTS_PATH)
+            data = np.load(path)
             self.coef_ = data["coef"].astype(np.float32, copy=False)
             self.intercept_ = float(data["intercept"][0])
             if "classes" in data.files:

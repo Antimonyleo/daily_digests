@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import html
 import re
 from datetime import datetime, timezone
 from urllib.parse import urldefrag, urlparse, urlunparse
@@ -36,7 +37,7 @@ _TRACKING_PARAMS = {"utm_source", "utm_medium", "utm_campaign", "utm_term", "utm
 
 
 def _strip_html(s: str) -> str:
-    return _HTML_TAG.sub("", s or "").strip()
+    return html.unescape(_HTML_TAG.sub("", s or "")).strip()
 
 
 def canonicalize_url(url: str) -> str:
@@ -44,6 +45,7 @@ def canonicalize_url(url: str) -> str:
         return url
     url, _ = urldefrag(url)
     parsed = urlparse(url)
+    parsed = parsed._replace(scheme=parsed.scheme.lower(), netloc=parsed.netloc.lower())
     # drop tracking query params
     if parsed.query:
         kept = [

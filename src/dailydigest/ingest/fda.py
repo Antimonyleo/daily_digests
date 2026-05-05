@@ -22,7 +22,7 @@ from ..models import Item, SourceSpec
     reraise=False,
 )
 def _get_json(url: str, params: dict[str, str]) -> dict:
-    with httpx.Client(timeout=20.0) as client:
+    with httpx.Client(timeout=20.0, follow_redirects=True) as client:
         resp = client.get(url, params=params)
         resp.raise_for_status()
         return resp.json()
@@ -48,7 +48,7 @@ class FDASource:
         two_days_ago = today - timedelta(days=2)
         default_query = (
             f"submissions.submission_status_date:"
-            f"[{two_days_ago.strftime('%Y%m%d')}+TO+{today.strftime('%Y%m%d')}]"
+            f"[{two_days_ago.strftime('%Y%m%d')} TO {today.strftime('%Y%m%d')}]"
         )
         search = spec.query or default_query
 
@@ -80,7 +80,8 @@ class FDASource:
         if products:
             first = products[0] or {}
             brand = (first.get("brand_name") or "").strip()
-            generic = (first.get("active_ingredients") or [{}])[0].get("name", "") or ""
+            ingredients = first.get("active_ingredients") or []
+            generic = (ingredients[0].get("name", "") if ingredients else "") or ""
 
         title_bits = [b for b in (sponsor, brand or generic, app_no) if b]
         if not title_bits:

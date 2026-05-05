@@ -53,7 +53,7 @@ def rank() -> None:
         title = (row.title or "").strip().replace("\n", " ")
         if len(title) > 90:
             title = title[:87] + "..."
-        typer.echo(f"{s:+.4f}  [{row.section[:3]}] {row.source[:18]:<18}  {title}")
+        typer.echo(f"{s:+.4f}  [{(row.section or '')[:3]}] {(row.source or '')[:18]:<18}  {title}")
 
 
 @app.command()

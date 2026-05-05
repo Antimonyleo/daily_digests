@@ -96,6 +96,17 @@ def get_settings() -> Settings:
     return load_settings()
 
 
+def reload_settings() -> None:
+    """Re-read .env and refresh in-memory singletons.
+
+    Call this after programmatically updating .env (e.g. from the web setup
+    wizard) so the running pipeline picks up the new backend immediately.
+    """
+    global SETTINGS
+    get_settings.cache_clear()
+    SETTINGS = load_settings()
+
+
 # Legacy access pattern: many existing modules import SETTINGS directly.
 # Kept for backwards compatibility. Prefer get_settings() in new code.
 SETTINGS = load_settings()

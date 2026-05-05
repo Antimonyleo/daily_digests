@@ -24,7 +24,7 @@ from ..models import Item, SourceSpec
 def _get_json(
     url: str, params: dict[str, str], headers: dict[str, str]
 ) -> dict:
-    with httpx.Client(timeout=20.0, headers=headers) as client:
+    with httpx.Client(timeout=20.0, follow_redirects=True, headers=headers) as client:
         resp = client.get(url, params=params)
         resp.raise_for_status()
         return resp.json()
@@ -108,8 +108,8 @@ class OpenAlexSource:
             )
             pub = _parse_date(work.get("publication_date"))
             ext = (
-                work.get("id")
-                or work.get("doi")
+                work.get("doi")
+                or work.get("id")
                 or hashlib.sha1(url.encode("utf-8")).hexdigest()[:16]
             )
             out.append(

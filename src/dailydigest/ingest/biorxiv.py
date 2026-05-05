@@ -41,7 +41,7 @@ class BiorxivSource:
         to = today.isoformat()
         out: list[Item] = []
         cursor = 0
-        with httpx.Client(timeout=20.0) as client:
+        with httpx.Client(timeout=20.0, follow_redirects=True) as client:
             while True:
                 url = f"{self.BASE}/{server}/{frm}/{to}/{cursor}"
                 try:
@@ -83,7 +83,10 @@ class BiorxivSource:
                     )
                 # paginate
                 msg = data.get("messages") or [{}]
-                total = int(msg[0].get("total", 0))
+                try:
+                    total = int(msg[0].get("total", 0))
+                except (TypeError, ValueError):
+                    total = 0
                 cursor += len(collection)
                 if cursor >= total or cursor >= 200:  # cap at 200/run for safety
                     break

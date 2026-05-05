@@ -21,6 +21,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
+import queue as std_queue
 import shutil
 import threading
 import uuid
@@ -28,7 +30,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import (
     HTMLResponse,
     JSONResponse,
@@ -40,7 +42,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import select
 
 from . import votes as votes_mod
-from .config import SETTINGS
+from .config import SETTINGS, reload_settings
 from .email_render import SECTION_META, SECTION_ORDER
 from .pipeline import _digest_id, run_all
 from .store import ItemRow, VoteRow, init_db, session_scope
@@ -58,11 +60,10 @@ templates = Jinja2Templates(directory=str(_TEMPLATE_DIR))
 # Per-section sort order so we can ORDER BY (section_order, label_number).
 _SECTION_RANK = {name: idx for idx, name in enumerate(SECTION_ORDER)}
 
-# Module-level registry of in-progress runs. Each run owns an asyncio.Queue
-# that the SSE endpoint drains and the background pipeline thread fills via
-# a thread-safe shim (loop.call_soon_threadsafe).
-_RUN_QUEUES: dict[str, asyncio.Queue[dict[str, Any]]] = {}
-_RUN_LOOPS: dict[str, asyncio.AbstractEventLoop] = {}
+# Per-run progress queues.  Uses stdlib queue.Queue (thread-safe) so the
+# producer thread can put_nowait without needing the event loop reference.
+# The SSE consumer drains via asyncio.to_thread so it never blocks the loop.
+_RUN_QUEUES: dict[str, std_queue.Queue[dict[str, Any]]] = {}
 _RUN_STARTED: set[str] = set()
 _RUN_LOCK = threading.Lock()
 
@@ -319,11 +320,9 @@ def _run_pipeline_dry_run() -> None:
 
 
 @app.post("/refresh")
-def refresh(background_tasks: BackgroundTasks) -> JSONResponse:
+def refresh() -> JSONResponse:
     digest_id = _digest_id()
-    background_tasks.add_task(
-        lambda: threading.Thread(target=_run_pipeline_dry_run, daemon=True).start()
-    )
+    threading.Thread(target=_run_pipeline_dry_run, daemon=True).start()
     return JSONResponse({"ok": True, "digest_id": digest_id})
 
 
@@ -406,6 +405,14 @@ async def setup_post(request: Request) -> Response:
         "LLM_CLI_MODEL": cli_model,
     }
     _write_env_file(_ENV_PATH, env_updates)
+    # Propagate changes to os.environ so pydantic-settings picks them up,
+    # then refresh the in-memory SETTINGS singleton.
+    for k, v in env_updates.items():
+        if v:
+            os.environ[k] = v
+        else:
+            os.environ.pop(k, None)
+    reload_settings()
 
     response = RedirectResponse(url="/run", status_code=303)
     response.headers["Cache-Control"] = "no-store"
@@ -415,49 +422,42 @@ async def setup_post(request: Request) -> Response:
 # --- Run / brewing flow -----------------------------------------------------
 
 
-def _ensure_run(run_id: str) -> asyncio.Queue[dict[str, Any]]:
-    """Get-or-create the queue for a run."""
+def _ensure_run(run_id: str) -> std_queue.Queue[dict[str, Any]]:
+    """Get-or-create the stdlib Queue for a run."""
     with _RUN_LOCK:
         q = _RUN_QUEUES.get(run_id)
         if q is None:
-            q = asyncio.Queue()
+            q = std_queue.Queue()
             _RUN_QUEUES[run_id] = q
         return q
 
 
-def _make_progress_callback(run_id: str) -> Any:
-    """Return a thread-safe callback that pushes events onto the run's queue."""
-    def cb(stage: str, payload: dict[str, Any]) -> None:
-        loop = _RUN_LOOPS.get(run_id)
-        q = _RUN_QUEUES.get(run_id)
-        if loop is None or q is None:
-            return
-        evt = {"stage": stage, "payload": payload}
-        try:
-            loop.call_soon_threadsafe(q.put_nowait, evt)
-        except RuntimeError:
-            # Loop closed; drop event.
-            pass
-    return cb
-
-
 def _kick_off_run(run_id: str) -> None:
-    """Run pipeline.run_all in a background thread; emit done/error to queue."""
-    cb = _make_progress_callback(run_id)
-    loop = _RUN_LOOPS.get(run_id)
-    q = _RUN_QUEUES.get(run_id)
+    """Run pipeline.run_all in a background thread; always emits a terminal event."""
+
+    def _push(evt: dict[str, Any]) -> None:
+        q = _RUN_QUEUES.get(run_id)
+        if q is not None:
+            q.put_nowait(evt)
 
     def _target() -> None:
+        terminal_sent = False
+
+        def cb(stage: str, payload: dict[str, Any]) -> None:
+            nonlocal terminal_sent
+            if stage in ("done", "error"):
+                terminal_sent = True
+            _push({"stage": stage, "payload": payload})
+
         try:
             run_all(dry_run=True, progress_callback=cb)
         except Exception as e:  # noqa: BLE001
             logger.exception("pipeline failed in run %s", run_id)
-            if loop is not None and q is not None:
-                evt = {"stage": "error", "payload": {"message": f"{type(e).__name__}: {e}"}}
-                try:
-                    loop.call_soon_threadsafe(q.put_nowait, evt)
-                except RuntimeError:
-                    pass
+            _push({"stage": "error", "payload": {"message": f"{type(e).__name__}: {e}"}})
+            terminal_sent = True
+        finally:
+            if not terminal_sent:
+                _push({"stage": "done", "payload": {"forced": True}})
 
     threading.Thread(target=_target, daemon=True).start()
 
@@ -485,7 +485,6 @@ async def run_start(request: Request) -> JSONResponse:
         body = {}
     run_id = str(body.get("run_id") or uuid.uuid4().hex[:12])
     _ensure_run(run_id)
-    _RUN_LOOPS[run_id] = asyncio.get_running_loop()
     with _RUN_LOCK:
         if run_id in _RUN_STARTED:
             return JSONResponse({"ok": True, "run_id": run_id, "already_started": True})
@@ -497,21 +496,22 @@ async def run_start(request: Request) -> JSONResponse:
 @app.get("/run/stream")
 async def run_stream(run_id: str) -> StreamingResponse:
     q = _ensure_run(run_id)
-    _RUN_LOOPS[run_id] = asyncio.get_running_loop()
 
     async def event_gen():
-        # Initial hello so the client knows the stream opened.
         yield f"data: {json.dumps({'stage': 'connected', 'payload': {'run_id': run_id}})}\n\n"
         terminal = {"done", "error"}
         while True:
             try:
-                evt = await asyncio.wait_for(q.get(), timeout=30.0)
-            except asyncio.TimeoutError:
-                # Heartbeat to keep connection alive.
+                # Block in a thread-pool slot so the event loop stays free.
+                evt = await asyncio.to_thread(q.get, True, 30.0)
+            except std_queue.Empty:
                 yield ": heartbeat\n\n"
                 continue
             yield f"data: {json.dumps(evt)}\n\n"
             if evt.get("stage") in terminal:
+                with _RUN_LOCK:
+                    _RUN_QUEUES.pop(run_id, None)
+                    _RUN_STARTED.discard(run_id)
                 break
 
     return StreamingResponse(

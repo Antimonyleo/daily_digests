@@ -113,28 +113,32 @@ def _parse_id_summary_map(raw: str) -> dict[int, str]:
     out: dict[int, str] = {}
     for k, v in parsed.items():
         try:
-            out[int(k)] = str(v).strip()
+            val = str(v).strip()
+            if val:
+                out[int(k)] = val
         except (TypeError, ValueError):
             continue
     return out
 
 
 def _call_llm(batch: list[ItemRow]) -> dict[int, str]:
-    sys, user = _build_prompt(batch)
+    from .config import get_settings
+    cfg = get_settings()
+    sys_prompt, user_prompt = _build_prompt(batch)
     body = {
-        "model": SETTINGS.llm_model,
+        "model": cfg.llm_model,
         "messages": [
-            {"role": "system", "content": sys},
-            {"role": "user", "content": user},
+            {"role": "system", "content": sys_prompt},
+            {"role": "user", "content": user_prompt},
         ],
         "temperature": 0.2,
         "response_format": {"type": "json_object"},
     }
     headers = {
-        "Authorization": f"Bearer {SETTINGS.llm_api_key}",
+        "Authorization": f"Bearer {cfg.llm_api_key}",
         "Content-Type": "application/json",
     }
-    url = SETTINGS.llm_base_url.rstrip("/") + "/chat/completions"
+    url = cfg.llm_base_url.rstrip("/") + "/chat/completions"
     with httpx.Client(timeout=_TIMEOUT) as client:
         resp = client.post(url, headers=headers, json=body)
         resp.raise_for_status()
@@ -205,7 +209,8 @@ def _summarize_via_cli(
                 out.setdefault(row.id, _extractive(row))
 
     for row in items:
-        out.setdefault(row.id, _extractive(row))
+        if not out.get(row.id):  # fill missing or empty-string summaries
+            out[row.id] = _extractive(row)
     return out
 
 
@@ -220,7 +225,8 @@ def _summarize_via_api(items: list[ItemRow]) -> dict[int, str]:
             for row in batch:
                 out.setdefault(row.id, _extractive(row))
     for row in items:
-        out.setdefault(row.id, _extractive(row))
+        if not out.get(row.id):
+            out[row.id] = _extractive(row)
     return out
 
 
@@ -238,28 +244,32 @@ def summarize_items(items: list[ItemRow]) -> dict[int, str]:
     if not items:
         return {}
 
-    backend = (SETTINGS.llm_backend or "api").lower()
+    from .config import get_settings
+    s = get_settings()
+    backend = (s.llm_backend or "api").lower()
 
     if backend == "extractive":
         return _summarize_extractive(items)
     if backend == "claude_code":
-        # `claude --print` reads the prompt from argv or stdin and prints a
-        # single text response, no tools, no interactive UI.
         cmd: list[str] = ["claude", "--print"]
-        if SETTINGS.llm_cli_model:
-            cmd += ["--model", SETTINGS.llm_cli_model]
+        if s.llm_cli_model:
+            cmd += ["--model", s.llm_cli_model]
         return _summarize_via_cli(items, cmd)
     if backend == "codex":
-        # `codex exec` is the non-interactive subcommand; --color never keeps
-        # stdout free of ANSI sequences, --skip-git-repo-check lets the call
-        # work outside a repo, and reading the prompt from stdin avoids argv
-        # length limits on large batches.
-        cmd = ["codex", "exec", "--color", "never", "--skip-git-repo-check"]
-        if SETTINGS.llm_cli_model:
-            cmd += ["--model", SETTINGS.llm_cli_model]
+        # --color never: keep stdout free of ANSI escapes.
+        # --skip-git-repo-check: work when called outside a git repo.
+        # reasoning_effort=low: summarization is simple; high effort burns quota needlessly.
+        cmd = [
+            "codex", "exec",
+            "--color", "never",
+            "--skip-git-repo-check",
+            "-c", "reasoning_effort=low",
+        ]
+        if s.llm_cli_model:
+            cmd += ["--model", s.llm_cli_model]
         return _summarize_via_cli(items, cmd)
 
     # default: OpenAI-compatible HTTP API; no key -> extractive
-    if not SETTINGS.llm_api_key:
+    if not s.llm_api_key:
         return _summarize_extractive(items)
     return _summarize_via_api(items)

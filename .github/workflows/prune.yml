@@ -1,13 +1,11 @@
-# DailyDigest nightly prune workflow
+# DailyDigest prune workflow — manual trigger only (local-first mode)
 #
-# Runs daily at 03:15 UTC (off-peak).
-# Deletes items older than RETENTION_DAYS (configured in PROFILE_PATH or defaults to 30).
-# Updates digest.db artifact for next digest run.
+# Automated pruning is not needed when running locally; data/digest.db lives
+# on your machine and you can prune manually with `dd prune`.
+# Re-enable the schedule below if you switch to a hosted/CI-based deployment.
 
 name: Prune
 on:
-  schedule:
-    - cron: '15 3 * * *'  # 03:15 UTC daily
   workflow_dispatch:
 
 jobs:
@@ -17,16 +15,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-          cache: 'pip'
-
       - name: Setup uv
         uses: astral-sh/setup-uv@v3
         with:
           enable-cache: true
+          python-version: '3.12'
 
       - name: Download digest-db artifact
         uses: actions/download-artifact@v4

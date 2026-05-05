@@ -22,7 +22,7 @@ from ..models import Item, SourceSpec
     reraise=False,
 )
 def _get_json(url: str, params: dict[str, str]) -> dict:
-    with httpx.Client(timeout=20.0) as client:
+    with httpx.Client(timeout=20.0, follow_redirects=True) as client:
         resp = client.get(url, params=params)
         resp.raise_for_status()
         return resp.json()
@@ -98,6 +98,7 @@ class ClinicalTrialsSource:
         last_update = (
             (status_mod.get("lastUpdatePostDateStruct") or {}).get("date")
             or status_mod.get("lastUpdatePostDate")
+            or (status_mod.get("lastUpdateSubmitDateStruct") or {}).get("date")
             or status_mod.get("lastUpdateSubmitDate")
         )
         pub_dt = _parse_date(last_update)

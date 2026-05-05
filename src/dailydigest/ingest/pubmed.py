@@ -57,7 +57,7 @@ class PubMedSource:
 
         try:
             root = ET_fromstring(xml_text)
-        except ET.ParseError:
+        except Exception:
             return out
 
         for art in root.findall(".//PubmedArticle"):
