@@ -13,7 +13,9 @@ import pytest
 
 from dailydigest.rank.ranker import (
     DOWNWEIGHT_PENALTY,
+    LRRanker,
     _apply_downweight,
+    _lr_weights_path,
     _cosine_score_items,
     pick_top_per_section,
     score_items,
@@ -156,6 +158,54 @@ class TestScoreItems:
         scored = score_items(items, _profile_vec(3), [])
         scores = [s for _, s in scored]
         assert scores == sorted(scores, reverse=True)
+
+
+class TestLRRankerPersistence:
+    def test_fit_writes_loadable_npz(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("DB_PATH", str(tmp_path / "digest.db"))
+        from dailydigest import config as config_mod
+
+        config_mod.reload_settings()
+        X = np.asarray(
+            [
+                [1.0, 0.0, 0.0],
+                [0.9, 0.1, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.1, 0.9, 0.0],
+            ],
+            dtype=np.float32,
+        )
+        y = np.asarray([1, 1, -1, -1], dtype=np.float32)
+
+        ranker = LRRanker()
+        ranker.fit(X, y)
+
+        assert _lr_weights_path().exists()
+        loaded = LRRanker()
+        assert loaded.load() is True
+        scores = loaded.score(X)
+        assert scores.shape == (4,)
+
+    def test_missing_weight_cache_rechecks_when_weights_appear(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("DB_PATH", str(tmp_path / "digest.db"))
+        from dailydigest import config as config_mod
+        from dailydigest.rank import ranker as ranker_mod
+
+        config_mod.reload_settings()
+        ranker_mod._LR_SINGLETON = False
+        path = _lr_weights_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        np.savez(
+            path,
+            coef=np.asarray([[1.0, 0.0, 0.0]], dtype=np.float32),
+            intercept=np.asarray([0.0], dtype=np.float32),
+            classes=np.asarray([-1, 1], dtype=np.int32),
+        )
+
+        try:
+            assert ranker_mod.get_lr_ranker() is not None
+        finally:
+            ranker_mod.reset_lr_cache()
 
 
 # ---------------------------------------------------------------------------

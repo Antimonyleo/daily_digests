@@ -145,7 +145,7 @@ def record_vote_by_id(item_id: int, value: int) -> bool:
     don't need to resolve a label like ``R3``. ``value`` semantics:
 
     - ``+1`` / ``-1``: upsert the vote via :func:`_upsert_vote` (logs flips).
-    - ``0``: neutral — delete any existing vote for this item.
+    - ``0``: neutral — persist a reviewed-but-neutral signal for UI feedback.
 
     Returns True on success, False if ``item_id`` does not exist.
     """
@@ -158,23 +158,12 @@ def record_vote_by_id(item_id: int, value: int) -> bool:
         if s.get(ItemRow, item_id) is None:
             return False
 
-        if value == 0:
-            existing = s.execute(
-                select(VoteRow).where(VoteRow.item_id == item_id)
-            ).scalar_one_or_none()
-            if existing is not None:
-                logger.info(
-                    "cleared vote on item %d (was %+d)", item_id, existing.value
-                )
-                s.delete(existing)
-            return True
-
         _upsert_vote(s, item_id, value)
         return True
 
 
 def get_vote_value(item_id: int) -> int | None:
-    """Return the stored vote value (+1/-1) for ``item_id``, or None."""
+    """Return the stored vote value (+1/0/-1) for ``item_id``, or None."""
     init_db()
     with session_scope() as s:
         return s.execute(
@@ -220,6 +209,7 @@ def vote_dataset() -> tuple[np.ndarray, np.ndarray] | None:
         rows = s.execute(
             select(VoteRow.value, ItemRow.title, ItemRow.abstract)
             .join(ItemRow, VoteRow.item_id == ItemRow.id)
+            .where(VoteRow.value.in_((-1, 1)))
         ).all()
 
     if len(rows) < MIN_VOTES_FOR_LR:

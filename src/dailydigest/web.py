@@ -9,7 +9,7 @@ Routes:
 - ``POST /refresh``        — kick off a dry-run pipeline in the background
 - ``GET /healthz``         — liveness probe
 - ``GET /setup``           — onboarding wizard (bio, keywords, LLM backend)
-- ``POST /setup``          — write profile.yaml and .env, redirect to /run
+- ``POST /setup``          — write local profile YAML and .env, redirect to /run
 - ``GET /run``             — brewing page with live SSE progress feed
 - ``POST /run/start``      — kick off pipeline.run_all in a background thread
 - ``GET /run/stream``      — Server-Sent Events stream of pipeline progress
@@ -19,15 +19,19 @@ Routes:
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
 import logging
 import os
 import queue as std_queue
+import re
+import secrets
 import shutil
 import threading
 import uuid
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs, urlsplit
 
 import yaml
 from fastapi import FastAPI, HTTPException, Request
@@ -39,13 +43,14 @@ from fastapi.responses import (
     StreamingResponse,
 )
 from fastapi.templating import Jinja2Templates
+from jinja2 import Environment, FileSystemLoader
 from sqlalchemy import select
 
 from . import votes as votes_mod
-from .config import SETTINGS, reload_settings
-from .email_render import SECTION_META, SECTION_ORDER
+from .config import SETTINGS, get_settings, reload_settings
+from .email_render import SECTION_META, SECTION_ORDER, safe_url
 from .pipeline import _digest_id, run_all
-from .store import ItemRow, VoteRow, init_db, session_scope
+from .store import DigestRow, ItemRow, VoteRow, init_db, session_scope
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +60,9 @@ _PROFILE_PATH = _REPO_ROOT / SETTINGS.profile_path
 _ENV_PATH = _REPO_ROOT / ".env"
 
 app = FastAPI(title="DailyDigest")
-templates = Jinja2Templates(directory=str(_TEMPLATE_DIR))
+templates = Jinja2Templates(
+    env=Environment(loader=FileSystemLoader(str(_TEMPLATE_DIR)), autoescape=True)
+)
 
 # Per-section sort order so we can ORDER BY (section_order, label_number).
 _SECTION_RANK = {name: idx for idx, name in enumerate(SECTION_ORDER)}
@@ -66,6 +73,8 @@ _SECTION_RANK = {name: idx for idx, name in enumerate(SECTION_ORDER)}
 _RUN_QUEUES: dict[str, std_queue.Queue[dict[str, Any]]] = {}
 _RUN_STARTED: set[str] = set()
 _RUN_LOCK = threading.Lock()
+_CSRF_TOKEN = secrets.token_urlsafe(32)
+_ENV_SAFE_RE = re.compile(r"^[A-Za-z0-9_./:@+-]*$")
 
 
 # ---------------------------------------------------------------------------
@@ -124,7 +133,7 @@ def _load_today(digest_id: str) -> tuple[list[dict], dict[int, int]]:
                     "id": row.id,
                     "label": row.item_label or "",
                     "title": row.title or "",
-                    "url": row.url or "",
+                    "url": safe_url(row.url),
                     "source": row.source or "",
                     "published": _format_date(row),
                     "summary": row.summary or "",
@@ -155,6 +164,46 @@ def _load_today(digest_id: str) -> tuple[list[dict], dict[int, int]]:
     return rendered_sections, current_vote
 
 
+def _digest_exists(digest_id: str) -> bool:
+    init_db()
+    with session_scope() as s:
+        return s.get(DigestRow, digest_id) is not None
+
+
+def _host_name(host_header: str | None) -> str:
+    host = (host_header or "").strip()
+    if host.startswith("["):
+        end = host.find("]")
+        return host[1:end].lower() if end != -1 else host.lower()
+    return host.rsplit(":", 1)[0].lower()
+
+
+def _is_local_host(host: str) -> bool:
+    return host == "localhost" or host == "testserver" or host == "::1" or host.startswith("127.")
+
+
+def _require_local_origin(request: Request) -> None:
+    host = _host_name(request.headers.get("host"))
+    if not _is_local_host(host):
+        raise HTTPException(status_code=403, detail="local UI only accepts loopback hosts")
+
+    origin = request.headers.get("origin")
+    if not origin:
+        return
+    origin_host = _host_name(urlsplit(origin).netloc)
+    if origin_host != host or not _is_local_host(origin_host):
+        raise HTTPException(status_code=403, detail="cross-origin writes are not allowed")
+
+
+def _require_csrf(request: Request, form: dict[str, str] | None = None) -> None:
+    _require_local_origin(request)
+    supplied = request.headers.get("x-csrf-token")
+    if form is not None:
+        supplied = supplied or form.get("_csrf_token")
+    if not supplied or not hmac.compare_digest(str(supplied), _CSRF_TOKEN):
+        raise HTTPException(status_code=403, detail="invalid CSRF token")
+
+
 # ---------------------------------------------------------------------------
 # Profile / env helpers (onboarding).
 # ---------------------------------------------------------------------------
@@ -162,6 +211,32 @@ def _load_today(digest_id: str) -> tuple[list[dict], dict[int, int]]:
 
 def _profile_exists() -> bool:
     return _PROFILE_PATH.exists()
+
+
+def _profile_data() -> dict[str, Any]:
+    if not _PROFILE_PATH.exists():
+        return {}
+    try:
+        return yaml.safe_load(_PROFILE_PATH.read_text()) or {}
+    except Exception as e:  # noqa: BLE001
+        logger.warning("could not parse profile.yaml: %s", e)
+        return {}
+
+
+def _profile_name() -> str:
+    return str(_profile_data().get("name") or "").strip()
+
+
+async def _read_urlencoded_form(request: Request) -> dict[str, str]:
+    """Parse browser form posts without requiring python-multipart.
+
+    The setup and name forms use the default
+    ``application/x-www-form-urlencoded`` encoding, so Starlette's multipart
+    dependency is unnecessary here.
+    """
+    raw = await request.body()
+    parsed = parse_qs(raw.decode("utf-8"), keep_blank_values=True)
+    return {k: values[-1] if values else "" for k, values in parsed.items()}
 
 
 def _detect_clis() -> dict[str, bool]:
@@ -180,6 +255,7 @@ def _parse_csv(value: str | None) -> list[str]:
 def _load_existing_form_defaults() -> dict[str, str]:
     """Pre-populate the form from any existing profile.yaml + .env values."""
     out: dict[str, str] = {
+        "name": "",
         "bio": "",
         "keywords": "",
         "downweight": "",
@@ -189,10 +265,15 @@ def _load_existing_form_defaults() -> dict[str, str]:
         "llm_model": SETTINGS.llm_model,
         "claude_cli_model": "",
         "codex_cli_model": "",
+        "top_research": str(SETTINGS.top_research),
+        "top_industry": str(SETTINGS.top_industry),
+        "top_regulatory": str(SETTINGS.top_regulatory),
+        "top_world": str(SETTINGS.top_world),
     }
     if _PROFILE_PATH.exists():
         try:
             data = yaml.safe_load(_PROFILE_PATH.read_text()) or {}
+            out["name"] = str(data.get("name") or "").strip()
             out["bio"] = (data.get("bio") or "").strip()
             out["keywords"] = ", ".join(data.get("keywords") or [])
             out["downweight"] = ", ".join(data.get("downweight") or [])
@@ -220,8 +301,16 @@ def _read_env_file(path: Path) -> dict[str, str]:
         if not line or line.startswith("#") or "=" not in line:
             continue
         k, _, v = line.partition("=")
-        out[k.strip()] = v.strip()
+        out[k.strip()] = _parse_env_value(v)
     return out
+
+
+def _parse_env_value(value: str) -> str:
+    val = value.strip()
+    if len(val) >= 2 and val[0] == '"' and val[-1] == '"':
+        body = val[1:-1]
+        return body.replace('\\"', '"').replace("\\\\", "\\")
+    return val
 
 
 def _write_env_file(path: Path, updates: dict[str, str]) -> None:
@@ -243,16 +332,30 @@ def _write_env_file(path: Path, updates: dict[str, str]) -> None:
         k, _, _v = stripped.partition("=")
         key = k.strip()
         if key in updates:
-            new_lines.append(f"{key}={updates[key]}")
+            new_lines.append(f"{key}={_format_env_value(updates[key])}")
             seen.add(key)
         else:
             new_lines.append(line)
 
     for key, val in updates.items():
         if key not in seen:
-            new_lines.append(f"{key}={val}")
+            new_lines.append(f"{key}={_format_env_value(val)}")
 
     path.write_text("\n".join(new_lines) + "\n")
+
+
+def _format_env_value(value: str) -> str:
+    val = str(value)
+    if any(ch in val for ch in ("\r", "\n", "\0")):
+        raise ValueError("environment values cannot contain line breaks")
+    if val == "" or _ENV_SAFE_RE.match(val):
+        return val
+    escaped = val.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
+def _env_value_has_control_chars(value: str | None) -> bool:
+    return any(ch in str(value or "") for ch in ("\r", "\n", "\0"))
 
 
 def _validate_setup(form: dict[str, str]) -> list[str]:
@@ -274,7 +377,37 @@ def _validate_setup(form: dict[str, str]) -> list[str]:
         errors.append("`claude` CLI not found in PATH. Install Claude Code first.")
     if backend == "codex" and not clis["codex"]:
         errors.append("`codex` CLI not found in PATH. Install Codex first.")
+    for key, label in (
+        ("llm_base_url", "API base URL"),
+        ("llm_api_key", "API key"),
+        ("llm_model", "API model"),
+        ("claude_cli_model", "Claude model"),
+        ("codex_cli_model", "Codex model"),
+    ):
+        if _env_value_has_control_chars(form.get(key)):
+            errors.append(f"{label} cannot contain line breaks.")
+    for key, label in (
+        ("top_research", "Research items"),
+        ("top_industry", "Industry items"),
+        ("top_regulatory", "Regulatory items"),
+        ("top_world", "World items"),
+    ):
+        raw = (form.get(key) or "").strip()
+        try:
+            value = int(raw)
+        except ValueError:
+            errors.append(f"{label} must be a number.")
+            continue
+        if value < 0 or value > 30:
+            errors.append(f"{label} must be between 0 and 30.")
     return errors
+
+
+def _int_form(form: dict[str, str], key: str, default: int) -> str:
+    try:
+        return str(int((form.get(key) or "").strip()))
+    except ValueError:
+        return str(default)
 
 
 # ---------------------------------------------------------------------------
@@ -288,14 +421,18 @@ def index(request: Request) -> Response:
         return RedirectResponse(url="/setup", status_code=302)
     digest_id = _digest_id()
     sections, current_vote = _load_today(digest_id)
+    brewed = bool(sections) or _digest_exists(digest_id)
     response = templates.TemplateResponse(
         request,
         "digest_web.html.j2",
         {
             "digest_id": digest_id,
+            "profile_name": _profile_name(),
             "sections": sections,
             "current_vote_per_item": current_vote,
             "empty": len(sections) == 0,
+            "brewed": brewed,
+            "csrf_token": _CSRF_TOKEN,
         },
     )
     response.headers["Cache-Control"] = "no-store"
@@ -303,7 +440,8 @@ def index(request: Request) -> Response:
 
 
 @app.post("/vote/{item_id}/{value}")
-def vote(item_id: int, value: int) -> JSONResponse:
+def vote(request: Request, item_id: int, value: int) -> JSONResponse:
+    _require_csrf(request)
     if value not in (-1, 0, 1):
         raise HTTPException(status_code=400, detail="value must be -1, 0, or 1")
     ok = votes_mod.record_vote_by_id(item_id, value)
@@ -320,7 +458,8 @@ def _run_pipeline_dry_run() -> None:
 
 
 @app.post("/refresh")
-def refresh() -> JSONResponse:
+def refresh(request: Request) -> JSONResponse:
+    _require_csrf(request)
     digest_id = _digest_id()
     threading.Thread(target=_run_pipeline_dry_run, daemon=True).start()
     return JSONResponse({"ok": True, "digest_id": digest_id})
@@ -344,6 +483,7 @@ def setup_get(request: Request) -> Response:
             "form": form,
             "errors": [],
             "cli_status": _detect_clis(),
+            "csrf_token": _CSRF_TOKEN,
         },
     )
     response.headers["Cache-Control"] = "no-store"
@@ -352,8 +492,10 @@ def setup_get(request: Request) -> Response:
 
 @app.post("/setup")
 async def setup_post(request: Request) -> Response:
-    raw = await request.form()
+    raw = await _read_urlencoded_form(request)
+    _require_csrf(request, raw)
     form: dict[str, str] = {
+        "name": str(raw.get("name", "")),
         "bio": str(raw.get("bio", "")),
         "keywords": str(raw.get("keywords", "")),
         "downweight": str(raw.get("downweight", "")),
@@ -363,6 +505,10 @@ async def setup_post(request: Request) -> Response:
         "llm_model": str(raw.get("llm_model", "")),
         "claude_cli_model": str(raw.get("claude_cli_model", "")),
         "codex_cli_model": str(raw.get("codex_cli_model", "")),
+        "top_research": str(raw.get("top_research", SETTINGS.top_research)),
+        "top_industry": str(raw.get("top_industry", SETTINGS.top_industry)),
+        "top_regulatory": str(raw.get("top_regulatory", SETTINGS.top_regulatory)),
+        "top_world": str(raw.get("top_world", SETTINGS.top_world)),
     }
 
     errors = _validate_setup(form)
@@ -370,7 +516,12 @@ async def setup_post(request: Request) -> Response:
         response = templates.TemplateResponse(
             request,
             "setup.html.j2",
-            {"form": form, "errors": errors, "cli_status": _detect_clis()},
+            {
+                "form": form,
+                "errors": errors,
+                "cli_status": _detect_clis(),
+                "csrf_token": _CSRF_TOKEN,
+            },
             status_code=400,
         )
         response.headers["Cache-Control"] = "no-store"
@@ -378,6 +529,7 @@ async def setup_post(request: Request) -> Response:
 
     # Write profile.yaml.
     profile = {
+        "name": form["name"].strip(),
         "bio": form["bio"].strip() or "General reader.",
         "keywords": _parse_csv(form["keywords"]),
         "downweight": _parse_csv(form["downweight"]),
@@ -403,6 +555,10 @@ async def setup_post(request: Request) -> Response:
         # we write it now so when that agent lands their config field, the
         # value is already on disk.
         "LLM_CLI_MODEL": cli_model,
+        "TOP_RESEARCH": _int_form(form, "top_research", SETTINGS.top_research),
+        "TOP_INDUSTRY": _int_form(form, "top_industry", SETTINGS.top_industry),
+        "TOP_REGULATORY": _int_form(form, "top_regulatory", SETTINGS.top_regulatory),
+        "TOP_WORLD": _int_form(form, "top_world", SETTINGS.top_world),
     }
     _write_env_file(_ENV_PATH, env_updates)
     # Propagate changes to os.environ so pydantic-settings picks them up,
@@ -413,8 +569,26 @@ async def setup_post(request: Request) -> Response:
         else:
             os.environ.pop(k, None)
     reload_settings()
+    globals()["SETTINGS"] = get_settings()
 
     response = RedirectResponse(url="/run", status_code=303)
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@app.post("/profile/name")
+async def profile_name_post(request: Request) -> Response:
+    raw = await _read_urlencoded_form(request)
+    _require_csrf(request, raw)
+    name = str(raw.get("name", "")).strip()
+    if name:
+        data = _profile_data()
+        if not data:
+            data = {"bio": "General reader.", "keywords": [], "downweight": []}
+        data["name"] = name
+        _PROFILE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _PROFILE_PATH.write_text(yaml.safe_dump(data, sort_keys=False))
+    response = RedirectResponse(url="/", status_code=303)
     response.headers["Cache-Control"] = "no-store"
     return response
 
@@ -470,7 +644,7 @@ def run_get(request: Request) -> Response:
     response = templates.TemplateResponse(
         request,
         "run.html.j2",
-        {"run_id": run_id},
+        {"run_id": run_id, "csrf_token": _CSRF_TOKEN},
     )
     response.headers["Cache-Control"] = "no-store"
     return response
@@ -478,6 +652,7 @@ def run_get(request: Request) -> Response:
 
 @app.post("/run/start")
 async def run_start(request: Request) -> JSONResponse:
+    _require_csrf(request)
     body: dict[str, Any] = {}
     try:
         body = await request.json()

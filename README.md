@@ -1,48 +1,140 @@
 # DailyDigest
 
-Personalized morning research/news digest. Ingests RSS feeds and APIs across academic journals (Nature, Science, Cell, NEJM, Lancet, ...), preprints (bioRxiv, medRxiv, arXiv), biotech industry press (Endpoints, FierceBiotech, STAT), regulatory bodies (FDA, ClinicalTrials.gov), and general news (BBC, Al Jazeera, MIT Tech Review, Hacker News). Ranks items against your interest profile. Emails a condensed digest each morning.
+DailyDigest is a personalized morning research and news digest. It pulls from journals, preprint servers, biotech industry feeds, regulatory sources, and world news; ranks everything against your profile; summarizes the best items; and gives you a calm local UI for reading and feedback.
 
-**Status:** MVP shipped, end-to-end verified in dry-run. See [`docs/STATUS.md`](docs/STATUS.md).
+It is built for researchers who want signal without opening 40 tabs before breakfast.
+
+**Status:** public-release hardened local app. Verified with `92` passing tests. See [docs/STATUS.md](docs/STATUS.md).
+
+## Features
+
+- One-command local web app with `./scripts/start.sh`
+- First-run setup wizard for name, research profile, keywords, downweights, digest size, and summarizer backend
+- Broad source coverage: journals, bioRxiv/medRxiv/arXiv, PubMed/OpenAlex, FDA/ClinicalTrials.gov, biotech news, and world news
+- Profile-aware ranking with local embeddings
+- Good / Neutral / Bad feedback saved instantly
+- Optional learned ranking after enough Good/Bad votes and `uv run dd vote --train`
+- Extractive summaries by default, with optional OpenAI-compatible API, Claude Code CLI, or Codex CLI backends
+- Dry-run HTML previews and optional Resend email delivery
+- Local-first safety: loopback-only web server, CSRF-protected write routes, escaped templates, ignored user profile/data
 
 ## Quickstart
 
 ```bash
-uv sync
-cp config/profile.example.yaml config/profile.yaml   # then edit
-cp .env.example .env                                  # then edit
-uv run dd run-all --dry-run                           # writes data/digest-<ts>.html
+git clone <your-repo-url>
+cd dailydigest
+./scripts/start.sh
 ```
 
-Open the resulting HTML in a browser. To go live, fill `RESEND_API_KEY` and `DIGEST_TO` in `.env` and drop `--dry-run`.
+Open `http://127.0.0.1:8765`. First-time users go to setup, which writes the local profile to `data/profile.yaml`, updates `.env`, and starts a dry-run brew with live progress.
 
-## Commands
+Run without auto-opening a browser:
 
 ```bash
-dd ingest                  # pull all sources into SQLite
-dd rank                    # print top 20 ranked recent items
-dd run-all                 # full pipeline + send email
-dd run-all --dry-run       # render HTML to disk, no send
-dd run-all --gate          # only run if local hour == DIGEST_HOUR
-dd run-all --backfill 7    # widen recency window to 7 days
-dd vote "+R3 R7 -I5"       # thumbs feedback on the most recent digest
-dd vote --train            # retrain the LR ranker (needs ≥30 votes)
-dd prune                   # delete items older than RETENTION_DAYS
+NO_BROWSER=1 ./scripts/start.sh
+```
+
+DailyDigest expects to be run from a repo checkout. `uv` is required; the startup script will tell you if it is missing.
+
+## First-Run Tutorial
+
+1. Start the app with `./scripts/start.sh`.
+2. Fill out Settings with your bio and interest keywords.
+3. Choose `Extractive` for the easiest first run. It needs no login or API key.
+4. Click `Brew my morning cup of tea`.
+5. Read the digest and mark entries Good, Neutral, or Bad.
+
+Good and Bad votes can improve future ranking after retraining. Neutral only marks an item reviewed.
+
+## Summarizer Backends
+
+| Backend | Setup | Best for |
+|---|---|---|
+| `extractive` | None | First run, offline use, zero cost |
+| `api` | `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` | OpenAI-compatible hosted models |
+| `claude_code` | Local `claude` CLI installed and logged in | Using a Claude subscription locally |
+| `codex` | Local `codex` CLI installed and logged in | Using an OpenAI/Codex login locally |
+
+Setup detects whether `claude` or `codex` are on `PATH`. If a CLI is installed but not logged in, the app may only discover that during brew time; failed batches fall back to extractive summaries instead of aborting the digest.
+
+## Common Workflows
+
+Preview a static HTML digest:
+
+```bash
+uv sync
+uv run dd run-all --dry-run
+```
+
+Send a real email digest:
+
+```bash
+# Fill RESEND_API_KEY and DIGEST_TO in .env first.
+uv run dd run-all
+```
+
+Retrain ranking from feedback:
+
+```bash
+uv run dd vote --train
+```
+
+Run only at the configured local digest hour:
+
+```bash
+uv run dd run-all --gate
+```
+
+## CLI Reference
+
+```bash
+uv run dd ingest                  # Pull all sources into SQLite
+uv run dd rank                    # Print top ranked recent items
+uv run dd run-all                 # Full pipeline + email send
+uv run dd run-all --dry-run       # Render HTML to data/, no email
+uv run dd run-all --backfill 7    # Widen recency window
+uv run dd vote "+R3 R7 -I5"       # Record label-based feedback
+uv run dd vote --train            # Train learned ranker, needs >=30 Good/Bad votes
+uv run dd prune                   # Delete old items
+```
+
+## Project Map
+
+```mermaid
+flowchart LR
+    accTitle: DailyDigest Pipeline
+    accDescr: Sources are ingested into SQLite, ranked against the user profile, summarized, shown in the local UI or email preview, and improved through feedback.
+
+    sources["Sources"] --> ingest["Ingest"]
+    ingest --> dedupe["Dedupe + English filter"]
+    dedupe --> store["SQLite"]
+    profile["data/profile.yaml"] --> rank["Profile ranking"]
+    store --> rank
+    rank --> summarize["Summarize"]
+    summarize --> ui["Local web UI"]
+    summarize --> email["Email / HTML preview"]
+    ui --> votes["Votes"]
+    votes --> ranker["Optional LR retrain"]
+    ranker --> rank
 ```
 
 ## Documentation
 
-- [`CLAUDE.md`](CLAUDE.md) — full architecture, design decisions, conventions.
-- [`docs/STATUS.md`](docs/STATUS.md) — what's done, what's broken, how to resume work.
-- [`docs/CHANGELOG.md`](docs/CHANGELOG.md) — chronological build log, decisions, bug fixes.
+- [CLAUDE.md](CLAUDE.md) - architecture, conventions, and design notes
+- [docs/STATUS.md](docs/STATUS.md) - current state and verification
+- [docs/CHANGELOG.md](docs/CHANGELOG.md) - build log and fixes
+- [docs/llm-backends.md](docs/llm-backends.md) - backend tradeoffs
+- [docs/domain-setup.md](docs/domain-setup.md) - Resend sender domain setup
 
 ## Cost
 
-Target ≤ $5/month all-in:
-- GitHub Actions cron: free
-- LLM (small hosted): $0–3
-- Resend (1 email/day): free tier
-- Embeddings: local CPU, free
+Typical personal use can stay very cheap:
+
+- Local embeddings and SQLite: free
+- GitHub Actions cron: free tier
+- Resend daily email: free tier
+- LLM summaries: optional, often a few dollars/month or zero with extractive mode
 
 ## License
 
-Personal project — no license attached.
+Personal project. No license attached.

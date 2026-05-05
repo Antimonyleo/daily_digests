@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from pathlib import Path
+from urllib.parse import urlsplit
 
-from jinja2 import Environment, FileSystemLoader, select_autoescape
+from jinja2 import Environment, FileSystemLoader
 
 from .store import ItemRow
 
 _TEMPLATE_DIR = Path(__file__).resolve().parents[2] / "templates"
+_ALLOWED_LINK_SCHEMES = {"http", "https"}
 
 SECTION_META: dict[str, dict[str, str]] = {
     "research": {"title": "Research", "emoji": "🧬"},
@@ -23,10 +25,20 @@ SECTION_ORDER = ["research", "industry", "regulatory", "world"]
 def _env() -> Environment:
     return Environment(
         loader=FileSystemLoader(str(_TEMPLATE_DIR)),
-        autoescape=select_autoescape(["html", "xml"]),
+        # Template names end in .html.j2, so select_autoescape(["html"]) would
+        # miss them. Force escaping for feed-controlled email content.
+        autoescape=True,
         trim_blocks=True,
         lstrip_blocks=True,
     )
+
+
+def safe_url(url: str | None) -> str:
+    raw = (url or "").strip()
+    parsed = urlsplit(raw)
+    if parsed.scheme.lower() in _ALLOWED_LINK_SCHEMES and parsed.netloc:
+        return raw
+    return "#"
 
 
 def _format_date(row: ItemRow) -> str:
@@ -61,7 +73,7 @@ def render_digest(
                 {
                     "label": row.item_label or "",
                     "title": row.title or "",
-                    "url": row.url or "",
+                    "url": safe_url(row.url),
                     "source": row.source or "",
                     "published": _format_date(row),
                     "summary": summary or "",

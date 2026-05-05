@@ -1,6 +1,8 @@
 # Personal interest profile. Used to build a vector for ranking.
 # Edit freely; the embedder reads `bio` + each `keywords` entry.
 
+name: ""
+
 bio: |
   Biotech researcher with interests in molecular biology, drug discovery,
   CRISPR-based gene editing, and computational biology. I follow developments

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import logging
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -23,6 +24,23 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
+
+
+def _is_loopback_bind(host: str) -> bool:
+    h = host.strip().lower()
+    if h == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(h).is_loopback
+    except ValueError:
+        return False
+
+
+def _require_loopback_bind(host: str) -> None:
+    if not _is_loopback_bind(host):
+        raise typer.BadParameter(
+            "DailyDigest has no authentication; bind to 127.0.0.1 or localhost."
+        )
 
 
 def should_run_now() -> bool:
@@ -159,6 +177,7 @@ def serve(
     """Run the local FastAPI web UI for browsing today's digest and voting."""
     import uvicorn
 
+    _require_loopback_bind(host)
     typer.echo(f"Open http://{host}:{port} in a browser.")
     uvicorn.run("dailydigest.web:app", host=host, port=port, log_level="info")
 
@@ -177,9 +196,13 @@ def start(
 
     import uvicorn
 
+    _require_loopback_bind(host)
     url = f"http://{host}:{port}"
     typer.echo(f"Starting DailyDigest at {url}")
-    typer.echo("First run? The browser will open the setup wizard. Press Ctrl-C to stop.")
+    if no_browser:
+        typer.echo("First run? Open the URL to use the setup wizard. Press Ctrl-C to stop.")
+    else:
+        typer.echo("First run? The browser will open the setup wizard. Press Ctrl-C to stop.")
 
     if not no_browser:
         # Defer the browser open ~1.5s so uvicorn has time to bind the port.

@@ -92,6 +92,7 @@ class TestLoadSources:
 class TestLoadProfile:
     def test_basic_profile_fields(self, tmp_path):
         profile_yaml = {
+            "name": "Hao",
             "bio": "Researcher in CRISPR and gene therapy.",
             "keywords": ["CRISPR", "gene editing", "mRNA"],
             "downweight": ["cryptocurrency"],
@@ -100,6 +101,7 @@ class TestLoadProfile:
         p.write_text(yaml.dump(profile_yaml))
 
         profile = load_profile(str(p))
+        assert profile.name == "Hao"
         assert "CRISPR" in profile.bio
         assert len(profile.keywords) == 3
         assert "CRISPR" in profile.keywords

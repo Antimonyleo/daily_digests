@@ -1,22 +1,20 @@
 # DailyDigest — Project Status
 
-**Last updated:** 2026-05-04
-**State:** v1.3 — Phases 0–7 + Wave 4 (review fixes) + Wave 5 (CLI backends + web UI) + Wave 6 (GUI onboarding + 65-journal coverage).
-**End-to-end verified:** `dd start` boots FastAPI + auto-opens browser. Setup wizard at `/setup`, brewing page with SSE progress at `/run`, "your morning cup of tea is brewed ☕" at `/done`. **77 sources** (65 research incl. Nature/Science/Cell families, ACS/RSC/Wiley flagships, NAR). 68/68 pytest passing in 0.48s.
+**Last updated:** 2026-05-05
+**State:** v1.5 — public-release hardening: escaped HTML rendering, CSRF-protected local UI writes, loopback-only web binding, one-command startup script, local profile onboarding, voting clarity, and review fixes.
+**End-to-end verified:** `./scripts/start.sh` syncs deps and boots FastAPI. Setup wizard at `/setup`, brewing page with accessible SSE progress at `/run`, "your morning cup of tea is brewed" at `/done`. **77 sources** (65 research incl. Nature/Science/Cell families, ACS/RSC/Wiley flagships, NAR). 92/92 pytest passing.
 
 ---
 
 ## TL;DR for picking this up
 
 ```bash
-cd ~/AI/githubrepo/dailydigest
-uv sync                                  # install deps (~3 GB, includes torch)
-cp config/profile.example.yaml config/profile.yaml   # then edit your bio/keywords
-cp .env.example .env                                  # then edit
-uv run dd run-all --dry-run              # writes data/digest-<ts>.html
+git clone <your-repo-url>
+cd dailydigest
+./scripts/start.sh
 ```
 
-Open the HTML in a browser. If it looks reasonable, populate `RESEND_API_KEY` + `DIGEST_TO` in `.env` (or as GH Actions secrets) and remove `--dry-run`.
+Open `http://127.0.0.1:8765`. First-time users are sent to `/setup`; the wizard writes the local ignored profile at `data/profile.yaml`, then brews with live progress. If you prefer no browser auto-open, use `NO_BROWSER=1 ./scripts/start.sh`.
 
 ---
 
@@ -24,24 +22,24 @@ Open the HTML in a browser. If it looks reasonable, populate `RESEND_API_KEY` + 
 
 | Stage | Command | Status |
 |---|---|---|
-| Ingest | `dd ingest` | ✅ 929 items from 26 active sources in ~37s |
-| Rank | `dd rank` | ✅ prints top-20 with cosine scores |
-| Full pipeline | `dd run-all --dry-run` | ✅ writes HTML to `data/digest-*.html` |
-| Vote | `dd vote "+R1 R2 -W1"` | ✅ resolves labels, writes to votes table |
-| LR retrain | `dd vote --train` | ✅ (skips if <30 votes) |
-| Prune | `dd prune` | ✅ deletes items >30d old |
-| TZ gate | `dd run-all --gate` | ✅ skips unless local hour == DIGEST_HOUR |
-| Backfill | `dd run-all --backfill 7` | ✅ widens recency window |
-| Inbound replies | `dd ingest-replies` | ✅ skip-path verified; IMAP path needs Gmail App Password to test |
+| Ingest | `uv run dd ingest` | ✅ 929 items from 26 active sources in ~37s |
+| Rank | `uv run dd rank` | ✅ prints top-20 with cosine scores |
+| Full pipeline | `uv run dd run-all --dry-run` | ✅ writes HTML to `data/digest-*.html` |
+| Vote | `uv run dd vote "+R1 R2 -W1"` | ✅ resolves labels, writes to votes table |
+| LR retrain | `uv run dd vote --train` | ✅ (skips if <30 votes) |
+| Prune | `uv run dd prune` | ✅ deletes items >30d old |
+| TZ gate | `uv run dd run-all --gate` | ✅ skips unless local hour == DIGEST_HOUR |
+| Backfill | `uv run dd run-all --backfill 7` | ✅ widens recency window |
+| Inbound replies | `uv run dd ingest-replies` | ✅ skip-path verified; IMAP path needs Gmail App Password to test |
 | OPML export | `python -m dailydigest.freshrss_export` | ✅ writes `data/sources.opml` (20 RSS feeds) |
-| GUI onboarding | `dd start` | ✅ Boots server + opens browser; routes new users to `/setup` wizard, returning users to digest |
+| GUI onboarding | `./scripts/start.sh` or `uv run dd start` | ✅ Boots loopback-only server + opens browser; routes users without `data/profile.yaml` to `/setup`, returning users to digest |
 | Setup wizard | `GET /setup` | ✅ Bio + keywords + downweight + LLM backend + model picker (200 OK, 12 KB) |
 | Brewing progress | `GET /run` | ✅ SSE stream from pipeline.run_all with stages: ingest → dedupe → rank → summarize → done |
-| Done page | `GET /done` | ✅ "Your morning cup of tea is brewed ☕" + "Take me there" → opens `/` |
-| Local digest viewer | `GET /` | ✅ FastAPI app at 127.0.0.1:8765, click-to-vote 👍/😐/👎; redirects to /setup if no profile |
-| Claude Code backend | `LLM_BACKEND=claude_code dd run-all` | ✅ `claude --print` (+ optional `--model <id>` via `LLM_CLI_MODEL`) |
-| Codex backend | `LLM_BACKEND=codex dd run-all` | ✅ `codex exec` (+ optional `--model`) |
-| Tests | `uv run pytest -q` (after `uv sync --group dev`) | ✅ 68 passed in 0.46s |
+| Done page | `GET /done` | ✅ "Your morning cup of tea is brewed" + "Open digest" → opens `/` |
+| Local digest viewer | `GET /` | ✅ FastAPI app at 127.0.0.1:8765, Good / Neutral / Bad votes save instantly; redirects to /setup if no profile |
+| Claude Code backend | `LLM_BACKEND=claude_code uv run dd run-all` | ✅ `claude --print` (+ optional `--model <id>` via `LLM_CLI_MODEL`) |
+| Codex backend | `LLM_BACKEND=codex uv run dd run-all` | ✅ `codex exec` (+ optional `--model`) |
+| Tests | `uv run pytest -q` (after `uv sync --group dev`) | ✅ 92 passed |
 
 Live verification artifacts:
 - `data/digest-20260504-081032.html` — 28,224 bytes, all 4 sections (R×8, I×6, G×3, W×3) with emoji headers, inline CSS, vote-syntax footer.
@@ -56,7 +54,7 @@ config/sources.yaml ─► ingest/* ─► dedupe ─► EN filter ─► upsert
                                                             │
                                             recent_items(2d)│
                                                             ▼
-config/profile.yaml ─► embed (bge-small) ─► cosine + (LR if trained)
+data/profile.yaml ─► embed (bge-small) ─► cosine + (LR if trained)
                                                             │
                                                             ▼
                                             pick_top_per_section
@@ -72,7 +70,8 @@ config/profile.yaml ─► embed (bge-small) ─► cosine + (LR if trained)
 - **Storage:** SQLite at `data/digest.db`. Tables: `items` `votes` `digests` `runs`. 30-day retention on items.
 - **Ranker:** cosine vs profile vector by default; hybrid `0.5*cosine + 0.5*lr_prob` once ≥30 votes train the LR.
 - **Summarizer:** OpenAI-compatible `/chat/completions`. Returns extractive (first 2 sentences) when no key is set. Never raises — failures fall back to extractive.
-- **Email:** Resend. Sandbox `onboarding@resend.dev` works without domain. Dry-run writes to disk.
+- **Email:** Resend. Sandbox `onboarding@resend.dev` works without domain. Dry-run writes to disk. Email and web templates force escaping for feed-controlled content.
+- **Local UI safety:** write routes require a per-process CSRF token, reject foreign origins, and the CLI rejects non-loopback web binds.
 - **Hosting:** GitHub Actions hourly cron, gates on user TZ; DB persisted across runs via workflow artifact.
 
 ---
@@ -96,8 +95,9 @@ config/profile.yaml ─► embed (bge-small) ─► cosine + (LR if trained)
 
 ## Configuration cheat sheet
 
-### `config/profile.yaml` (per-user)
+### `data/profile.yaml` (per-user, ignored)
 ```yaml
+name: ""
 bio: |
   3–6 sentences describing research interests.
 keywords: [list of 10–30 topics]
@@ -106,7 +106,7 @@ downweight: [list of penalty keywords]
 
 ### `.env` / GH secrets
 ```
-PROFILE_PATH=config/profile.yaml
+PROFILE_PATH=data/profile.yaml
 SOURCES_PATH=config/sources.yaml
 LLM_BASE_URL=https://api.openai.com/v1   # or NanoGPT / Ollama / vLLM
 LLM_API_KEY=                              # empty → extractive fallback
@@ -117,7 +117,7 @@ DIGEST_TO=you@example.com
 USER_TZ=America/New_York
 DIGEST_HOUR=8
 DB_PATH=data/digest.db
-TOP_RESEARCH=8
+TOP_RESEARCH=12
 TOP_INDUSTRY=6
 TOP_REGULATORY=3
 TOP_WORLD=3
@@ -148,7 +148,8 @@ No blocker bugs.
 ## Quickstart for a fresh shell
 
 ```bash
-cd ~/AI/githubrepo/dailydigest
+git clone <your-repo-url>
+cd dailydigest
 
 # 1. Inspect what state already exists
 git status
@@ -158,8 +159,6 @@ ls data/                  # ← DB and any prior dry-run HTMLs
 uv sync
 
 # 3. Configure
-cp config/profile.example.yaml config/profile.yaml   # if not already
-$EDITOR config/profile.yaml
 cp .env.example .env                                  # if not already
 $EDITOR .env
 
@@ -169,8 +168,8 @@ uv run dd rank            # should print top-20
 uv run dd run-all --dry-run
 
 # 5. Browse + vote (recommended)
-uv run dd serve           # starts http://127.0.0.1:8765
-# Open the URL in a browser; click 👍/😐/👎 next to items.
+./scripts/start.sh        # starts http://127.0.0.1:8765
+# Open the URL in a browser; click Good / Neutral / Bad next to items.
 
 # Or read as a static file:
 xdg-open data/digest-*.html   # Linux
@@ -205,7 +204,7 @@ uv run dd run-all          # no --dry-run
 
 To enable the GH Actions cron:
 1. Push to a GitHub repo.
-2. Settings → Secrets → add: `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL`, `RESEND_API_KEY`, `DIGEST_FROM`, `DIGEST_TO`, `USER_TZ`, `DIGEST_HOUR`, `PROFILE_PATH` (or commit `config/profile.yaml` if non-sensitive).
+2. Settings → Secrets → add: `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL`, `RESEND_API_KEY`, `DIGEST_FROM`, `DIGEST_TO`, `USER_TZ`, `DIGEST_HOUR`, and optionally `PROFILE_PATH`.
 3. The hourly workflow self-gates on `USER_TZ == DIGEST_HOUR` and only sends one email per day.
 
 ---
@@ -215,11 +214,11 @@ To enable the GH Actions cron:
 Roughly in priority order if/when work resumes:
 
 1. **Set up custom sender domain** — biggest deliverability win. Follow `docs/domain-setup.md`. ~30 min.
-2. **Get a working LLM key** — NanoGPT or OpenAI. With key, `summarize.py` produces 1–2 sentence summaries instead of first-2-sentence extractive. Test with `dd run-all --dry-run` and inspect HTML.
+2. **Get a working LLM key** — NanoGPT or OpenAI. With key, `summarize.py` produces 1–2 sentence summaries instead of first-2-sentence extractive. Test with `uv run dd run-all --dry-run` and inspect HTML.
 3. **Test on real GH Actions runner** — 4 workflows written but never executed. Push to a private repo and trigger `workflow_dispatch` once for `digest`, `prune`, `ingest-replies`, `test`.
-4. **Wire up Gmail App Password and test inbound replies** — set `IMAP_USER` / `IMAP_PASSWORD` / `REPLY_TO_EMAIL`, send yourself a digest, reply with `+R1 -I2`, run `dd ingest-replies`.
+4. **Wire up Gmail App Password and test inbound replies** — set `IMAP_USER` / `IMAP_PASSWORD` / `REPLY_TO_EMAIL`, send yourself a digest, reply with `+R1 -I2`, run `uv run dd ingest-replies`.
 5. **Replace dead feeds** — find current URLs for EMA News, openFDA Drugs@FDA, Reuters. Update `config/sources.yaml`.
-6. **Train the LR ranker** — needs ~30 votes. Use the digest a few weeks first, then `dd vote --train`.
+6. **Train the LR ranker** — needs ~30 votes. Use the digest a few weeks first, then `uv run dd vote --train`.
 7. **Stand up FreshRSS sidecar** (optional) — follow `docs/freshrss-setup.md`. Hetzner CX11 + a domain you own. ~$4/mo.
 8. **Per-section length budgets in summary prompt** — currently each section caps item *count*; consider summary length too.
 
@@ -230,6 +229,6 @@ Roughly in priority order if/when work resumes:
 - **Source of truth for design:** `CLAUDE.md` (architecture, decisions, repo layout).
 - **Source of truth for status:** this file.
 - **Build chronology:** `docs/CHANGELOG.md`.
-- **Tests:** none yet (would be Phase 6 if expanded; not in scope of v1).
+- **Tests:** `uv run pytest -q`.
 
 If you find yourself confused about why something is the way it is, the answer is almost always in `CLAUDE.md` § "Key decisions / conventions".

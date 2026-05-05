@@ -22,6 +22,7 @@ class Item(BaseModel):
 
 
 class Profile(BaseModel):
+    name: str = ""
     bio: str
     keywords: list[str] = Field(default_factory=list)
     downweight: list[str] = Field(default_factory=list)

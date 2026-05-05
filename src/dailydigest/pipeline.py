@@ -10,7 +10,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from . import health
-from .config import SETTINGS, load_profile, load_sources
+from .config import get_settings, load_profile, load_sources
 from .dedupe import dedupe_by_url, filter_english
 from .email_render import SECTION_ORDER, render_digest
 from .email_send import send_digest
@@ -28,6 +28,7 @@ from .store import (
     session_scope,
     upsert_items,
     write_digest,
+    write_summaries,
 )
 from .summarize import summarize_items
 
@@ -123,11 +124,12 @@ def ingest_all(progress_callback: ProgressCallback | None = None) -> int:
 
 
 def _section_caps() -> dict[str, int]:
+    s = get_settings()
     return {
-        "research": SETTINGS.top_research,
-        "industry": SETTINGS.top_industry,
-        "regulatory": SETTINGS.top_regulatory,
-        "world": SETTINGS.top_world,
+        "research": s.top_research,
+        "industry": s.top_industry,
+        "regulatory": s.top_regulatory,
+        "world": s.top_world,
     }
 
 
@@ -154,7 +156,7 @@ def _digest_id() -> str:
     with their local 8am.
     """
     try:
-        tz: ZoneInfo | timezone = ZoneInfo(SETTINGS.user_tz)
+        tz: ZoneInfo | timezone = ZoneInfo(get_settings().user_tz)
     except Exception:  # noqa: BLE001 - bad TZ string falls back to UTC
         tz = timezone.utc
     return datetime.now(tz).strftime("%Y-%m-%d")
@@ -226,9 +228,10 @@ def run_all(
     _emit(
         progress_callback,
         "summarize_start",
-        {"items": len(selected_rows), "backend": SETTINGS.llm_backend},
+        {"items": len(selected_rows), "backend": get_settings().llm_backend},
     )
     summaries = summarize_items(selected_rows)
+    write_summaries(summaries)
     _emit(progress_callback, "summarize_done", {"items": len(summaries)})
 
     sections: dict[str, list[tuple[ItemRow, float, str]]] = {k: [] for k in SECTION_ORDER}
@@ -237,10 +240,9 @@ def run_all(
             sections[row.section].append((row, score, summaries.get(row.id, "")))
 
     digest_id = _digest_id()
-    # Only call write_digest if there is no already-sent row for this id.
-    # store.write_digest uses session.merge, which would clobber `sent_at` to
-    # NULL on a re-run. Skipping the write preserves the original send timestamp.
-    if _should_write_digest(digest_id):
+    # Dry-runs should refresh the local preview even if today's email was
+    # already sent. write_digest preserves sent_at for existing rows.
+    if dry_run or _should_write_digest(digest_id):
         write_digest(digest_id, [(row.item_label, row.id) for row, _, _ in labeled])
     else:
         logger.info(
@@ -263,9 +265,10 @@ def run_all(
         {"digest_id": digest_id, "html_bytes": len(html)},
     )
     subject = f"DailyDigest {digest_id}"
-    send_digest(html, subject, dry_run=dry_run)
+    sent = send_digest(html, subject, dry_run=dry_run)
 
-    if not dry_run and SETTINGS.resend_api_key and SETTINGS.digest_to:
+    s = get_settings()
+    if sent and not dry_run and s.resend_api_key and s.digest_to:
         mark_sent(digest_id)
 
     total_items = sum(len(v) for v in sections.values())

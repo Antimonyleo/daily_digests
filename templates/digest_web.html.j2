@@ -1,120 +1,230 @@
 {% extends "_base.html.j2" %}
 {% block title %}DailyDigest {{ digest_id }}{% endblock %}
 {% block extra_styles %}
-  .wrap { max-width: 640px; }
-  .header .actions button {
-    font-size: 12px; padding: 6px 10px; margin-left: 6px;
-    background: #fff; border: 1px solid var(--border); border-radius: 6px; cursor: pointer;
-    color: var(--text);
+  .topbar {
+    display: grid; grid-template-columns: 1fr auto; gap: 20px;
+    align-items: end; margin-bottom: 18px;
   }
-  .header .actions button:hover { background: #f0f0f3; }
+  .eyebrow {
+    color: var(--accent); font-size: 12px; font-weight: 800;
+    letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 8px;
+  }
+	  h1 {
+	    font-size: clamp(28px, 4vw, 44px); line-height: 1.05;
+	    margin: 0; letter-spacing: 0; overflow-wrap: anywhere;
+	  }
+  .subhead {
+    margin: 10px 0 0; color: var(--muted); max-width: 620px;
+    font-size: 15px; line-height: 1.55;
+  }
+  .actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+  .name-prompt {
+    display: grid; grid-template-columns: 1fr auto; gap: 10px;
+    padding: 14px; margin-bottom: 16px; border: 1px solid #d6e6db;
+    border-radius: 8px; background: var(--accent-soft);
+  }
+  .name-prompt label { display: block; font-size: 12px; font-weight: 800; color: var(--accent-strong); margin-bottom: 5px; }
+  .name-prompt input {
+    width: 100%; min-height: 38px; padding: 8px 10px;
+    border: 1px solid #b9d2c3; border-radius: 8px; background: #fff;
+  }
+  .digest-card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; box-shadow: var(--shadow); overflow: hidden; }
+  .digest-toolbar {
+    display: flex; justify-content: space-between; gap: 16px; align-items: center;
+    padding: 16px 18px; background: var(--panel); border-bottom: 1px solid var(--border);
+  }
+	  .digest-date { font-weight: 750; overflow-wrap: anywhere; }
+	  .feedback-note { color: var(--muted); font-size: 13px; line-height: 1.45; max-width: 620px; }
   .section-title {
-    font-size: 16px; margin: 0; padding: 18px 24px 6px 24px;
-    border-bottom: 1px solid #efeff4; color: #111;
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    font-size: 17px; margin: 0; padding: 20px 22px 8px;
+    border-top: 1px solid #edf1ec; color: var(--text);
+  }
+  .section-title:first-of-type { border-top: none; }
+  .section-count {
+    font-size: 12px; color: var(--muted); font-weight: 650;
+    background: #eef1ed; border-radius: 999px; padding: 4px 9px;
   }
   .item {
-    position: relative;
-    padding: 12px 24px 14px 24px;
-    border-bottom: 1px solid #f6f6f8;
+    display: grid; grid-template-columns: minmax(0, 1fr) 214px; gap: 18px;
+    padding: 16px 22px; border-top: 1px solid #eef1ed;
   }
-  .item:last-child { border-bottom: none; }
+  .item:first-of-type { border-top: none; }
   .item .label-pill {
-    display: inline-block; font-weight: 700; color: var(--accent);
-    background: var(--accent-soft); border-radius: 4px;
-    padding: 1px 6px; font-family: Menlo, Consolas, monospace; font-size: 11px;
-    margin-right: 6px;
+    display: inline-flex; align-items: center; font-weight: 800; color: var(--accent-strong);
+    background: var(--accent-soft); border: 1px solid #d7e9dd; border-radius: 6px;
+    padding: 2px 7px; font-family: Menlo, Consolas, monospace; font-size: 11px;
+    margin-right: 8px;
   }
   .item a.title-link {
-    color: var(--accent); text-decoration: none; font-weight: 600; font-size: 14px;
-    line-height: 1.45;
+    color: var(--text); text-decoration: none; font-weight: 720; font-size: 16px;
+    line-height: 1.36; overflow-wrap: anywhere; word-break: normal;
   }
-  .item a.title-link:hover { text-decoration: underline; }
-  .item .meta { font-size: 11px; color: var(--muted); margin-top: 3px; }
-  .item .summary { font-size: 13px; line-height: 1.5; margin-top: 6px; color: #333; }
-  .vote-row {
-    position: absolute; top: 10px; right: 16px;
-    display: flex; gap: 4px;
+  .item a.title-link:hover { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
+	  .item .meta { font-size: 12px; color: var(--muted); margin: 6px 0 0; overflow-wrap: anywhere; }
+	  .item .summary { font-size: 14px; line-height: 1.55; margin: 9px 0 0; color: #334238; overflow-wrap: anywhere; }
+  .save-state { min-height: 18px; margin-top: 8px; color: var(--muted); font-size: 12px; }
+  .save-state.saved { color: var(--up); }
+  .save-state.error { color: var(--down); }
+  .vote-panel {
+    align-self: start; border: 1px solid var(--border); border-radius: 8px;
+    background: #fff; padding: 10px; min-width: 0;
   }
+  .vote-title {
+    font-size: 11px; color: var(--muted); font-weight: 800; text-transform: uppercase;
+    letter-spacing: 0.08em; margin-bottom: 8px;
+  }
+  .vote-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
   .vote-btn {
-    font-size: 14px; line-height: 1; padding: 4px 7px;
-    background: #fafafa; border: 1px solid var(--border); border-radius: 5px;
-    cursor: pointer; color: #555;
+    min-height: 38px; padding: 7px 6px; border: 1px solid var(--border); border-radius: 7px;
+    cursor: pointer; color: var(--text); background: #fafbf9; font-size: 12px; font-weight: 750;
   }
-  .vote-btn:hover { background: #f0f0f3; }
-  .vote-btn.active.up   { background: #e2f4e6; border-color: var(--up); color: var(--up); }
-  .vote-btn.active.neut { background: #ececec; border-color: var(--neutral); color: var(--neutral); }
-  .vote-btn.active.down { background: #fbe6e4; border-color: var(--down); color: var(--down); }
+  .vote-btn:hover { background: #f0f5f1; border-color: #bfd0c5; }
+  .vote-btn.active.good { background: #e4f4eb; border-color: var(--up); color: var(--up); }
+  .vote-btn.active.neutral { background: #eef1ed; border-color: var(--neutral); color: var(--neutral); }
+  .vote-btn.active.bad { background: #fdecea; border-color: var(--down); color: var(--down); }
+  .vote-btn:disabled { opacity: 0.65; cursor: progress; }
   .item.flash { background: var(--flash); transition: background 0.4s; }
-  body.compact .summary { display: none; }
-  body.compact .item { padding-top: 8px; padding-bottom: 8px; }
-  .empty { padding: 48px 24px; text-align: center; color: var(--muted); font-size: 14px; line-height: 1.6; }
+  .empty { padding: 44px 22px; text-align: center; color: var(--muted); font-size: 14px; line-height: 1.6; }
+  .toast {
+    position: fixed; right: 18px; bottom: 18px; z-index: 20;
+    background: #16231c; color: #fff; border-radius: 8px; padding: 11px 13px;
+    box-shadow: 0 12px 30px rgba(0,0,0,0.18); font-size: 13px;
+    transform: translateY(18px); opacity: 0; pointer-events: none;
+    transition: transform 0.18s ease, opacity 0.18s ease;
+  }
+  .toast.show { transform: translateY(0); opacity: 1; }
+  @media (max-width: 760px) {
+    .topbar { grid-template-columns: 1fr; align-items: start; }
+    .actions { justify-content: flex-start; }
+    .digest-toolbar { align-items: flex-start; flex-direction: column; }
+    .item { grid-template-columns: 1fr; gap: 10px; }
+    .vote-panel { width: 100%; }
+    .name-prompt { grid-template-columns: 1fr; }
+  }
 {% endblock %}
 {% block body %}
-  <div class="card">
-    <div class="header">
+  <header class="topbar">
+    <div>
+      <div class="eyebrow">DailyDigest</div>
+      <h1>Good morning{% if profile_name %}, {{ profile_name }}{% endif %}</h1>
+      <p class="subhead">Fresh research, biotech, regulatory, and world signals ranked against your profile.</p>
+    </div>
+    <div class="actions">
+      <button class="btn primary" id="refresh-btn" type="button">Brew my morning cup of tea</button>
+      <button class="btn" onclick="window.location.href='/setup'" type="button">Settings</button>
+    </div>
+  </header>
+
+  {% if not profile_name %}
+	  <form class="name-prompt" method="post" action="/profile/name">
+	    <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+	    <div>
+      <label for="name">First name</label>
+      <input id="name" name="name" type="text" autocomplete="given-name" placeholder="What should DailyDigest call you?">
+    </div>
+    <button class="btn primary" type="submit">Save</button>
+  </form>
+  {% endif %}
+
+  <main class="digest-card">
+    <div class="digest-toolbar">
       <div>
-        <div class="title">DailyDigest</div>
-        <div class="digest-id">{{ digest_id }}</div>
-      </div>
-      <div class="actions">
-        <button id="compact-btn" type="button">Compact</button>
-        <button id="refresh-btn" type="button">Refresh</button>
-        <button onclick="window.location.href='/setup'" type="button">Settings</button>
+        <div class="digest-date">{{ digest_id }}</div>
+	        <div class="feedback-note">Votes save instantly. Good and Bad help future ranking after retraining. Neutral just marks an item reviewed.</div>
       </div>
     </div>
 
-    {% if empty %}
-    <div class="empty">
-      No digest generated for today yet.<br>
-      Run <code>dd run-all --dry-run</code> in a terminal, or click <strong>Refresh</strong>.
-    </div>
+	    {% if empty %}
+	    <div class="empty">
+	      {% if brewed %}
+	      A digest was brewed for today, but no matching items were found.<br>
+	      Adjust section sizes or profile terms in Settings, then brew again.
+	      {% else %}
+	      No digest has been brewed for today yet.<br>
+	      Use the brew button to fetch fresh sources and watch progress live.
+	      {% endif %}
+	    </div>
     {% else %}
       {% for section in sections %}
       <h2 class="section-title">
-        <span style="margin-right:6px;">{{ section.emoji }}</span>{{ section.title }}
+        <span><span style="margin-right:6px;">{{ section.emoji }}</span>{{ section.title }}</span>
+        <span class="section-count">{{ section.entries|length }}</span>
       </h2>
       {% for item in section.entries %}
       <div class="item" data-item-id="{{ item.id }}">
-        <div class="vote-row">
-          <button class="vote-btn up{% if item.current_vote == 1 %} active up{% endif %}"
-                  data-value="1" type="button" title="Upvote">👍</button>
-          <button class="vote-btn neut{% if item.current_vote == 0 %} active neut{% endif %}"
-                  data-value="0" type="button" title="Neutral">😐</button>
-          <button class="vote-btn down{% if item.current_vote == -1 %} active down{% endif %}"
-                  data-value="-1" type="button" title="Downvote">👎</button>
+        <div class="item-main">
+          <div>
+            <span class="label-pill">{{ item.label }}</span>
+            <a class="title-link" href="{{ item.url }}" target="_blank" rel="noopener">{{ item.title }}</a>
+          </div>
+          <div class="meta">
+            {{ item.source }}{% if item.published %} &middot; {{ item.published }}{% endif %}
+          </div>
+          {% if item.summary %}
+          <div class="summary">{{ item.summary }}</div>
+          {% endif %}
+          <div class="save-state" aria-live="polite"></div>
         </div>
-        <div>
-          <span class="label-pill">{{ item.label }}</span>
-          <a class="title-link" href="{{ item.url }}" target="_blank" rel="noopener">{{ item.title }}</a>
+        <div class="vote-panel">
+          <div class="vote-title">Evaluate</div>
+          <div class="vote-row" role="group" aria-label="Evaluate {{ item.label }}">
+            <button class="vote-btn good{% if item.current_vote == 1 %} active good{% endif %}"
+                    data-value="1" type="button" aria-pressed="{{ 'true' if item.current_vote == 1 else 'false' }}">Good</button>
+            <button class="vote-btn neutral{% if item.current_vote == 0 %} active neutral{% endif %}"
+                    data-value="0" type="button" aria-pressed="{{ 'true' if item.current_vote == 0 else 'false' }}">Neutral</button>
+            <button class="vote-btn bad{% if item.current_vote == -1 %} active bad{% endif %}"
+                    data-value="-1" type="button" aria-pressed="{{ 'true' if item.current_vote == -1 else 'false' }}">Bad</button>
+          </div>
         </div>
-        <div class="meta">
-          {{ item.source }}{% if item.published %} &middot; {{ item.published }}{% endif %}
-        </div>
-        {% if item.summary %}
-        <div class="summary">{{ item.summary }}</div>
-        {% endif %}
       </div>
       {% endfor %}
       {% endfor %}
     {% endif %}
 
     <div class="footer">
-      Local UI &middot; votes write to <code>data/digest.db</code> &middot; loopback only.
+      Local UI &middot; votes write to <code>data/digest.db</code>.
     </div>
-  </div>
+  </main>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
 {% endblock %}
 {% block scripts %}
 <script>
 (function () {
-  const VALUE_CLASS = { "1": "up", "0": "neut", "-1": "down" };
+	  const VALUE_CLASS = { "1": "good", "0": "neutral", "-1": "bad" };
+	  const VALUE_LABEL = { "1": "Good", "0": "Neutral", "-1": "Bad" };
+	  const CSRF_TOKEN = {{ csrf_token|tojson }};
+  const toastEl = document.getElementById("toast");
+  let toastTimer = null;
 
   function setActive(itemEl, value) {
     itemEl.querySelectorAll(".vote-btn").forEach((b) => {
       const v = b.dataset.value;
       b.classList.toggle("active", v === String(value));
-      ["up", "neut", "down"].forEach((c) => b.classList.remove(c));
+      b.setAttribute("aria-pressed", v === String(value) ? "true" : "false");
+      ["good", "neutral", "bad"].forEach((c) => b.classList.remove(c));
       b.classList.add(VALUE_CLASS[v]);
     });
+  }
+
+  function setSaving(itemEl, saving) {
+    itemEl.querySelectorAll(".vote-btn").forEach((b) => { b.disabled = saving; });
+  }
+
+  function setStatus(itemEl, text, state) {
+    const status = itemEl.querySelector(".save-state");
+    if (!status) return;
+    status.classList.remove("saved", "error");
+    if (state) status.classList.add(state);
+    status.textContent = text;
+  }
+
+  function showToast(text) {
+    if (!toastEl) return;
+    toastEl.textContent = text;
+    toastEl.classList.add("show");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => toastEl.classList.remove("show"), 2200);
   }
 
   function flash(itemEl) {
@@ -127,22 +237,26 @@
       btn.addEventListener("click", async () => {
         const id = itemEl.dataset.itemId;
         const value = btn.dataset.value;
+        setSaving(itemEl, true);
+        setStatus(itemEl, "Saving response...", "");
         try {
-          const r = await fetch(`/vote/${id}/${value}`, { method: "POST" });
+	          const r = await fetch(`/vote/${id}/${value}`, {
+	            method: "POST",
+	            headers: { "X-CSRF-Token": CSRF_TOKEN },
+	          });
           if (!r.ok) throw new Error("HTTP " + r.status);
           setActive(itemEl, value);
+          const stamp = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+          setStatus(itemEl, `${VALUE_LABEL[value]} saved at ${stamp}`, "saved");
+          showToast(`${VALUE_LABEL[value]} response saved`);
         } catch (e) {
+          setStatus(itemEl, "Response was not saved. Try again.", "error");
           flash(itemEl);
+        } finally {
+          setSaving(itemEl, false);
         }
       });
     });
-  });
-
-  const compactBtn = document.getElementById("compact-btn");
-  if (localStorage.getItem("dd-compact") === "1") document.body.classList.add("compact");
-  compactBtn.addEventListener("click", () => {
-    const on = document.body.classList.toggle("compact");
-    localStorage.setItem("dd-compact", on ? "1" : "0");
   });
 
   const refreshBtn = document.getElementById("refresh-btn");

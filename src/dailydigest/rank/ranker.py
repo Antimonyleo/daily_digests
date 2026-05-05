@@ -76,12 +76,13 @@ class LRRanker:
         target = _lr_weights_path()
         target.parent.mkdir(parents=True, exist_ok=True)
         tmp = target.with_suffix(".npz.tmp")
-        np.savez(
-            tmp,
-            coef=self.coef_,
-            intercept=np.asarray([self.intercept_], dtype=np.float32),
-            classes=self._classes,
-        )
+        with tmp.open("wb") as f:
+            np.savez(
+                f,
+                coef=self.coef_,
+                intercept=np.asarray([self.intercept_], dtype=np.float32),
+                classes=self._classes,
+            )
         tmp.replace(target)
         logger.info("LRRanker: saved weights to %s", target)
 
@@ -139,7 +140,9 @@ def get_lr_ranker() -> LRRanker | None:
     """Return a loaded LRRanker singleton, or ``None`` if weights missing."""
     global _LR_SINGLETON
     if _LR_SINGLETON is False:
-        return None
+        if not _lr_weights_path().exists():
+            return None
+        _LR_SINGLETON = None
     if isinstance(_LR_SINGLETON, LRRanker):
         return _LR_SINGLETON
     with _LR_LOCK:
@@ -172,7 +175,9 @@ def _vote_count() -> int:
     try:
         init_db()
         with session_scope() as s:
-            n = s.execute(select(func.count()).select_from(VoteRow)).scalar_one()
+            n = s.execute(
+                select(func.count()).select_from(VoteRow).where(VoteRow.value.in_((-1, 1)))
+            ).scalar_one()
             return int(n or 0)
     except Exception as e:  # noqa: BLE001
         logger.warning("ranker: failed to count votes: %s", e)

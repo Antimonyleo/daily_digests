@@ -1,14 +1,15 @@
 {% extends "_base.html.j2" %}
 {% block title %}Set up DailyDigest{% endblock %}
 {% block extra_styles %}
-  .card { padding: 24px; }
-  h1 { font-size: 22px; margin: 0 0 4px 0; }
-  .lede { color: var(--muted); margin: 0 0 20px 0; font-size: 13px; }
-  .step { margin-bottom: 28px; }
+  .wrap { max-width: 860px; }
+  .card { padding: 28px; }
+  h1 { font-size: 30px; line-height: 1.1; margin: 0 0 8px 0; letter-spacing: 0; }
+  .lede { color: var(--muted); margin: 0 0 24px 0; font-size: 14px; line-height: 1.5; }
+  .step { margin-bottom: 30px; padding-top: 4px; }
   .step h2 { font-size: 14px; letter-spacing: 0.06em; text-transform: uppercase;
              color: var(--muted); margin: 0 0 8px 0; }
   label { display: block; font-size: 13px; font-weight: 600; margin: 12px 0 4px; }
-  textarea, input[type="text"], input[type="url"], input[type="password"], select {
+  textarea, input[type="text"], input[type="url"], input[type="password"], input[type="number"], select {
     width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px;
     font-size: 13px; font-family: inherit; background: #fff; color: var(--text);
   }
@@ -19,11 +20,12 @@
     background: #fff; display: flex; flex-wrap: wrap; gap: 4px; align-items: center;
     min-height: 38px;
   }
-  .chip {
-    background: var(--accent-soft); color: var(--accent); border-radius: 4px;
-    padding: 3px 8px; font-size: 12px; cursor: pointer; user-select: none;
-  }
-  .chip:hover { background: #d8e7f5; }
+	  .chip {
+	    background: var(--accent-soft); color: var(--accent-strong); border: 0; border-radius: 4px;
+	    padding: 3px 8px; font-size: 12px; cursor: pointer; user-select: none;
+	    max-width: 100%; overflow-wrap: anywhere; text-align: left;
+	  }
+	  .chip:hover, .chip:focus { background: #d8e7f5; outline: 2px solid #b9d2c3; outline-offset: 1px; }
   .chip-input input {
     border: none; outline: none; flex: 1; min-width: 100px; font-size: 13px;
     padding: 4px 6px; background: transparent;
@@ -42,9 +44,13 @@
   .badge.ok { background: #e2f4e6; color: var(--up); }
   .badge.bad { background: #fbe6e4; color: var(--down); }
   .api-fields, .cli-fields { margin-top: 8px; padding: 10px;
-                              background: #fafafb; border-radius: 6px;
+                              background: var(--panel); border-radius: 6px;
                               border: 1px dashed var(--border); }
   .api-fields[hidden], .cli-fields[hidden] { display: none; }
+  .field-grid, .size-grid {
+    display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px;
+  }
+  .size-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .errors { background: var(--flash); color: var(--down); padding: 10px 12px;
             border-radius: 6px; font-size: 13px; margin-bottom: 16px; }
   button.brew {
@@ -52,34 +58,44 @@
     background: var(--accent); color: #fff; border: none; border-radius: 8px;
     cursor: pointer; margin-top: 8px;
   }
-  button.brew:hover { background: #084d96; }
+  button.brew:hover { background: var(--accent-strong); }
+  @media (max-width: 720px) {
+    .field-grid, .size-grid { grid-template-columns: 1fr; }
+  }
 {% endblock %}
 {% block body %}
 <div class="card">
-  <h1>Welcome to DailyDigest ☕</h1>
-  <p class="lede">Tell us about you, pick how to summarize, then brew.</p>
+  <h1>DailyDigest settings</h1>
+  <p class="lede">Tune the profile, summarizer, and section sizes used when brewing a new digest.</p>
 
   {% if errors %}
-  <div class="errors">
+	  <div class="errors" role="alert" aria-live="assertive" tabindex="-1">
     {% for e in errors %}<div>{{ e }}</div>{% endfor %}
   </div>
   {% endif %}
 
-  <form method="post" action="/setup">
+	  <form method="post" action="/setup">
+	    <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
     <div class="step">
       <h2>1 &middot; About you</h2>
+      <div class="field-grid">
+        <div>
+          <label for="name">First name</label>
+	          <input id="name" name="name" type="text" autocomplete="given-name" placeholder="Ada" value="{{ form.name }}">
+        </div>
+      </div>
       <label for="bio">Your bio (3–6 sentences)</label>
       <textarea id="bio" name="bio" placeholder="What do you research? What topics matter most to you?">{{ form.bio }}</textarea>
       <div class="hint">Used to build a vector that ranks items against your interests.</div>
 
-      <label>Interest keywords</label>
+      <label for="kw-text">Interest keywords</label>
       <div class="chip-input" id="kw-input">
         <input type="text" id="kw-text" placeholder="Type and press comma or Enter…">
       </div>
       <input type="hidden" name="keywords" id="kw-hidden" value="{{ form.keywords }}">
       <div class="hint">Examples: CRISPR, mRNA therapeutics, FDA approval.</div>
 
-      <label>Downweight terms (push these down)</label>
+      <label for="dw-text">Downweight terms (push these down)</label>
       <div class="chip-input" id="dw-input">
         <input type="text" id="dw-text" placeholder="Type and press comma or Enter…">
       </div>
@@ -172,7 +188,30 @@
       </div>
     </div>
 
-    <button class="brew" type="submit">Brew my morning tea ☕</button>
+    <div class="step">
+      <h2>3 &middot; Digest size</h2>
+      <div class="size-grid">
+        <div>
+          <label for="top_research">Research</label>
+          <input id="top_research" name="top_research" type="number" min="0" max="30" value="{{ form.top_research }}">
+        </div>
+        <div>
+          <label for="top_industry">Industry</label>
+          <input id="top_industry" name="top_industry" type="number" min="0" max="30" value="{{ form.top_industry }}">
+        </div>
+        <div>
+          <label for="top_regulatory">Regulatory</label>
+          <input id="top_regulatory" name="top_regulatory" type="number" min="0" max="30" value="{{ form.top_regulatory }}">
+        </div>
+        <div>
+          <label for="top_world">World</label>
+          <input id="top_world" name="top_world" type="number" min="0" max="30" value="{{ form.top_world }}">
+        </div>
+      </div>
+      <div class="hint">Today has plenty of research candidates; this cap controls how many top ranked entries are shown.</div>
+    </div>
+
+    <button class="brew" type="submit">Brew my morning cup of tea</button>
   </form>
 </div>
 {% endblock %}
@@ -188,12 +227,13 @@
     function render() {
       wrap.querySelectorAll(".chip").forEach((c) => c.remove());
       chips.forEach((val, idx) => {
-        const c = document.createElement("span");
-        c.className = "chip";
-        c.textContent = val + " ✕";
-        c.title = "Click to remove";
-        c.addEventListener("click", () => { chips.splice(idx, 1); render(); });
-        wrap.insertBefore(c, text);
+	        const c = document.createElement("button");
+	        c.className = "chip";
+	        c.type = "button";
+	        c.textContent = val + " ✕";
+	        c.setAttribute("aria-label", `Remove ${val}`);
+	        c.addEventListener("click", () => { chips.splice(idx, 1); render(); });
+	        wrap.insertBefore(c, text);
       });
       hidden.value = chips.join(",");
     }
@@ -221,8 +261,11 @@
     render();
   }
 
-  makeChipInput("kw-input", "kw-text", "kw-hidden");
-  makeChipInput("dw-input", "dw-text", "dw-hidden");
+	  makeChipInput("kw-input", "kw-text", "kw-hidden");
+	  makeChipInput("dw-input", "dw-text", "dw-hidden");
+
+	  const errors = document.querySelector(".errors");
+	  if (errors) errors.focus();
 
   // Backend reveal logic.
   const apiFields = document.getElementById("api-fields");

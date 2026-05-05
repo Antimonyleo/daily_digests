@@ -2,14 +2,14 @@
 
 Backends, selected by ``SETTINGS.llm_backend``:
 
-* ``api`` (default): OpenAI-compatible HTTP API. Requires ``LLM_API_KEY``;
+* ``api``: OpenAI-compatible HTTP API. Requires ``LLM_API_KEY``;
   silently falls through to ``extractive`` if no key is configured.
 * ``claude_code``: shells out to the local ``claude`` CLI in non-interactive
   print mode. Uses your Anthropic subscription quota instead of API credits.
 * ``codex``: shells out to the local ``codex`` CLI (``codex exec``). Uses your
   OpenAI subscription / login.
-* ``extractive``: no LLM. Returns the first 1-2 sentences of each abstract.
-  Also the per-batch fallback whenever any other backend fails.
+* ``extractive`` (default): no LLM. Returns the first 1-2 sentences of each
+  abstract. Also the per-batch fallback whenever any other backend fails.
 """
 
 from __future__ import annotations
@@ -246,7 +246,7 @@ def summarize_items(items: list[ItemRow]) -> dict[int, str]:
 
     from .config import get_settings
     s = get_settings()
-    backend = (s.llm_backend or "api").lower()
+    backend = (s.llm_backend or "extractive").lower()
 
     if backend == "extractive":
         return _summarize_extractive(items)

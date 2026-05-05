@@ -1,5 +1,5 @@
 {% extends "_base.html.j2" %}
-{% block title %}Your tea is ready ☕{% endblock %}
+{% block title %}Your digest is ready{% endblock %}
 {% block extra_styles %}
   .card { padding: 48px 24px; text-align: center; }
   h1 { font-size: 26px; margin: 8px 0 8px 0; }
@@ -12,18 +12,22 @@
     display: inline-block; padding: 14px 24px; font-size: 16px; font-weight: 600;
     background: var(--accent); color: #fff; text-decoration: none; border-radius: 8px;
   }
-  a.cta:hover { background: #084d96; }
-  .cup-emoji { font-size: 56px; line-height: 1; }
+  a.cta:hover { background: var(--accent-strong); }
+  .cup-mark { font-size: 44px; line-height: 1; color: var(--accent); font-weight: 800; }
 {% endblock %}
 {% block body %}
 <div class="card">
-  <div class="cup-emoji">☕</div>
+  <div class="cup-mark" aria-hidden="true">✓</div>
   <h1>Your morning cup of tea is brewed</h1>
   <p class="summary">
+    {% if total_items == 0 %}
+    <span class="digest-id">{{ digest_id }}</span>: no matching items were found today.
+    {% else %}
     <span class="digest-id">{{ digest_id }}</span>:
     {{ total_items }} items across Research / Industry / Regulatory / World.
+    {% endif %}
   </p>
-  <a class="cta" href="/">Take me there →</a>
+  <a class="cta" href="/">Open digest</a>
   <div style="margin-top:16px;">
     <a href="/run" style="font-size:13px;color:var(--accent);">Run again</a>
     &middot;

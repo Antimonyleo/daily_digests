@@ -14,14 +14,14 @@ from .models import Profile, SourceSpec
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    profile_path: str = "config/profile.yaml"
+    profile_path: str = "data/profile.yaml"
     sources_path: str = "config/sources.yaml"
 
     llm_base_url: str = "https://api.openai.com/v1"
     llm_api_key: str = ""
     llm_model: str = "gpt-4o-mini"
     # Backend selector: "api" | "claude_code" | "codex" | "extractive"
-    llm_backend: str = "api"
+    llm_backend: str = "extractive"
     # Optional model pin for CLI backends (claude_code, codex). Empty = inherit
     # the CLI's default. e.g. "claude-haiku-4-5-20251001" or "gpt-5-mini".
     llm_cli_model: str = ""
@@ -36,7 +36,7 @@ class Settings(BaseSettings):
 
     db_path: str = "data/digest.db"
 
-    top_research: int = 8
+    top_research: int = 12
     top_industry: int = 6
     top_regulatory: int = 3
     top_world: int = 3

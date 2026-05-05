@@ -57,7 +57,7 @@ class VoteRow(Base):
 
     id = Column(Integer, primary_key=True)
     item_id = Column(Integer, ForeignKey("items.id", ondelete="CASCADE"), nullable=False, index=True)
-    value = Column(Integer, nullable=False)  # +1 / -1
+    value = Column(Integer, nullable=False)  # +1 / 0 / -1
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     item = relationship("ItemRow")
@@ -203,12 +203,37 @@ def write_digest(digest_id: str, labeled_items: list[tuple[str, int]]) -> None:
     """labeled_items: list of (label, item_id)."""
     init_db()
     with session_scope() as s:
-        s.merge(DigestRow(id=digest_id, item_count=len(labeled_items)))
+        digest = s.get(DigestRow, digest_id)
+        if digest is None:
+            s.add(DigestRow(id=digest_id, item_count=len(labeled_items)))
+        else:
+            # Preserve sent_at while allowing dry-run reruns to refresh preview rows.
+            digest.item_count = len(labeled_items)
+        previous = (
+            s.execute(select(ItemRow).where(ItemRow.digest_id == digest_id))
+            .scalars()
+            .all()
+        )
+        for row in previous:
+            row.digest_id = None
+            row.item_label = None
         for label, item_id in labeled_items:
             row = s.get(ItemRow, item_id)
             if row is not None:
                 row.digest_id = digest_id
                 row.item_label = label
+
+
+def write_summaries(summaries: dict[int, str]) -> None:
+    """Persist per-item summaries for the local web UI."""
+    if not summaries:
+        return
+    init_db()
+    with session_scope() as s:
+        for item_id, summary in summaries.items():
+            row = s.get(ItemRow, int(item_id))
+            if row is not None:
+                row.summary = summary
 
 
 def mark_sent(digest_id: str) -> None:

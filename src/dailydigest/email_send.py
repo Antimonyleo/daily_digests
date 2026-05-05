@@ -20,15 +20,15 @@ def _write_dry_run(html: str, subject: str) -> Path:
     return out
 
 
-def send_digest(html: str, subject: str, dry_run: bool = False) -> None:
+def send_digest(html: str, subject: str, dry_run: bool = False) -> bool:
     if dry_run or not SETTINGS.resend_api_key:
         _write_dry_run(html, subject)
-        return
+        return False
 
     if not SETTINGS.digest_to:
         logger.warning("digest_to is empty; writing dry-run instead.")
         _write_dry_run(html, subject)
-        return
+        return False
 
     try:
         import resend
@@ -44,6 +44,8 @@ def send_digest(html: str, subject: str, dry_run: bool = False) -> None:
             payload["reply_to"] = [SETTINGS.reply_to_email]
         resend.Emails.send(payload)
         logger.info("Sent digest %r to %s", subject, SETTINGS.digest_to)
+        return True
     except Exception as e:  # noqa: BLE001
         logger.error("Resend send failed (%s); writing dry-run copy.", e)
         _write_dry_run(html, subject)
+        return False

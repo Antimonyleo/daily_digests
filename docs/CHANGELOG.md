@@ -279,3 +279,40 @@ User wanted to minimize CLI for non-technical use and expand journal coverage to
 - `GET /setup` → 200 (12,063 B).
 - `GET /` (with profile.yaml) → 200; without profile.yaml → 302 redirect to `/setup`.
 - All 14 routes registered (incl. SSE stream, healthz, FastAPI auto-docs).
+
+---
+
+## 2026-05-05 — Wave 7: public-release hardening
+
+Pre-release review focused on shipping the repo publicly rather than keeping it as a local prototype.
+
+### Security / privacy
+
+- Email renderer now forces Jinja autoescape for `.html.j2` templates; web UI uses an explicit autoescaped Jinja environment too.
+- Feed-controlled links are sanitized to `http`/`https`; unsafe schemes render as `#`.
+- Local write routes (`/setup`, `/profile/name`, `/vote`, `/refresh`, `/run/start`) require a per-process CSRF token and reject foreign `Origin` headers.
+- `dd start` / `dd serve` reject non-loopback host binds because the local UI has no login system.
+- `.env` writer now rejects CR/LF injection and quotes values with spaces, `#`, or `=`.
+- Personal profile and Claude session logs removed from tracked release state; local profiles live under ignored `data/profile.yaml`.
+
+### UX / onboarding
+
+- Added `scripts/start.sh` as the public quickstart entry point.
+- Removed Compact mode from the digest UI.
+- Vote explainer now uses clearer copy: Good/Bad affect ranking after retraining; Neutral only marks reviewed items.
+- Empty brewed digests now say no matching items were found instead of implying nothing was brewed.
+- Run progress exposes a real progressbar, live status text, and alert-style error reporting.
+- Setup chips are keyboard-removable buttons instead of mouse-only spans.
+
+### Correctness
+
+- Dry-run reruns refresh the local preview even if that digest was previously sent, while preserving `sent_at`.
+- `send_digest()` returns success/failure; the pipeline only marks a digest sent after a successful real email send.
+- Web summaries persist to the DB after summarization.
+- Digest reruns clear stale item assignments for the same digest id.
+- LR ranker weight persistence fixed and cache rechecks when weights appear after server start.
+
+### Verification
+
+- `uv run pytest -q` → 92/92 passing.
+- Startup script smoke-tested with fake `uv` and with local server boot.

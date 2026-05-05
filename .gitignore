@@ -4,6 +4,8 @@ __pycache__/
 .venv/
 .env
 data/
+config/profile.yaml
+.claude/
 *.db
 *.db-journal
 .ruff_cache/
