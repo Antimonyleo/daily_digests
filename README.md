@@ -126,6 +126,12 @@ flowchart LR
 - [docs/llm-backends.md](docs/llm-backends.md) - backend tradeoffs
 - [docs/domain-setup.md](docs/domain-setup.md) - Resend sender domain setup
 
+## Branches
+
+- `main` is the clean public release branch for users.
+- `dev` is the active development branch for ongoing work before release.
+- Local agent folders such as `.claude/` and `.codex/`, plus `.env`, `data/`, and personal profiles, stay ignored and should not be committed.
+
 ## Cost
 
 Typical personal use can stay very cheap:

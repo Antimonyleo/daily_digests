@@ -6,6 +6,7 @@ __pycache__/
 data/
 config/profile.yaml
 .claude/
+.codex/
 *.db
 *.db-journal
 .ruff_cache/
