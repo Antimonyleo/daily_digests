@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from sqlalchemy import (
+    LargeBinary,
     Column,
     DateTime,
     Float,
@@ -73,6 +74,23 @@ class VoteRow(Base):
     # exist. If a future deployment hits a duplicate-row violation, the
     # fix is to drop the votes table once and let ``init_db`` recreate it.
     __table_args__ = (UniqueConstraint("item_id", name="uq_votes_item_id"),)
+
+
+class ItemEmbeddingRow(Base):
+    __tablename__ = "item_embeddings"
+
+    id = Column(Integer, primary_key=True)
+    item_id = Column(Integer, ForeignKey("items.id", ondelete="CASCADE"), nullable=False, index=True)
+    model = Column(String, nullable=False)
+    text_hash = Column(String, nullable=False)
+    dim = Column(Integer, nullable=False)
+    vector = Column(LargeBinary, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+    item = relationship("ItemRow")
+
+    __table_args__ = (UniqueConstraint("item_id", "model", name="uq_item_embedding_item_model"),)
 
 
 class DigestRow(Base):

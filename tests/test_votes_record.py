@@ -68,6 +68,6 @@ def test_vote_dataset_ignores_neutral_votes(tmp_path, monkeypatch):
     def _should_not_embed(_texts):
         raise AssertionError("neutral-only votes should not be embedded")
 
-    monkeypatch.setattr(votes_mod, "embed_texts", _should_not_embed)
+    monkeypatch.setattr(votes_mod, "embed_item_rows", _should_not_embed)
 
     assert votes_mod.vote_dataset() is None

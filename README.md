@@ -12,6 +12,7 @@ It is built for researchers who want signal without opening 40 tabs before break
 - First-run setup wizard for name, research profile, keywords, downweights, digest size, and summarizer backend
 - Broad source coverage: journals, bioRxiv/medRxiv/arXiv, PubMed/OpenAlex, FDA/ClinicalTrials.gov, biotech news, and world news
 - Profile-aware ranking with local embeddings
+- SQLite embedding cache so repeated brews only embed new or changed items
 - Good / Neutral / Bad feedback saved instantly
 - Optional learned ranking after enough Good/Bad votes and `uv run dd vote --train`
 - Extractive summaries by default, with optional OpenAI-compatible API, Claude Code CLI, or Codex CLI backends
@@ -137,6 +138,7 @@ flowchart LR
 Typical personal use can stay very cheap:
 
 - Local embeddings and SQLite: free
+- Cached item embeddings are small, roughly 1.5 KB per item with the default model, and are pruned with old items
 - GitHub Actions cron: free tier
 - Resend daily email: free tier
 - LLM summaries: optional, often a few dollars/month or zero with extractive mode

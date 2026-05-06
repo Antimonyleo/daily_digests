@@ -1,8 +1,8 @@
 # DailyDigest — Project Status
 
 **Last updated:** 2026-05-05
-**State:** v1.5 — public-release hardening: escaped HTML rendering, CSRF-protected local UI writes, loopback-only web binding, one-command startup script, local profile onboarding, voting clarity, and review fixes.
-**End-to-end verified:** `./scripts/start.sh` syncs deps and boots FastAPI. Setup wizard at `/setup`, brewing page with accessible SSE progress at `/run`, "your morning cup of tea is brewed" at `/done`. **77 sources** (65 research incl. Nature/Science/Cell families, ACS/RSC/Wiley flagships, NAR). 92/92 pytest passing.
+**State:** v1.6-dev — embedding-cache optimization for lighter repeated local brews, plus public-release hardening.
+**End-to-end verified:** `./scripts/start.sh` syncs deps and boots FastAPI. Setup wizard at `/setup`, brewing page with accessible SSE progress at `/run`, "your morning cup of tea is brewed" at `/done`. **77 sources** (65 research incl. Nature/Science/Cell families, ACS/RSC/Wiley flagships, NAR). 95/95 pytest passing.
 
 ---
 
@@ -39,7 +39,7 @@ Open `http://127.0.0.1:8765`. First-time users are sent to `/setup`; the wizard 
 | Local digest viewer | `GET /` | ✅ FastAPI app at 127.0.0.1:8765, Good / Neutral / Bad votes save instantly; redirects to /setup if no profile |
 | Claude Code backend | `LLM_BACKEND=claude_code uv run dd run-all` | ✅ `claude --print` (+ optional `--model <id>` via `LLM_CLI_MODEL`) |
 | Codex backend | `LLM_BACKEND=codex uv run dd run-all` | ✅ `codex exec` (+ optional `--model`) |
-| Tests | `uv run pytest -q` (after `uv sync --group dev`) | ✅ 92 passed |
+| Tests | `uv run pytest -q` (after `uv sync --group dev`) | ✅ 95 passed |
 
 Live verification artifacts:
 - `data/digest-20260504-081032.html` — 28,224 bytes, all 4 sections (R×8, I×6, G×3, W×3) with emoji headers, inline CSS, vote-syntax footer.
@@ -68,7 +68,7 @@ data/profile.yaml ─► embed (bge-small) ─► cosine + (LR if trained)
 ```
 
 - **Storage:** SQLite at `data/digest.db`. Tables: `items` `votes` `digests` `runs`. 30-day retention on items.
-- **Ranker:** cosine vs profile vector by default; hybrid `0.5*cosine + 0.5*lr_prob` once ≥30 votes train the LR.
+- **Ranker:** cosine vs profile vector by default; hybrid `0.5*cosine + 0.5*lr_prob` once ≥30 votes train the LR. Item embeddings are cached in SQLite and reused across brews until title/abstract text changes.
 - **Summarizer:** OpenAI-compatible `/chat/completions`. Returns extractive (first 2 sentences) when no key is set. Never raises — failures fall back to extractive.
 - **Email:** Resend. Sandbox `onboarding@resend.dev` works without domain. Dry-run writes to disk. Email and web templates force escaping for feed-controlled content.
 - **Local UI safety:** write routes require a per-process CSRF token, reject foreign origins, and the CLI rejects non-loopback web binds.

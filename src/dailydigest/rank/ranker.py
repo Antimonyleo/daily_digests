@@ -15,7 +15,7 @@ from threading import Lock
 import numpy as np
 
 from ..store import ItemRow
-from .embed import embed_texts
+from .embedding_cache import embed_item_rows, item_text
 
 logger = logging.getLogger(__name__)
 
@@ -30,11 +30,7 @@ def _lr_weights_path() -> Path:
 
 
 def _item_text(row: ItemRow) -> str:
-    title = (row.title or "").strip()
-    abstract = (row.abstract or "").strip()
-    if abstract:
-        return f"{title}. {abstract}"
-    return title
+    return item_text(row)
 
 
 # --------------------------------------------------------------------------- #
@@ -214,7 +210,7 @@ def _cosine_score_items(
         return []
 
     texts = [_item_text(r) for r in items]
-    vecs = embed_texts(texts)
+    vecs = embed_item_rows(items)
     if profile_vec.size == 0 or vecs.size == 0:
         sims = np.zeros(len(items), dtype=np.float32)
     else:
@@ -246,7 +242,7 @@ def score_items_lr(
         return _cosine_score_items(items, profile_vec, downweight_terms)
 
     texts = [_item_text(r) for r in items]
-    vecs = embed_texts(texts)
+    vecs = embed_item_rows(items)
     if profile_vec.size == 0 or vecs.size == 0:
         cosine = np.zeros(len(items), dtype=np.float32)
     else:

@@ -316,3 +316,22 @@ Pre-release review focused on shipping the repo publicly rather than keeping it 
 
 - `uv run pytest -q` → 92/92 passing.
 - Startup script smoke-tested with fake `uv` and with local server boot.
+
+---
+
+## 2026-05-06 — Wave 8: lighter repeated local brews
+
+Repeated ranking was re-embedding every recent item, which is expensive on small laptops.
+
+### Embedding cache
+
+- Added `item_embeddings` SQLite table keyed by item id + embedding model.
+- Cached vectors store float32 bytes plus a SHA-256 hash of title+abstract text.
+- Ranking and LR vote training now call `embed_item_rows()`, which only embeds new or changed items.
+- Existing `prune()` removes old cached embeddings through SQLite foreign-key cascade.
+- Rows without DB ids still fall back to direct embedding, keeping tests and ad-hoc callers simple.
+
+### Verification
+
+- Added cache tests for reuse, text-change invalidation, and pruning.
+- `uv run pytest -q` → 95/95 passing.

@@ -16,7 +16,7 @@ from typing import Iterable
 import numpy as np
 from sqlalchemy import select
 
-from .rank.embed import embed_texts
+from .rank.embedding_cache import embed_item_rows
 from .store import DigestRow, ItemRow, VoteRow, init_db, session_scope
 
 logger = logging.getLogger(__name__)
@@ -207,23 +207,22 @@ def vote_dataset() -> tuple[np.ndarray, np.ndarray] | None:
     init_db()
     with session_scope() as s:
         rows = s.execute(
-            select(VoteRow.value, ItemRow.title, ItemRow.abstract)
+            select(VoteRow.value, ItemRow)
             .join(ItemRow, VoteRow.item_id == ItemRow.id)
             .where(VoteRow.value.in_((-1, 1)))
         ).all()
+        for _value, row in rows:
+            s.expunge(row)
 
     if len(rows) < MIN_VOTES_FOR_LR:
         return None
 
-    texts: list[str] = []
+    voted_rows: list[ItemRow] = []
     ys: list[int] = []
-    for value, title, abstract in rows:
-        title = (title or "").strip()
-        abstract = (abstract or "").strip()
-        text = f"{title}. {abstract}" if abstract else title
-        texts.append(text)
+    for value, row in rows:
+        voted_rows.append(row)
         ys.append(1 if int(value) >= 0 else -1)
 
-    X = embed_texts(texts).astype(np.float32, copy=False)
+    X = embed_item_rows(voted_rows).astype(np.float32, copy=False)
     y = np.asarray(ys, dtype=np.float32)
     return X, y

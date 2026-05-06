@@ -48,7 +48,8 @@ def fake_embed(monkeypatch):
     monkeypatch.setattr(embed_mod, "embed_texts", _fake_embed)
     # Also patch in ranker module's direct reference
     from dailydigest.rank import ranker as ranker_mod
-    monkeypatch.setattr(ranker_mod, "embed_texts", _fake_embed)
+    from dailydigest.rank import embedding_cache as cache_mod
+    monkeypatch.setattr(cache_mod, "embed_texts", _fake_embed)
 
 
 # ---------------------------------------------------------------------------
