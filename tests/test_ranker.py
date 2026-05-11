@@ -15,6 +15,7 @@ from dailydigest.rank.ranker import (
     DOWNWEIGHT_PENALTY,
     LRRanker,
     _apply_downweight,
+    _apply_quality_adjustments,
     _lr_weights_path,
     _cosine_score_items,
     pick_top_per_section,
@@ -61,6 +62,7 @@ def _make_row(title: str, section: str = "research", abstract: str = "") -> Magi
     row.title = title
     row.abstract = abstract
     row.section = section
+    row.source = ""
     return row
 
 
@@ -101,6 +103,78 @@ class TestApplyDownweight:
         texts = ["CRYPTOCURRENCY news today"]
         result = _apply_downweight(base, texts, ["cryptocurrency"])
         assert result[0] == pytest.approx(0.9 - DOWNWEIGHT_PENALTY, abs=1e-6)
+
+
+# ---------------------------------------------------------------------------
+# _apply_quality_adjustments
+# ---------------------------------------------------------------------------
+
+class TestApplyQualityAdjustments:
+    def test_top_journal_can_beat_low_prestige_item_with_slightly_higher_topic_score(self):
+        nature = _make_row(
+            "Base editing delivery study",
+            "research",
+            "Moderately relevant but from a top journal.",
+        )
+        nature.source = "Nature"
+        minor = _make_row(
+            "Base editing delivery study in a niche outlet",
+            "research",
+            "Slightly closer to the profile but lower reputation.",
+        )
+        minor.source = "Minor Journal"
+
+        adjusted = _apply_quality_adjustments(
+            [nature, minor],
+            np.asarray([0.55, 0.65], dtype=np.float32),
+            [],
+        )
+
+        assert adjusted[0] > adjusted[1]
+
+    def test_low_prestige_research_can_surface_when_highly_novel_and_relevant(self):
+        novel = _make_row(
+            "First-in-class breakthrough CRISPR therapy approved after pivotal phase 3 trial",
+            "research",
+            "Highly novel and urgent gene editing result.",
+        )
+        novel.source = "Minor Journal"
+        routine = _make_row(
+            "Incremental review of known delivery chemistry",
+            "research",
+            "A useful but routine review.",
+        )
+        routine.source = "Nature Reviews Drug Discovery"
+
+        adjusted = _apply_quality_adjustments(
+            [novel, routine],
+            np.asarray([0.82, 0.54], dtype=np.float32),
+            [],
+        )
+
+        assert adjusted[0] > adjusted[1]
+
+    def test_industry_promotional_language_is_penalized_below_independent_news(self):
+        promo = _make_row(
+            "Company today announced the commercial launch of its AI discovery platform",
+            "industry",
+            "The company is pleased to announce availability and product features.",
+        )
+        promo.source = "Company Press Release"
+        news = _make_row(
+            "FDA approves first-in-class RNA therapy after phase 3 survival benefit",
+            "industry",
+            "Independent coverage of approval, efficacy, and safety data.",
+        )
+        news.source = "STAT News"
+
+        adjusted = _apply_quality_adjustments(
+            [promo, news],
+            np.asarray([0.70, 0.70], dtype=np.float32),
+            [],
+        )
+
+        assert adjusted[1] > adjusted[0]
 
 
 # ---------------------------------------------------------------------------

@@ -83,6 +83,41 @@ class TestLoadSources:
         result = load_sources(str(p))
         assert result[0].url is None
         assert result[0].category is None
+        assert result[0].prestige_score is None
+        assert result[0].quality_tier is None
+
+    def test_source_quality_metadata_loaded(self, tmp_path):
+        sources_yaml = {
+            "research": [
+                {
+                    "name": "Nature",
+                    "kind": "rss",
+                    "url": "https://nature.com/rss",
+                    "quality_tier": "top",
+                    "prestige_score": 1.0,
+                    "impact_floor": 7.0,
+                }
+            ],
+            "industry": [
+                {
+                    "name": "PressFeed",
+                    "kind": "rss",
+                    "url": "https://example.com/rss",
+                    "promo_risk": 0.8,
+                }
+            ],
+        }
+        p = tmp_path / "sources.yaml"
+        p.write_text(yaml.dump(sources_yaml))
+
+        result = load_sources(str(p))
+
+        nature = next(s for s in result if s.name == "Nature")
+        press = next(s for s in result if s.name == "PressFeed")
+        assert nature.quality_tier == "top"
+        assert nature.prestige_score == pytest.approx(1.0)
+        assert nature.impact_floor == pytest.approx(7.0)
+        assert press.promo_risk == pytest.approx(0.8)
 
 
 # ---------------------------------------------------------------------------

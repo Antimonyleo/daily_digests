@@ -1,6 +1,9 @@
 # Source feeds grouped by section. Sections drive the email template grouping.
 # `kind` selects the ingest adapter. Supported kinds:
 #   rss, biorxiv, arxiv, openalex, pubmed, fda_api, clinicaltrials.
+# Optional ranking metadata:
+#   quality_tier, prestige_score, impact_floor, promo_risk.
+# These are coarse local ranking hints, not live impact-factor lookups.
 # EMA does not have a stable JSON API, so it is wired in as a plain `rss` entry
 # below rather than as its own adapter class.
 
@@ -8,33 +11,62 @@ research:
   - name: Nature
     kind: rss
     url: https://www.nature.com/nature.rss
+    quality_tier: top
+    prestige_score: 1.0
+    impact_floor: 7.0
   - name: Nature Biotechnology
     kind: rss
     url: https://www.nature.com/nbt.rss
+    quality_tier: high
+    prestige_score: 0.95
+    impact_floor: 7.0
   - name: Nature Methods
     kind: rss
     url: https://www.nature.com/nmeth.rss
+    quality_tier: high
+    prestige_score: 0.95
+    impact_floor: 7.0
   - name: Nature Medicine
     kind: rss
     url: https://www.nature.com/nm.rss
+    quality_tier: high
+    prestige_score: 0.95
+    impact_floor: 7.0
   - name: Science
     kind: rss
     url: https://www.science.org/rss/news_current.xml
+    quality_tier: top
+    prestige_score: 1.0
+    impact_floor: 7.0
   - name: Cell
     kind: rss
     url: https://www.cell.com/cell/current.rss
+    quality_tier: top
+    prestige_score: 1.0
+    impact_floor: 7.0
   - name: NEJM
     kind: rss
     url: https://www.nejm.org/action/showFeed?type=etoc&feed=rss&jc=nejm
+    quality_tier: top
+    prestige_score: 1.0
+    impact_floor: 7.0
   - name: The Lancet
     kind: rss
     url: https://www.thelancet.com/rssfeed/lancet_current.xml
+    quality_tier: top
+    prestige_score: 1.0
+    impact_floor: 7.0
   - name: PNAS
     kind: rss
     url: https://www.pnas.org/action/showFeed?type=etoc&feed=rss&jc=pnas
+    quality_tier: high
+    prestige_score: 0.9
+    impact_floor: 7.0
   - name: eLife
     kind: rss
     url: https://elifesciences.org/rss/recent.xml
+    quality_tier: strong
+    prestige_score: 0.74
   - name: bioRxiv (recent)
     kind: biorxiv
     server: biorxiv
@@ -224,15 +256,23 @@ industry:
   - name: Endpoints News
     kind: rss
     url: https://endpts.com/feed/
+    quality_tier: trusted-news
+    promo_risk: 0.05
   - name: FierceBiotech
     kind: rss
     url: https://www.fiercebiotech.com/rss/xml
+    quality_tier: trusted-news
+    promo_risk: 0.05
   - name: STAT News
     kind: rss
     url: https://www.statnews.com/feed/
+    quality_tier: trusted-news
+    promo_risk: 0.02
   - name: BioPharma Dive
     kind: rss
     url: https://www.biopharmadive.com/feeds/news/
+    quality_tier: trusted-news
+    promo_risk: 0.05
 
 regulatory:
   - name: FDA Press Announcements
@@ -262,12 +302,17 @@ world:
   - name: Al Jazeera (World)
     kind: rss
     url: https://www.aljazeera.com/xml/rss/all.xml
+    quality_tier: trusted-news
   - name: BBC World
     kind: rss
     url: https://feeds.bbci.co.uk/news/world/rss.xml
+    quality_tier: trusted-news
   - name: MIT Technology Review
     kind: rss
     url: https://www.technologyreview.com/feed/
+    quality_tier: trusted-news
   - name: Hacker News (front)
     kind: rss
     url: https://hnrss.org/frontpage
+    quality_tier: news
+    promo_risk: 0.15

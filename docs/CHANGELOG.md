@@ -319,6 +319,26 @@ Pre-release review focused on shipping the repo publicly rather than keeping it 
 
 ---
 
+## 2026-05-11 — Wave 9: quality-aware ranking
+
+The digest now ranks for "worth reading" instead of only "textually similar to my profile."
+
+### Ranking quality
+
+- Added local source-quality metadata and heuristics for journal/source reputation.
+- Research ranking now blends topic fit, source prestige, and novelty/urgency signals.
+- Low-prestige research is pushed down unless it is both highly relevant and clearly novel.
+- Top journals such as Nature, Science, Cell, NEJM, and The Lancet can surface with moderate topic match.
+- Industry and world-news ranking now penalizes promotional wording such as sponsored content, webinars, commercial launches, and press-release language.
+- `config/sources.yaml` supports `quality_tier`, `prestige_score`, `impact_floor`, and `promo_risk` ranking hints.
+
+### Verification
+
+- Added tests for top-journal preference, novel low-prestige exceptions, promotional penalties, and source metadata loading.
+- `uv run pytest -q` -> 99/99 passing.
+
+---
+
 ## 2026-05-06 — Wave 8: lighter repeated local brews
 
 Repeated ranking was re-embedding every recent item, which is expensive on small laptops.

@@ -34,6 +34,12 @@ class SourceSpec(BaseModel):
     url: str | None = None
     server: str | None = None
     section: str = "research"
+    # Optional ranking metadata. These are deliberately coarse, stable knobs:
+    # exact impact factors drift yearly, while source tiers are maintainable.
+    quality_tier: str | None = None
+    prestige_score: float | None = Field(default=None, ge=0.0, le=1.0)
+    impact_floor: float | None = Field(default=None, ge=0.0)
+    promo_risk: float | None = Field(default=None, ge=0.0, le=1.0)
     # Phase 3 optional fields used by additional ingest adapters.
     category: str | None = None
     query: str | None = None

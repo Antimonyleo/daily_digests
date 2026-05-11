@@ -16,6 +16,7 @@ import numpy as np
 
 from ..store import ItemRow
 from .embedding_cache import embed_item_rows, item_text
+from .source_quality import quality_adjusted_score
 
 logger = logging.getLogger(__name__)
 
@@ -200,6 +201,16 @@ def _apply_downweight(
     return out
 
 
+def _apply_quality_adjustments(
+    items: list[ItemRow],
+    base_scores: np.ndarray,
+    downweight_terms: list[str],
+) -> list[float]:
+    texts = [_item_text(r) for r in items]
+    scores = _apply_downweight(base_scores, texts, downweight_terms)
+    return [quality_adjusted_score(row, score) for row, score in zip(items, scores, strict=True)]
+
+
 def _cosine_score_items(
     items: list[ItemRow],
     profile_vec: np.ndarray,
@@ -209,14 +220,13 @@ def _cosine_score_items(
     if not items:
         return []
 
-    texts = [_item_text(r) for r in items]
     vecs = embed_item_rows(items)
     if profile_vec.size == 0 or vecs.size == 0:
         sims = np.zeros(len(items), dtype=np.float32)
     else:
         sims = vecs @ profile_vec.astype(np.float32, copy=False)
 
-    final = _apply_downweight(sims, texts, downweight_terms)
+    final = _apply_quality_adjustments(items, sims, downweight_terms)
     scored = list(zip(items, final, strict=True))
     scored.sort(key=lambda t: t[1], reverse=True)
     return scored
@@ -241,7 +251,6 @@ def score_items_lr(
     if lr is None or _vote_count() < MIN_VOTES_FOR_LR:
         return _cosine_score_items(items, profile_vec, downweight_terms)
 
-    texts = [_item_text(r) for r in items]
     vecs = embed_item_rows(items)
     if profile_vec.size == 0 or vecs.size == 0:
         cosine = np.zeros(len(items), dtype=np.float32)
@@ -255,7 +264,7 @@ def score_items_lr(
         return _cosine_score_items(items, profile_vec, downweight_terms)
 
     blended = HYBRID_COSINE_W * cosine + HYBRID_LR_W * lr_prob
-    final = _apply_downweight(blended, texts, downweight_terms)
+    final = _apply_quality_adjustments(items, blended, downweight_terms)
     scored = list(zip(items, final, strict=True))
     scored.sort(key=lambda t: t[1], reverse=True)
     return scored
