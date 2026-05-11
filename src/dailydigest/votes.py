@@ -14,9 +14,10 @@ from datetime import datetime, timezone
 from typing import Iterable
 
 import numpy as np
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from .rank.embedding_cache import embed_item_rows
+from .rank.ranker import LRRanker, reset_lr_cache
 from .store import DigestRow, ItemRow, VoteRow, init_db, session_scope
 
 logger = logging.getLogger(__name__)
@@ -169,6 +170,99 @@ def get_vote_value(item_id: int) -> int | None:
         return s.execute(
             select(VoteRow.value).where(VoteRow.item_id == item_id)
         ).scalar_one_or_none()
+
+
+def vote_counts() -> dict[str, int]:
+    """Return persisted vote counts split by Good, Bad, and Neutral."""
+    init_db()
+    counts = {"good": 0, "bad": 0, "neutral": 0, "signed": 0, "total": 0}
+    with session_scope() as s:
+        rows = s.execute(
+            select(VoteRow.value, func.count()).group_by(VoteRow.value)
+        ).all()
+
+    for value, n in rows:
+        count = int(n or 0)
+        if int(value) == 1:
+            counts["good"] = count
+        elif int(value) == -1:
+            counts["bad"] = count
+        elif int(value) == 0:
+            counts["neutral"] = count
+
+    counts["signed"] = counts["good"] + counts["bad"]
+    counts["total"] = counts["signed"] + counts["neutral"]
+    return counts
+
+
+def lr_training_status() -> dict[str, object]:
+    """Return lightweight LR training/ranking status for web/API display."""
+    counts = vote_counts()
+    signed = counts["signed"]
+    remaining = max(MIN_VOTES_FOR_LR - signed, 0)
+    model_trained = LRRanker().load()
+    can_train = remaining == 0
+    ranking_status = "lr_active" if model_trained and can_train else "cosine_baseline"
+    training_status = "ready" if can_train else "needs_votes"
+    return {
+        "vote_counts": counts,
+        "min_votes_for_lr": MIN_VOTES_FOR_LR,
+        "remaining_votes_for_lr": remaining,
+        "can_train": can_train,
+        "model_trained": model_trained,
+        "training_status": training_status,
+        "ranking_status": ranking_status,
+    }
+
+
+def train_lr_ranker() -> dict[str, object]:
+    """Train the persisted LR ranker from signed votes when enough exist."""
+    status = lr_training_status()
+    if not status["can_train"]:
+        return {
+            "ok": False,
+            "trained": False,
+            "reason": "needs_votes",
+            "message": (
+                f"Need {status['remaining_votes_for_lr']} more signed votes "
+                f"before LR training."
+            ),
+            "status": status,
+        }
+
+    dataset = vote_dataset()
+    if dataset is None:
+        status = lr_training_status()
+        return {
+            "ok": False,
+            "trained": False,
+            "reason": "needs_votes",
+            "message": "Not enough signed votes to train LR ranking.",
+            "status": status,
+        }
+
+    X, y = dataset
+    ranker = LRRanker()
+    try:
+        ranker.fit(X, y)
+    except ValueError as e:
+        status = lr_training_status()
+        return {
+            "ok": False,
+            "trained": False,
+            "reason": "invalid_dataset",
+            "message": str(e),
+            "status": status,
+        }
+
+    reset_lr_cache()
+    status = lr_training_status()
+    return {
+        "ok": True,
+        "trained": True,
+        "trained_votes": int(len(y)),
+        "status": status,
+    }
 
 
 def _upsert_vote(s, item_id: int, value: int) -> None:

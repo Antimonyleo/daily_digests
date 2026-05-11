@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 
 from . import health
 from .config import get_settings, load_profile, load_sources
-from .dedupe import dedupe_by_url, filter_english
+from .dedupe import dedupe_by_url, dedupe_ranking_candidates, filter_english
 from .email_render import SECTION_ORDER, render_digest
 from .email_send import send_digest
 from .health import IngestStats
@@ -210,8 +210,14 @@ def run_all(
     profile_vec = build_profile_vector(profile)
 
     days = backfill_days if backfill_days and backfill_days > 0 else 2
-    items = recent_items(days=days)
-    logger.info("ranking %d recent items (window=%d days)", len(items), days)
+    recent = recent_items(days=days)
+    items = dedupe_ranking_candidates(recent)
+    logger.info(
+        "ranking %d recent items after cross-source dedupe (%d before, window=%d days)",
+        len(items),
+        len(recent),
+        days,
+    )
     scored = score_items(items, profile_vec, profile.downweight)
     # Note: do NOT pre-truncate `scored` to a global top-K before per-section picking;
     # a single-domain profile (e.g. biotech-heavy) starves industry/regulatory/world.

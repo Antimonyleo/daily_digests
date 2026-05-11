@@ -6,6 +6,8 @@ The app binds to 127.0.0.1 by default — no remote access, no auth.
 Routes:
 - ``GET /``                — render today's digest (or redirect to /setup if no profile)
 - ``POST /vote/{id}/{v}``  — record a +1/0/-1 vote for an item
+- ``GET /ranking/status``  — return vote counts and LR ranker status
+- ``POST /ranking/train``  — train the local LR ranker when enough votes exist
 - ``POST /refresh``        — kick off a dry-run pipeline in the background
 - ``GET /healthz``         — liveness probe
 - ``GET /setup``           — onboarding wizard (bio, keywords, LLM backend)
@@ -430,6 +432,7 @@ def index(request: Request) -> Response:
             "profile_name": _profile_name(),
             "sections": sections,
             "current_vote_per_item": current_vote,
+            "ranking_status": votes_mod.lr_training_status(),
             "empty": len(sections) == 0,
             "brewed": brewed,
             "csrf_token": _CSRF_TOKEN,
@@ -447,7 +450,26 @@ def vote(request: Request, item_id: int, value: int) -> JSONResponse:
     ok = votes_mod.record_vote_by_id(item_id, value)
     if not ok:
         raise HTTPException(status_code=404, detail=f"item {item_id} not found")
-    return JSONResponse({"ok": True, "item_id": item_id, "new_value": value})
+    return JSONResponse(
+        {
+            "ok": True,
+            "item_id": item_id,
+            "new_value": value,
+            "ranking_status": votes_mod.lr_training_status(),
+        }
+    )
+
+
+@app.get("/ranking/status")
+def ranking_status(request: Request) -> JSONResponse:
+    _require_local_origin(request)
+    return JSONResponse({"ok": True, "status": votes_mod.lr_training_status()})
+
+
+@app.post("/ranking/train")
+def ranking_train(request: Request) -> JSONResponse:
+    _require_csrf(request)
+    return JSONResponse(votes_mod.train_lr_ranker())
 
 
 def _run_pipeline_dry_run() -> None:

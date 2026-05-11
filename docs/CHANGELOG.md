@@ -319,6 +319,36 @@ Pre-release review focused on shipping the repo publicly rather than keeping it 
 
 ---
 
+## 2026-05-11 — Wave 10: ranking quality hardening
+
+This wave closes the main ways boring, stale, duplicate, or promotional items could consume digest slots.
+
+### Candidate quality
+
+- Ranking candidates now use `published_at` for freshness when available, falling back to `fetched_at` only for sources without publication dates.
+- Ranking candidates are deduped across sources with DOI, PMID, arXiv ID, normalized URL, and cautious same-day title keys.
+- openFDA custom queries now preserve the default recent-date window instead of replacing it.
+
+### Source and promo quality
+
+- The Science source now points to the journal TOC feed rather than the news feed.
+- Added source-quality coverage for configured high-impact feeds that previously fell through to `unknown`.
+- `trusted-news`, `news`, and `self-published` quality tiers now map to explicit prestige scores.
+- Promo penalties now apply to research, regulatory, and fallback sections, not only industry/world.
+
+### Feedback loop
+
+- The web UI now shows Good/Bad/Signed vote counts and LR training status.
+- Added local `/ranking/status` and CSRF-protected `/ranking/train` routes.
+- Vote responses return updated ranking status so the UI reflects progress immediately.
+
+### Verification
+
+- Added regression tests for freshness filtering, cross-source dedupe, FDA date query preservation, real source-quality config audits, research/regulatory promo penalties, and web ranking training.
+- `uv run pytest -q` -> 113/113 passing.
+
+---
+
 ## 2026-05-11 — Wave 9: quality-aware ranking
 
 The digest now ranks for "worth reading" instead of only "textually similar to my profile."

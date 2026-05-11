@@ -34,7 +34,7 @@ research:
     impact_floor: 7.0
   - name: Science
     kind: rss
-    url: https://www.science.org/rss/news_current.xml
+    url: https://www.science.org/action/showFeed?type=etoc&feed=rss&jc=science
     quality_tier: top
     prestige_score: 1.0
     impact_floor: 7.0

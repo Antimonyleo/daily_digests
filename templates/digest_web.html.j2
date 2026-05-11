@@ -35,6 +35,25 @@
   }
 	  .digest-date { font-weight: 750; overflow-wrap: anywhere; }
 	  .feedback-note { color: var(--muted); font-size: 13px; line-height: 1.45; max-width: 620px; }
+  .ranking-panel {
+    display: grid; gap: 8px; min-width: 282px; padding: 12px;
+    border: 1px solid var(--border); border-radius: 8px; background: #fff;
+  }
+  .ranking-kicker {
+    color: var(--muted); font-size: 11px; font-weight: 800;
+    letter-spacing: 0.08em; text-transform: uppercase;
+  }
+  .ranking-counts { display: flex; flex-wrap: wrap; gap: 6px; }
+  .count-pill {
+    display: inline-flex; align-items: center; gap: 4px;
+    min-height: 26px; padding: 3px 8px; border-radius: 999px;
+    background: #eef1ed; color: var(--text); font-size: 12px; font-weight: 750;
+  }
+  .count-pill.good { background: #e4f4eb; color: var(--up); }
+  .count-pill.bad { background: #fdecea; color: var(--down); }
+  .ranking-message { color: var(--muted); font-size: 12px; line-height: 1.4; }
+  .ranking-panel .btn { width: 100%; }
+  .ranking-panel .btn:disabled { opacity: 0.55; cursor: not-allowed; }
   .section-title {
     display: flex; align-items: center; justify-content: space-between; gap: 12px;
     font-size: 17px; margin: 0; padding: 20px 22px 8px;
@@ -98,6 +117,7 @@
     .topbar { grid-template-columns: 1fr; align-items: start; }
     .actions { justify-content: flex-start; }
     .digest-toolbar { align-items: flex-start; flex-direction: column; }
+    .ranking-panel { width: 100%; min-width: 0; }
     .item { grid-template-columns: 1fr; gap: 10px; }
     .vote-panel { width: 100%; }
     .name-prompt { grid-template-columns: 1fr; }
@@ -132,6 +152,26 @@
       <div>
         <div class="digest-date">{{ digest_id }}</div>
 	        <div class="feedback-note">Votes save instantly. Good and Bad help future ranking after retraining. Neutral just marks an item reviewed.</div>
+      </div>
+      <div class="ranking-panel" aria-live="polite">
+        <div class="ranking-kicker">Ranking feedback</div>
+        <div class="ranking-counts">
+          <span class="count-pill good">Good <span id="vote-good">{{ ranking_status.vote_counts.good }}</span></span>
+          <span class="count-pill bad">Bad <span id="vote-bad">{{ ranking_status.vote_counts.bad }}</span></span>
+          <span class="count-pill">Signed <span id="vote-signed">{{ ranking_status.vote_counts.signed }}</span>/<span id="vote-threshold">{{ ranking_status.min_votes_for_lr }}</span></span>
+        </div>
+        <div class="ranking-message" id="ranking-message">
+          {% if ranking_status.ranking_status == "lr_active" %}
+          LR model trained and active for ranking.
+          {% elif ranking_status.model_trained %}
+          LR model trained; needs {{ ranking_status.remaining_votes_for_lr }} more signed votes to activate.
+          {% elif ranking_status.can_train %}
+          Enough signed votes are ready for LR training.
+          {% else %}
+          LR training needs {{ ranking_status.remaining_votes_for_lr }} more signed votes.
+          {% endif %}
+        </div>
+        <button class="btn primary" id="train-ranker-btn" type="button"{% if not ranking_status.can_train %} disabled{% endif %}>Train ranking</button>
       </div>
     </div>
 
@@ -195,6 +235,7 @@
 	  const VALUE_LABEL = { "1": "Good", "0": "Neutral", "-1": "Bad" };
 	  const CSRF_TOKEN = {{ csrf_token|tojson }};
   const toastEl = document.getElementById("toast");
+  const trainBtn = document.getElementById("train-ranker-btn");
   let toastTimer = null;
 
   function setActive(itemEl, value) {
@@ -232,6 +273,31 @@
     setTimeout(() => itemEl.classList.remove("flash"), 600);
   }
 
+  function updateRankingStatus(status) {
+    if (!status || !status.vote_counts) return;
+    const counts = status.vote_counts;
+    const goodEl = document.getElementById("vote-good");
+    const badEl = document.getElementById("vote-bad");
+    const signedEl = document.getElementById("vote-signed");
+    const thresholdEl = document.getElementById("vote-threshold");
+    const msgEl = document.getElementById("ranking-message");
+    if (goodEl) goodEl.textContent = counts.good;
+    if (badEl) badEl.textContent = counts.bad;
+    if (signedEl) signedEl.textContent = counts.signed;
+    if (thresholdEl) thresholdEl.textContent = status.min_votes_for_lr;
+    if (trainBtn) trainBtn.disabled = !status.can_train;
+    if (!msgEl) return;
+    if (status.ranking_status === "lr_active") {
+      msgEl.textContent = "LR model trained and active for ranking.";
+    } else if (status.model_trained) {
+      msgEl.textContent = `LR model trained; needs ${status.remaining_votes_for_lr} more signed votes to activate.`;
+    } else if (status.can_train) {
+      msgEl.textContent = "Enough signed votes are ready for LR training.";
+    } else {
+      msgEl.textContent = `LR training needs ${status.remaining_votes_for_lr} more signed votes.`;
+    }
+  }
+
   document.querySelectorAll(".item").forEach((itemEl) => {
     itemEl.querySelectorAll(".vote-btn").forEach((btn) => {
       btn.addEventListener("click", async () => {
@@ -245,7 +311,9 @@
 	            headers: { "X-CSRF-Token": CSRF_TOKEN },
 	          });
           if (!r.ok) throw new Error("HTTP " + r.status);
+          const payload = await r.json();
           setActive(itemEl, value);
+          updateRankingStatus(payload.ranking_status);
           const stamp = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
           setStatus(itemEl, `${VALUE_LABEL[value]} saved at ${stamp}`, "saved");
           showToast(`${VALUE_LABEL[value]} response saved`);
@@ -258,6 +326,28 @@
       });
     });
   });
+
+  if (trainBtn) {
+    trainBtn.addEventListener("click", async () => {
+      trainBtn.disabled = true;
+      const oldText = trainBtn.textContent;
+      trainBtn.textContent = "Training...";
+      try {
+        const r = await fetch("/ranking/train", {
+          method: "POST",
+          headers: { "X-CSRF-Token": CSRF_TOKEN },
+        });
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        const payload = await r.json();
+        updateRankingStatus(payload.status);
+        showToast(payload.ok ? "Ranking trained" : (payload.message || "Ranking was not trained"));
+      } catch (e) {
+        showToast("Ranking training failed");
+      } finally {
+        trainBtn.textContent = oldText;
+      }
+    });
+  }
 
   const refreshBtn = document.getElementById("refresh-btn");
   refreshBtn.addEventListener("click", () => {

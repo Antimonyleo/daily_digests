@@ -7,10 +7,12 @@ Covers:
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import pytest
 
 from dailydigest.ingest.rss import canonicalize_url
-from dailydigest.dedupe import dedupe_by_url
+from dailydigest.dedupe import dedupe_by_url, dedupe_ranking_candidates
 from dailydigest.models import Item
 
 
@@ -145,3 +147,49 @@ class TestDedupeByUrl:
         ]
         result = dedupe_by_url(items)
         assert len(result) == 1
+
+
+class TestDedupeRankingCandidates:
+    def test_collapses_doi_duplicates_across_url_forms(self):
+        items = [
+            _make_item("https://doi.org/10.1234/ABC.1", "DOI article", "OpenAlex"),
+            _make_item("https://dx.doi.org/10.1234/abc.1", "DOI article mirror", "Journal"),
+        ]
+
+        result = dedupe_ranking_candidates(items)
+
+        assert len(result) == 1
+        assert result[0].source == "OpenAlex"
+
+    def test_collapses_pubmed_openalex_duplicate_by_same_day_title_and_doi_transitively(self):
+        pub_dt = datetime(2026, 5, 10, tzinfo=timezone.utc)
+        title = "Example therapy improves survival in phase 3 trial"
+        pubmed = Item(
+            source="PubMed",
+            section="research",
+            external_id="12345678",
+            url="https://pubmed.ncbi.nlm.nih.gov/12345678/",
+            title=title,
+            published_at=pub_dt,
+        )
+        openalex = Item(
+            source="OpenAlex",
+            section="research",
+            external_id="https://doi.org/10.5555/example",
+            url="https://doi.org/10.5555/example",
+            title=title,
+            published_at=pub_dt,
+        )
+        publisher = Item(
+            source="Publisher",
+            section="research",
+            external_id="publisher-1",
+            url="https://dx.doi.org/10.5555/example",
+            title="Publisher copy",
+            published_at=pub_dt,
+        )
+
+        result = dedupe_ranking_candidates([pubmed, openalex, publisher])
+
+        assert len(result) == 1
+        assert result[0].source == "PubMed"

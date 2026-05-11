@@ -4,14 +4,14 @@ DailyDigest is a personalized morning research and news digest. It pulls from jo
 
 It is built for researchers who want signal without opening 40 tabs before breakfast.
 
-**Status:** public-release hardened local app. Verified with `99` passing tests. See [docs/STATUS.md](docs/STATUS.md).
+**Status:** public-release hardened local app. Verified with `113` passing tests. See [docs/STATUS.md](docs/STATUS.md).
 
 ## Features
 
 - One-command local web app with `./scripts/start.sh`
 - First-run setup wizard for name, research profile, keywords, downweights, digest size, and summarizer backend
 - Broad source coverage: journals, bioRxiv/medRxiv/arXiv, PubMed/OpenAlex, FDA/ClinicalTrials.gov, biotech news, and world news
-- Profile-aware ranking with local embeddings, source-quality boosts, novelty signals, and anti-promo penalties
+- Profile-aware ranking with local embeddings, source-quality boosts, novelty signals, freshness gates, cross-source dedupe, and anti-promo penalties
 - SQLite embedding cache so repeated brews only embed new or changed items
 - Good / Neutral / Bad feedback saved instantly
 - Optional learned ranking after enough Good/Bad votes and `uv run dd vote --train`
@@ -49,7 +49,7 @@ Good and Bad votes can improve future ranking after retraining. Neutral only mar
 
 ## Ranking Quality
 
-DailyDigest balances personal topic fit with editorial quality. Research items from top journals such as Nature, Science, Cell, NEJM, and The Lancet get a reputation lift, while lower-prestige sources need strong relevance plus novelty to break into the digest. Industry and world-news items are checked for urgency and promotional wording, so press-release-style posts are pushed below independent, substantive coverage.
+DailyDigest balances personal topic fit with editorial quality. Research items from top journals such as Nature, Science, Cell, NEJM, and The Lancet get a reputation lift, while lower-prestige sources need strong relevance plus novelty to break into the digest. Ranking candidates are freshness-filtered, deduped across sources, and checked for promotional wording so stale items, repeated papers, and press-release-style posts are pushed below independent, substantive coverage.
 
 You can tune source hints in `config/sources.yaml` with `quality_tier`, `prestige_score`, `impact_floor`, and `promo_risk`. Exact impact factors are not fetched during brewing; the app uses stable local tiers to stay fast and reproducible.
 

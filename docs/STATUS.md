@@ -1,8 +1,8 @@
 # DailyDigest — Project Status
 
 **Last updated:** 2026-05-11
-**State:** v1.7-dev — quality-aware ranking for top journals, novelty, and anti-promo filtering, plus embedding-cache optimization for lighter repeated local brews.
-**End-to-end verified:** `./scripts/start.sh` syncs deps and boots FastAPI. Setup wizard at `/setup`, brewing page with accessible SSE progress at `/run`, "your morning cup of tea is brewed" at `/done`. **77 sources** (65 research incl. Nature/Science/Cell families, ACS/RSC/Wiley flagships, NAR). 99/99 pytest passing.
+**State:** v1.8-dev — freshness-filtered, cross-source deduped, quality-aware ranking with web-triggered LR training.
+**End-to-end verified:** `./scripts/start.sh` syncs deps and boots FastAPI. Setup wizard at `/setup`, brewing page with accessible SSE progress at `/run`, "your morning cup of tea is brewed" at `/done`. **77 sources** (65 research incl. Nature/Science/Cell families, ACS/RSC/Wiley flagships, NAR). 113/113 pytest passing.
 
 ---
 
@@ -23,7 +23,7 @@ Open `http://127.0.0.1:8765`. First-time users are sent to `/setup`; the wizard 
 | Stage | Command | Status |
 |---|---|---|
 | Ingest | `uv run dd ingest` | ✅ 929 items from 26 active sources in ~37s |
-| Rank | `uv run dd rank` | ✅ prints top-20 with topic + source-quality adjusted scores |
+| Rank | `uv run dd rank` | ✅ prints top-20 with freshness-filtered, deduped, topic + source-quality adjusted scores |
 | Full pipeline | `uv run dd run-all --dry-run` | ✅ writes HTML to `data/digest-*.html` |
 | Vote | `uv run dd vote "+R1 R2 -W1"` | ✅ resolves labels, writes to votes table |
 | LR retrain | `uv run dd vote --train` | ✅ (skips if <30 votes) |
@@ -39,7 +39,7 @@ Open `http://127.0.0.1:8765`. First-time users are sent to `/setup`; the wizard 
 | Local digest viewer | `GET /` | ✅ FastAPI app at 127.0.0.1:8765, Good / Neutral / Bad votes save instantly; redirects to /setup if no profile |
 | Claude Code backend | `LLM_BACKEND=claude_code uv run dd run-all` | ✅ `claude --print` (+ optional `--model <id>` via `LLM_CLI_MODEL`) |
 | Codex backend | `LLM_BACKEND=codex uv run dd run-all` | ✅ `codex exec` (+ optional `--model`) |
-| Tests | `uv run pytest -q` (after `uv sync --group dev`) | ✅ 99 passed |
+| Tests | `uv run pytest -q` (after `uv sync --group dev`) | ✅ 113 passed |
 
 Live verification artifacts:
 - `data/digest-20260504-081032.html` — 28,224 bytes, all 4 sections (R×8, I×6, G×3, W×3) with emoji headers, inline CSS, vote-syntax footer.
@@ -54,7 +54,7 @@ config/sources.yaml ─► ingest/* ─► dedupe ─► EN filter ─► upsert
                                                             │
                                             recent_items(2d)│
                                                             ▼
-data/profile.yaml ─► embed (bge-small) ─► cosine + source quality + (LR if trained)
+data/profile.yaml ─► embed (bge-small) ─► freshness + dedupe + cosine + source quality + (LR if trained)
                                                             │
                                                             ▼
                                             pick_top_per_section

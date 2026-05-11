@@ -18,6 +18,8 @@ from sqlalchemy import (
     create_engine,
     delete,
     event,
+    func,
+    or_,
     select,
 )
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
@@ -198,7 +200,14 @@ def recent_items(days: int = 2) -> list[ItemRow]:
     with session_scope() as s:
         rows = (
             s.execute(
-                select(ItemRow).where(ItemRow.fetched_at >= cutoff).order_by(ItemRow.fetched_at.desc())
+                select(ItemRow)
+                .where(
+                    or_(
+                        ItemRow.published_at >= cutoff,
+                        (ItemRow.published_at.is_(None) & (ItemRow.fetched_at >= cutoff)),
+                    )
+                )
+                .order_by(func.coalesce(ItemRow.published_at, ItemRow.fetched_at).desc())
             )
             .scalars()
             .all()

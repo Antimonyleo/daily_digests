@@ -46,11 +46,11 @@ class FDASource:
         endpoint = (spec.endpoint or "drug/drugsfda.json").lstrip("/")
         today = datetime.now(timezone.utc).date()
         two_days_ago = today - timedelta(days=2)
-        default_query = (
+        date_query = (
             f"submissions.submission_status_date:"
             f"[{two_days_ago.strftime('%Y%m%d')} TO {today.strftime('%Y%m%d')}]"
         )
-        search = spec.query or default_query
+        search = self._search_query(date_query, spec.query)
 
         url = f"{self.BASE}/{endpoint}"
         params = {"search": search, "limit": str(self.LIMIT)}
@@ -69,6 +69,14 @@ class FDASource:
             if item is not None:
                 out.append(item)
         return out
+
+    def _search_query(self, date_query: str, custom_query: str | None) -> str:
+        custom = (custom_query or "").strip()
+        if not custom:
+            return date_query
+        if "submission_status_date" in custom:
+            return custom
+        return f"({date_query}) AND ({custom})"
 
     def _parse_entry(self, entry: dict[str, Any], spec: SourceSpec) -> Item | None:
         app_no = entry.get("application_number") or ""

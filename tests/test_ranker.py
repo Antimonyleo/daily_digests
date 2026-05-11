@@ -176,6 +176,50 @@ class TestApplyQualityAdjustments:
 
         assert adjusted[1] > adjusted[0]
 
+    def test_research_promotional_language_is_penalized(self):
+        promo = _make_row(
+            "Sponsored webinar on first-in-class CRISPR delivery",
+            "research",
+            "Register now for partner content about an AI discovery platform.",
+        )
+        promo.source = "Nature"
+        clean = _make_row(
+            "First-in-class CRISPR delivery study",
+            "research",
+            "Primary research on delivery chemistry and efficacy.",
+        )
+        clean.source = "Nature"
+
+        adjusted = _apply_quality_adjustments(
+            [promo, clean],
+            np.asarray([0.70, 0.70], dtype=np.float32),
+            [],
+        )
+
+        assert adjusted[1] > adjusted[0]
+
+    def test_regulatory_promotional_language_is_penalized(self):
+        promo = _make_row(
+            "Company today announced sponsored FDA submission webinar",
+            "regulatory",
+            "Register now for partner content about the product launch.",
+        )
+        promo.source = "Company Press Release"
+        clean = _make_row(
+            "FDA approves first-in-class therapy after phase 3 survival benefit",
+            "regulatory",
+            "Approval notice covering efficacy and safety data.",
+        )
+        clean.source = "FDA Drug Approvals (CDER)"
+
+        adjusted = _apply_quality_adjustments(
+            [promo, clean],
+            np.asarray([0.70, 0.70], dtype=np.float32),
+            [],
+        )
+
+        assert adjusted[1] > adjusted[0]
+
 
 # ---------------------------------------------------------------------------
 # _cosine_score_items (uses monkeypatched embed)

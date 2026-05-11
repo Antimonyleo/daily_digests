@@ -52,6 +52,7 @@ HIGH_TIER_PATTERNS = (
     "science translational medicine",
     "science immunology",
     "science robotics",
+    "cell host and microbe",
     "cell stem cell",
     "cell metabolism",
     "cancer cell",
@@ -78,6 +79,8 @@ STRONG_TIER_PATTERNS = (
     "nano letters",
     "acs catalysis",
     "acs central science",
+    "acs chemical biology",
+    "chemistry of materials",
     "chemical science",
     "chem. soc. rev.",
     "energy and environmental science",
@@ -211,6 +214,12 @@ def _tier_to_prestige(tier: str | None, section: str) -> float | None:
         return 0.74
     if tier_lc in {"repository", "preprint"}:
         return 0.55
+    if tier_lc == "trusted-news":
+        return 0.72
+    if tier_lc == "news":
+        return DEFAULT_NEWS_PRESTIGE
+    if tier_lc == "self-published":
+        return 0.42
     if tier_lc == "low":
         return 0.35
     return DEFAULT_RESEARCH_PRESTIGE if section == "research" else DEFAULT_NEWS_PRESTIGE
@@ -283,12 +292,12 @@ def novelty_score(row: Any) -> float:
 
 def promotional_score(row: Any) -> float:
     text_lc = _row_text(row).lower()
+    source_quality = infer_source_quality(_row_source(row), _row_section(row))
     if not text_lc:
-        return 0.0
+        return _clip(source_quality.promo_risk)
 
     hits = sum(1 for term in PROMOTIONAL_TERMS if term in text_lc)
     score = min(0.75, hits * 0.22)
-    source_quality = infer_source_quality(_row_source(row), _row_section(row))
     score += source_quality.promo_risk
     return _clip(score)
 
@@ -302,7 +311,12 @@ def quality_adjusted_score(row: Any, base_score: float) -> float:
     base = float(base_score)
 
     if section == "research":
-        score = base + (0.18 * source_quality.prestige_score) + (0.12 * novelty)
+        score = (
+            base
+            + (0.18 * source_quality.prestige_score)
+            + (0.12 * novelty)
+            - (0.35 * promo)
+        )
         low_prestige = source_quality.prestige_score < LOW_RESEARCH_PRESTIGE
         exceptional = base >= 0.78 and novelty >= 0.50
         if low_prestige and not exceptional:
@@ -313,6 +327,6 @@ def quality_adjusted_score(row: Any, base_score: float) -> float:
         return base + (0.06 * source_quality.prestige_score) + (0.14 * novelty) - (0.45 * promo)
 
     if section == "regulatory":
-        return base + (0.10 * novelty)
+        return base + (0.06 * source_quality.prestige_score) + (0.10 * novelty) - (0.45 * promo)
 
-    return base
+    return base + (0.06 * source_quality.prestige_score) + (0.10 * novelty) - (0.45 * promo)
