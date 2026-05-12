@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import sqlite3
 from datetime import datetime, timezone
+
+import numpy as np
 
 
 def _reset_store_for_tmp_db(monkeypatch, tmp_path):
@@ -71,3 +74,74 @@ def test_vote_dataset_ignores_neutral_votes(tmp_path, monkeypatch):
     monkeypatch.setattr(votes_mod, "embed_item_rows", _should_not_embed)
 
     assert votes_mod.vote_dataset() is None
+
+
+def test_legacy_duplicate_vote_rows_use_latest_vote_for_counts_and_training(tmp_path, monkeypatch):
+    db_path = tmp_path / "legacy_digest.db"
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE items (
+            id INTEGER PRIMARY KEY,
+            source VARCHAR NOT NULL,
+            section VARCHAR NOT NULL,
+            external_id VARCHAR NOT NULL,
+            url VARCHAR NOT NULL,
+            title TEXT NOT NULL,
+            abstract TEXT DEFAULT '',
+            authors TEXT DEFAULT '',
+            published_at DATETIME,
+            fetched_at DATETIME,
+            summary TEXT DEFAULT '',
+            score FLOAT,
+            digest_id VARCHAR,
+            item_label VARCHAR
+        );
+        CREATE TABLE votes (
+            id INTEGER PRIMARY KEY,
+            item_id INTEGER NOT NULL,
+            value INTEGER NOT NULL,
+            created_at DATETIME
+        );
+        INSERT INTO items (
+            id, source, section, external_id, url, title, abstract, authors,
+            published_at, fetched_at, summary, score, digest_id, item_label
+        ) VALUES (
+            1, 'Legacy', 'research', 'legacy-1', 'https://example.com/legacy-1',
+            'Legacy item', 'Abstract', '', '2026-05-12 00:00:00',
+            '2026-05-12 00:00:00', '', NULL, NULL, NULL
+        );
+        INSERT INTO votes (id, item_id, value, created_at)
+        VALUES
+            (1, 1, 1, '2026-05-12 10:00:00'),
+            (2, 1, -1, '2026-05-12 11:00:00');
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    monkeypatch.setenv("DB_PATH", str(db_path))
+    from dailydigest import config as config_mod
+    from dailydigest import store as store_mod
+    from dailydigest import votes as votes_mod
+
+    config_mod.reload_settings()
+    store_mod.SETTINGS = config_mod.SETTINGS
+    store_mod._ENGINE = None
+    store_mod._SessionLocal = None
+    monkeypatch.setattr(votes_mod, "MIN_VOTES_FOR_LR", 1)
+    monkeypatch.setattr(
+        votes_mod,
+        "embed_item_rows",
+        lambda rows: np.ones((len(rows), 2), dtype=np.float32),
+    )
+
+    assert votes_mod.get_vote_value(1) == -1
+    assert votes_mod.vote_counts()["bad"] == 1
+    assert votes_mod.vote_counts()["good"] == 0
+
+    dataset = votes_mod.vote_dataset()
+
+    assert dataset is not None
+    _x, y = dataset
+    assert y.tolist() == [-1.0]

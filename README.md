@@ -4,7 +4,7 @@ DailyDigest is a personalized morning research and news digest. It pulls from jo
 
 It is built for researchers who want signal without opening 40 tabs before breakfast.
 
-**Status:** public-release hardened local app. Verified with `113` passing tests. See [docs/STATUS.md](docs/STATUS.md).
+**Status:** public-release hardened local app. Verified with `119` passing tests. See [docs/STATUS.md](docs/STATUS.md).
 
 ## Features
 

@@ -2,7 +2,7 @@
 
 **Last updated:** 2026-05-11
 **State:** v1.8-dev — freshness-filtered, cross-source deduped, quality-aware ranking with web-triggered LR training.
-**End-to-end verified:** `./scripts/start.sh` syncs deps and boots FastAPI. Setup wizard at `/setup`, brewing page with accessible SSE progress at `/run`, "your morning cup of tea is brewed" at `/done`. **77 sources** (65 research incl. Nature/Science/Cell families, ACS/RSC/Wiley flagships, NAR). 113/113 pytest passing.
+**End-to-end verified:** `./scripts/start.sh` syncs deps and boots FastAPI. Setup wizard at `/setup`, brewing page with accessible SSE progress at `/run`, "your morning cup of tea is brewed" at `/done`. **77 sources** (65 research incl. Nature/Science/Cell families, ACS/RSC/Wiley flagships, NAR). 119/119 pytest passing.
 
 ---
 
@@ -39,7 +39,7 @@ Open `http://127.0.0.1:8765`. First-time users are sent to `/setup`; the wizard 
 | Local digest viewer | `GET /` | ✅ FastAPI app at 127.0.0.1:8765, Good / Neutral / Bad votes save instantly; redirects to /setup if no profile |
 | Claude Code backend | `LLM_BACKEND=claude_code uv run dd run-all` | ✅ `claude --print` (+ optional `--model <id>` via `LLM_CLI_MODEL`) |
 | Codex backend | `LLM_BACKEND=codex uv run dd run-all` | ✅ `codex exec` (+ optional `--model`) |
-| Tests | `uv run pytest -q` (after `uv sync --group dev`) | ✅ 113 passed |
+| Tests | `uv run pytest -q` (after `uv sync --group dev`) | ✅ 119 passed |
 
 Live verification artifacts:
 - `data/digest-20260504-081032.html` — 28,224 bytes, all 4 sections (R×8, I×6, G×3, W×3) with emoji headers, inline CSS, vote-syntax footer.

@@ -257,6 +257,16 @@ class TestCosineScoreItems:
         no_penalty = scored_norm[0][1]
         assert no_penalty - penalty_applied == pytest.approx(DOWNWEIGHT_PENALTY, abs=1e-6)
 
+    def test_skips_angew_cover_entries(self):
+        cover = _make_row("Front Cover: Molecular Catalysts", "research", "Cover picture.")
+        cover.source = "Angew. Chem. Int. Ed."
+        article = _make_row("Catalyst mechanism study", "research", "Primary research.")
+        article.source = "Angew. Chem. Int. Ed."
+
+        scored = _cosine_score_items([cover, article], _profile_vec(3), [])
+
+        assert [row.title for row, _score in scored] == ["Catalyst mechanism study"]
+
 
 # ---------------------------------------------------------------------------
 # score_items (public entry point — falls back to cosine since no LR weights)

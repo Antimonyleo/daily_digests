@@ -218,6 +218,23 @@ def recent_items(days: int = 2) -> list[ItemRow]:
         return list(rows)
 
 
+def exclude_reviewed_items(rows: list[ItemRow]) -> list[ItemRow]:
+    """Drop rows that already have a saved Good/Neutral/Bad response."""
+    ids = [int(r.id) for r in rows if r.id is not None]
+    if not ids:
+        return rows
+    with session_scope() as s:
+        reviewed = {
+            int(item_id)
+            for item_id in s.execute(
+                select(VoteRow.item_id).where(VoteRow.item_id.in_(ids))
+            ).scalars()
+        }
+    if not reviewed:
+        return rows
+    return [r for r in rows if int(r.id) not in reviewed]
+
+
 def prune(days: int) -> int:
     init_db()
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)

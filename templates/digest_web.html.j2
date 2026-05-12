@@ -332,6 +332,7 @@
       trainBtn.disabled = true;
       const oldText = trainBtn.textContent;
       trainBtn.textContent = "Training...";
+      let keepDisabled = false;
       try {
         const r = await fetch("/ranking/train", {
           method: "POST",
@@ -340,11 +341,14 @@
         if (!r.ok) throw new Error("HTTP " + r.status);
         const payload = await r.json();
         updateRankingStatus(payload.status);
-        showToast(payload.ok ? "Ranking trained" : (payload.message || "Ranking was not trained"));
+        keepDisabled = Boolean(payload.running);
+        if (payload.running && trainBtn) trainBtn.disabled = true;
+        showToast(payload.message || (payload.ok ? "Ranking training started" : "Ranking was not trained"));
       } catch (e) {
         showToast("Ranking training failed");
       } finally {
         trainBtn.textContent = oldText;
+        if (!keepDisabled) trainBtn.disabled = false;
       }
     });
   }

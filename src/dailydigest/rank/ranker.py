@@ -16,7 +16,7 @@ import numpy as np
 
 from ..store import ItemRow
 from .embedding_cache import embed_item_rows, item_text
-from .source_quality import quality_adjusted_score
+from .source_quality import quality_adjusted_score, should_skip_item
 
 logger = logging.getLogger(__name__)
 
@@ -217,6 +217,7 @@ def _cosine_score_items(
     downweight_terms: list[str],
 ) -> list[tuple[ItemRow, float]]:
     """Cosine baseline: embed title+abstract, dot-product with profile vec."""
+    items = [item for item in items if not should_skip_item(item)]
     if not items:
         return []
 
@@ -242,6 +243,7 @@ def score_items_lr(
     Falls back to :func:`_cosine_score_items` when the LR ranker cannot be
     loaded or fewer than 30 votes are available.
     """
+    items = [item for item in items if not should_skip_item(item)]
     if not items:
         return []
 

@@ -75,6 +75,8 @@ _SECTION_RANK = {name: idx for idx, name in enumerate(SECTION_ORDER)}
 _RUN_QUEUES: dict[str, std_queue.Queue[dict[str, Any]]] = {}
 _RUN_STARTED: set[str] = set()
 _RUN_LOCK = threading.Lock()
+_TRAIN_LOCK = threading.Lock()
+_TRAIN_JOB: dict[str, Any] = {"running": False, "last_result": None}
 _CSRF_TOKEN = secrets.token_urlsafe(32)
 _ENV_SAFE_RE = re.compile(r"^[A-Za-z0-9_./:@+-]*$")
 
@@ -463,13 +465,67 @@ def vote(request: Request, item_id: int, value: int) -> JSONResponse:
 @app.get("/ranking/status")
 def ranking_status(request: Request) -> JSONResponse:
     _require_local_origin(request)
-    return JSONResponse({"ok": True, "status": votes_mod.lr_training_status()})
+    with _TRAIN_LOCK:
+        training_job = dict(_TRAIN_JOB)
+    return JSONResponse(
+        {
+            "ok": True,
+            "status": votes_mod.lr_training_status(),
+            "training_job": training_job,
+        }
+    )
 
 
 @app.post("/ranking/train")
 def ranking_train(request: Request) -> JSONResponse:
     _require_csrf(request)
-    return JSONResponse(votes_mod.train_lr_ranker())
+    status = votes_mod.lr_training_status()
+    if not status["can_train"]:
+        return JSONResponse(
+            {
+                "ok": False,
+                "started": False,
+                "running": False,
+                "message": (
+                    f"Need {status['remaining_votes_for_lr']} more signed votes "
+                    "before LR training."
+                ),
+                "status": status,
+            }
+        )
+
+    with _TRAIN_LOCK:
+        if _TRAIN_JOB["running"]:
+            return JSONResponse(
+                {
+                    "ok": True,
+                    "started": False,
+                    "running": True,
+                    "message": "Ranking training is already running.",
+                    "status": status,
+                    "training_job": dict(_TRAIN_JOB),
+                }
+            )
+        _TRAIN_JOB["running"] = True
+        _TRAIN_JOB["last_result"] = None
+
+    def _target() -> None:
+        result = votes_mod.train_lr_ranker()
+        with _TRAIN_LOCK:
+            _TRAIN_JOB["running"] = False
+            _TRAIN_JOB["last_result"] = result
+
+    threading.Thread(target=_target, daemon=True).start()
+    return JSONResponse(
+        {
+            "ok": True,
+            "started": True,
+            "running": True,
+            "message": "Ranking training started.",
+            "status": status,
+            "training_job": dict(_TRAIN_JOB),
+        }
+    )
 
 
 def _run_pipeline_dry_run() -> None:

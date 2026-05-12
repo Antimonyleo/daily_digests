@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from typing import Iterable
 
 import numpy as np
-from sqlalchemy import func, select
+from sqlalchemy import select
 
 from .rank.embedding_cache import embed_item_rows
 from .rank.ranker import LRRanker, reset_lr_cache
@@ -168,27 +168,42 @@ def get_vote_value(item_id: int) -> int | None:
     init_db()
     with session_scope() as s:
         return s.execute(
-            select(VoteRow.value).where(VoteRow.item_id == item_id)
+            select(VoteRow.value)
+            .where(VoteRow.item_id == item_id)
+            .order_by(VoteRow.created_at.desc(), VoteRow.id.desc())
+            .limit(1)
         ).scalar_one_or_none()
 
 
 def vote_counts() -> dict[str, int]:
-    """Return persisted vote counts split by Good, Bad, and Neutral."""
+    """Return persisted vote counts split by Good, Bad, and Neutral.
+
+    Older local databases may predate the UNIQUE(item_id) constraint and can
+    contain multiple vote rows for one item. Treat the newest row as canonical
+    so the UI and LR training agree with "latest vote wins" semantics.
+    """
     init_db()
     counts = {"good": 0, "bad": 0, "neutral": 0, "signed": 0, "total": 0}
     with session_scope() as s:
         rows = s.execute(
-            select(VoteRow.value, func.count()).group_by(VoteRow.value)
+            select(VoteRow.item_id, VoteRow.value)
+            .order_by(VoteRow.item_id, VoteRow.created_at.desc(), VoteRow.id.desc())
         ).all()
 
-    for value, n in rows:
-        count = int(n or 0)
+    latest_by_item: dict[int, int] = {}
+    for item_id, value in rows:
+        iid = int(item_id)
+        if iid in latest_by_item:
+            continue
+        latest_by_item[iid] = int(value)
+
+    for value in latest_by_item.values():
         if int(value) == 1:
-            counts["good"] = count
+            counts["good"] += 1
         elif int(value) == -1:
-            counts["bad"] = count
+            counts["bad"] += 1
         elif int(value) == 0:
-            counts["neutral"] = count
+            counts["neutral"] += 1
 
     counts["signed"] = counts["good"] + counts["bad"]
     counts["total"] = counts["signed"] + counts["neutral"]
@@ -230,7 +245,18 @@ def train_lr_ranker() -> dict[str, object]:
             "status": status,
         }
 
-    dataset = vote_dataset()
+    try:
+        dataset = vote_dataset()
+    except Exception as e:  # noqa: BLE001
+        logger.exception("LR training dataset assembly failed")
+        status = lr_training_status()
+        return {
+            "ok": False,
+            "trained": False,
+            "reason": "training_error",
+            "message": f"Could not assemble training data: {type(e).__name__}: {e}",
+            "status": status,
+        }
     if dataset is None:
         status = lr_training_status()
         return {
@@ -254,6 +280,16 @@ def train_lr_ranker() -> dict[str, object]:
             "message": str(e),
             "status": status,
         }
+    except Exception as e:  # noqa: BLE001
+        logger.exception("LR training failed")
+        status = lr_training_status()
+        return {
+            "ok": False,
+            "trained": False,
+            "reason": "training_error",
+            "message": f"Could not train LR ranking: {type(e).__name__}: {e}",
+            "status": status,
+        }
 
     reset_lr_cache()
     status = lr_training_status()
@@ -273,9 +309,18 @@ def _upsert_vote(s, item_id: int, value: int) -> None:
     sign exists, logs an INFO line so flip patterns are visible in the
     feedback loop.
     """
-    existing = s.execute(
-        select(VoteRow).where(VoteRow.item_id == item_id)
-    ).scalar_one_or_none()
+    existing_rows = (
+        s.execute(
+            select(VoteRow)
+            .where(VoteRow.item_id == item_id)
+            .order_by(VoteRow.created_at.desc(), VoteRow.id.desc())
+        )
+        .scalars()
+        .all()
+    )
+    existing = existing_rows[0] if existing_rows else None
+    for duplicate in existing_rows[1:]:
+        s.delete(duplicate)
     now = datetime.now(timezone.utc)
     if existing is None:
         s.add(VoteRow(item_id=item_id, value=value, created_at=now))
@@ -300,13 +345,25 @@ def vote_dataset() -> tuple[np.ndarray, np.ndarray] | None:
     """
     init_db()
     with session_scope() as s:
-        rows = s.execute(
-            select(VoteRow.value, ItemRow)
+        raw_rows = s.execute(
+            select(VoteRow.item_id, VoteRow.value, ItemRow)
             .join(ItemRow, VoteRow.item_id == ItemRow.id)
             .where(VoteRow.value.in_((-1, 1)))
+            .order_by(VoteRow.item_id, VoteRow.created_at.desc(), VoteRow.id.desc())
         ).all()
+
+        rows: list[tuple[int, ItemRow]] = []
+        seen_item_ids: set[int] = set()
+        for item_id, value, row in raw_rows:
+            iid = int(item_id)
+            if iid in seen_item_ids:
+                continue
+            seen_item_ids.add(iid)
+            rows.append((int(value), row))
+
         for _value, row in rows:
-            s.expunge(row)
+            if row in s:
+                s.expunge(row)
 
     if len(rows) < MIN_VOTES_FOR_LR:
         return None

@@ -59,3 +59,34 @@ def test_recent_items_uses_published_at_before_fetched_at(monkeypatch, tmp_path)
     assert "old-pub-new-fetch" not in external_ids
     assert "no-pub-new-fetch" in external_ids
     assert "fresh-pub-old-fetch" in external_ids
+
+
+def test_exclude_reviewed_items_removes_saved_feedback(monkeypatch, tmp_path):
+    store_mod = _reset_store(tmp_path, monkeypatch)
+    now = datetime.now(timezone.utc)
+
+    with store_mod.session_scope() as s:
+        reviewed = store_mod.ItemRow(
+            source="Reviewed",
+            section="research",
+            external_id="reviewed",
+            url="https://example.com/reviewed",
+            title="Already reviewed",
+            published_at=now,
+        )
+        fresh = store_mod.ItemRow(
+            source="Fresh",
+            section="research",
+            external_id="fresh",
+            url="https://example.com/fresh",
+            title="Not reviewed",
+            published_at=now,
+        )
+        s.add_all([reviewed, fresh])
+        s.flush()
+        s.add(store_mod.VoteRow(item_id=reviewed.id, value=0))
+
+    rows = store_mod.recent_items(days=2)
+    filtered = store_mod.exclude_reviewed_items(rows)
+
+    assert {row.external_id for row in filtered} == {"fresh"}

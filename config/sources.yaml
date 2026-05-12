@@ -81,6 +81,8 @@ research:
     category: cs.LG
   - name: OpenAlex (biotech)
     kind: openalex
+    quality_tier: aggregator
+    prestige_score: 0.34
     query: biotechnology OR therapeutic OR clinical trial OR drug discovery
     polite_email: noreply@example.com
   - name: PubMed (clinical/biotech)

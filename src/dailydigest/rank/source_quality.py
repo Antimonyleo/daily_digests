@@ -165,6 +165,27 @@ PROMOTIONAL_TERMS = (
     "ai discovery platform",
 )
 
+ACCESS_FRICTION_TERMS = (
+    "sign up",
+    "signup",
+    "log in",
+    "login",
+    "subscribe",
+    "subscription required",
+    "requires subscription",
+    "member-only",
+    "members only",
+    "membership required",
+    "purchase access",
+)
+
+SKIP_PATTERNS = (
+    re.compile(r"\bfront\s+cover\b", re.IGNORECASE),
+    re.compile(r"\binside\s+cover\b", re.IGNORECASE),
+    re.compile(r"\bback\s+cover\b", re.IGNORECASE),
+    re.compile(r"\bcover\s+(picture|image|profile|feature|art|story)\b", re.IGNORECASE),
+)
+
 
 def _safe_str(value: Any) -> str:
     return value if isinstance(value, str) else ""
@@ -214,6 +235,8 @@ def _tier_to_prestige(tier: str | None, section: str) -> float | None:
         return 0.74
     if tier_lc in {"repository", "preprint"}:
         return 0.55
+    if tier_lc == "aggregator":
+        return 0.34
     if tier_lc == "trusted-news":
         return 0.72
     if tier_lc == "news":
@@ -254,6 +277,8 @@ def infer_source_quality(source: str, section: str) -> SourceQuality:
 
 def _infer_source_quality_by_name(source_lc: str, section_lc: str) -> SourceQuality:
     if section_lc == "research":
+        if "openalex" in source_lc:
+            return SourceQuality(0.34, "aggregator", None)
         if source_lc in TOP_TIER_NAMES:
             return SourceQuality(0.99, "top", 7.0)
         if any(pattern in source_lc for pattern in HIGH_TIER_PATTERNS):
@@ -297,9 +322,19 @@ def promotional_score(row: Any) -> float:
         return _clip(source_quality.promo_risk)
 
     hits = sum(1 for term in PROMOTIONAL_TERMS if term in text_lc)
-    score = min(0.75, hits * 0.22)
+    access_hits = sum(1 for term in ACCESS_FRICTION_TERMS if term in text_lc)
+    score = min(0.75, hits * 0.22) + min(0.35, access_hits * 0.14)
     score += source_quality.promo_risk
     return _clip(score)
+
+
+def should_skip_item(row: Any) -> bool:
+    """Return True for feed entries that should not enter ranking at all."""
+    source_lc = _row_source(row).lower()
+    text = _row_text(row)
+    if "angew" in source_lc and any(pattern.search(text) for pattern in SKIP_PATTERNS):
+        return True
+    return False
 
 
 def quality_adjusted_score(row: Any, base_score: float) -> float:

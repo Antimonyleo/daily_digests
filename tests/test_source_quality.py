@@ -11,6 +11,7 @@ from dailydigest.rank.source_quality import (
     _configured_sources_cached,
     infer_source_quality,
     quality_adjusted_score,
+    should_skip_item,
 )
 
 
@@ -78,3 +79,40 @@ def test_research_promo_language_reduces_quality_adjusted_score():
     )
 
     assert quality_adjusted_score(promo, 0.70) < quality_adjusted_score(clean, 0.70)
+
+
+def test_openalex_is_downweighted_as_aggregator_source():
+    _clear_source_quality_cache()
+
+    quality = infer_source_quality("OpenAlex (biotech)", "research")
+
+    assert quality.quality_tier == "aggregator"
+    assert quality.prestige_score == pytest.approx(0.34)
+
+
+def test_access_friction_language_reduces_quality_adjusted_score():
+    class Row:
+        source = "Nature"
+        section = "research"
+
+        def __init__(self, title: str, abstract: str = "") -> None:
+            self.title = title
+            self.abstract = abstract
+
+    clean = Row("CRISPR delivery study", "Primary research with efficacy data.")
+    gated = Row(
+        "CRISPR delivery study",
+        "Sign up or log in; subscription required for access.",
+    )
+
+    assert quality_adjusted_score(gated, 0.70) < quality_adjusted_score(clean, 0.70)
+
+
+def test_angew_cover_entries_are_skipped():
+    class Row:
+        source = "Angew. Chem. Int. Ed."
+        section = "research"
+        title = "Front Cover: Molecular Catalysts"
+        abstract = "Cover picture information."
+
+    assert should_skip_item(Row()) is True

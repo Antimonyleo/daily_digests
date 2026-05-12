@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from pathlib import Path
+import threading
 
-import numpy as np
 from fastapi.testclient import TestClient
 
 
@@ -286,29 +286,20 @@ def test_ranking_train_api_uses_monkeypatched_dataset_and_ranker(tmp_path, monke
     store_mod._SessionLocal = None
     monkeypatch.setattr(votes_mod, "MIN_VOTES_FOR_LR", 2)
 
-    fitted: list[tuple[np.ndarray, np.ndarray]] = []
-    reset_calls: list[bool] = []
-
     class DummyRanker:
         trained = False
 
         def load(self):
             return self.trained
 
-        def fit(self, X, y):
-            fitted.append((X, y))
-            DummyRanker.trained = True
-
     monkeypatch.setattr(votes_mod, "LRRanker", DummyRanker)
-    monkeypatch.setattr(votes_mod, "reset_lr_cache", lambda: reset_calls.append(True))
-    monkeypatch.setattr(
-        votes_mod,
-        "vote_dataset",
-        lambda: (
-            np.asarray([[0.1, 0.2], [0.9, 0.8]], dtype=np.float32),
-            np.asarray([1, -1], dtype=np.float32),
-        ),
-    )
+    release_train = threading.Event()
+
+    def _slow_train():
+        release_train.wait(5)
+        return {"ok": True, "trained": True, "status": votes_mod.lr_training_status()}
+
+    monkeypatch.setattr(votes_mod, "train_lr_ranker", _slow_train)
 
     store_mod.init_db()
     with store_mod.session_scope() as s:
@@ -329,6 +320,8 @@ def test_ranking_train_api_uses_monkeypatched_dataset_and_ranker(tmp_path, monke
 
     client = TestClient(web.app, raise_server_exceptions=False)
     assert client.request("POST", "/ranking/train").status_code == 403
+    web._TRAIN_JOB["running"] = False
+    web._TRAIN_JOB["last_result"] = None
 
     response = client.request(
         "POST",
@@ -339,13 +332,23 @@ def test_ranking_train_api_uses_monkeypatched_dataset_and_ranker(tmp_path, monke
     assert response.status_code == 200
     payload = response.json()
     assert payload["ok"] is True
-    assert payload["trained"] is True
-    assert payload["trained_votes"] == 2
-    assert payload["status"]["model_trained"] is True
-    assert payload["status"]["ranking_status"] == "lr_active"
-    assert len(fitted) == 1
-    assert fitted[0][0].shape == (2, 2)
-    assert reset_calls == [True]
+    assert payload["started"] is True
+    assert payload["running"] is True
+    assert payload["message"] == "Ranking training started."
+
+    # A second click while training is in progress should return immediately
+    # instead of starting another fit or hanging the UI.
+    response2 = client.request(
+        "POST",
+        "/ranking/train",
+        headers={"X-CSRF-Token": web._CSRF_TOKEN},
+    )
+    assert response2.status_code == 200
+    payload2 = response2.json()
+    assert payload2["ok"] is True
+    assert payload2["started"] is False
+    assert payload2["running"] is True
+    release_train.set()
 
 
 def test_run_start_rejects_foreign_origin_and_detects_duplicate(monkeypatch):

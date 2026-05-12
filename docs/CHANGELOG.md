@@ -319,6 +319,25 @@ Pre-release review focused on shipping the repo publicly rather than keeping it 
 
 ---
 
+## 2026-05-12 — Wave 11: ranking feedback fixes
+
+### Fixes
+
+- Downweighted OpenAlex as an aggregator source; it can still surface exceptional matches, but no longer competes like a curated journal feed.
+- Added access-friction penalties for sign-up, login, subscription, and member-only wording.
+- Skipped Angew cover/front-cover/feed-art entries before ranking.
+- Future brews now skip items that already have saved Good/Neutral/Bad feedback, so old evaluations do not appear pre-selected on newly brewed digests.
+- Made vote counting and LR training robust to legacy local databases with duplicate vote rows, using the latest vote per item.
+- Train-ranking failures now return structured JSON instead of an internal server error.
+- The Train ranking button now starts LR training in the background and returns immediately instead of making the browser wait for embedding/model work.
+
+### Verification
+
+- Added regressions for OpenAlex weighting, access-friction penalties, Angew cover skipping, reviewed-item exclusion, and legacy duplicate vote rows.
+- `uv run pytest -q` -> 119/119 passing.
+
+---
+
 ## 2026-05-11 — Wave 10: ranking quality hardening
 
 This wave closes the main ways boring, stale, duplicate, or promotional items could consume digest slots.

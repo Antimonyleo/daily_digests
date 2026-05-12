@@ -24,6 +24,7 @@ from .store import (
     ItemRow,
     init_db,
     mark_sent,
+    exclude_reviewed_items,
     recent_items,
     session_scope,
     upsert_items,
@@ -210,7 +211,7 @@ def run_all(
     profile_vec = build_profile_vector(profile)
 
     days = backfill_days if backfill_days and backfill_days > 0 else 2
-    recent = recent_items(days=days)
+    recent = exclude_reviewed_items(recent_items(days=days))
     items = dedupe_ranking_candidates(recent)
     logger.info(
         "ranking %d recent items after cross-source dedupe (%d before, window=%d days)",

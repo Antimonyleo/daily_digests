@@ -16,6 +16,7 @@ from .dedupe import dedupe_ranking_candidates
 from .pipeline import ingest_all, run_all
 from .rank.profile import build_profile_vector
 from .rank.ranker import LRRanker, reset_lr_cache, score_items
+from .store import exclude_reviewed_items
 from .store import prune as store_prune
 from .store import recent_items
 
@@ -66,7 +67,7 @@ def rank() -> None:
     """Re-rank recent items and print top 20."""
     profile = load_profile()
     pv = build_profile_vector(profile)
-    items = dedupe_ranking_candidates(recent_items(days=2))
+    items = dedupe_ranking_candidates(exclude_reviewed_items(recent_items(days=2)))
     scored = score_items(items, pv, profile.downweight)
     for row, s in scored[:20]:
         title = (row.title or "").strip().replace("\n", " ")
