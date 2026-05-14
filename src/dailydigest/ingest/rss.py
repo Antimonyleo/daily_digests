@@ -73,6 +73,22 @@ def _external_id(entry, url: str) -> str:
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
 
 
+def _extract_abstract(entry) -> str:
+    """Extract abstract text, preferring content:encoded (CDATA) over summary.
+
+    Nature, Cell, ACS, and other publishers put full abstracts in
+    ``content[0].value`` (the ``content:encoded`` element) while ``summary``
+    contains only a short teaser or is empty.  Without this fallback, items
+    from top journals embed only the title, which badly hurts ranking quality.
+    """
+    content = entry.get("content")
+    if content and isinstance(content, list):
+        value = content[0].get("value") if content[0] else None
+        if value:
+            return _strip_html(value)
+    return _strip_html(entry.get("summary", entry.get("description", "")))
+
+
 class RSSSource:
     def fetch(self, spec: SourceSpec) -> list[Item]:
         if not spec.url:
@@ -85,14 +101,14 @@ class RSSSource:
             return []
         feed = feedparser.parse(content)
         out: list[Item] = []
-        for entry in feed.entries:
+        for entry in feed.entries[:200]:
             url = canonicalize_url(entry.get("link", ""))
             if not url:
                 continue
             title = _strip_html(entry.get("title", "")).strip()
             if not title:
                 continue
-            abstract = _strip_html(entry.get("summary", entry.get("description", "")))
+            abstract = _extract_abstract(entry)
             authors = ""
             if entry.get("authors"):
                 authors = ", ".join(a.get("name", "") for a in entry["authors"] if a.get("name"))

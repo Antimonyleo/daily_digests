@@ -32,17 +32,17 @@ class Settings(BaseSettings):
     reply_to_email: str = ""
 
     user_tz: str = ""
-    digest_hour: int = 8
+    digest_hour: int = Field(default=8, ge=0, le=23)
 
     db_path: str = "data/digest.db"
 
-    top_research: int = 12
-    top_industry: int = 6
-    top_regulatory: int = 3
-    top_world: int = 3
-    retention_days: int = 30
+    top_research: int = Field(default=12, ge=0, le=100)
+    top_industry: int = Field(default=6, ge=0, le=100)
+    top_regulatory: int = Field(default=3, ge=0, le=100)
+    top_world: int = Field(default=3, ge=0, le=100)
+    retention_days: int = Field(default=30, ge=1, le=3650)
 
-    candidates_for_summary: int = Field(default=60, description="top-K after Stage A ranking")
+    candidates_for_summary: int = Field(default=60, ge=1, description="top-K after Stage A ranking")
 
 
 def load_settings() -> Settings:

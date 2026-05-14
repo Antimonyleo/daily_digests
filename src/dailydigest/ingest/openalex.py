@@ -55,7 +55,7 @@ class OpenAlexSource:
     """Queries the OpenAlex Works endpoint for fresh articles.
 
     API: https://api.openalex.org/works?filter=from_publication_date:{yesterday},
-        type:article&search={query}&per-page=25
+        type:article&search={query}&per-page=25&cursor=*
     Spec fields: ``query`` (search term), optional ``polite_email``.
     """
 
@@ -66,12 +66,13 @@ class OpenAlexSource:
     def fetch(self, spec: SourceSpec) -> list[Item]:
         query = spec.query or ""
         yesterday = (datetime.now(timezone.utc).date() - timedelta(days=1)).isoformat()
-        params: dict[str, str] = {
+        base_params: dict[str, str] = {
             "filter": f"from_publication_date:{yesterday},type:article",
             "per-page": str(self.PER_PAGE),
+            "cursor": "*",
         }
         if query:
-            params["search"] = query
+            base_params["search"] = query
 
         ua = "dailydigest/0.1"
         if spec.polite_email:
@@ -79,49 +80,64 @@ class OpenAlexSource:
         headers = {"User-Agent": ua}
 
         out: list[Item] = []
-        try:
-            payload = _get_json(self.BASE, params, headers)
-        except Exception:
-            return out
-        if not payload:
-            return out
+        params = dict(base_params)
+        while len(out) < self.MAX_ITEMS:
+            try:
+                payload = _get_json(self.BASE, params, headers)
+            except Exception:
+                break
+            if not payload:
+                break
 
-        results: list[dict[str, Any]] = payload.get("results") or []
-        for work in results[: self.MAX_ITEMS]:
-            title = (work.get("title") or work.get("display_name") or "").strip()
-            if not title:
-                continue
-            url = (
-                work.get("doi")
-                or (work.get("primary_location") or {}).get("landing_page_url")
-                or work.get("id")
-                or ""
-            )
-            if not url:
-                continue
-            abstract = _reconstruct_abstract(work.get("abstract_inverted_index"))
-            authorships = work.get("authorships") or []
-            authors = ", ".join(
-                (a.get("author") or {}).get("display_name", "")
-                for a in authorships
-                if (a.get("author") or {}).get("display_name")
-            )
-            pub = _parse_date(work.get("publication_date"))
-            ext = (
-                work.get("doi")
-                or work.get("id")
-                or hashlib.sha1(url.encode("utf-8")).hexdigest()[:16]
-            )
-            out.append(
-                Item(
-                    source=spec.name,
-                    section=spec.section,
-                    external_id=str(ext),
-                    url=url,
-                    title=title,
-                    abstract=abstract,
-                    authors=authors,
-                    published_at=pub,
+            results: list[dict[str, Any]] = payload.get("results") or []
+            if not results:
+                break
+
+            for work in results:
+                if len(out) >= self.MAX_ITEMS:
+                    break
+                title = (work.get("title") or work.get("display_name") or "").strip()
+                if not title:
+                    continue
+                url = (
+                    work.get("doi")
+                    or (work.get("primary_location") or {}).get("landing_page_url")
+                    or work.get("id")
+                    or ""
                 )
-            )
+                if not url:
+                    continue
+                abstract = _reconstruct_abstract(work.get("abstract_inverted_index"))
+                authorships = work.get("authorships") or []
+                authors = ", ".join(
+                    (a.get("author") or {}).get("display_name", "")
+                    for a in authorships
+                    if (a.get("author") or {}).get("display_name")
+                )
+                pub = _parse_date(work.get("publication_date"))
+                ext = (
+                    work.get("doi")
+                    or work.get("id")
+                    or hashlib.sha1(url.encode("utf-8")).hexdigest()[:16]
+                )
+                out.append(
+                    Item(
+                        source=spec.name,
+                        section=spec.section,
+                        external_id=str(ext),
+                        url=url,
+                        title=title,
+                        abstract=abstract,
+                        authors=authors,
+                        published_at=pub,
+                    )
+                )
+
+            meta = payload.get("meta") or {}
+            next_cursor = meta.get("next_cursor")
+            if not next_cursor:
+                break
+            params = dict(base_params)
+            params["cursor"] = next_cursor
+
         return out

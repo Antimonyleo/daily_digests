@@ -9,6 +9,8 @@ import numpy as np
 _MODEL = None
 _MODEL_LOCK = Lock()
 _MODEL_NAME = "BAAI/bge-small-en-v1.5"
+# BGE asymmetric retrieval: queries need this prefix; documents/passages do not.
+_QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
 
 
 def _get_model():
@@ -43,13 +45,18 @@ def _get_model():
     return _MODEL
 
 
-def embed_texts(texts: list[str]) -> np.ndarray:
+def embed_texts(texts: list[str], is_query: bool = False) -> np.ndarray:
     """Return L2-normalized embeddings of shape [N, D].
 
     Empty input yields an empty array of shape [0, 0].
+    Pass ``is_query=True`` for profile / search vectors — BGE prepends a
+    retrieval instruction that measurably improves asymmetric retrieval quality.
+    Documents (item title+abstract) do not need the prefix.
     """
     if not texts:
         return np.zeros((0, 0), dtype=np.float32)
+    if is_query:
+        texts = [_QUERY_PREFIX + t for t in texts]
     model = _get_model()
     vecs = model.encode(
         texts,

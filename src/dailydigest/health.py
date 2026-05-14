@@ -123,6 +123,16 @@ def weekly_summary() -> list[dict]:
     return sorted(agg.values(), key=lambda d: d["source"].lower())
 
 
+def latest_snapshot() -> list[dict]:
+    """Return the latest per-source ingest snapshot, or [] when unavailable."""
+    path = _health_path()
+    if not path.exists():
+        return []
+    data = _load_existing(path)
+    latest = data.get("latest") or []
+    return list(latest) if isinstance(latest, list) else []
+
+
 def should_show(summary: list[dict]) -> bool:
     """Heuristic: include the footer only when at least one source had >=1
     failure in the last 7 days. Keeps successful weeks visually clean."""

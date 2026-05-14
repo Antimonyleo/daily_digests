@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Iterable
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from threading import Lock
+
 from sqlalchemy import (
+    CheckConstraint,
     LargeBinary,
     Column,
     DateTime,
@@ -21,6 +25,7 @@ from sqlalchemy import (
     func,
     or_,
     select,
+    text,
 )
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import DeclarativeBase, Session, relationship, sessionmaker
@@ -75,7 +80,10 @@ class VoteRow(Base):
     # so dropping/recreating votes is acceptable if duplicates already
     # exist. If a future deployment hits a duplicate-row violation, the
     # fix is to drop the votes table once and let ``init_db`` recreate it.
-    __table_args__ = (UniqueConstraint("item_id", name="uq_votes_item_id"),)
+    __table_args__ = (
+        UniqueConstraint("item_id", name="uq_votes_item_id"),
+        CheckConstraint("value IN (-1, 0, 1)", name="ck_vote_value"),
+    )
 
 
 class ItemEmbeddingRow(Base):
@@ -104,6 +112,42 @@ class DigestRow(Base):
     sent_at = Column(DateTime(timezone=True))
 
 
+class DigestItemFeatureRow(Base):
+    __tablename__ = "digest_item_features"
+
+    id = Column(Integer, primary_key=True)
+    digest_id = Column(String, ForeignKey("digests.id", ondelete="CASCADE"), nullable=False, index=True)
+    item_id = Column(Integer, ForeignKey("items.id", ondelete="CASCADE"), nullable=False, index=True)
+    item_label = Column(String)
+    final_score = Column(Float)
+    features_json = Column(Text, nullable=False, default="{}")
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+    item = relationship("ItemRow")
+    digest = relationship("DigestRow")
+
+    __table_args__ = (UniqueConstraint("digest_id", "item_id", name="uq_digest_item_features"),)
+
+
+class DigestItemRow(Base):
+    __tablename__ = "digest_items"
+
+    id = Column(Integer, primary_key=True)
+    digest_id = Column(String, ForeignKey("digests.id", ondelete="CASCADE"), nullable=False, index=True)
+    item_id = Column(Integer, ForeignKey("items.id", ondelete="CASCADE"), nullable=False, index=True)
+    item_label = Column(String, nullable=False)
+    score = Column(Float)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+    item = relationship("ItemRow")
+    digest = relationship("DigestRow")
+
+    __table_args__ = (
+        UniqueConstraint("digest_id", "item_id", name="uq_digest_items_item"),
+        UniqueConstraint("digest_id", "item_label", name="uq_digest_items_label"),
+    )
+
+
 class RunRow(Base):
     __tablename__ = "runs"
 
@@ -116,13 +160,19 @@ class RunRow(Base):
 
 
 _ENGINE = None
+_ENGINE_LOCK = Lock()
 
 
 def _engine():
     global _ENGINE
-    if _ENGINE is None:
+    if _ENGINE is not None:
+        return _ENGINE
+    with _ENGINE_LOCK:
+        if _ENGINE is not None:
+            return _ENGINE
         ensure_data_dir()
-        _ENGINE = create_engine(f"sqlite:///{SETTINGS.db_path}", future=True)
+        from .config import get_settings
+        _ENGINE = create_engine(f"sqlite:///{get_settings().db_path}", future=True)
 
         @event.listens_for(_ENGINE, "connect")
         def _set_sqlite_pragma(dbapi_conn, _record):
@@ -136,6 +186,55 @@ def _engine():
 def init_db() -> None:
     eng = _engine()
     Base.metadata.create_all(eng)
+    _migrate_sqlite_schema(eng)
+
+
+def _migrate_sqlite_schema(eng) -> None:
+    """Add columns introduced after early local DBs were created.
+
+    SQLite ``create_all`` creates missing tables but does not alter existing
+    ones. Keep this intentionally small and additive so old local databases can
+    open the web UI without manual reset.
+    """
+    if eng.dialect.name != "sqlite":
+        return
+
+    required_columns = {
+        "items": {
+            "abstract": "TEXT DEFAULT ''",
+            "authors": "TEXT DEFAULT ''",
+            "published_at": "DATETIME",
+            "fetched_at": "DATETIME",
+            "summary": "TEXT DEFAULT ''",
+            "score": "FLOAT",
+            "digest_id": "VARCHAR",
+            "item_label": "VARCHAR",
+        },
+        "digests": {
+            "created_at": "DATETIME",
+            "item_count": "INTEGER DEFAULT 0",
+            "sent_at": "DATETIME",
+        },
+        "votes": {
+            "created_at": "DATETIME",
+        },
+    }
+
+    with eng.begin() as conn:
+        for table_name, columns in required_columns.items():
+            exists = conn.execute(
+                text("SELECT name FROM sqlite_master WHERE type='table' AND name=:name"),
+                {"name": table_name},
+            ).first()
+            if exists is None:
+                continue
+            existing = {
+                row[1]
+                for row in conn.execute(text(f"PRAGMA table_info({table_name})")).all()
+            }
+            for column, ddl in columns.items():
+                if column not in existing:
+                    conn.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {column} {ddl}"))
 
 
 _SessionLocal = None
@@ -219,7 +318,12 @@ def recent_items(days: int = 2) -> list[ItemRow]:
 
 
 def exclude_reviewed_items(rows: list[ItemRow]) -> list[ItemRow]:
-    """Drop rows that already have a saved Good/Neutral/Bad response."""
+    """Drop rows the user has already reviewed (voted 0 or -1).
+
+    Up-voted (+1) items are kept so they can reappear in backfill runs and
+    continue training the LR without being silently excluded.  Neutral and
+    down-voted items have been explicitly dismissed and should not resurface.
+    """
     ids = [int(r.id) for r in rows if r.id is not None]
     if not ids:
         return rows
@@ -227,7 +331,10 @@ def exclude_reviewed_items(rows: list[ItemRow]) -> list[ItemRow]:
         reviewed = {
             int(item_id)
             for item_id in s.execute(
-                select(VoteRow.item_id).where(VoteRow.item_id.in_(ids))
+                select(VoteRow.item_id).where(
+                    VoteRow.item_id.in_(ids),
+                    VoteRow.value != 1,
+                )
             ).scalars()
         }
     if not reviewed:
@@ -236,15 +343,40 @@ def exclude_reviewed_items(rows: list[ItemRow]) -> list[ItemRow]:
 
 
 def prune(days: int) -> int:
+    """Delete items older than ``days``, but preserve voted items.
+
+    Voted items are kept indefinitely so the LR ranker always has training
+    data even after 30-day rotation.  Without this guard, CASCADE deletion
+    via ``ON DELETE CASCADE`` on ``votes`` would silently erase all training
+    signal accumulated over months.
+    """
     init_db()
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     with session_scope() as s:
-        result = s.execute(delete(ItemRow).where(ItemRow.fetched_at < cutoff))
+        voted_ids = s.execute(select(VoteRow.item_id)).scalars().all()
+        stmt = delete(ItemRow).where(ItemRow.fetched_at < cutoff)
+        if voted_ids:
+            stmt = stmt.where(ItemRow.id.not_in(list(voted_ids)))
+        result = s.execute(stmt)
         return result.rowcount or 0
 
 
-def write_digest(digest_id: str, labeled_items: list[tuple[str, int]]) -> None:
-    """labeled_items: list of (label, item_id)."""
+def prune_old_digests(days: int) -> int:
+    """Remove digest metadata rows older than ``days``.  Returns count deleted."""
+    init_db()
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    with session_scope() as s:
+        result = s.execute(delete(DigestRow).where(DigestRow.created_at < cutoff))
+        return result.rowcount or 0
+
+
+def write_digest(digest_id: str, labeled_items: list[tuple]) -> None:
+    """Persist digest item assignments.
+
+    ``labeled_items`` accepts ``(label, item_id)`` for backwards compatibility
+    or ``(label, item_id, score)`` so ranked rows can carry their final score to
+    the web/email renderers.
+    """
     init_db()
     with session_scope() as s:
         digest = s.get(DigestRow, digest_id)
@@ -261,11 +393,90 @@ def write_digest(digest_id: str, labeled_items: list[tuple[str, int]]) -> None:
         for row in previous:
             row.digest_id = None
             row.item_label = None
-        for label, item_id in labeled_items:
+        for item in labeled_items:
+            label, item_id = item[0], item[1]
+            score = item[2] if len(item) >= 3 else None
             row = s.get(ItemRow, item_id)
             if row is not None:
                 row.digest_id = digest_id
                 row.item_label = label
+                if score is not None:
+                    row.score = float(score)
+        s.execute(delete(DigestItemRow).where(DigestItemRow.digest_id == digest_id))
+        for item in labeled_items:
+            label, item_id = item[0], item[1]
+            score = item[2] if len(item) >= 3 else None
+            if s.get(ItemRow, int(item_id)) is not None:
+                s.add(
+                    DigestItemRow(
+                        digest_id=digest_id,
+                        item_id=int(item_id),
+                        item_label=str(label),
+                        score=float(score) if score is not None else None,
+                    )
+                )
+
+
+def write_digest_features(
+    digest_id: str,
+    feature_rows: list[tuple[str, int, float, dict]],
+) -> None:
+    """Persist rank-feature snapshots for the local web UI.
+
+    Each tuple is ``(label, item_id, final_score, features)``. Features are
+    stored as JSON so the ranker can evolve without requiring DB migrations.
+    """
+    if not feature_rows:
+        return
+    init_db()
+    with session_scope() as s:
+        if s.get(DigestRow, digest_id) is None:
+            s.add(DigestRow(id=digest_id, item_count=len(feature_rows)))
+        for label, item_id, final_score, features in feature_rows:
+            payload = json.dumps(features or {}, sort_keys=True)
+            stmt = (
+                sqlite_insert(DigestItemFeatureRow)
+                .values(
+                    digest_id=digest_id,
+                    item_id=int(item_id),
+                    item_label=label,
+                    final_score=float(final_score),
+                    features_json=payload,
+                    created_at=datetime.now(timezone.utc),
+                )
+                .on_conflict_do_update(
+                    index_elements=["digest_id", "item_id"],
+                    set_={
+                        "item_label": label,
+                        "final_score": float(final_score),
+                        "features_json": payload,
+                        "created_at": datetime.now(timezone.utc),
+                    },
+                )
+            )
+            s.execute(stmt)
+
+
+def load_digest_features(digest_id: str) -> dict[int, dict]:
+    """Return persisted rank-feature snapshots keyed by item id."""
+    init_db()
+    with session_scope() as s:
+        rows = (
+            s.execute(
+                select(DigestItemFeatureRow.item_id, DigestItemFeatureRow.features_json)
+                .where(DigestItemFeatureRow.digest_id == digest_id)
+            )
+            .all()
+        )
+    out: dict[int, dict] = {}
+    for item_id, raw in rows:
+        try:
+            payload = json.loads(raw or "{}")
+        except json.JSONDecodeError:
+            payload = {}
+        if isinstance(payload, dict):
+            out[int(item_id)] = payload
+    return out
 
 
 def write_summaries(summaries: dict[int, str]) -> None:

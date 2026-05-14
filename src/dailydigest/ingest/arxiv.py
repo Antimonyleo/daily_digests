@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import hashlib
+import time
 from datetime import datetime, timezone
+from threading import Lock
 
 import feedparser
 import httpx
@@ -13,6 +15,20 @@ from tenacity import (
 )
 
 from ..models import Item, SourceSpec
+
+# arXiv Terms of Use require >= 3 seconds between automated requests.
+_ARXIV_LOCK = Lock()
+_ARXIV_LAST_REQUEST: float = 0.0
+_ARXIV_POLITE_DELAY = 3.0
+
+
+def _arxiv_polite_wait() -> None:
+    global _ARXIV_LAST_REQUEST
+    with _ARXIV_LOCK:
+        elapsed = time.monotonic() - _ARXIV_LAST_REQUEST
+        if elapsed < _ARXIV_POLITE_DELAY:
+            time.sleep(_ARXIV_POLITE_DELAY - elapsed)
+        _ARXIV_LAST_REQUEST = time.monotonic()
 
 
 @retry(
@@ -41,6 +57,7 @@ class ArxivSource:
     MAX_RESULTS = 50
 
     def fetch(self, spec: SourceSpec) -> list[Item]:
+        _arxiv_polite_wait()
         category = spec.category or "q-bio.QM"
         params = {
             "search_query": f"cat:{category}",

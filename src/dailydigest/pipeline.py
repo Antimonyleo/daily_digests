@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from . import health
+from . import health, votes as votes_mod
 from .config import get_settings, load_profile, load_sources
 from .dedupe import dedupe_by_url, dedupe_ranking_candidates, filter_english
 from .email_render import SECTION_ORDER, render_digest
@@ -17,8 +17,9 @@ from .email_send import send_digest
 from .health import IngestStats
 from .ingest import dispatch_source
 from .models import Item
-from .rank.profile import build_profile_vector
+from .rank.profile import build_profile_matrix
 from .rank.ranker import pick_top_per_section, score_items
+from .rank.source_quality import breakdown_payload
 from .store import (
     DigestRow,
     ItemRow,
@@ -29,6 +30,7 @@ from .store import (
     session_scope,
     upsert_items,
     write_digest,
+    write_digest_features,
     write_summaries,
 )
 from .summarize import summarize_items
@@ -208,7 +210,7 @@ def run_all(
     logger.info("upserted %d new items", inserted)
 
     profile = load_profile()
-    profile_vec = build_profile_vector(profile)
+    profile_vec = build_profile_matrix(profile)
 
     days = backfill_days if backfill_days and backfill_days > 0 else 2
     recent = exclude_reviewed_items(recent_items(days=days))
@@ -219,7 +221,12 @@ def run_all(
         len(recent),
         days,
     )
-    scored = score_items(items, profile_vec, profile.downweight)
+    scored = score_items(
+        items,
+        profile_vec,
+        profile.downweight,
+        reason_penalty_map=votes_mod.reason_penalty_map(),
+    )
     # Note: do NOT pre-truncate `scored` to a global top-K before per-section picking;
     # a single-domain profile (e.g. biotech-heavy) starves industry/regulatory/world.
     # `pick_top_per_section` already caps per-section, so summary cost is bounded.
@@ -237,7 +244,11 @@ def run_all(
         "summarize_start",
         {"items": len(selected_rows), "backend": get_settings().llm_backend},
     )
-    summaries = summarize_items(selected_rows)
+    summaries = {
+        item_id: summary
+        for item_id, summary in summarize_items(selected_rows).items()
+        if item_id in {int(row.id) for row in selected_rows}
+    }
     write_summaries(summaries)
     _emit(progress_callback, "summarize_done", {"items": len(summaries)})
 
@@ -250,7 +261,19 @@ def run_all(
     # Dry-runs should refresh the local preview even if today's email was
     # already sent. write_digest preserves sent_at for existing rows.
     if dry_run or _should_write_digest(digest_id):
-        write_digest(digest_id, [(row.item_label, row.id) for row, _, _ in labeled])
+        write_digest(digest_id, [(row.item_label, row.id, score) for row, score, _ in labeled])
+        write_digest_features(
+            digest_id,
+            [
+                (
+                    row.item_label or label,
+                    int(row.id),
+                    float(score),
+                    breakdown_payload(row, float(score)),
+                )
+                for row, score, label in labeled
+            ],
+        )
     else:
         logger.info(
             "digest %s already has a sent row; skipping write_digest to preserve sent_at",

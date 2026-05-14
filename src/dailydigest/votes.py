@@ -8,9 +8,12 @@ embedding-based training matrix used by :class:`rank.ranker.LRRanker`.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from datetime import datetime, timezone
+from pathlib import Path
+from threading import Lock
 from typing import Iterable
 
 import numpy as np
@@ -18,13 +21,59 @@ from sqlalchemy import select
 
 from .rank.embedding_cache import embed_item_rows
 from .rank.ranker import LRRanker, reset_lr_cache
-from .store import DigestRow, ItemRow, VoteRow, init_db, session_scope
+from .store import DigestItemRow, DigestRow, ItemRow, VoteRow, init_db, session_scope
 
 logger = logging.getLogger(__name__)
 
 _TOKEN_RE = re.compile(r"^([+-]?)([A-Za-z]+)(\d+)$")
+ALLOWED_REASONS = {
+    "off_topic",
+    "low_impact",
+    "promotional",
+    "already_known",
+    "too_technical",
+    "not_urgent",
+    "access_friction",
+    "duplicate",
+}
+REASON_PENALTIES = {
+    "off_topic": 0.12,
+    "low_impact": 0.10,
+    "promotional": 0.14,
+    "already_known": 0.08,
+    "too_technical": 0.04,
+    "not_urgent": 0.07,
+    "access_friction": 0.08,
+    "duplicate": 0.10,
+}
 
 MIN_VOTES_FOR_LR = 30
+_VOTE_REASONS_LOCK = Lock()
+
+
+def _vote_reasons_path() -> Path:
+    from .config import get_settings
+
+    return Path(get_settings().db_path).parent / "vote_reasons.json"
+
+
+def _load_vote_reasons() -> dict:
+    path = _vote_reasons_path()
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception as e:  # noqa: BLE001
+        logger.warning("vote reasons unreadable, resetting: %s", e)
+        return {}
+
+
+def _write_vote_reasons(data: dict) -> None:
+    path = _vote_reasons_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
+    tmp.replace(path)
 
 
 def parse_vote_line(line: str) -> tuple[list[str], list[str]]:
@@ -90,11 +139,18 @@ def _resolve_labels(
     missing: list[str] = []
     for label in labels:
         item_id = s.execute(
-            select(ItemRow.id).where(
-                ItemRow.digest_id == digest_id,
-                ItemRow.item_label == label,
+            select(DigestItemRow.item_id).where(
+                DigestItemRow.digest_id == digest_id,
+                DigestItemRow.item_label == label,
             )
         ).scalar_one_or_none()
+        if item_id is None:
+            item_id = s.execute(
+                select(ItemRow.id).where(
+                    ItemRow.digest_id == digest_id,
+                    ItemRow.item_label == label,
+                )
+            ).scalar_one_or_none()
         if item_id is None:
             missing.append(label)
         else:
@@ -173,6 +229,66 @@ def get_vote_value(item_id: int) -> int | None:
             .order_by(VoteRow.created_at.desc(), VoteRow.id.desc())
             .limit(1)
         ).scalar_one_or_none()
+
+
+def record_vote_reason(item_id: int, reason: str) -> bool:
+    """Persist an optional qualitative feedback reason for a voted item."""
+    if reason not in ALLOWED_REASONS:
+        return False
+    init_db()
+    with session_scope() as s:
+        if s.get(ItemRow, item_id) is None:
+            return False
+    with _VOTE_REASONS_LOCK:
+        data = _load_vote_reasons()
+        key = str(int(item_id))
+        reasons = list(data.get(key) or [])
+        if reason not in reasons:
+            reasons.append(reason)
+        data[key] = reasons
+        _write_vote_reasons(data)
+    return True
+
+
+def remove_vote_reason(item_id: int, reason: str) -> bool:
+    """Remove one qualitative feedback reason for an item."""
+    if reason not in ALLOWED_REASONS:
+        return False
+    init_db()
+    with session_scope() as s:
+        if s.get(ItemRow, item_id) is None:
+            return False
+    with _VOTE_REASONS_LOCK:
+        data = _load_vote_reasons()
+        key = str(int(item_id))
+        reasons = [r for r in list(data.get(key) or []) if r != reason]
+        if reasons:
+            data[key] = reasons
+        else:
+            data.pop(key, None)
+        _write_vote_reasons(data)
+    return True
+
+
+def get_vote_reasons(item_id: int) -> list[str]:
+    with _VOTE_REASONS_LOCK:
+        data = _load_vote_reasons()
+    reasons = data.get(str(int(item_id))) or []
+    return [r for r in reasons if r in ALLOWED_REASONS]
+
+
+def reason_penalty_map() -> dict[str, float]:
+    """Return item-id keyed penalties derived from qualitative reason chips."""
+    with _VOTE_REASONS_LOCK:
+        data = _load_vote_reasons()
+    penalties: dict[str, float] = {}
+    for item_id, reasons in data.items():
+        total = 0.0
+        for reason in list(reasons or []):
+            total += REASON_PENALTIES.get(str(reason), 0.0)
+        if total > 0:
+            penalties[str(item_id)] = min(total, 0.30)
+    return penalties
 
 
 def vote_counts() -> dict[str, int]:
@@ -268,6 +384,22 @@ def train_lr_ranker() -> dict[str, object]:
         }
 
     X, y = dataset
+    n_pos = int((y == 1).sum())
+    n_neg = int((y == -1).sum())
+    if n_pos < 5 or n_neg < 5:
+        status = lr_training_status()
+        return {
+            "ok": False,
+            "trained": False,
+            "reason": "class_imbalance",
+            "message": (
+                f"Need at least 5 votes of each sign for reliable LR training "
+                f"(have {n_pos} positive, {n_neg} negative). "
+                f"Keep voting to balance the dataset."
+            ),
+            "status": status,
+        }
+
     ranker = LRRanker()
     try:
         ranker.fit(X, y)
@@ -372,7 +504,7 @@ def vote_dataset() -> tuple[np.ndarray, np.ndarray] | None:
     ys: list[int] = []
     for value, row in rows:
         voted_rows.append(row)
-        ys.append(1 if int(value) >= 0 else -1)
+        ys.append(1 if int(value) > 0 else -1)
 
     X = embed_item_rows(voted_rows).astype(np.float32, copy=False)
     y = np.asarray(ys, dtype=np.float32)

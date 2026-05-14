@@ -25,6 +25,24 @@ class SourceQuality:
     promo_risk: float = 0.0
 
 
+@dataclass(frozen=True)
+class ScoreBreakdown:
+    topic: float
+    source: float
+    novelty: float
+    learned: float
+    penalty: float
+    final: float
+    tags: tuple[str, ...]
+    promo_penalty: float = 0.0
+    access_penalty: float = 0.0
+    reason_penalty: float = 0.0
+    content_type: str = "article"
+    freshness_tags: tuple[str, ...] = ()
+    quality_tags: tuple[str, ...] = ()
+    why_shown: tuple[str, ...] = ()
+
+
 DEFAULT_RESEARCH_PRESTIGE = 0.42
 DEFAULT_NEWS_PRESTIGE = 0.58
 LOW_RESEARCH_PRESTIGE = 0.50
@@ -97,6 +115,13 @@ REPOSITORY_PATTERNS = (
     "arxiv",
     "openalex",
     "pubmed",
+)
+
+ARXIV_CS_PATTERNS = (
+    "arxiv cs.",
+    "arxiv cs-",
+    "arxiv cs/",
+    "arxiv cs",
 )
 
 CREDIBLE_NEWS_PATTERNS = (
@@ -177,6 +202,55 @@ ACCESS_FRICTION_TERMS = (
     "members only",
     "membership required",
     "purchase access",
+)
+
+COMMENTARY_TERMS = (
+    "commentary",
+    "editorial",
+    "viewpoint",
+    "opinion",
+    "perspective",
+    "news and views",
+    "news & views",
+    "correspondence",
+    "letter to the editor",
+    "podcast",
+)
+
+CONTENT_TYPE_TERMS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("editorial", ("editorial", "opinion", "viewpoint", "perspective", "news and views", "news & views")),
+    ("commentary", ("commentary", "correspondence", "letter to the editor")),
+    ("podcast", ("podcast",)),
+    ("review", ("review", "primer", "overview")),
+    ("clinical", ("clinical trial", "trial results", "phase 3", "phase iii", "approval", "approved")),
+    ("method", ("method", "methods", "protocol", "platform", "assay")),
+    ("dataset", ("dataset", "atlas")),
+    ("structure", ("structure", "cryo-em")),
+)
+
+METHOD_OR_RESULT_TERMS = (
+    "method",
+    "methods",
+    "protocol",
+    "platform",
+    "screen",
+    "assay",
+    "dataset",
+    "atlas",
+    "structure",
+    "cryo-em",
+    "single-cell",
+    "trial",
+    "phase",
+    "approved",
+    "approval",
+    "efficacy",
+    "survival",
+    "mechanism",
+    "identified",
+    "demonstrates",
+    "reveals",
+    "reports",
 )
 
 SKIP_PATTERNS = (
@@ -279,6 +353,8 @@ def _infer_source_quality_by_name(source_lc: str, section_lc: str) -> SourceQual
     if section_lc == "research":
         if "openalex" in source_lc:
             return SourceQuality(0.34, "aggregator", None)
+        if is_arxiv_cs_source(source_lc):
+            return SourceQuality(0.48, "repository", None)
         if source_lc in TOP_TIER_NAMES:
             return SourceQuality(0.99, "top", 7.0)
         if any(pattern in source_lc for pattern in HIGH_TIER_PATTERNS):
@@ -328,13 +404,287 @@ def promotional_score(row: Any) -> float:
     return _clip(score)
 
 
+def access_friction_score(row: Any) -> float:
+    text_lc = _row_text(row).lower()
+    if not text_lc:
+        return 0.0
+    hits = sum(1 for term in ACCESS_FRICTION_TERMS if term in text_lc)
+    return _clip(min(0.35, hits * 0.14))
+
+
+def is_arxiv_cs_source(source_or_row: Any) -> bool:
+    source = source_or_row if isinstance(source_or_row, str) else _row_source(source_or_row)
+    source_lc = source.lower()
+    return "arxiv" in source_lc and any(pattern in source_lc for pattern in ARXIV_CS_PATTERNS)
+
+
+def source_bucket(row: Any) -> str:
+    """Return a coarse source class for final digest balancing."""
+    source_lc = _row_source(row).lower()
+    section = _row_section(row).lower()
+    if section != "research":
+        return section or "other"
+    if is_arxiv_cs_source(source_lc):
+        return "arxiv_cs"
+    if "arxiv" in source_lc:
+        return "arxiv_other"
+    if "biorxiv" in source_lc or "medrxiv" in source_lc:
+        return "bio_med_preprint"
+    if "openalex" in source_lc:
+        return "aggregator"
+    if "pubmed" in source_lc:
+        return "published_database"
+
+    quality = infer_source_quality(_row_source(row), section)
+    if quality.quality_tier in {"top", "high", "strong"}:
+        return "published_journal"
+    return "other_research"
+
+
+def is_preprint_source(row: Any) -> bool:
+    return source_bucket(row) in {"arxiv_cs", "arxiv_other", "bio_med_preprint"}
+
+
+def is_published_journal_source(row: Any) -> bool:
+    return source_bucket(row) == "published_journal"
+
+
+def is_high_quality_journal_source(row: Any) -> bool:
+    if _row_section(row).lower() != "research":
+        return False
+    quality = infer_source_quality(_row_source(row), "research")
+    return quality.quality_tier in {"top", "high", "strong"}
+
+
+def content_type(row: Any) -> str:
+    """Return a compact content-type label inferred from source text."""
+    text_lc = _row_text(row).lower()
+    for label, terms in CONTENT_TYPE_TERMS:
+        if any(term in text_lc for term in terms):
+            return label
+    return "research" if _row_section(row).lower() == "research" else "article"
+
+
 def should_skip_item(row: Any) -> bool:
     """Return True for feed entries that should not enter ranking at all."""
     source_lc = _row_source(row).lower()
     text = _row_text(row)
     if "angew" in source_lc and any(pattern.search(text) for pattern in SKIP_PATTERNS):
         return True
+    text_lc = text.lower()
+    is_commentary = any(term in text_lc for term in COMMENTARY_TERMS)
+    has_new_information = (
+        novelty_score(row) >= 0.24
+        or any(term in text_lc for term in METHOD_OR_RESULT_TERMS)
+    )
+    if is_commentary and not has_new_information:
+        return True
     return False
+
+
+def _reason_tags(
+    row: Any,
+    source_quality: SourceQuality,
+    novelty: float,
+    promo: float,
+    access: float,
+    learned: float,
+) -> tuple[str, ...]:
+    tags: list[str] = []
+    section = _row_section(row).lower()
+    tier = source_quality.quality_tier
+    if tier in {"top", "high", "strong"}:
+        tags.append("High-quality source")
+    elif tier in {"repository", "preprint"}:
+        tags.append("Preprint / repository")
+    elif tier == "aggregator":
+        tags.append("Aggregator source")
+    elif tier == "trusted-news":
+        tags.append("Trusted news")
+
+    if novelty >= 0.55:
+        tags.append("High novelty")
+    elif novelty >= 0.24:
+        tags.append("Fresh signal")
+
+    if section == "regulatory":
+        tags.append("Regulatory update")
+    if learned >= 0.65:
+        tags.append("Matches learned preferences")
+    if promo >= 0.35:
+        tags.append("Promo risk")
+    if access >= 0.14:
+        tags.append("Access friction")
+    if is_arxiv_cs_source(row):
+        tags.append("arXiv CS")
+    return tuple(tags[:5])
+
+
+def _quality_tags(source_quality: SourceQuality, promo: float, access: float, row: Any) -> tuple[str, ...]:
+    tags: list[str] = []
+    tier = source_quality.quality_tier
+    if tier in {"top", "high", "strong"}:
+        tags.append("high_quality_source")
+    elif tier in {"repository", "preprint"}:
+        tags.append("preprint_repository")
+    elif tier == "aggregator":
+        tags.append("aggregator_source")
+    elif tier == "trusted-news":
+        tags.append("trusted_news")
+    if promo >= 0.35:
+        tags.append("promo_risk")
+    if access >= 0.14:
+        tags.append("access_friction")
+    if is_arxiv_cs_source(row):
+        tags.append("arxiv_cs")
+    return tuple(tags)
+
+
+def _freshness_tags(novelty: float) -> tuple[str, ...]:
+    if novelty >= 0.55:
+        return ("high_novelty",)
+    if novelty >= 0.24:
+        return ("fresh_signal",)
+    return ()
+
+
+def _why_shown(
+    *,
+    topic: float,
+    learned: float,
+    source_quality: SourceQuality,
+    novelty: float,
+    promo: float,
+    access: float,
+) -> tuple[str, ...]:
+    reasons: list[str] = []
+    if topic >= 0.65:
+        reasons.append("Strong topic match")
+    elif topic >= 0.45:
+        reasons.append("Relevant to your profile")
+    if learned >= 0.65:
+        reasons.append("Matches your feedback")
+    if source_quality.quality_tier in {"top", "high", "strong", "trusted-news"}:
+        reasons.append("Reliable source")
+    if novelty >= 0.55:
+        reasons.append("High-impact new signal")
+    elif novelty >= 0.24:
+        reasons.append("Fresh development")
+    if promo >= 0.35:
+        reasons.append("Downweighted for promotional language")
+    if access >= 0.14:
+        reasons.append("Downweighted for access friction")
+    return tuple(reasons[:5])
+
+
+def score_breakdown(
+    row: Any,
+    base_score: float,
+    learned_score: float = 0.0,
+    reason_penalty: float = 0.0,
+) -> ScoreBreakdown:
+    """Return display/debug components for a ranked item.
+
+    ``base_score`` is the profile/topic score before quality adjustments. The
+    returned components are clipped to 0..1 so they work directly as bar widths.
+    """
+    section = _row_section(row).lower()
+    source_quality = infer_source_quality(_row_source(row), section)
+    novelty = novelty_score(row)
+    promo = promotional_score(row)
+    access = access_friction_score(row)
+    final = quality_adjusted_score(row, base_score)
+    reason_penalty = _clip(float(reason_penalty))
+    if reason_penalty:
+        final -= reason_penalty
+    penalty = _clip(promo + reason_penalty)
+    tags = _reason_tags(row, source_quality, novelty, promo, access, learned_score)
+    quality_tags = _quality_tags(source_quality, promo, access, row)
+    freshness_tags = _freshness_tags(novelty)
+    topic = _clip(float(base_score))
+    learned = _clip(float(learned_score))
+    return ScoreBreakdown(
+        topic=topic,
+        source=_clip(source_quality.prestige_score),
+        novelty=_clip(novelty),
+        learned=learned,
+        penalty=penalty,
+        final=float(final),
+        tags=tags,
+        promo_penalty=_clip(promo),
+        access_penalty=_clip(access),
+        reason_penalty=reason_penalty,
+        content_type=content_type(row),
+        freshness_tags=freshness_tags,
+        quality_tags=quality_tags,
+        why_shown=_why_shown(
+            topic=topic,
+            learned=learned,
+            source_quality=source_quality,
+            novelty=novelty,
+            promo=promo,
+            access=access,
+        ),
+    )
+
+
+def display_breakdown(row: Any) -> ScoreBreakdown:
+    """Best-effort breakdown for already persisted digest rows.
+
+    We persist the final score but not the original profile vector similarity.
+    For the UI, use the final score as the topic-match proxy and recompute the
+    stable source/novelty/penalty components from item metadata.
+    """
+    raw_score = getattr(row, "score", None)
+    base = float(raw_score) if isinstance(raw_score, (int, float)) else 0.5
+    breakdown = score_breakdown(row, _clip(base))
+    return ScoreBreakdown(
+        topic=breakdown.topic,
+        source=breakdown.source,
+        novelty=breakdown.novelty,
+        learned=breakdown.learned,
+        penalty=breakdown.penalty,
+        final=base,
+        tags=breakdown.tags,
+        promo_penalty=breakdown.promo_penalty,
+        access_penalty=breakdown.access_penalty,
+        reason_penalty=breakdown.reason_penalty,
+        content_type=breakdown.content_type,
+        freshness_tags=breakdown.freshness_tags,
+        quality_tags=breakdown.quality_tags,
+        why_shown=breakdown.why_shown,
+    )
+
+
+def breakdown_payload(
+    row: Any,
+    base_score: float,
+    learned_score: float = 0.0,
+    reason_penalty: float = 0.0,
+) -> dict[str, Any]:
+    """Return a JSON-serializable rank explanation for persistence/UI."""
+    breakdown = score_breakdown(
+        row,
+        base_score,
+        learned_score=learned_score,
+        reason_penalty=reason_penalty,
+    )
+    return {
+        "score": round(float(breakdown.final), 4),
+        "topic": round(float(breakdown.topic), 4),
+        "source": round(float(breakdown.source), 4),
+        "novelty": round(float(breakdown.novelty), 4),
+        "learned": round(float(breakdown.learned), 4),
+        "penalty": round(float(breakdown.penalty), 4),
+        "promo_penalty": round(float(breakdown.promo_penalty), 4),
+        "access_penalty": round(float(breakdown.access_penalty), 4),
+        "reason_penalty": round(float(breakdown.reason_penalty), 4),
+        "content_type": breakdown.content_type,
+        "tags": list(breakdown.tags),
+        "quality_tags": list(breakdown.quality_tags),
+        "freshness_tags": list(breakdown.freshness_tags),
+        "why_shown": list(breakdown.why_shown),
+    }
 
 
 def quality_adjusted_score(row: Any, base_score: float) -> float:
@@ -346,22 +696,33 @@ def quality_adjusted_score(row: Any, base_score: float) -> float:
     base = float(base_score)
 
     if section == "research":
-        score = (
-            base
-            + (0.18 * source_quality.prestige_score)
-            + (0.12 * novelty)
-            - (0.35 * promo)
-        )
+        # Prestige is a tie-breaker, not the main ranking signal. A Nature or
+        # Science item should not outrank a substantially better topic match
+        # just because of venue.
+        source_bonus = 0.06 * max(source_quality.prestige_score - LOW_RESEARCH_PRESTIGE, 0.0)
+        score = base + source_bonus + (0.14 * novelty) - (0.35 * promo)
         low_prestige = source_quality.prestige_score < LOW_RESEARCH_PRESTIGE
         exceptional = base >= 0.78 and novelty >= 0.50
         if low_prestige and not exceptional:
-            score -= 0.22
+            # Smooth ramp: full 0.18 penalty at base≤0.50, fades to zero at base=0.78.
+            # Removes the hard cliff that previously jumped 0.10 at base=0.64.
+            smooth = max(0.0, min(1.0, (0.78 - base) / 0.28))
+            score -= 0.18 * smooth
+        if is_arxiv_cs_source(row) and not exceptional:
+            # arXiv CS can be useful for ML/AI methods, but it should not crowd
+            # out peer-reviewed journal papers unless the topic fit is clearly
+            # stronger. Smooth ramp from 0.76 down to 0.56.
+            arxiv_smooth = max(0.0, min(1.0, (0.76 - base) / 0.20))
+            score -= 0.09 * arxiv_smooth
         return score
 
     if section in {"industry", "world"}:
         return base + (0.06 * source_quality.prestige_score) + (0.14 * novelty) - (0.45 * promo)
 
     if section == "regulatory":
-        return base + (0.06 * source_quality.prestige_score) + (0.10 * novelty) - (0.45 * promo)
+        # FDA/EMA items often contain "today announced", "approved", "pleased to
+        # announce" — all promo-flagged but editorially legitimate. Use a light
+        # 0.15× penalty rather than the full 0.45× applied to industry.
+        return base + (0.06 * source_quality.prestige_score) + (0.10 * novelty) - (0.15 * promo)
 
-    return base + (0.06 * source_quality.prestige_score) + (0.10 * novelty) - (0.45 * promo)
+    return base + (0.06 * source_quality.prestige_score) + (0.10 * novelty) - (0.15 * promo)

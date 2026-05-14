@@ -65,7 +65,14 @@ class BiorxivSource:
                     authors = entry.get("authors") or ""
                     pub = entry.get("date") or ""
                     try:
-                        pub_dt = datetime.fromisoformat(pub).replace(tzinfo=timezone.utc) if pub else None
+                        if pub:
+                            # Parse as date-only and anchor to noon UTC so we don't
+                            # accidentally mark a US-Pacific date as midnight UTC
+                            # (which would push it to the previous calendar day).
+                            y, m, d = (int(x) for x in pub.split("-"))
+                            pub_dt = datetime(y, m, d, 12, 0, 0, tzinfo=timezone.utc)
+                        else:
+                            pub_dt = None
                     except Exception:
                         pub_dt = None
                     ext = doi or hashlib.sha1(link.encode()).hexdigest()[:16]

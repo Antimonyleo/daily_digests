@@ -35,7 +35,7 @@ def fake_embed(monkeypatch):
     """
     from dailydigest.rank import embed as embed_mod
 
-    def _fake_embed(texts: list[str]) -> np.ndarray:
+    def _fake_embed(texts: list[str], is_query: bool = False) -> np.ndarray:
         vecs = []
         for t in texts:
             h = hash(t)
@@ -110,7 +110,7 @@ class TestApplyDownweight:
 # ---------------------------------------------------------------------------
 
 class TestApplyQualityAdjustments:
-    def test_top_journal_can_beat_low_prestige_item_with_slightly_higher_topic_score(self):
+    def test_top_journal_bonus_is_only_a_tiebreaker(self):
         nature = _make_row(
             "Base editing delivery study",
             "research",
@@ -126,11 +126,55 @@ class TestApplyQualityAdjustments:
 
         adjusted = _apply_quality_adjustments(
             [nature, minor],
-            np.asarray([0.55, 0.65], dtype=np.float32),
+            np.asarray([0.55, 0.58], dtype=np.float32),
             [],
         )
 
         assert adjusted[0] > adjusted[1]
+
+    def test_high_impact_source_breaks_close_tie(self):
+        high_impact = _make_row(
+            "Base editing delivery study",
+            "research",
+            "Primary research with efficacy data.",
+        )
+        high_impact.source = "Nature"
+        unknown = _make_row(
+            "Base editing delivery study",
+            "research",
+            "Primary research with efficacy data.",
+        )
+        unknown.source = "Minor Journal"
+
+        adjusted = _apply_quality_adjustments(
+            [high_impact, unknown],
+            np.asarray([0.62, 0.62], dtype=np.float32),
+            [],
+        )
+
+        assert adjusted[0] > adjusted[1]
+
+    def test_topic_fit_can_beat_high_prestige_with_large_relevance_gap(self):
+        nature = _make_row(
+            "Broad cellular observation",
+            "research",
+            "Primary research in a high-impact journal but weakly matched.",
+        )
+        nature.source = "Nature"
+        relevant = _make_row(
+            "RNA delivery mechanism for targeted therapeutics",
+            "research",
+            "Detailed mechanism and efficacy data closely matching the profile.",
+        )
+        relevant.source = "Minor Journal"
+
+        adjusted = _apply_quality_adjustments(
+            [nature, relevant],
+            np.asarray([0.55, 0.70], dtype=np.float32),
+            [],
+        )
+
+        assert adjusted[1] > adjusted[0]
 
     def test_low_prestige_research_can_surface_when_highly_novel_and_relevant(self):
         novel = _make_row(
@@ -220,6 +264,29 @@ class TestApplyQualityAdjustments:
 
         assert adjusted[1] > adjusted[0]
 
+    def test_reason_penalty_map_downweights_matching_item_id(self):
+        low_impact = _make_row(
+            "Routine RNA delivery update",
+            "research",
+            "Primary research with efficacy data.",
+        )
+        low_impact.id = 101
+        neutral = _make_row(
+            "Routine RNA delivery update",
+            "research",
+            "Primary research with efficacy data.",
+        )
+        neutral.id = 102
+
+        adjusted = _apply_quality_adjustments(
+            [low_impact, neutral],
+            np.asarray([0.70, 0.70], dtype=np.float32),
+            [],
+            {101: 0.09},
+        )
+
+        assert adjusted[1] - adjusted[0] == pytest.approx(0.09, abs=1e-6)
+
 
 # ---------------------------------------------------------------------------
 # _cosine_score_items (uses monkeypatched embed)
@@ -267,6 +334,24 @@ class TestCosineScoreItems:
 
         assert [row.title for row, _score in scored] == ["Catalyst mechanism study"]
 
+    def test_skips_editorial_entries_without_new_information(self):
+        editorial = _make_row(
+            "Editorial: The future of biological research",
+            "research",
+            "This editorial discusses broad challenges and opportunities.",
+        )
+        editorial.source = "Nature"
+        article = _make_row(
+            "Single-cell atlas method reveals immune mechanism",
+            "research",
+            "Primary research reports a method and dataset.",
+        )
+        article.source = "Nature"
+
+        scored = _cosine_score_items([editorial, article], _profile_vec(3), [])
+
+        assert [row.title for row, _score in scored] == [article.title]
+
 
 # ---------------------------------------------------------------------------
 # score_items (public entry point — falls back to cosine since no LR weights)
@@ -287,6 +372,19 @@ class TestScoreItems:
         scored = score_items(items, _profile_vec(3), [])
         scores = [s for _, s in scored]
         assert scores == sorted(scores, reverse=True)
+
+    def test_reason_penalty_map_is_supported_by_public_scorer(self):
+        penalized = _make_row("CRISPR delivery update", "research")
+        penalized.id = None
+        penalized.external_id = "penalized"
+        neutral = _make_row("CRISPR delivery update", "research")
+        neutral.id = None
+        neutral.external_id = "neutral"
+
+        scored = score_items([penalized, neutral], _profile_vec(3), [], {"penalized": 0.15})
+
+        score_by_external_id = {row.external_id: score for row, score in scored}
+        assert score_by_external_id["neutral"] > score_by_external_id["penalized"]
 
 
 class TestLRRankerPersistence:
@@ -403,3 +501,38 @@ class TestPickTopPerSection:
         assert by_section["research"] == 2
         assert by_section["industry"] == 1
         assert by_section["general"] == 1
+
+    def test_research_selection_caps_arxiv_cs_when_journals_are_available(self):
+        arxiv_items = []
+        for idx in range(12):
+            row = _make_row(f"arXiv CS method {idx}", "research")
+            row.source = "arXiv cs.LG"
+            arxiv_items.append((row, 0.95 - idx * 0.01))
+        journal_items = []
+        for idx in range(10):
+            row = _make_row(f"Nature family paper {idx}", "research")
+            row.source = "Nature Biotechnology"
+            journal_items.append((row, 0.70 - idx * 0.01))
+
+        result = pick_top_per_section(arxiv_items + journal_items, {"research": 10})
+
+        arxiv_count = sum(1 for row, _score in result if row.source == "arXiv cs.LG")
+        journal_count = sum(1 for row, _score in result if row.source == "Nature Biotechnology")
+        assert arxiv_count <= 1
+        assert journal_count >= 6
+
+    def test_research_selection_protects_top_journal_papers_below_preprints(self):
+        scored = []
+        for idx in range(8):
+            row = _make_row(f"preprint {idx}", "research")
+            row.source = "bioRxiv (recent)"
+            scored.append((row, 0.92 - idx * 0.01))
+        for idx in range(4):
+            row = _make_row(f"Cell paper {idx}", "research")
+            row.source = "Cell"
+            scored.append((row, 0.66 - idx * 0.01))
+
+        result = pick_top_per_section(scored, {"research": 8})
+
+        assert any(row.source == "Cell" for row, _score in result)
+        assert sum(1 for row, _score in result if row.source == "bioRxiv (recent)") <= 2

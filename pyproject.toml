@@ -42,6 +42,17 @@ packages = ["src/dailydigest"]
 [dependency-groups]
 dev = ["pytest>=8.0", "pytest-cov>=5.0"]
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.coverage.run]
+source = ["src"]
+omit = ["tests/*"]
+
+[tool.coverage.report]
+show_missing = true
+
 [tool.ruff]
 line-length = 100
 target-version = "py312"
