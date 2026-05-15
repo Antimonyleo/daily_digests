@@ -129,6 +129,18 @@ class DigestItemFeatureRow(Base):
     __table_args__ = (UniqueConstraint("digest_id", "item_id", name="uq_digest_item_features"),)
 
 
+class DigestAuditRow(Base):
+    __tablename__ = "digest_audits"
+
+    id = Column(Integer, primary_key=True)
+    digest_id = Column(String, ForeignKey("digests.id", ondelete="CASCADE"), nullable=False, index=True)
+    audit_type = Column(String, nullable=False, index=True)
+    payload_json = Column(Text, nullable=False, default="{}")
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+    digest = relationship("DigestRow")
+
+
 class DigestItemRow(Base):
     __tablename__ = "digest_items"
 
@@ -485,6 +497,55 @@ def load_digest_features(digest_id: str) -> dict[int, dict]:
     return out
 
 
+def write_digest_audit(digest_id: str, audit_type: str, payloads: list[dict]) -> None:
+    """Replace one audit payload set for a digest."""
+    init_db()
+    with session_scope() as s:
+        if s.get(DigestRow, digest_id) is None:
+            s.add(DigestRow(id=digest_id, item_count=0))
+        s.execute(
+            delete(DigestAuditRow).where(
+                DigestAuditRow.digest_id == digest_id,
+                DigestAuditRow.audit_type == audit_type,
+            )
+        )
+        for payload in payloads:
+            s.add(
+                DigestAuditRow(
+                    digest_id=digest_id,
+                    audit_type=audit_type,
+                    payload_json=json.dumps(payload or {}, sort_keys=True),
+                )
+            )
+
+
+def load_digest_audit(digest_id: str, audit_type: str) -> list[dict]:
+    """Return persisted digest audit payloads."""
+    init_db()
+    with session_scope() as s:
+        rows = (
+            s.execute(
+                select(DigestAuditRow.payload_json)
+                .where(
+                    DigestAuditRow.digest_id == digest_id,
+                    DigestAuditRow.audit_type == audit_type,
+                )
+                .order_by(DigestAuditRow.id)
+            )
+            .scalars()
+            .all()
+        )
+    out: list[dict] = []
+    for raw in rows:
+        try:
+            payload = json.loads(raw or "{}")
+        except json.JSONDecodeError:
+            payload = {}
+        if isinstance(payload, dict):
+            out.append(payload)
+    return out
+
+
 def write_summaries(summaries: dict[int, str]) -> None:
     """Persist per-item summaries for the local web UI."""
     if not summaries:
@@ -503,6 +564,26 @@ def mark_sent(digest_id: str) -> None:
         d = s.get(DigestRow, digest_id)
         if d is not None:
             d.sent_at = datetime.now(timezone.utc)
+
+
+def days_since_last_sent(exclude_digest_id: str | None = None) -> int:
+    """Return calendar days since the most-recently sent digest.
+
+    Returns -1 when no digest has been sent yet (first run).
+    ``exclude_digest_id`` is typically today's digest id so we don't count
+    the current run as the "last sent" baseline.
+    """
+    init_db()
+    with session_scope() as s:
+        q = select(func.max(DigestRow.sent_at)).where(DigestRow.sent_at.isnot(None))
+        if exclude_digest_id:
+            q = q.where(DigestRow.id != exclude_digest_id)
+        last_sent = s.execute(q).scalar_one_or_none()
+    if last_sent is None:
+        return -1
+    if last_sent.tzinfo is None:
+        last_sent = last_sent.replace(tzinfo=timezone.utc)
+    return max(0, (datetime.now(timezone.utc) - last_sent).days)
 
 
 def db_path_exists() -> bool:

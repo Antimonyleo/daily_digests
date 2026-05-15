@@ -187,6 +187,66 @@ def test_run_all_does_not_mark_sent_when_send_digest_returns_false(monkeypatch, 
         assert digest.sent_at is None
 
 
+def test_run_all_auto_backfill_when_days_missed(monkeypatch, tmp_path):
+    """When the last sent digest was several days ago, the window auto-widens."""
+    from datetime import datetime, timedelta, timezone
+    from dailydigest import pipeline as pipeline_mod
+
+    store_mod = _reset_store(tmp_path, monkeypatch)
+    today_id = "2026-05-15"
+    old_sent_at = datetime(2026, 5, 10, tzinfo=timezone.utc)  # 5 days ago
+
+    with store_mod.session_scope() as s:
+        s.add(store_mod.DigestRow(id="2026-05-10", item_count=3, sent_at=old_sent_at))
+
+    captured_days: list[int] = []
+
+    def fake_recent_items(days=2):
+        captured_days.append(days)
+        return []
+
+    monkeypatch.setattr(pipeline_mod, "_digest_id", lambda: today_id)
+    monkeypatch.setattr(pipeline_mod, "ingest_all", lambda progress_callback=None: 0)
+    monkeypatch.setattr(pipeline_mod, "load_profile", lambda: SimpleNamespace(bio="", keywords=[], downweight=[]))
+    monkeypatch.setattr(pipeline_mod, "build_profile_matrix", lambda _profile: __import__("numpy").zeros((1, 3)))
+    monkeypatch.setattr(pipeline_mod, "recent_items", fake_recent_items)
+    monkeypatch.setattr(pipeline_mod, "score_items", lambda items, _pv, _downweight, reason_penalty_map=None: [])
+    monkeypatch.setattr(pipeline_mod, "pick_top_per_section", lambda scored, _caps: [])
+    monkeypatch.setattr(pipeline_mod, "summarize_items", lambda rows: {})
+    monkeypatch.setattr(pipeline_mod, "send_digest", lambda html, subject, dry_run=False: False)
+
+    pipeline_mod.run_all(dry_run=True)
+
+    # Gap is at least 5 days; auto days should be > 2
+    assert captured_days and captured_days[0] >= 5
+
+
+def test_run_all_explicit_backfill_days_overrides_auto(monkeypatch, tmp_path):
+    """An explicit backfill_days= value is used as-is, ignoring auto-detection."""
+    from dailydigest import pipeline as pipeline_mod
+
+    store_mod = _reset_store(tmp_path, monkeypatch)
+    captured_days: list[int] = []
+
+    def fake_recent_items(days=2):
+        captured_days.append(days)
+        return []
+
+    monkeypatch.setattr(pipeline_mod, "_digest_id", lambda: "2026-05-15")
+    monkeypatch.setattr(pipeline_mod, "ingest_all", lambda progress_callback=None: 0)
+    monkeypatch.setattr(pipeline_mod, "load_profile", lambda: SimpleNamespace(bio="", keywords=[], downweight=[]))
+    monkeypatch.setattr(pipeline_mod, "build_profile_matrix", lambda _profile: __import__("numpy").zeros((1, 3)))
+    monkeypatch.setattr(pipeline_mod, "recent_items", fake_recent_items)
+    monkeypatch.setattr(pipeline_mod, "score_items", lambda items, _pv, _downweight, reason_penalty_map=None: [])
+    monkeypatch.setattr(pipeline_mod, "pick_top_per_section", lambda scored, _caps: [])
+    monkeypatch.setattr(pipeline_mod, "summarize_items", lambda rows: {})
+    monkeypatch.setattr(pipeline_mod, "send_digest", lambda html, subject, dry_run=False: False)
+
+    pipeline_mod.run_all(dry_run=True, backfill_days=7)
+
+    assert captured_days and captured_days[0] == 7
+
+
 def test_run_all_empty_digest_emits_done_with_zero_items(monkeypatch, tmp_path):
     from dailydigest import pipeline as pipeline_mod
 

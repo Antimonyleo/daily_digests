@@ -18,17 +18,23 @@ from .health import IngestStats
 from .ingest import dispatch_source
 from .models import Item
 from .rank.profile import build_profile_matrix
-from .rank.ranker import pick_top_per_section, score_items
-from .rank.source_quality import breakdown_payload
+from .rank.ranker import pick_top_per_section, score_items, score_items_with_features
+from .rank.source_quality import (
+    breakdown_payload,
+    is_high_quality_journal_source,
+    source_bucket,
+)
 from .store import (
     DigestRow,
     ItemRow,
+    days_since_last_sent,
     init_db,
     mark_sent,
     exclude_reviewed_items,
     recent_items,
     session_scope,
     upsert_items,
+    write_digest_audit,
     write_digest,
     write_digest_features,
     write_summaries,
@@ -36,6 +42,7 @@ from .store import (
 from .summarize import summarize_items
 
 logger = logging.getLogger(__name__)
+_ORIGINAL_SCORE_ITEMS = score_items
 
 SECTION_LABEL_PREFIX: dict[str, str] = {
     "research": "R",
@@ -165,6 +172,119 @@ def _digest_id() -> str:
     return datetime.now(tz).strftime("%Y-%m-%d")
 
 
+def _row_feature_key(row: ItemRow) -> int:
+    return int(row.id) if isinstance(row.id, int) else id(row)
+
+
+def _selection_reason(row: ItemRow, features: dict[str, Any]) -> str:
+    bucket = str(features.get("source_bucket") or source_bucket(row))
+    if row.section == "research":
+        if bucket == "published_journal":
+            return "protected published-journal slot"
+        if bucket == "published_database":
+            return "published-paper database slot"
+        if bucket == "arxiv_cs":
+            return "capped arXiv CS slot"
+        if bucket in {"arxiv_other", "bio_med_preprint"}:
+            return "capped preprint slot"
+        if bucket == "aggregator":
+            return "capped aggregator slot"
+    return "score-ranked slot"
+
+
+def _build_top_journal_audit(
+    scored: list[tuple[ItemRow, float]],
+    picked: list[tuple[ItemRow, float]],
+    score_features: dict[int, dict[str, Any]],
+    cap: int = 20,
+) -> list[dict[str, Any]]:
+    selected_ids = {_row_feature_key(row) for row, _score in picked}
+    missed: list[dict[str, Any]] = []
+    for row, score in scored:
+        if row.section != "research" or not is_high_quality_journal_source(row):
+            continue
+        key = _row_feature_key(row)
+        if key in selected_ids:
+            continue
+        features = score_features.get(key, {})
+        missed.append(
+            {
+                "item_id": int(row.id) if isinstance(row.id, int) else None,
+                "title": row.title or "",
+                "source": row.source or "",
+                "url": row.url or "",
+                "score": round(float(score), 4),
+                "topic_score": round(float(features.get("topic_score", score) or 0.0), 4),
+                "source_bucket": features.get("source_bucket") or source_bucket(row),
+                "reason": (
+                    "below the final cutoff after topic fit, diversity caps, "
+                    "and feedback penalties"
+                ),
+            }
+        )
+        if len(missed) >= cap:
+            break
+    return missed
+
+
+def _score_items_for_pipeline(
+    items: list[ItemRow],
+    profile_vec,
+    downweight: list[str],
+) -> tuple[list[tuple[ItemRow, float]], dict[int, dict[str, Any]]]:
+    """Score with feature snapshots, falling back for tests that monkeypatch score_items."""
+    try:
+        reason_penalties = votes_mod.reason_penalty_map(items)
+    except TypeError:
+        reason_penalties = votes_mod.reason_penalty_map()
+    if score_items is not _ORIGINAL_SCORE_ITEMS:
+        scored = score_items(
+            items,
+            profile_vec,
+            downweight,
+            reason_penalty_map=reason_penalties,
+        )
+        features = {
+            _row_feature_key(row): {
+                "topic_score": float(score),
+                "learned_score": 0.0,
+                "final_score": float(score),
+                "reason_penalty": 0.0,
+                "source_bucket": source_bucket(row),
+                "scoring_mode": "legacy",
+            }
+            for row, score in scored
+        }
+        return scored, features
+    try:
+        return score_items_with_features(
+            items,
+            profile_vec,
+            downweight,
+            reason_penalty_map=reason_penalties,
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.warning("feature-scoring path failed, falling back to legacy scorer: %s", e)
+        scored = score_items(
+            items,
+            profile_vec,
+            downweight,
+            reason_penalty_map=reason_penalties,
+        )
+        features = {
+            _row_feature_key(row): {
+                "topic_score": float(score),
+                "learned_score": 0.0,
+                "final_score": float(score),
+                "reason_penalty": 0.0,
+                "source_bucket": source_bucket(row),
+                "scoring_mode": "legacy",
+            }
+            for row, score in scored
+        }
+        return scored, features
+
+
 def _should_write_digest(digest_id: str) -> bool:
     """Return True if `write_digest` should be called for this digest_id.
 
@@ -186,8 +306,10 @@ def run_all(
 ) -> str:
     """Run ingest + rank + summarize + render + send. Returns the digest id.
 
-    ``backfill_days`` widens the recency window used for ranking (default 2).
-    Useful for catching up after a missed run, e.g. ``run_all(backfill_days=7)``.
+    ``backfill_days`` widens the recency window used for ranking. When omitted,
+    the window is set automatically: if the last sent digest was N days ago,
+    ``days = N + 1`` (capped at 14), so no day's content is ever skipped.
+    Pass an explicit value to override.
     """
     init_db()
 
@@ -212,7 +334,11 @@ def run_all(
     profile = load_profile()
     profile_vec = build_profile_matrix(profile)
 
-    days = backfill_days if backfill_days and backfill_days > 0 else 2
+    if backfill_days and backfill_days > 0:
+        days = backfill_days
+    else:
+        gap = days_since_last_sent(exclude_digest_id=digest_id)
+        days = max(2, min(gap + 1, 14)) if gap >= 0 else 2
     recent = exclude_reviewed_items(recent_items(days=days))
     items = dedupe_ranking_candidates(recent)
     logger.info(
@@ -221,16 +347,12 @@ def run_all(
         len(recent),
         days,
     )
-    scored = score_items(
-        items,
-        profile_vec,
-        profile.downweight,
-        reason_penalty_map=votes_mod.reason_penalty_map(),
-    )
+    scored, score_features = _score_items_for_pipeline(items, profile_vec, profile.downweight)
     # Note: do NOT pre-truncate `scored` to a global top-K before per-section picking;
     # a single-domain profile (e.g. biotech-heavy) starves industry/regulatory/world.
     # `pick_top_per_section` already caps per-section, so summary cost is bounded.
     picked = pick_top_per_section(scored, _section_caps())
+    top_journal_audit = _build_top_journal_audit(scored, picked, score_features)
     labeled = _assign_labels(picked)
     _emit(
         progress_callback,
@@ -260,6 +382,9 @@ def run_all(
     # Dry-runs should refresh the local preview even if today's email was
     # already sent. write_digest preserves sent_at for existing rows.
     if dry_run or _should_write_digest(digest_id):
+        def _feature(row: ItemRow) -> dict[str, Any]:
+            return score_features.get(_row_feature_key(row), {})
+
         write_digest(digest_id, [(row.item_label, row.id, score) for row, score, _ in labeled])
         write_digest_features(
             digest_id,
@@ -268,11 +393,20 @@ def run_all(
                     row.item_label or label,
                     int(row.id),
                     float(score),
-                    breakdown_payload(row, float(score)),
+                    breakdown_payload(
+                        row,
+                        float(_feature(row).get("topic_score", score)),
+                        learned_score=float(_feature(row).get("learned_score", 0.0)),
+                        reason_penalty=float(_feature(row).get("reason_penalty", 0.0)),
+                        final_score=float(score),
+                        selection_reason=_selection_reason(row, _feature(row)),
+                        scoring_mode=str(_feature(row).get("scoring_mode", "cosine")),
+                    ),
                 )
                 for row, score, label in labeled
             ],
         )
+        write_digest_audit(digest_id, "missed_top_journals", top_journal_audit)
     else:
         logger.info(
             "digest %s already has a sent row; skipping write_digest to preserve sent_at",

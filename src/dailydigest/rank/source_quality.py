@@ -10,14 +10,15 @@ stays local, fast, and reproducible.
 from __future__ import annotations
 
 import re
-import re as _re
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any
 
 from ..models import SourceSpec
 
-_ARXIV_CS_RE = _re.compile(r"\barxiv[\s:_\-]*cs[\s:./\-]", _re.IGNORECASE)
+RANKER_VERSION = "2026-05-15-source-balance-v4"
+
+_ARXIV_CS_RE = re.compile(r"\barxiv[\s:_\-]*cs[\s:./\-]", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -438,11 +439,15 @@ def source_bucket(row: Any) -> str:
     quality = infer_source_quality(_row_source(row), section)
     if quality.quality_tier in {"top", "high", "strong"}:
         return "published_journal"
+    # Catch remaining preprint servers (ChemRxiv, SSRN, Research Square, …)
+    # that aren't matched by the explicit string checks above.
+    if quality.quality_tier in {"repository", "preprint"}:
+        return "preprint_other"
     return "other_research"
 
 
 def is_preprint_source(row: Any) -> bool:
-    return source_bucket(row) in {"arxiv_cs", "arxiv_other", "bio_med_preprint"}
+    return source_bucket(row) in {"arxiv_cs", "arxiv_other", "bio_med_preprint", "preprint_other"}
 
 
 def is_published_journal_source(row: Any) -> bool:
@@ -666,6 +671,10 @@ def breakdown_payload(
     base_score: float,
     learned_score: float = 0.0,
     reason_penalty: float = 0.0,
+    *,
+    final_score: float | None = None,
+    selection_reason: str | None = None,
+    scoring_mode: str | None = None,
 ) -> dict[str, Any]:
     """Return a JSON-serializable rank explanation for persistence/UI."""
     breakdown = score_breakdown(
@@ -675,7 +684,8 @@ def breakdown_payload(
         reason_penalty=reason_penalty,
     )
     return {
-        "score": round(float(breakdown.final), 4),
+        "ranker_version": RANKER_VERSION,
+        "score": round(float(final_score if final_score is not None else breakdown.final), 4),
         "topic": round(float(breakdown.topic), 4),
         "source": round(float(breakdown.source), 4),
         "novelty": round(float(breakdown.novelty), 4),
@@ -685,6 +695,9 @@ def breakdown_payload(
         "access_penalty": round(float(breakdown.access_penalty), 4),
         "reason_penalty": round(float(breakdown.reason_penalty), 4),
         "content_type": breakdown.content_type,
+        "source_bucket": source_bucket(row),
+        "selection_reason": selection_reason or "",
+        "scoring_mode": scoring_mode or "cosine",
         "tags": list(breakdown.tags),
         "quality_tags": list(breakdown.quality_tags),
         "freshness_tags": list(breakdown.freshness_tags),
@@ -710,9 +723,15 @@ def quality_adjusted_score(row: Any, base_score: float) -> float:
         exceptional = base >= 0.78 and novelty >= 0.50
         if low_prestige and not exceptional:
             # Smooth ramp: full 0.18 penalty at base≤0.50, fades to zero at base=0.78.
-            # Removes the hard cliff that previously jumped 0.10 at base=0.64.
             smooth = max(0.0, min(1.0, (0.78 - base) / 0.28))
             score -= 0.18 * smooth
+        # Preprints (bioRxiv, ChemRxiv, SSRN, …) have not been peer-reviewed.
+        # Apply a mild penalty so a peer-reviewed paper with similar topic fit
+        # is preferred. Fades to zero at high base scores so a highly relevant
+        # preprint can still surface over a weakly matched journal paper.
+        if source_quality.quality_tier in {"repository", "preprint"} and not exceptional:
+            preprint_smooth = max(0.0, min(1.0, (0.76 - base) / 0.26))
+            score -= 0.08 * preprint_smooth
         if is_arxiv_cs_source(row) and not exceptional:
             # arXiv CS can be useful for ML/AI methods, but it should not crowd
             # out peer-reviewed journal papers unless the topic fit is clearly
