@@ -89,7 +89,7 @@ research:
     kind: pubmed
     # Simplified: the prior topic AND-clause filtered everything out (0 hits in 2-day window).
     # This broader query reliably returns 20+ items in the 2-day reldate window.
-    query: clinical trial[pt] AND 2024:2026[dp]
+    query: clinical trial[pt]
 
   # --- Nature family (high-impact) ---
   - name: Nature Nanotechnology

@@ -6,6 +6,8 @@ The app binds to 127.0.0.1 by default — no remote access, no auth.
 Routes:
 - ``GET /``                — render today's digest (or redirect to /setup if no profile)
 - ``POST /vote/{id}/{v}``  — record a +1/0/-1 vote for an item
+- ``POST /vote/{id}/reason/{reason}`` — record qualitative feedback reason
+- ``DELETE /vote/{id}/reason/{reason}`` — remove qualitative feedback reason
 - ``GET /ranking/status``  — return vote counts and LR ranker status
 - ``POST /ranking/train``  — train the local LR ranker when enough votes exist
 - ``POST /refresh``        — kick off a dry-run pipeline in the background
@@ -48,18 +50,28 @@ from fastapi.templating import Jinja2Templates
 from jinja2 import Environment, FileSystemLoader
 from sqlalchemy import select
 
-from . import votes as votes_mod
+from . import health, votes as votes_mod
 from .config import SETTINGS, get_settings, reload_settings
 from .email_render import SECTION_META, SECTION_ORDER, safe_url
 from .pipeline import _digest_id, run_all
-from .store import DigestRow, ItemRow, VoteRow, init_db, session_scope
+from .rank.source_quality import display_breakdown
+from .store import DigestRow, ItemRow, VoteRow, init_db, load_digest_features, session_scope
 
 logger = logging.getLogger(__name__)
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _TEMPLATE_DIR = _REPO_ROOT / "templates"
-_PROFILE_PATH = _REPO_ROOT / SETTINGS.profile_path
 _ENV_PATH = _REPO_ROOT / ".env"
+
+
+def _get_profile_path() -> Path:
+    from .config import get_settings
+    candidate = (_REPO_ROOT / get_settings().profile_path).resolve()
+    try:
+        candidate.relative_to(_REPO_ROOT)
+    except ValueError:
+        raise ValueError(f"PROFILE_PATH escapes repo root: {candidate}")
+    return candidate
 
 app = FastAPI(title="DailyDigest")
 templates = Jinja2Templates(
@@ -77,6 +89,8 @@ _RUN_STARTED: set[str] = set()
 _RUN_LOCK = threading.Lock()
 _TRAIN_LOCK = threading.Lock()
 _TRAIN_JOB: dict[str, Any] = {"running": False, "last_result": None}
+_BREW_LOCK = threading.Lock()
+_BREW_JOB: dict[str, Any] = {"running": False, "run_id": None}
 _CSRF_TOKEN = secrets.token_urlsafe(32)
 _ENV_SAFE_RE = re.compile(r"^[A-Za-z0-9_./:@+-]*$")
 
@@ -99,6 +113,70 @@ def _format_date(row: ItemRow) -> str:
     return row.published_at.strftime("%Y-%m-%d")
 
 
+def _bar_pct(value: float) -> int:
+    if value <= 0:
+        return 0
+    return max(3, min(100, int(round(value * 100))))
+
+
+def _breakdown_payload(row: ItemRow, persisted: dict | None = None) -> dict:
+    if persisted:
+        score = persisted.get("score", row.score or 0.0)
+        return {
+            "score": f"{float(score):.2f}" if isinstance(score, (int, float)) else str(score),
+            "tags": list(persisted.get("tags") or []),
+            "why_shown": list(persisted.get("why_shown") or []),
+            "content_type": str(persisted.get("content_type") or "article"),
+            "components": {
+                "topic": _bar_pct(float(persisted.get("topic") or 0.0)),
+                "source": _bar_pct(float(persisted.get("source") or 0.0)),
+                "novelty": _bar_pct(float(persisted.get("novelty") or 0.0)),
+                "penalty": _bar_pct(float(persisted.get("penalty") or 0.0)),
+            },
+        }
+    breakdown = display_breakdown(row)
+    return {
+        "score": f"{breakdown.final:.2f}",
+        "tags": list(breakdown.tags),
+        "why_shown": list(breakdown.why_shown),
+        "content_type": breakdown.content_type,
+        "components": {
+            "topic": _bar_pct(breakdown.topic),
+            "source": _bar_pct(breakdown.source),
+            "novelty": _bar_pct(breakdown.novelty),
+            "penalty": _bar_pct(breakdown.penalty),
+        },
+    }
+
+
+def _digest_overview(sections: list[dict]) -> dict:
+    entries = [entry for section in sections for entry in section["entries"]]
+    source_counts: dict[str, int] = {}
+    for entry in entries:
+        source = entry.get("source") or "Unknown"
+        source_counts[source] = source_counts.get(source, 0) + 1
+    source_mix = sorted(source_counts.items(), key=lambda kv: (-kv[1], kv[0].lower()))[:6]
+    latest = health.latest_snapshot()
+    scanned = sum(int(row.get("items") or 0) for row in latest)
+    return {
+        "selected": len(entries),
+        "scanned": scanned,
+        "sources": len(latest),
+        "failures": sum(1 for row in latest if not row.get("ok", True)),
+        "section_mix": [
+            {"title": s["title"], "count": len(s["entries"])}
+            for s in sections
+            if s.get("entries")
+        ],
+        "source_mix": source_mix,
+        "must_read": sorted(
+            entries,
+            key=lambda e: float(e.get("score_raw") or 0.0),
+            reverse=True,
+        )[:5],
+    }
+
+
 def _load_today(digest_id: str) -> tuple[list[dict], dict[int, int]]:
     """Return (rendered_sections, current_vote_per_item)."""
     init_db()
@@ -113,9 +191,20 @@ def _load_today(digest_id: str) -> tuple[list[dict], dict[int, int]]:
 
         item_ids = [r.id for r in rows]
         vote_rows = s.execute(
-            select(VoteRow.item_id, VoteRow.value).where(VoteRow.item_id.in_(item_ids))
+            select(VoteRow.item_id, VoteRow.value)
+            .where(VoteRow.item_id.in_(item_ids))
+            .order_by(VoteRow.item_id, VoteRow.created_at.desc(), VoteRow.id.desc())
         ).all()
-        current_vote = {int(iid): int(val) for iid, val in vote_rows}
+        current_vote: dict[int, int] = {}
+        for item_id, value in vote_rows:
+            iid = int(item_id)
+            if iid not in current_vote:
+                current_vote[iid] = int(value)
+        current_reasons = {
+            int(item_id): votes_mod.get_vote_reasons(int(item_id))
+            for item_id in item_ids
+        }
+        persisted_features = load_digest_features(digest_id)
 
         rows.sort(
             key=lambda r: (
@@ -141,7 +230,10 @@ def _load_today(digest_id: str) -> tuple[list[dict], dict[int, int]]:
                     "source": row.source or "",
                     "published": _format_date(row),
                     "summary": row.summary or "",
+                    "score_raw": float(row.score or 0.0),
+                    "ranking": _breakdown_payload(row, persisted_features.get(int(row.id))),
                     "current_vote": current_vote.get(int(row.id)),
+                    "current_reasons": current_reasons.get(int(row.id), []),
                 }
             )
 
@@ -214,14 +306,14 @@ def _require_csrf(request: Request, form: dict[str, str] | None = None) -> None:
 
 
 def _profile_exists() -> bool:
-    return _PROFILE_PATH.exists()
+    return _get_profile_path().exists()
 
 
 def _profile_data() -> dict[str, Any]:
-    if not _PROFILE_PATH.exists():
+    if not _get_profile_path().exists():
         return {}
     try:
-        return yaml.safe_load(_PROFILE_PATH.read_text()) or {}
+        return yaml.safe_load(_get_profile_path().read_text()) or {}
     except Exception as e:  # noqa: BLE001
         logger.warning("could not parse profile.yaml: %s", e)
         return {}
@@ -265,7 +357,7 @@ def _load_existing_form_defaults() -> dict[str, str]:
         "downweight": "",
         "llm_backend": SETTINGS.llm_backend or "extractive",
         "llm_base_url": SETTINGS.llm_base_url,
-        "llm_api_key": SETTINGS.llm_api_key,
+        "llm_api_key": "***" if SETTINGS.llm_api_key else "",
         "llm_model": SETTINGS.llm_model,
         "claude_cli_model": "",
         "codex_cli_model": "",
@@ -274,9 +366,9 @@ def _load_existing_form_defaults() -> dict[str, str]:
         "top_regulatory": str(SETTINGS.top_regulatory),
         "top_world": str(SETTINGS.top_world),
     }
-    if _PROFILE_PATH.exists():
+    if _get_profile_path().exists():
         try:
-            data = yaml.safe_load(_PROFILE_PATH.read_text()) or {}
+            data = yaml.safe_load(_get_profile_path().read_text()) or {}
             out["name"] = str(data.get("name") or "").strip()
             out["bio"] = (data.get("bio") or "").strip()
             out["keywords"] = ", ".join(data.get("keywords") or [])
@@ -426,6 +518,7 @@ def index(request: Request) -> Response:
     digest_id = _digest_id()
     sections, current_vote = _load_today(digest_id)
     brewed = bool(sections) or _digest_exists(digest_id)
+    overview = _digest_overview(sections)
     response = templates.TemplateResponse(
         request,
         "digest_web.html.j2",
@@ -433,6 +526,7 @@ def index(request: Request) -> Response:
             "digest_id": digest_id,
             "profile_name": _profile_name(),
             "sections": sections,
+            "overview": overview,
             "current_vote_per_item": current_vote,
             "ranking_status": votes_mod.lr_training_status(),
             "empty": len(sections) == 0,
@@ -458,6 +552,38 @@ def vote(request: Request, item_id: int, value: int) -> JSONResponse:
             "item_id": item_id,
             "new_value": value,
             "ranking_status": votes_mod.lr_training_status(),
+        }
+    )
+
+
+@app.post("/vote/{item_id}/reason/{reason}")
+def vote_reason(request: Request, item_id: int, reason: str) -> JSONResponse:
+    _require_csrf(request)
+    ok = votes_mod.record_vote_reason(item_id, reason)
+    if not ok:
+        raise HTTPException(status_code=400, detail="unknown item or reason")
+    return JSONResponse(
+        {
+            "ok": True,
+            "item_id": item_id,
+            "reason": reason,
+            "reasons": votes_mod.get_vote_reasons(item_id),
+        }
+    )
+
+
+@app.delete("/vote/{item_id}/reason/{reason}")
+def vote_reason_delete(request: Request, item_id: int, reason: str) -> JSONResponse:
+    _require_csrf(request)
+    ok = votes_mod.remove_vote_reason(item_id, reason)
+    if not ok:
+        raise HTTPException(status_code=400, detail="unknown item or reason")
+    return JSONResponse(
+        {
+            "ok": True,
+            "item_id": item_id,
+            "reason": reason,
+            "reasons": votes_mod.get_vote_reasons(item_id),
         }
     )
 
@@ -529,18 +655,39 @@ def ranking_train(request: Request) -> JSONResponse:
 
 
 def _run_pipeline_dry_run() -> None:
+    if not _BREW_LOCK.acquire(blocking=False):
+        logger.info("background refresh skipped because another brew is running")
+        return
     try:
-        run_all(dry_run=True)
-    except Exception as e:  # noqa: BLE001
-        logger.warning("background refresh failed: %s", e)
+        with _RUN_LOCK:
+            _BREW_JOB["running"] = True
+            _BREW_JOB["run_id"] = "refresh"
+        try:
+            run_all(dry_run=True)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("background refresh failed: %s", e)
+    finally:
+        with _RUN_LOCK:
+            _BREW_JOB["running"] = False
+            _BREW_JOB["run_id"] = None
+        _BREW_LOCK.release()
 
 
 @app.post("/refresh")
 def refresh(request: Request) -> JSONResponse:
     _require_csrf(request)
     digest_id = _digest_id()
+    if _BREW_LOCK.locked():
+        return JSONResponse(
+            {
+                "ok": True,
+                "digest_id": digest_id,
+                "running": True,
+                "message": "A brew is already running.",
+            }
+        )
     threading.Thread(target=_run_pipeline_dry_run, daemon=True).start()
-    return JSONResponse({"ok": True, "digest_id": digest_id})
+    return JSONResponse({"ok": True, "digest_id": digest_id, "running": True})
 
 
 @app.get("/healthz")
@@ -612,8 +759,8 @@ async def setup_post(request: Request) -> Response:
         "keywords": _parse_csv(form["keywords"]),
         "downweight": _parse_csv(form["downweight"]),
     }
-    _PROFILE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    _PROFILE_PATH.write_text(yaml.safe_dump(profile, sort_keys=False))
+    _get_profile_path().parent.mkdir(parents=True, exist_ok=True)
+    _get_profile_path().write_text(yaml.safe_dump(profile, sort_keys=False))
 
     # Write/update .env.
     backend = form["llm_backend"]
@@ -627,7 +774,6 @@ async def setup_post(request: Request) -> Response:
         "LLM_BACKEND": backend,
         "LLM_BASE_URL": form["llm_base_url"].strip()
         or (SETTINGS.llm_base_url or "https://api.openai.com/v1"),
-        "LLM_API_KEY": form["llm_api_key"].strip(),
         "LLM_MODEL": form["llm_model"].strip() or "gpt-4o-mini",
         # NOTE: LLM_CLI_MODEL is the new env var owned by the config agent;
         # we write it now so when that agent lands their config field, the
@@ -638,6 +784,10 @@ async def setup_post(request: Request) -> Response:
         "TOP_REGULATORY": _int_form(form, "top_regulatory", SETTINGS.top_regulatory),
         "TOP_WORLD": _int_form(form, "top_world", SETTINGS.top_world),
     }
+    # Only update API key if it's not the masked "***" value
+    api_key = form.get("llm_api_key", "").strip()
+    if api_key and api_key != "***":
+        env_updates["LLM_API_KEY"] = api_key
     _write_env_file(_ENV_PATH, env_updates)
     # Propagate changes to os.environ so pydantic-settings picks them up,
     # then refresh the in-memory SETTINGS singleton.
@@ -664,8 +814,8 @@ async def profile_name_post(request: Request) -> Response:
         if not data:
             data = {"bio": "General reader.", "keywords": [], "downweight": []}
         data["name"] = name
-        _PROFILE_PATH.parent.mkdir(parents=True, exist_ok=True)
-        _PROFILE_PATH.write_text(yaml.safe_dump(data, sort_keys=False))
+        _get_profile_path().parent.mkdir(parents=True, exist_ok=True)
+        _get_profile_path().write_text(yaml.safe_dump(data, sort_keys=False))
     response = RedirectResponse(url="/", status_code=303)
     response.headers["Cache-Control"] = "no-store"
     return response
@@ -694,6 +844,18 @@ def _kick_off_run(run_id: str) -> None:
 
     def _target() -> None:
         terminal_sent = False
+        acquired = _BREW_LOCK.acquire(blocking=False)
+        if not acquired:
+            _push(
+                {
+                    "stage": "error",
+                    "payload": {"message": "Another brew is already running. Please wait for it to finish."},
+                }
+            )
+            return
+        with _RUN_LOCK:
+            _BREW_JOB["running"] = True
+            _BREW_JOB["run_id"] = run_id
 
         def cb(stage: str, payload: dict[str, Any]) -> None:
             nonlocal terminal_sent
@@ -708,6 +870,10 @@ def _kick_off_run(run_id: str) -> None:
             _push({"stage": "error", "payload": {"message": f"{type(e).__name__}: {e}"}})
             terminal_sent = True
         finally:
+            with _RUN_LOCK:
+                _BREW_JOB["running"] = False
+                _BREW_JOB["run_id"] = None
+            _BREW_LOCK.release()
             if not terminal_sent:
                 _push({"stage": "done", "payload": {"forced": True}})
 
@@ -751,21 +917,22 @@ async def run_stream(run_id: str) -> StreamingResponse:
     q = _ensure_run(run_id)
 
     async def event_gen():
-        yield f"data: {json.dumps({'stage': 'connected', 'payload': {'run_id': run_id}})}\n\n"
-        terminal = {"done", "error"}
-        while True:
-            try:
-                # Block in a thread-pool slot so the event loop stays free.
-                evt = await asyncio.to_thread(q.get, True, 30.0)
-            except std_queue.Empty:
-                yield ": heartbeat\n\n"
-                continue
-            yield f"data: {json.dumps(evt)}\n\n"
-            if evt.get("stage") in terminal:
-                with _RUN_LOCK:
-                    _RUN_QUEUES.pop(run_id, None)
-                    _RUN_STARTED.discard(run_id)
-                break
+        try:
+            yield f"data: {json.dumps({'stage': 'connected', 'run_id': run_id})}\n\n"
+            terminal = {"done", "error"}
+            while True:
+                try:
+                    evt = await asyncio.to_thread(q.get, True, 5.0)
+                except Exception:  # queue.Empty or similar
+                    yield ": heartbeat\n\n"
+                    continue
+                yield f"data: {json.dumps(evt)}\n\n"
+                if evt.get("stage") in terminal:
+                    break
+        finally:
+            with _RUN_LOCK:
+                _RUN_QUEUES.pop(run_id, None)
+                _RUN_STARTED.discard(run_id)
 
     return StreamingResponse(
         event_gen(),

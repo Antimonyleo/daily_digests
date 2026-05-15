@@ -93,10 +93,9 @@ class TestEdgeCases:
         assert up == ["R1", "R2", "W3"]
         assert down == ["I1", "G2"]
 
-    def test_sign_persistence_resets_after_token(self):
-        # A bare '-' sets sign for the immediately following token only;
-        # subsequent unsigned tokens revert to '+'.
+    def test_sign_persistence_sticks_to_following_tokens(self):
+        # A bare '-' sets current_sign='-' for all subsequent unsigned tokens.
         up, down = parse_vote_line("- R3 R7")
-        # '-' sets current_sign='-' then 'R3' consumes it; 'R7' is unsigned -> '+'
+        # '-' sets current_sign='-'; both 'R3' and 'R7' inherit it.
         assert "R3" in down
-        assert "R7" in up
+        assert "R7" in down

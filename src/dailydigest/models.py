@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class Item(BaseModel):
@@ -19,6 +19,13 @@ class Item(BaseModel):
 
     score: float | None = None
     digest_id: str | None = None
+
+    @field_validator("abstract", mode="before")
+    @classmethod
+    def _cap_abstract(cls, v: object) -> str:
+        if not v:
+            return ""
+        return str(v)[:4000]
 
 
 class Profile(BaseModel):

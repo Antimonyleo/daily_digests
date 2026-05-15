@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 
 import numpy as np
@@ -9,7 +10,9 @@ import numpy as np
 from ..models import Profile
 from .embed import embed_texts
 
-_SENT_RE = re.compile(r"(?<=[.!?])\s+")
+logger = logging.getLogger(__name__)
+
+_SENT_RE = re.compile(r"(?<=[.!?;])\s+|\n+")
 
 
 def _profile_parts(profile: Profile) -> list[str]:
@@ -31,6 +34,11 @@ def build_profile_matrix(profile: Profile) -> np.ndarray:
     """
     parts = _profile_parts(profile)
     if not parts:
+        logger.warning(
+            "Profile has no bio sentences or keywords; "
+            "ranking will use prestige-only. "
+            "Add bio text or keywords to your profile.yaml."
+        )
         return np.zeros((1, 384), dtype=np.float32)
     return embed_texts(parts, is_query=True)  # [N, 384], L2-normalized
 
@@ -42,6 +50,11 @@ def build_profile_vector(profile: Profile) -> np.ndarray:
     """
     parts = _profile_parts(profile)
     if not parts:
+        logger.warning(
+            "Profile has no bio sentences or keywords; "
+            "ranking will use prestige-only. "
+            "Add bio text or keywords to your profile.yaml."
+        )
         return np.zeros(384, dtype=np.float32)
     vecs = embed_texts(parts, is_query=True)  # already L2-normalized, shape [N, D]
     mean = vecs.mean(axis=0)

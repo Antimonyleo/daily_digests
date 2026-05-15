@@ -1,8 +1,8 @@
 # DailyDigest — Project Status
 
-**Last updated:** 2026-05-11
-**State:** v1.8-dev — freshness-filtered, cross-source deduped, quality-aware ranking with web-triggered LR training.
-**End-to-end verified:** `./scripts/start.sh` syncs deps and boots FastAPI. Setup wizard at `/setup`, brewing page with accessible SSE progress at `/run`, "your morning cup of tea is brewed" at `/done`. **77 sources** (65 research incl. Nature/Science/Cell families, ACS/RSC/Wiley flagships, NAR). 119/119 pytest passing.
+**Last updated:** 2026-05-12
+**State:** v1.9-dev — graphical local digest UI, source/novelty ranking explanations, qualitative feedback reasons, and web-triggered ranking updates.
+**End-to-end verified:** `NO_BROWSER=1 ./scripts/start.sh` syncs deps and boots FastAPI at `http://127.0.0.1:8765`. `GET /` returns 200 with must-read cards, source-mix bars, per-item ranking bars, and the updated personalization copy. **77 sources** (65 research incl. Nature/Science/Cell families, ACS/RSC/Wiley flagships, NAR). `133` pytest tests pass locally.
 
 ---
 
@@ -36,10 +36,10 @@ Open `http://127.0.0.1:8765`. First-time users are sent to `/setup`; the wizard 
 | Setup wizard | `GET /setup` | ✅ Bio + keywords + downweight + LLM backend + model picker (200 OK, 12 KB) |
 | Brewing progress | `GET /run` | ✅ SSE stream from pipeline.run_all with stages: ingest → dedupe → rank → summarize → done |
 | Done page | `GET /done` | ✅ "Your morning cup of tea is brewed" + "Open digest" → opens `/` |
-| Local digest viewer | `GET /` | ✅ FastAPI app at 127.0.0.1:8765, Good / Neutral / Bad votes save instantly; redirects to /setup if no profile |
+| Local digest viewer | `GET /` | ✅ FastAPI app at 127.0.0.1:8765, graphical overview, must-read cards, source mix, ranking bars, Good / Neutral / Bad votes, reason chips; redirects to /setup if no profile |
 | Claude Code backend | `LLM_BACKEND=claude_code uv run dd run-all` | ✅ `claude --print` (+ optional `--model <id>` via `LLM_CLI_MODEL`) |
 | Codex backend | `LLM_BACKEND=codex uv run dd run-all` | ✅ `codex exec` (+ optional `--model`) |
-| Tests | `uv run pytest -q` (after `uv sync --group dev`) | ✅ 119 passed |
+| Tests | `.venv/bin/python -m pytest -q` | ✅ 133 passed |
 
 Live verification artifacts:
 - `data/digest-20260504-081032.html` — 28,224 bytes, all 4 sections (R×8, I×6, G×3, W×3) with emoji headers, inline CSS, vote-syntax footer.
@@ -68,7 +68,7 @@ data/profile.yaml ─► embed (bge-small) ─► freshness + dedupe + cosine + 
 ```
 
 - **Storage:** SQLite at `data/digest.db`. Tables: `items` `votes` `digests` `runs`. 30-day retention on items.
-- **Ranker:** cosine vs profile vector by default; hybrid `0.5*cosine + 0.5*lr_prob` once ≥30 votes train the LR. Item embeddings are cached in SQLite and reused across brews until title/abstract text changes.
+- **Ranker:** cosine vs profile vector by default; hybrid `0.5*cosine + 0.5*lr_prob` once ≥30 votes train the LR. Source quality is now a tie-breaker rather than the dominant force; novelty, access friction, promotional-risk, and low-information commentary filters are exposed in the web UI. Item embeddings are cached in SQLite and reused across brews until title/abstract text changes.
 - **Summarizer:** OpenAI-compatible `/chat/completions`. Returns extractive (first 2 sentences) when no key is set. Never raises — failures fall back to extractive.
 - **Email:** Resend. Sandbox `onboarding@resend.dev` works without domain. Dry-run writes to disk. Email and web templates force escaping for feed-controlled content.
 - **Local UI safety:** write routes require a per-process CSRF token, reject foreign origins, and the CLI rejects non-loopback web binds.
@@ -214,7 +214,7 @@ To enable the GH Actions cron:
 Roughly in priority order if/when work resumes:
 
 1. **Set up custom sender domain** — biggest deliverability win. Follow `docs/domain-setup.md`. ~30 min.
-2. **Get a working LLM key** — NanoGPT or OpenAI. With key, `summarize.py` produces 1–2 sentence summaries instead of first-2-sentence extractive. Test with `uv run dd run-all --dry-run` and inspect HTML.
+2. **Get a working LLM key** — NanoGPT or OpenAI. With key, `summarize.py` can produce richer two-sentence summaries; extractive mode now prefers informative abstract sentences and adds a short "why read" note. Test with `uv run dd run-all --dry-run` and inspect HTML.
 3. **Test on real GH Actions runner** — 4 workflows written but never executed. Push to a private repo and trigger `workflow_dispatch` once for `digest`, `prune`, `ingest-replies`, `test`.
 4. **Wire up Gmail App Password and test inbound replies** — set `IMAP_USER` / `IMAP_PASSWORD` / `REPLY_TO_EMAIL`, send yourself a digest, reply with `+R1 -I2`, run `uv run dd ingest-replies`.
 5. **Replace dead feeds** — find current URLs for EMA News, openFDA Drugs@FDA, Reuters. Update `config/sources.yaml`.

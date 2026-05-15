@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import time
 import xml.etree.ElementTree as ET  # types/ParseError only; parsing uses defusedxml
 from datetime import datetime, timezone
@@ -14,6 +15,8 @@ from tenacity import (
 )
 
 from ..models import Item, SourceSpec
+
+logger = logging.getLogger(__name__)
 
 
 _RETRY = retry(
@@ -49,7 +52,8 @@ class PubMedSource:
                     return out
                 time.sleep(self.SLEEP)
                 xml_text = self._efetch(client, ids)
-        except Exception:
+        except Exception as e:
+            logger.warning("%s fetch failed: %s: %s", getattr(spec, "name", "PubMedSource"), type(e).__name__, str(e)[:200])
             return out
 
         if not xml_text:
@@ -136,7 +140,8 @@ class PubMedSource:
             if year:
                 try:
                     # Month may be a name (e.g. "Jan"); fall back to numeric only.
-                    m = int(month) if month.isdigit() else 1
+                    _MONTH_ABBR = {"jan":1,"feb":2,"mar":3,"apr":4,"may":5,"jun":6,"jul":7,"aug":8,"sep":9,"oct":10,"nov":11,"dec":12}
+                    m = int(month) if month.isdigit() else _MONTH_ABBR.get(month.lower()[:3], 1)
                     d = int(day) if day.isdigit() else 1
                     pub_dt = datetime(int(year), m, d, tzinfo=timezone.utc)
                 except Exception:

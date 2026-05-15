@@ -4,6 +4,21 @@ Chronological log of how the MVP was built. Useful when you want to understand *
 
 ---
 
+## 2026-05-12 — Graphical digest UI and richer feedback
+
+- Added a graphical web overview: scanned/selected/source counts, source-issue count, must-read cards, and source-mix bars.
+- Persisted final rank scores on digest rows so the web UI can show stable ordering context after a brew.
+- Added per-item ranking explanations: topic, source, novelty, and penalty bars plus concise tags such as `High-quality source`, `High novelty`, `Promo risk`, and `Access friction`.
+- Reworked personalization copy from LR/internal language to user-facing wording: responses save instantly, Good/Bad teach the next ranking update, Neutral only marks reviewed items.
+- Added feedback reason chips (`Off topic`, `Low impact`, `Promo`, `Access`, `Duplicate`, `Not urgent`) and a CSRF-protected `/vote/{item_id}/reason/{reason}` endpoint backed by `data/vote_reasons.json`.
+- Reason chips are now toggleable; clicking an active reason removes it with a CSRF-protected `DELETE /vote/{item_id}/reason/{reason}` call.
+- Extractive summaries now prefer informative abstract sentences over title paraphrases and add a short "why read" note. LLM prompts now ask for what is new, what method/result/event was reported, and why it is worth reading.
+- Low-information editorials/commentaries are skipped unless they include new methods, datasets, trials, approvals, mechanisms, or other result signals.
+- Top-journal source quality is now a tie-breaker rather than a dominant boost, so a weak topic match from Nature/Science should not beat a substantially stronger user-interest match.
+- Reworked web tests to avoid the Python 3.14 `TestClient` hang and verified the full suite: `133` tests passing locally.
+
+---
+
 ## 2026-05-03 — Scoping
 
 - Surveyed the landscape (Feedly+Leo, Inoreader, Scholar Inbox, Particle, Refind, Readwise Reader, FreshRSS, OSS prior art including `giftedunicorn/ai-news-bot`, `AutoLLM/ArxivDigest`, "Paper Morning").

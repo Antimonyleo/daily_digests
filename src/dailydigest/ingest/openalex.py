@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -12,7 +13,10 @@ from tenacity import (
     wait_exponential,
 )
 
+from ..dedupe import _canonical_doi
 from ..models import Item, SourceSpec
+
+logger = logging.getLogger(__name__)
 
 
 @retry(
@@ -46,7 +50,8 @@ def _parse_date(value: str | None) -> datetime | None:
     if not value:
         return None
     try:
-        return datetime.fromisoformat(value).replace(tzinfo=timezone.utc)
+        dt = datetime.fromisoformat(str(value).split("T")[0])
+        return dt.replace(hour=12, minute=0, second=0, tzinfo=timezone.utc)
     except Exception:
         return None
 
@@ -81,10 +86,13 @@ class OpenAlexSource:
 
         out: list[Item] = []
         params = dict(base_params)
-        while len(out) < self.MAX_ITEMS:
+        pages = 0
+        prev_cursor = None
+        while len(out) < self.MAX_ITEMS and pages < 15:
             try:
                 payload = _get_json(self.BASE, params, headers)
-            except Exception:
+            except Exception as e:
+                logger.warning("%s fetch failed: %s: %s", getattr(spec, "name", "OpenAlexSource"), type(e).__name__, str(e)[:200])
                 break
             if not payload:
                 break
@@ -115,11 +123,9 @@ class OpenAlexSource:
                     if (a.get("author") or {}).get("display_name")
                 )
                 pub = _parse_date(work.get("publication_date"))
-                ext = (
-                    work.get("doi")
-                    or work.get("id")
-                    or hashlib.sha1(url.encode("utf-8")).hexdigest()[:16]
-                )
+                raw_doi = work.get("doi") or ""
+                bare_doi = _canonical_doi(raw_doi)
+                ext = bare_doi or work.get("id") or hashlib.sha1(url.encode("utf-8")).hexdigest()[:16]
                 out.append(
                     Item(
                         source=spec.name,
@@ -133,10 +139,12 @@ class OpenAlexSource:
                     )
                 )
 
+            pages += 1
             meta = payload.get("meta") or {}
             next_cursor = meta.get("next_cursor")
-            if not next_cursor:
+            if not next_cursor or next_cursor == prev_cursor:
                 break
+            prev_cursor = next_cursor
             params = dict(base_params)
             params["cursor"] = next_cursor
 

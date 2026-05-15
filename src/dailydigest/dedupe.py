@@ -9,6 +9,16 @@ from .ingest.rss import canonicalize_url
 from .models import Item
 
 
+def _canonical_doi(raw: str) -> str:
+    """Normalize a DOI to bare lowercase form."""
+    if not raw:
+        return ""
+    s = raw.strip()
+    s = re.sub(r"^https?://(?:dx\.)?doi\.org/", "", s, flags=re.IGNORECASE)
+    s = re.sub(r"^doi:\s*", "", s, flags=re.IGNORECASE)
+    return s.lower()
+
+
 _DOI_RE = re.compile(r"\b10\.\d{4,9}/[-._;()/:A-Z0-9]+\b", re.IGNORECASE)
 _ARXIV_RE = re.compile(
     r"(?:arxiv:)?((?:\d{4}\.\d{4,5})|(?:[a-z-]+(?:\.[A-Z]{2})?/\d{7}))(?:v\d+)?",

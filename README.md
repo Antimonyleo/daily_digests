@@ -4,7 +4,7 @@ DailyDigest is a personalized morning research and news digest. It pulls from jo
 
 It is built for researchers who want signal without opening 40 tabs before breakfast.
 
-**Status:** public-release hardened local app. Verified with `119` passing tests. See [docs/STATUS.md](docs/STATUS.md).
+**Status:** public-release hardened local app. Verified with `133` passing tests plus a live local web smoke test. See [docs/STATUS.md](docs/STATUS.md).
 
 ## Features
 
@@ -13,8 +13,9 @@ It is built for researchers who want signal without opening 40 tabs before break
 - Broad source coverage: journals, bioRxiv/medRxiv/arXiv, PubMed/OpenAlex, FDA/ClinicalTrials.gov, biotech news, and world news
 - Profile-aware ranking with local embeddings, source-quality boosts, novelty signals, freshness gates, cross-source dedupe, and anti-promo penalties
 - SQLite embedding cache so repeated brews only embed new or changed items
-- Good / Neutral / Bad feedback saved instantly
-- Optional learned ranking after enough Good/Bad votes and `uv run dd vote --train`
+- Graphical digest overview with scanned/selected counts, must-read cards, source-mix bars, and per-item ranking signals
+- Good / Neutral / Bad feedback saved instantly, with optional toggleable reason chips like `Low impact`, `Promo`, `Access`, and `Duplicate`
+- Optional learned ranking after enough Good/Bad votes from the UI or `uv run dd vote --train`
 - Extractive summaries by default, with optional OpenAI-compatible API, Claude Code CLI, or Codex CLI backends
 - Dry-run HTML previews and optional Resend email delivery
 - Local-first safety: loopback-only web server, CSRF-protected write routes, escaped templates, ignored user profile/data
@@ -43,13 +44,15 @@ DailyDigest expects to be run from a repo checkout. `uv` is required; the startu
 2. Fill out Settings with your bio and interest keywords.
 3. Choose `Extractive` for the easiest first run. It needs no login or API key.
 4. Click `Brew my morning cup of tea`.
-5. Read the digest and mark entries Good, Neutral, or Bad.
+5. Read the `Must read first` cards, then scan each section.
+6. Mark entries Good, Neutral, or Bad. Add a reason chip when something is off.
+7. When enough Good/Bad feedback is collected, click `Update my ranking`.
 
-Good and Bad votes can improve future ranking after retraining. Neutral only marks an item reviewed.
+Good and Bad responses teach future ranking updates. Neutral only marks an item reviewed.
 
 ## Ranking Quality
 
-DailyDigest balances personal topic fit with editorial quality. Research items from top journals such as Nature, Science, Cell, NEJM, and The Lancet get a reputation lift, while lower-prestige sources need strong relevance plus novelty to break into the digest. Ranking candidates are freshness-filtered, deduped across sources, and checked for promotional wording so stale items, repeated papers, and press-release-style posts are pushed below independent, substantive coverage.
+DailyDigest balances personal topic fit with editorial quality. Top journals still help as a tie-breaker, but a weakly matched Nature or Science item should not beat a substantially better match from a less prestigious venue. Ranking candidates are freshness-filtered, deduped across sources, and checked for promotional wording and low-information commentary so stale items, repeated papers, press-release-style posts, and editorials without new methods/results are pushed below independent, substantive coverage.
 
 You can tune source hints in `config/sources.yaml` with `quality_tier`, `prestige_score`, `impact_floor`, and `promo_risk`. Exact impact factors are not fetched during brewing; the app uses stable local tiers to stay fast and reproducible.
 

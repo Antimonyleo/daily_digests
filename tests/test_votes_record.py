@@ -48,6 +48,49 @@ def test_neutral_vote_is_persisted_for_visible_feedback(tmp_path, monkeypatch):
     assert votes_mod.get_vote_value(item_id) == 0
 
 
+def test_vote_reason_is_persisted_once_per_item(tmp_path, monkeypatch):
+    store_mod = _reset_store_for_tmp_db(monkeypatch, tmp_path)
+    from dailydigest import votes as votes_mod
+
+    item_id = _insert_item(store_mod)
+
+    assert votes_mod.record_vote_reason(item_id, "low_impact") is True
+    assert votes_mod.record_vote_reason(item_id, "low_impact") is True
+    assert votes_mod.record_vote_reason(item_id, "promotional") is True
+
+    assert votes_mod.get_vote_reasons(item_id) == ["low_impact", "promotional"]
+
+    assert votes_mod.remove_vote_reason(item_id, "low_impact") is True
+    assert votes_mod.get_vote_reasons(item_id) == ["promotional"]
+    assert votes_mod.remove_vote_reason(item_id, "promotional") is True
+    assert votes_mod.get_vote_reasons(item_id) == []
+
+
+def test_reason_penalty_map_sums_reason_weights(tmp_path, monkeypatch):
+    store_mod = _reset_store_for_tmp_db(monkeypatch, tmp_path)
+    from dailydigest import votes as votes_mod
+
+    item_id = _insert_item(store_mod)
+
+    assert votes_mod.record_vote_reason(item_id, "low_impact") is True
+    assert votes_mod.record_vote_reason(item_id, "promotional") is True
+
+    penalties = votes_mod.reason_penalty_map()
+
+    assert abs(penalties[str(item_id)] - 0.24) < 1e-9
+
+
+def test_vote_reason_rejects_unknown_reason_or_item(tmp_path, monkeypatch):
+    store_mod = _reset_store_for_tmp_db(monkeypatch, tmp_path)
+    from dailydigest import votes as votes_mod
+
+    item_id = _insert_item(store_mod)
+
+    assert votes_mod.record_vote_reason(item_id, "not_a_reason") is False
+    assert votes_mod.record_vote_reason(999999, "low_impact") is False
+    assert votes_mod.get_vote_reasons(item_id) == []
+
+
 def test_vote_dataset_ignores_neutral_votes(tmp_path, monkeypatch):
     store_mod = _reset_store_for_tmp_db(monkeypatch, tmp_path)
     from dailydigest import votes as votes_mod

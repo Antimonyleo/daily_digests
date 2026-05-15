@@ -33,7 +33,7 @@ from .store import ItemRow
 logger = logging.getLogger(__name__)
 
 _SENT_SPLIT = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9])")
-_BATCH_SIZE = 10
+_BATCH_SIZE = 6
 _TIMEOUT = 60.0
 _CLI_TIMEOUT = 120  # seconds per batch for subprocess backends
 _TOKEN_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]+")
@@ -247,7 +247,7 @@ def _call_llm(batch: list[ItemRow]) -> dict[int, str]:
             {"role": "user", "content": user_prompt},
         ],
         "temperature": 0.2,
-        "max_tokens": 800,
+        "max_tokens": min(300 * len(batch) + 300, 4096),
         "response_format": {"type": "json_object"},
     }
     headers = {

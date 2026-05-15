@@ -5,7 +5,7 @@ from functools import lru_cache
 from pathlib import Path
 
 import yaml
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from .models import Profile, SourceSpec
@@ -43,6 +43,20 @@ class Settings(BaseSettings):
     retention_days: int = Field(default=30, ge=1, le=3650)
 
     candidates_for_summary: int = Field(default=60, ge=1, description="top-K after Stage A ranking")
+
+    @field_validator("user_tz")
+    @classmethod
+    def _validate_tz(cls, v: str) -> str:
+        if not v:
+            return v
+        try:
+            from zoneinfo import ZoneInfo
+            ZoneInfo(v)
+            return v
+        except Exception:
+            import logging
+            logging.getLogger(__name__).warning("USER_TZ=%r is not a valid timezone; using UTC", v)
+            return "UTC"
 
 
 def load_settings() -> Settings:

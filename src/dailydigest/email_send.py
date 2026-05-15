@@ -6,11 +6,16 @@ import logging
 from datetime import datetime, timezone
 from pathlib import Path
 
-from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
+from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from .config import ensure_data_dir, get_settings
 
 logger = logging.getLogger(__name__)
+
+
+def _is_transient_error(exc: BaseException) -> bool:
+    msg = str(exc).lower()
+    return any(kw in msg for kw in ("timeout", "connection", "network", "503", "502", "429", "rate limit"))
 
 
 def _write_dry_run(html: str, subject: str) -> Path:
@@ -25,7 +30,7 @@ def _write_dry_run(html: str, subject: str) -> Path:
 @retry(
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=1, min=2, max=10),
-    retry=retry_if_exception_type(Exception),
+    retry=retry_if_exception(_is_transient_error),
     reraise=True,
 )
 def _send_with_retry(payload: dict) -> None:

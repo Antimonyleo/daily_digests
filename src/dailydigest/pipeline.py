@@ -194,17 +194,17 @@ def run_all(
     # Idempotency check: if today's digest has already been sent and this is
     # not a dry-run, skip everything (no re-ingest, no re-render, no resend).
     # Dry-runs are always allowed to proceed so the user can preview.
-    digest_id_early = _digest_id()
+    digest_id = _digest_id()
     if not dry_run:
         with session_scope() as s:
-            existing = s.get(DigestRow, digest_id_early)
+            existing = s.get(DigestRow, digest_id)
             if existing is not None and existing.sent_at is not None:
                 logger.info(
                     "digest %s already sent at %s; skipping resend",
-                    digest_id_early,
+                    digest_id,
                     existing.sent_at,
                 )
-                return digest_id_early
+                return digest_id
 
     inserted = ingest_all(progress_callback=progress_callback)
     logger.info("upserted %d new items", inserted)
@@ -257,7 +257,6 @@ def run_all(
         if row.section in sections:
             sections[row.section].append((row, score, summaries.get(row.id, "")))
 
-    digest_id = _digest_id()
     # Dry-runs should refresh the local preview even if today's email was
     # already sent. write_digest preserves sent_at for existing rows.
     if dry_run or _should_write_digest(digest_id):

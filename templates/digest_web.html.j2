@@ -28,6 +28,46 @@
     width: 100%; min-height: 38px; padding: 8px 10px;
     border: 1px solid #b9d2c3; border-radius: 8px; background: #fff;
   }
+  .insight-grid {
+    display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px;
+    margin: 0 0 16px;
+  }
+  .stat-tile {
+    background: #fff; border: 1px solid var(--border); border-radius: 8px;
+    padding: 12px; box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+  }
+  .stat-label {
+    color: var(--muted); font-size: 11px; font-weight: 800;
+    letter-spacing: 0.08em; text-transform: uppercase;
+  }
+  .stat-value { font-size: 24px; font-weight: 820; margin-top: 4px; }
+  .source-mix, .must-read {
+    background: #fff; border: 1px solid var(--border); border-radius: 8px;
+    padding: 14px; margin-bottom: 16px;
+  }
+  .panel-title {
+    margin: 0 0 10px; font-size: 13px; color: var(--text);
+    font-weight: 820; letter-spacing: 0.02em;
+  }
+  .mix-row {
+    display: grid; grid-template-columns: minmax(110px, 190px) 1fr auto;
+    align-items: center; gap: 8px; margin: 7px 0; font-size: 12px;
+  }
+  .mix-track {
+    height: 8px; background: #eef1ed; border-radius: 999px; overflow: hidden;
+  }
+  .mix-fill { height: 100%; background: #5b8f73; border-radius: 999px; }
+  .must-list {
+    display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px;
+  }
+  .must-card {
+    border: 1px solid #dfe6df; border-radius: 8px; padding: 10px; background: #fbfcf9;
+  }
+  .must-card a {
+    color: var(--text); text-decoration: none; font-size: 13px; line-height: 1.35;
+    font-weight: 780; overflow-wrap: anywhere;
+  }
+  .must-meta { margin-top: 6px; color: var(--muted); font-size: 11px; }
   .digest-card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; box-shadow: var(--shadow); overflow: hidden; }
   .digest-toolbar {
     display: flex; justify-content: space-between; gap: 16px; align-items: center;
@@ -54,6 +94,26 @@
   .ranking-message { color: var(--muted); font-size: 12px; line-height: 1.4; }
   .ranking-panel .btn { width: 100%; }
   .ranking-panel .btn:disabled { opacity: 0.55; cursor: not-allowed; }
+  .reader-tools {
+    display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+    gap: 12px; padding: 14px 18px; border-bottom: 1px solid var(--border);
+    background: #fff;
+  }
+  .tool-group { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .tool-label {
+    color: var(--muted); font-size: 11px; font-weight: 800;
+    letter-spacing: 0.08em; text-transform: uppercase; margin-right: 2px;
+  }
+  .filter-chip {
+    border: 1px solid var(--border); border-radius: 999px; background: #fbfcf9;
+    color: var(--text); min-height: 30px; padding: 5px 10px; font-size: 12px;
+    font-weight: 720; cursor: pointer;
+  }
+  .filter-chip:hover { background: #f0f5f1; border-color: #bfd0c5; }
+  .filter-chip.active {
+    background: var(--accent-soft); border-color: #9fc2ae; color: var(--accent-strong);
+  }
+  .filter-count { color: var(--muted); font-size: 12px; }
   .section-title {
     display: flex; align-items: center; justify-content: space-between; gap: 12px;
     font-size: 17px; margin: 0; padding: 20px 22px 8px;
@@ -68,12 +128,25 @@
     display: grid; grid-template-columns: minmax(0, 1fr) 214px; gap: 18px;
     padding: 16px 22px; border-top: 1px solid #eef1ed;
   }
+  .item[data-priority="spotlight"] { border-left: 4px solid var(--gold); }
+  .item[data-priority="read"] { border-left: 4px solid var(--accent); }
+  .item[data-priority="skim"] { border-left: 4px solid #c7d0c9; }
   .item:first-of-type { border-top: none; }
+  .item-head { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; margin-bottom: 4px; }
   .item .label-pill {
-    display: inline-flex; align-items: center; font-weight: 800; color: var(--accent-strong);
-    background: var(--accent-soft); border: 1px solid #d7e9dd; border-radius: 6px;
-    padding: 2px 7px; font-family: Menlo, Consolas, monospace; font-size: 11px;
-    margin-right: 8px;
+    display: inline-flex; align-items: center; font-weight: 760; color: var(--muted);
+    background: #f3f5f2; border: 1px solid #dfe6df; border-radius: 6px;
+    padding: 2px 7px; font-size: 11px;
+  }
+  .priority-pill, .lane-pill {
+    display: inline-flex; align-items: center; min-height: 22px; padding: 3px 8px;
+    border-radius: 999px; font-size: 11px; font-weight: 820;
+  }
+  .priority-pill.spotlight { color: #7a4b00; background: var(--gold-soft); border: 1px solid #edd49c; }
+  .priority-pill.read { color: var(--accent-strong); background: var(--accent-soft); border: 1px solid #d7e9dd; }
+  .priority-pill.skim { color: #49554e; background: #f1f3f1; border: 1px solid #dfe6df; }
+  .lane-pill {
+    color: #334238; background: #f6f8f5; border: 1px solid #e2e8e1;
   }
   .item a.title-link {
     color: var(--text); text-decoration: none; font-weight: 720; font-size: 16px;
@@ -82,6 +155,28 @@
   .item a.title-link:hover { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
 	  .item .meta { font-size: 12px; color: var(--muted); margin: 6px 0 0; overflow-wrap: anywhere; }
 	  .item .summary { font-size: 14px; line-height: 1.55; margin: 9px 0 0; color: #334238; overflow-wrap: anywhere; }
+  .reason-row { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
+  .reason-badge {
+    display: inline-flex; align-items: center; min-height: 22px; padding: 3px 7px;
+    border: 1px solid #dce6dd; border-radius: 999px; background: #f4f8f5;
+    color: #365343; font-size: 11px; font-weight: 700;
+  }
+  .why-shown {
+    margin-top: 10px; border: 1px solid #e1e8e2; border-radius: 8px;
+    background: #fbfcf9; overflow: hidden;
+  }
+  .why-shown summary {
+    cursor: pointer; padding: 8px 10px; font-size: 12px; font-weight: 820;
+    color: var(--accent-strong);
+  }
+  .why-body { padding: 0 10px 10px; }
+  .why-copy { color: #405047; font-size: 12px; line-height: 1.45; margin-bottom: 8px; }
+  .editorial-signals { display: flex; flex-wrap: wrap; gap: 6px; }
+  .signal-chip {
+    display: inline-flex; align-items: center; min-height: 24px; padding: 4px 8px;
+    border-radius: 999px; border: 1px solid #dde6df; background: #fff;
+    color: #334238; font-size: 11px; font-weight: 720;
+  }
   .save-state { min-height: 18px; margin-top: 8px; color: var(--muted); font-size: 12px; }
   .save-state.saved { color: var(--up); }
   .save-state.error { color: var(--down); }
@@ -94,16 +189,32 @@
     letter-spacing: 0.08em; margin-bottom: 8px;
   }
   .vote-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+  .reason-prompt { margin-top: 9px; color: var(--muted); font-size: 11px; font-weight: 760; }
+  .reason-chip-row { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
+  .reason-chip {
+    border: 1px solid var(--border); border-radius: 999px; background: #fbfcf9;
+    color: var(--muted); min-height: 25px; padding: 3px 8px; font-size: 11px;
+    cursor: pointer;
+  }
+  .reason-chip.active { color: var(--accent-strong); border-color: #9fc2ae; background: var(--accent-soft); }
+  .reason-chip:disabled { opacity: 0.65; cursor: progress; }
   .vote-btn {
-    min-height: 38px; padding: 7px 6px; border: 1px solid var(--border); border-radius: 7px;
+    min-height: 48px; padding: 7px 6px; border: 1px solid var(--border); border-radius: 7px;
     cursor: pointer; color: var(--text); background: #fafbf9; font-size: 12px; font-weight: 750;
   }
+  .vote-label { display: block; font-weight: 820; line-height: 1.1; }
+  .vote-help { display: block; margin-top: 3px; color: var(--muted); font-size: 10px; font-weight: 650; line-height: 1.15; }
+  .vote-btn.active .vote-help { color: inherit; }
   .vote-btn:hover { background: #f0f5f1; border-color: #bfd0c5; }
   .vote-btn.active.good { background: #e4f4eb; border-color: var(--up); color: var(--up); }
   .vote-btn.active.neutral { background: #eef1ed; border-color: var(--neutral); color: var(--neutral); }
   .vote-btn.active.bad { background: #fdecea; border-color: var(--down); color: var(--down); }
   .vote-btn:disabled { opacity: 0.65; cursor: progress; }
   .item.flash { background: var(--flash); transition: background 0.4s; }
+  .no-filter-results {
+    display: none; padding: 30px 22px; color: var(--muted); text-align: center;
+    border-top: 1px solid #eef1ed; font-size: 14px;
+  }
   .empty { padding: 44px 22px; text-align: center; color: var(--muted); font-size: 14px; line-height: 1.6; }
   .toast {
     position: fixed; right: 18px; bottom: 18px; z-index: 20;
@@ -116,8 +227,13 @@
   @media (max-width: 760px) {
     .topbar { grid-template-columns: 1fr; align-items: start; }
     .actions { justify-content: flex-start; }
+    .insight-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .must-list { grid-template-columns: 1fr; }
+    .mix-row { grid-template-columns: 1fr auto; }
+    .mix-track { grid-column: 1 / -1; }
     .digest-toolbar { align-items: flex-start; flex-direction: column; }
     .ranking-panel { width: 100%; min-width: 0; }
+    .reader-tools { align-items: flex-start; flex-direction: column; }
     .item { grid-template-columns: 1fr; gap: 10px; }
     .vote-panel { width: 100%; }
     .name-prompt { grid-template-columns: 1fr; }
@@ -147,33 +263,97 @@
   </form>
   {% endif %}
 
+  <section class="insight-grid" aria-label="Digest summary">
+    <div class="stat-tile">
+      <div class="stat-label">Scanned</div>
+      <div class="stat-value">{{ overview.scanned or 0 }}</div>
+    </div>
+    <div class="stat-tile">
+      <div class="stat-label">Selected</div>
+      <div class="stat-value">{{ overview.selected }}</div>
+    </div>
+    <div class="stat-tile">
+      <div class="stat-label">Sources</div>
+      <div class="stat-value">{{ overview.sources or 0 }}</div>
+    </div>
+    <div class="stat-tile">
+      <div class="stat-label">Source issues</div>
+      <div class="stat-value">{{ overview.failures or 0 }}</div>
+    </div>
+  </section>
+
+  {% if overview.must_read %}
+  <section class="must-read">
+    <h2 class="panel-title">Must read first</h2>
+    <div class="must-list">
+      {% for item in overview.must_read[:3] %}
+      <div class="must-card">
+        <a href="{{ item.url }}" target="_blank" rel="noopener">{{ item.title }}</a>
+        <div class="must-meta">{{ item.source }}{% if item.ranking.tags %} &middot; {{ item.ranking.tags[0] }}{% endif %}</div>
+      </div>
+      {% endfor %}
+    </div>
+  </section>
+  {% endif %}
+
+  {% if overview.source_mix %}
+  <section class="source-mix">
+    <h2 class="panel-title">Today’s source mix</h2>
+    {% for source, count in overview.source_mix %}
+    <div class="mix-row">
+      <span>{{ source }}</span>
+      <div class="mix-track"><div class="mix-fill" style="width: {{ (count * 100 / overview.selected) | round(0, 'floor') if overview.selected else 0 }}%;"></div></div>
+      <span>{{ count }}</span>
+    </div>
+    {% endfor %}
+  </section>
+  {% endif %}
+
   <main class="digest-card">
     <div class="digest-toolbar">
       <div>
         <div class="digest-date">{{ digest_id }}</div>
-	        <div class="feedback-note">Votes save instantly. Good and Bad help future ranking after retraining. Neutral just marks an item reviewed.</div>
+	        <div class="feedback-note">Responses save instantly. Good and Bad teach the next ranking update; Neutral keeps the item out of your way without changing preferences.</div>
       </div>
       <div class="ranking-panel" aria-live="polite">
-        <div class="ranking-kicker">Ranking feedback</div>
+        <div class="ranking-kicker">Personalization</div>
         <div class="ranking-counts">
           <span class="count-pill good">Good <span id="vote-good">{{ ranking_status.vote_counts.good }}</span></span>
           <span class="count-pill bad">Bad <span id="vote-bad">{{ ranking_status.vote_counts.bad }}</span></span>
-          <span class="count-pill">Signed <span id="vote-signed">{{ ranking_status.vote_counts.signed }}</span>/<span id="vote-threshold">{{ ranking_status.min_votes_for_lr }}</span></span>
+          <span class="count-pill">Helpful ratings <span id="vote-signed">{{ ranking_status.vote_counts.signed }}</span>/<span id="vote-threshold">{{ ranking_status.min_votes_for_lr }}</span></span>
         </div>
         <div class="ranking-message" id="ranking-message">
           {% if ranking_status.ranking_status == "lr_active" %}
-          LR model trained and active for ranking.
+          Personal ranking is active.
           {% elif ranking_status.model_trained %}
-          LR model trained; needs {{ ranking_status.remaining_votes_for_lr }} more signed votes to activate.
+          Personal ranking is trained; {{ ranking_status.remaining_votes_for_lr }} more Good/Bad responses will refresh it.
           {% elif ranking_status.can_train %}
-          Enough signed votes are ready for LR training.
+          Enough feedback is ready. Update your personal ranking.
           {% else %}
-          LR training needs {{ ranking_status.remaining_votes_for_lr }} more signed votes.
+          {{ ranking_status.remaining_votes_for_lr }} more Good/Bad responses unlock personal ranking.
           {% endif %}
         </div>
-        <button class="btn primary" id="train-ranker-btn" type="button"{% if not ranking_status.can_train %} disabled{% endif %}>Train ranking</button>
+        <button class="btn primary" id="train-ranker-btn" type="button"{% if not ranking_status.can_train %} disabled{% endif %}>Update my ranking</button>
       </div>
     </div>
+
+    {% if not empty %}
+    <div class="reader-tools" aria-label="Digest filters">
+      <div class="tool-group" role="group" aria-label="Filter items">
+        <span class="tool-label">View</span>
+        <button class="filter-chip active" data-filter="all" type="button" aria-pressed="true">All</button>
+        <button class="filter-chip" data-filter="priority" type="button" aria-pressed="false">Priority</button>
+        <button class="filter-chip" data-filter="unreviewed" type="button" aria-pressed="false">Unread</button>
+      </div>
+      <div class="tool-group" role="group" aria-label="Filter by lane">
+        <span class="tool-label">Lane</span>
+        {% for section in sections %}
+        <button class="filter-chip" data-filter="section:{{ section.key }}" type="button" aria-pressed="false">{{ section.title }}</button>
+        {% endfor %}
+      </div>
+      <div class="filter-count" id="filter-count">{{ overview.selected }} shown</div>
+    </div>
+    {% endif %}
 
 	    {% if empty %}
 	    <div class="empty">
@@ -187,39 +367,118 @@
 	    </div>
     {% else %}
       {% for section in sections %}
+      <section class="section-block" data-section="{{ section.key }}">
       <h2 class="section-title">
         <span><span style="margin-right:6px;">{{ section.emoji }}</span>{{ section.title }}</span>
         <span class="section-count">{{ section.entries|length }}</span>
       </h2>
       {% for item in section.entries %}
-      <div class="item" data-item-id="{{ item.id }}">
+      {% set priority = 'spotlight' if item.score_raw >= 0.85 else ('read' if item.score_raw >= 0.65 else 'skim') %}
+      {% set priority_label = 'Lead story' if priority == 'spotlight' else ('Worth reading' if priority == 'read' else 'Quick skim') %}
+      <div class="item" data-item-id="{{ item.id }}" data-section="{{ section.key }}" data-priority="{{ priority }}" data-reviewed="{{ 'true' if item.current_vote is not none else 'false' }}">
         <div class="item-main">
-          <div>
+          <div class="item-head">
             <span class="label-pill">{{ item.label }}</span>
+            <span class="priority-pill {{ priority }}">{{ priority_label }}</span>
+            <span class="lane-pill">{{ section.title }}</span>
+          </div>
+          <div>
             <a class="title-link" href="{{ item.url }}" target="_blank" rel="noopener">{{ item.title }}</a>
           </div>
           <div class="meta">
             {{ item.source }}{% if item.published %} &middot; {{ item.published }}{% endif %}
           </div>
+          {% if item.ranking.tags %}
+          <div class="reason-row">
+            {% for tag in item.ranking.tags %}
+            <span class="reason-badge">{{ tag }}</span>
+            {% endfor %}
+          </div>
+          {% endif %}
+          <details class="why-shown">
+            <summary>Why shown?</summary>
+            <div class="why-body">
+              <div class="why-copy">
+                {% if item.ranking.why_shown %}
+                {{ item.ranking.why_shown | join('; ') }}.
+                {% else %}
+                Selected because it looks relevant to your profile and carries useful editorial signals for today’s read.
+                {% endif %}
+              </div>
+              <div class="editorial-signals" aria-label="Editorial signals for {{ item.label }}">
+                {% if item.ranking.content_type %}
+                <span class="signal-chip">{{ item.ranking.content_type | replace('_', ' ') | title }}</span>
+                {% endif %}
+                {% if item.ranking.tags %}
+                  {% for tag in item.ranking.tags %}
+                  <span class="signal-chip">{{ tag }}</span>
+                  {% endfor %}
+                {% else %}
+                  <span class="signal-chip">Profile match</span>
+                {% endif %}
+                {% if item.ranking.components.topic >= 75 %}
+                <span class="signal-chip">Strong profile fit</span>
+                {% elif item.ranking.components.topic >= 45 %}
+                <span class="signal-chip">Moderate profile fit</span>
+                {% endif %}
+                {% if item.ranking.components.source >= 70 %}
+                <span class="signal-chip">Reliable venue</span>
+                {% endif %}
+                {% if item.ranking.components.novelty >= 55 %}
+                <span class="signal-chip">New development</span>
+                {% endif %}
+                {% if item.ranking.components.penalty >= 35 %}
+                <span class="signal-chip">Read with caution</span>
+                {% endif %}
+              </div>
+            </div>
+          </details>
           {% if item.summary %}
           <div class="summary">{{ item.summary }}</div>
           {% endif %}
-          <div class="save-state" aria-live="polite"></div>
+          <div class="save-state{% if item.current_vote is not none %} saved{% endif %}" aria-live="polite">
+            {% if item.current_vote == 1 %}
+            Good saved.
+            {% elif item.current_vote == 0 %}
+            Neutral saved.
+            {% elif item.current_vote == -1 %}
+            Bad saved.
+            {% else %}
+            No response saved yet.
+            {% endif %}
+          </div>
         </div>
         <div class="vote-panel">
-          <div class="vote-title">Evaluate</div>
+          <div class="vote-title">Your read</div>
           <div class="vote-row" role="group" aria-label="Evaluate {{ item.label }}">
-            <button class="vote-btn good{% if item.current_vote == 1 %} active good{% endif %}"
-                    data-value="1" type="button" aria-pressed="{{ 'true' if item.current_vote == 1 else 'false' }}">Good</button>
-            <button class="vote-btn neutral{% if item.current_vote == 0 %} active neutral{% endif %}"
-                    data-value="0" type="button" aria-pressed="{{ 'true' if item.current_vote == 0 else 'false' }}">Neutral</button>
-            <button class="vote-btn bad{% if item.current_vote == -1 %} active bad{% endif %}"
-                    data-value="-1" type="button" aria-pressed="{{ 'true' if item.current_vote == -1 else 'false' }}">Bad</button>
+            <button class="vote-btn good{% if item.current_vote == 1 %} active{% endif %}"
+                    data-value="1" type="button" aria-pressed="{{ 'true' if item.current_vote == 1 else 'false' }}">
+              <span class="vote-label">Good</span><span class="vote-help">More like this</span>
+            </button>
+            <button class="vote-btn neutral{% if item.current_vote == 0 %} active{% endif %}"
+                    data-value="0" type="button" aria-pressed="{{ 'true' if item.current_vote == 0 else 'false' }}">
+              <span class="vote-label">Neutral</span><span class="vote-help">Seen</span>
+            </button>
+            <button class="vote-btn bad{% if item.current_vote == -1 %} active{% endif %}"
+                    data-value="-1" type="button" aria-pressed="{{ 'true' if item.current_vote == -1 else 'false' }}">
+              <span class="vote-label">Bad</span><span class="vote-help">Less like this</span>
+            </button>
+          </div>
+          <div class="reason-prompt">Reason</div>
+          <div class="reason-chip-row" role="group" aria-label="Feedback reason for {{ item.label }}">
+            <button class="reason-chip{% if 'off_topic' in item.current_reasons %} active{% endif %}" data-reason="off_topic" type="button" aria-pressed="{{ 'true' if 'off_topic' in item.current_reasons else 'false' }}">Off topic</button>
+            <button class="reason-chip{% if 'low_impact' in item.current_reasons %} active{% endif %}" data-reason="low_impact" type="button" aria-pressed="{{ 'true' if 'low_impact' in item.current_reasons else 'false' }}">Low impact</button>
+            <button class="reason-chip{% if 'promotional' in item.current_reasons %} active{% endif %}" data-reason="promotional" type="button" aria-pressed="{{ 'true' if 'promotional' in item.current_reasons else 'false' }}">Too promotional</button>
+            <button class="reason-chip{% if 'access_friction' in item.current_reasons %} active{% endif %}" data-reason="access_friction" type="button" aria-pressed="{{ 'true' if 'access_friction' in item.current_reasons else 'false' }}">Hard to access</button>
+            <button class="reason-chip{% if 'duplicate' in item.current_reasons %} active{% endif %}" data-reason="duplicate" type="button" aria-pressed="{{ 'true' if 'duplicate' in item.current_reasons else 'false' }}">Duplicate</button>
+            <button class="reason-chip{% if 'not_urgent' in item.current_reasons %} active{% endif %}" data-reason="not_urgent" type="button" aria-pressed="{{ 'true' if 'not_urgent' in item.current_reasons else 'false' }}">Not urgent</button>
           </div>
         </div>
       </div>
       {% endfor %}
+      </section>
       {% endfor %}
+      <div class="no-filter-results" id="no-filter-results">No items match this view.</div>
     {% endif %}
 
     <div class="footer">
@@ -246,6 +505,7 @@
       ["good", "neutral", "bad"].forEach((c) => b.classList.remove(c));
       b.classList.add(VALUE_CLASS[v]);
     });
+    itemEl.dataset.reviewed = "true";
   }
 
   function setSaving(itemEl, saving) {
@@ -288,15 +548,76 @@
     if (trainBtn) trainBtn.disabled = !status.can_train;
     if (!msgEl) return;
     if (status.ranking_status === "lr_active") {
-      msgEl.textContent = "LR model trained and active for ranking.";
+      msgEl.textContent = "Personal ranking is active.";
     } else if (status.model_trained) {
-      msgEl.textContent = `LR model trained; needs ${status.remaining_votes_for_lr} more signed votes to activate.`;
+      msgEl.textContent = `Personal ranking is trained; ${status.remaining_votes_for_lr} more Good/Bad responses will refresh it.`;
     } else if (status.can_train) {
-      msgEl.textContent = "Enough signed votes are ready for LR training.";
+      msgEl.textContent = "Enough feedback is ready. Update your personal ranking.";
     } else {
-      msgEl.textContent = `LR training needs ${status.remaining_votes_for_lr} more signed votes.`;
+      msgEl.textContent = `${status.remaining_votes_for_lr} more Good/Bad responses unlock personal ranking.`;
     }
   }
+
+  async function pollTrainingStatus() {
+    for (let i = 0; i < 40; i += 1) {
+      try {
+        const r = await fetch("/ranking/status");
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        const payload = await r.json();
+        updateRankingStatus(payload.status);
+        if (!payload.training_job || !payload.training_job.running) {
+          if (trainBtn) {
+            trainBtn.textContent = "Update my ranking";
+            trainBtn.disabled = !payload.status.can_train;
+          }
+          const result = payload.training_job ? payload.training_job.last_result : null;
+          if (result && result.ok) showToast("Personal ranking updated");
+          return;
+        }
+      } catch (e) {
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+    }
+  }
+
+  function applyReaderFilter(filter) {
+    const items = Array.from(document.querySelectorAll(".item"));
+    let shown = 0;
+    items.forEach((itemEl) => {
+      let visible = true;
+      if (filter === "priority") {
+        visible = itemEl.dataset.priority === "spotlight" || itemEl.dataset.priority === "read";
+      } else if (filter === "unreviewed") {
+        visible = itemEl.dataset.reviewed !== "true";
+      } else if (filter && filter.startsWith("section:")) {
+        visible = itemEl.dataset.section === filter.slice("section:".length);
+      }
+      itemEl.hidden = !visible;
+      if (visible) shown += 1;
+    });
+
+    document.querySelectorAll(".section-block").forEach((sectionEl) => {
+      const hasVisibleItem = Array.from(sectionEl.querySelectorAll(".item")).some((itemEl) => !itemEl.hidden);
+      sectionEl.hidden = !hasVisibleItem;
+    });
+
+    const countEl = document.getElementById("filter-count");
+    if (countEl) countEl.textContent = `${shown} shown`;
+    const emptyEl = document.getElementById("no-filter-results");
+    if (emptyEl) emptyEl.style.display = shown === 0 ? "block" : "none";
+  }
+
+  document.querySelectorAll(".filter-chip").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll(".filter-chip").forEach((other) => {
+        const active = other === btn;
+        other.classList.toggle("active", active);
+        other.setAttribute("aria-pressed", active ? "true" : "false");
+      });
+      applyReaderFilter(btn.dataset.filter || "all");
+    });
+  });
 
   document.querySelectorAll(".item").forEach((itemEl) => {
     itemEl.querySelectorAll(".vote-btn").forEach((btn) => {
@@ -313,6 +634,7 @@
           if (!r.ok) throw new Error("HTTP " + r.status);
           const payload = await r.json();
           setActive(itemEl, value);
+          applyReaderFilter(document.querySelector(".filter-chip.active")?.dataset.filter || "all");
           updateRankingStatus(payload.ranking_status);
           const stamp = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
           setStatus(itemEl, `${VALUE_LABEL[value]} saved at ${stamp}`, "saved");
@@ -325,13 +647,39 @@
         }
       });
     });
+    itemEl.querySelectorAll(".reason-chip").forEach((chip) => {
+      chip.addEventListener("click", async () => {
+        const id = itemEl.dataset.itemId;
+        const reason = chip.dataset.reason;
+        const removing = chip.classList.contains("active");
+        chip.disabled = true;
+        setStatus(itemEl, removing ? "Removing reason..." : "Saving reason...", "");
+        try {
+          const r = await fetch(`/vote/${id}/reason/${reason}`, {
+            method: removing ? "DELETE" : "POST",
+            headers: { "X-CSRF-Token": CSRF_TOKEN },
+          });
+          if (!r.ok) throw new Error("HTTP " + r.status);
+          chip.classList.toggle("active", !removing);
+          chip.setAttribute("aria-pressed", removing ? "false" : "true");
+          const stamp = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+          setStatus(itemEl, `${removing ? "Reason removed" : "Reason saved"} at ${stamp}`, "saved");
+          showToast(removing ? "Reason removed" : "Reason saved");
+        } catch (e) {
+          setStatus(itemEl, "Reason change was not saved. Try again.", "error");
+          flash(itemEl);
+        } finally {
+          chip.disabled = false;
+        }
+      });
+    });
   });
 
   if (trainBtn) {
     trainBtn.addEventListener("click", async () => {
       trainBtn.disabled = true;
       const oldText = trainBtn.textContent;
-      trainBtn.textContent = "Training...";
+      trainBtn.textContent = "Updating...";
       let keepDisabled = false;
       try {
         const r = await fetch("/ranking/train", {
@@ -342,10 +690,13 @@
         const payload = await r.json();
         updateRankingStatus(payload.status);
         keepDisabled = Boolean(payload.running);
-        if (payload.running && trainBtn) trainBtn.disabled = true;
-        showToast(payload.message || (payload.ok ? "Ranking training started" : "Ranking was not trained"));
+        if (payload.running && trainBtn) {
+          trainBtn.disabled = true;
+          pollTrainingStatus();
+        }
+        showToast(payload.message || (payload.ok ? "Ranking update started" : "Ranking was not updated"));
       } catch (e) {
-        showToast("Ranking training failed");
+        showToast("Ranking update failed");
       } finally {
         trainBtn.textContent = oldText;
         if (!keepDisabled) trainBtn.disabled = false;

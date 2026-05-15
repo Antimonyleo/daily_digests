@@ -31,10 +31,9 @@ from .source_quality import (
 
 logger = logging.getLogger(__name__)
 
-DOWNWEIGHT_PENALTY = 0.05
+DOWNWEIGHT_PENALTY = 0.20
 HYBRID_COSINE_W = 0.5
 HYBRID_LR_W = 0.5
-_MULTI_COSINE_K = 2  # top-k sub-profiles to average for OR semantics
 
 
 def _lr_weights_path() -> Path:
@@ -75,9 +74,7 @@ class LRRanker:
         if np.unique(y).size < 2:
             raise ValueError("LRRanker.fit needs both +1 and -1 examples")
 
-        # C=0.05 gives strong L2 regularization — with O(30) training points and
-        # 384 features, the default C=1.0 wildly overfits.
-        model = LogisticRegression(class_weight="balanced", max_iter=1000, C=0.05)
+        model = LogisticRegression(max_iter=1000, C=1.0)
         model.fit(X, y)
         self._sk_model = model
         self._classes = model.classes_.astype(np.int32)
@@ -93,6 +90,7 @@ class LRRanker:
                 coef=self.coef_,
                 intercept=np.asarray([self.intercept_], dtype=np.float32),
                 classes=self._classes,
+                feature_dim=np.asarray([self.coef_.shape[1]], dtype=np.int32),
             )
         tmp.replace(target)
         logger.info("LRRanker: saved weights to %s", target)
@@ -111,6 +109,14 @@ class LRRanker:
                 self._classes = data["classes"].astype(np.int32)
             else:
                 self._classes = np.asarray([-1, 1], dtype=np.int32)
+            if "feature_dim" in data.files:
+                saved_dim = int(data["feature_dim"][0])
+                if saved_dim != 9:
+                    logger.warning(
+                        "LRRanker: stale weights (dim=%d, expected=9); will retrain",
+                        saved_dim,
+                    )
+                    return False
             self._sk_model = None
             return True
         except Exception as e:  # noqa: BLE001
@@ -177,29 +183,9 @@ def reset_lr_cache() -> None:
 
 
 def _vote_count() -> int:
-    # Local import to avoid a circular import (votes -> store + embed).
     try:
-        from ..store import VoteRow, init_db, session_scope
-        from sqlalchemy import select
-    except Exception:  # noqa: BLE001
-        return 0
-    try:
-        init_db()
-        with session_scope() as s:
-            rows = s.execute(
-                select(VoteRow.item_id, VoteRow.value)
-                .where(VoteRow.value.in_((-1, 1)))
-                .order_by(VoteRow.item_id, VoteRow.created_at.desc(), VoteRow.id.desc())
-            ).all()
-        seen: set[int] = set()
-        signed = 0
-        for item_id, _value in rows:
-            iid = int(item_id)
-            if iid in seen:
-                continue
-            seen.add(iid)
-            signed += 1
-        return signed
+        from ..votes import signed_vote_count
+        return signed_vote_count()
     except Exception as e:  # noqa: BLE001
         logger.warning("ranker: failed to count votes: %s", e)
         return 0
@@ -210,16 +196,12 @@ def _vote_count() -> int:
 # --------------------------------------------------------------------------- #
 
 
-def _multi_cosine(vecs: np.ndarray, profile_mat: np.ndarray, k: int = _MULTI_COSINE_K) -> np.ndarray:
-    """Top-k-mean cosine across profile sub-vectors (OR semantics).
-
-    Each row of ``profile_mat`` is a separate profile component (e.g., one bio
-    sentence or one keyword).  Scoring uses the mean of the k highest cosine
-    similarities so that a niche-interest item can rank well if it is strongly
-    relevant to *any* sub-profile, not just the centroid.
-    """
-    sims = vecs @ profile_mat.T.astype(np.float32)  # [N_items, N_profile]
-    k = min(k, sims.shape[1])
+def _multi_cosine(vecs: np.ndarray, profile_mat: np.ndarray, k: int | None = None) -> np.ndarray:
+    sims = vecs @ profile_mat.T.astype(np.float32)
+    n = sims.shape[1]
+    if k is None:
+        k = max(1, min(5, int(round(math.log2(n + 1)))))
+    k = min(k, n)
     if k <= 1:
         return sims.max(axis=1).astype(np.float32)
     top_k = np.sort(sims, axis=1)[:, -k:]
@@ -296,7 +278,7 @@ def _reason_penalty_for(row: ItemRow, reason_penalty_map: Mapping[Any, float] | 
         if key not in reason_penalty_map:
             continue
         try:
-            return max(0.0, float(reason_penalty_map[key]))
+            return max(0.0, min(0.30, float(reason_penalty_map[key])))
         except (TypeError, ValueError):
             return 0.0
     return 0.0
@@ -358,12 +340,19 @@ def score_items_lr(
         cosine = _cosine_sim(vecs, profile_vec)
 
     try:
-        lr_prob = lr.score(vecs)
+        from ..votes import _build_item_features
+        features = _build_item_features(
+            items,
+            profile_vec if profile_vec.ndim == 2 else profile_vec.reshape(1, -1),
+        )
+        lr_prob = lr.score(features)
     except Exception as e:  # noqa: BLE001
         logger.warning("LRRanker.score failed (%s); falling back to cosine", e)
         return _cosine_score_items(items, profile_vec, downweight_terms, reason_penalty_map)
 
-    blended = HYBRID_COSINE_W * cosine + HYBRID_LR_W * lr_prob
+    c_lo, c_hi = float(cosine.min()), float(cosine.max())
+    cosine_norm = (cosine - c_lo) / (c_hi - c_lo + 1e-6) if c_hi > c_lo else np.full_like(cosine, 0.5)
+    blended = HYBRID_COSINE_W * cosine_norm + HYBRID_LR_W * lr_prob
     final = _apply_quality_adjustments(items, blended, downweight_terms, reason_penalty_map)
     scored = list(zip(items, final, strict=True))
     scored.sort(key=lambda t: t[1], reverse=True)
@@ -422,7 +411,8 @@ def _pick_research_balanced(
     bucket_counts: dict[str, int] = {}
 
     def add(row: ItemRow, score: float) -> bool:
-        key = id(row)
+        row_id = getattr(row, "id", None)
+        key = int(row_id) if isinstance(row_id, int) else id(row)
         if key in selected_ids or len(selected) >= cap:
             return False
         selected.append((row, score))
@@ -471,6 +461,19 @@ def _pick_research_balanced(
             if is_preprint_source(row) or source_bucket(row) == "aggregator":
                 continue
             add(row, score)
+
+    # Safety valve: only use preprints/aggregators as final fill when the section
+    # has no non-preprint items at all (e.g., a purely arXiv research feed).
+    if len(selected) < cap:
+        all_limited = all(
+            is_preprint_source(row) or source_bucket(row) == "aggregator"
+            for row, _ in scored
+        )
+        if all_limited:
+            for row, score in scored:
+                if len(selected) >= cap:
+                    break
+                add(row, score)
 
     selected.sort(key=lambda t: t[1], reverse=True)
     return selected

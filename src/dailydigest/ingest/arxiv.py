@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import logging
+import re
 import time
 from datetime import datetime, timezone
 from threading import Lock
@@ -16,10 +18,12 @@ from tenacity import (
 
 from ..models import Item, SourceSpec
 
+logger = logging.getLogger(__name__)
+
 # arXiv Terms of Use require >= 3 seconds between automated requests.
 _ARXIV_LOCK = Lock()
 _ARXIV_LAST_REQUEST: float = 0.0
-_ARXIV_POLITE_DELAY = 3.0
+_ARXIV_POLITE_DELAY = 4.0
 
 
 def _arxiv_polite_wait() -> None:
@@ -28,7 +32,6 @@ def _arxiv_polite_wait() -> None:
         elapsed = time.monotonic() - _ARXIV_LAST_REQUEST
         if elapsed < _ARXIV_POLITE_DELAY:
             time.sleep(_ARXIV_POLITE_DELAY - elapsed)
-        _ARXIV_LAST_REQUEST = time.monotonic()
 
 
 @retry(
@@ -38,10 +41,16 @@ def _arxiv_polite_wait() -> None:
     reraise=False,
 )
 def _http_get_text(url: str, params: dict[str, str]) -> str:
-    with httpx.Client(timeout=20.0, follow_redirects=True) as client:
-        resp = client.get(url, params=params)
-        resp.raise_for_status()
-        return resp.text
+    global _ARXIV_LAST_REQUEST
+    _arxiv_polite_wait()
+    try:
+        with httpx.Client(timeout=20.0, follow_redirects=True) as client:
+            resp = client.get(url, params=params)
+            resp.raise_for_status()
+            return resp.text
+    finally:
+        with _ARXIV_LOCK:
+            _ARXIV_LAST_REQUEST = time.monotonic()
 
 
 class ArxivSource:
@@ -57,7 +66,6 @@ class ArxivSource:
     MAX_RESULTS = 50
 
     def fetch(self, spec: SourceSpec) -> list[Item]:
-        _arxiv_polite_wait()
         category = spec.category or "q-bio.QM"
         params = {
             "search_query": f"cat:{category}",
@@ -68,7 +76,8 @@ class ArxivSource:
         out: list[Item] = []
         try:
             body = _http_get_text(self.BASE, params)
-        except Exception:
+        except Exception as e:
+            logger.warning("%s fetch failed: %s: %s", getattr(spec, "name", "ArxivSource"), type(e).__name__, str(e)[:200])
             return out
         if not body:
             return out
@@ -79,6 +88,7 @@ class ArxivSource:
             # arXiv IDs come back as the abs URL; keep only the trailing arxiv id.
             arxiv_id = raw_id.rsplit("/abs/", 1)[-1] if "/abs/" in raw_id else raw_id
             arxiv_id = arxiv_id.strip()
+            arxiv_id = re.sub(r"v\d+$", "", arxiv_id)
             if not arxiv_id:
                 continue
             link = entry.get("link", "") or raw_id

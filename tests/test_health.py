@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from dailydigest.health import IngestStats, should_show, weekly_summary
+from dailydigest.health import IngestStats, latest_snapshot, should_show, weekly_summary
 
 
 # ---------------------------------------------------------------------------
@@ -27,6 +27,15 @@ def _write_health(path: Path, history: list[dict]) -> None:
         "updated_at": datetime.now(timezone.utc).isoformat(),
         "latest": [],
         "history": history,
+    }
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def _write_health_payload(path: Path, latest: list[dict], history: list[dict] | None = None) -> None:
+    payload = {
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "latest": latest,
+        "history": history or [],
     }
     path.write_text(json.dumps(payload), encoding="utf-8")
 
@@ -141,6 +150,19 @@ class TestWeeklySummary:
         result = weekly_summary()
         names = [r["source"] for r in result]
         assert names == sorted(names, key=str.lower)
+
+
+def test_latest_snapshot_returns_most_recent_source_rows(tmp_path, monkeypatch):
+    db_path = tmp_path / "digest.db"
+    monkeypatch.setattr("dailydigest.health.SETTINGS", type("S", (), {"db_path": str(db_path)})())
+    health_file = tmp_path / "health.json"
+    latest = [
+        {"source": "Nature", "items": 12, "ok": True},
+        {"source": "Broken", "items": 0, "ok": False, "error": "timeout"},
+    ]
+    _write_health_payload(health_file, latest)
+
+    assert latest_snapshot() == latest
 
 
 # ---------------------------------------------------------------------------

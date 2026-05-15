@@ -172,12 +172,18 @@ def _engine():
             return _ENGINE
         ensure_data_dir()
         from .config import get_settings
-        _ENGINE = create_engine(f"sqlite:///{get_settings().db_path}", future=True)
+        _ENGINE = create_engine(
+            f"sqlite:///{get_settings().db_path}",
+            future=True,
+            connect_args={"check_same_thread": False},
+        )
 
         @event.listens_for(_ENGINE, "connect")
         def _set_sqlite_pragma(dbapi_conn, _record):
             cur = dbapi_conn.cursor()
             cur.execute("PRAGMA foreign_keys=ON")
+            cur.execute("PRAGMA journal_mode=WAL")
+            cur.execute("PRAGMA busy_timeout=5000")
             cur.close()
 
     return _ENGINE

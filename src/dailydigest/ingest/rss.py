@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import html
+import logging
 import re
 from datetime import datetime, timezone
 from urllib.parse import urldefrag, urlparse, urlunparse
@@ -16,6 +17,8 @@ from tenacity import (
 )
 
 from ..models import Item, SourceSpec
+
+logger = logging.getLogger(__name__)
 
 
 @retry(
@@ -32,12 +35,18 @@ def _http_get_bytes(url: str) -> bytes:
         return resp.content
 
 
+_BLOCK_NOISE_RE = re.compile(r"<(script|style)[^>]*>.*?</\1>", re.DOTALL | re.IGNORECASE)
 _HTML_TAG = re.compile(r"<[^>]+>")
 _TRACKING_PARAMS = {"utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content"}
 
 
 def _strip_html(s: str) -> str:
-    return html.unescape(_HTML_TAG.sub("", s or "")).strip()
+    if not s:
+        return ""
+    s = _BLOCK_NOISE_RE.sub(" ", s)
+    s = _HTML_TAG.sub(" ", s)
+    s = html.unescape(s)
+    return re.sub(r"\s+", " ", s).strip()
 
 
 def canonicalize_url(url: str) -> str:
@@ -95,11 +104,15 @@ class RSSSource:
             return []
         try:
             content = _http_get_bytes(spec.url)
-        except Exception:
+        except Exception as e:
+            logger.warning("%s fetch failed: %s: %s", getattr(spec, "name", "RSSSource"), type(e).__name__, str(e)[:200])
             return []
         if not content:
             return []
         feed = feedparser.parse(content)
+        if feed.bozo and not feed.entries:
+            logger.warning("RSS parse error for %s: %s", getattr(spec, "name", "?"), getattr(feed, "bozo_exception", "error"))
+            return []
         out: list[Item] = []
         for entry in feed.entries[:200]:
             url = canonicalize_url(entry.get("link", ""))
@@ -108,7 +121,7 @@ class RSSSource:
             title = _strip_html(entry.get("title", "")).strip()
             if not title:
                 continue
-            abstract = _extract_abstract(entry)
+            abstract = _extract_abstract(entry)[:3000]
             authors = ""
             if entry.get("authors"):
                 authors = ", ".join(a.get("name", "") for a in entry["authors"] if a.get("name"))

@@ -10,11 +10,14 @@ stays local, fast, and reproducible.
 from __future__ import annotations
 
 import re
+import re as _re
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any
 
 from ..models import SourceSpec
+
+_ARXIV_CS_RE = _re.compile(r"\barxiv[\s:_\-]*cs[\s:./\-]", _re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -115,13 +118,6 @@ REPOSITORY_PATTERNS = (
     "arxiv",
     "openalex",
     "pubmed",
-)
-
-ARXIV_CS_PATTERNS = (
-    "arxiv cs.",
-    "arxiv cs-",
-    "arxiv cs/",
-    "arxiv cs",
 )
 
 CREDIBLE_NEWS_PATTERNS = (
@@ -412,10 +408,14 @@ def access_friction_score(row: Any) -> float:
     return _clip(min(0.35, hits * 0.14))
 
 
-def is_arxiv_cs_source(source_or_row: Any) -> bool:
-    source = source_or_row if isinstance(source_or_row, str) else _row_source(source_or_row)
-    source_lc = source.lower()
-    return "arxiv" in source_lc and any(pattern in source_lc for pattern in ARXIV_CS_PATTERNS)
+def is_arxiv_cs_source(row_or_source) -> bool:
+    """Return True when the source string looks like an arXiv CS feed."""
+    source = (
+        row_or_source
+        if isinstance(row_or_source, str)
+        else (getattr(row_or_source, "source", None) or "")
+    )
+    return bool(_ARXIV_CS_RE.search(source))
 
 
 def source_bucket(row: Any) -> str:
@@ -467,18 +467,23 @@ def content_type(row: Any) -> str:
 
 def should_skip_item(row: Any) -> bool:
     """Return True for feed entries that should not enter ranking at all."""
-    source_lc = _row_source(row).lower()
-    text = _row_text(row)
-    if "angew" in source_lc and any(pattern.search(text) for pattern in SKIP_PATTERNS):
+    section = (getattr(row, "section", None) or "").lower()
+    title = (getattr(row, "title", None) or "").strip()
+    if not title:
         return True
-    text_lc = text.lower()
-    is_commentary = any(term in text_lc for term in COMMENTARY_TERMS)
-    has_new_information = (
-        novelty_score(row) >= 0.24
-        or any(term in text_lc for term in METHOD_OR_RESULT_TERMS)
-    )
-    if is_commentary and not has_new_information:
-        return True
+    if section == "research":
+        source_lc = _row_source(row).lower()
+        text = _row_text(row)
+        if "angew" in source_lc and any(pattern.search(text) for pattern in SKIP_PATTERNS):
+            return True
+        text_lc = text.lower()
+        is_commentary = any(term in text_lc for term in COMMENTARY_TERMS)
+        has_new_information = (
+            novelty_score(row) >= 0.24
+            or any(term in text_lc for term in METHOD_OR_RESULT_TERMS)
+        )
+        if is_commentary and not has_new_information:
+            return True
     return False
 
 
@@ -717,7 +722,13 @@ def quality_adjusted_score(row: Any, base_score: float) -> float:
         return score
 
     if section in {"industry", "world"}:
-        return base + (0.06 * source_quality.prestige_score) + (0.14 * novelty) - (0.45 * promo)
+        score = base + (0.06 * source_quality.prestige_score) + (0.14 * novelty) - (0.45 * promo)
+        # Smooth low-prestige penalty for self-published industry sources.
+        quality_tier_val = source_quality.quality_tier or ""
+        if quality_tier_val in ("self-published", "low") and base < 0.72:
+            smooth = max(0.0, min(1.0, (0.72 - base) / 0.24))
+            score -= 0.12 * smooth
+        return score
 
     if section == "regulatory":
         # FDA/EMA items often contain "today announced", "approved", "pleased to

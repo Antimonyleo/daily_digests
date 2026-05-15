@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -46,6 +47,52 @@ REASON_PENALTIES = {
     "access_friction": 0.08,
     "duplicate": 0.10,
 }
+
+def _build_item_features(rows: list, profile_mat: np.ndarray) -> np.ndarray:
+    """Build 9 engineered features per item for LR training/inference."""
+    from .rank.embedding_cache import embed_item_rows
+    from .rank.source_quality import (
+        novelty_score as _nov,
+        promotional_score as _promo,
+        access_friction_score as _friction,
+        infer_source_quality,
+    )
+    vecs = embed_item_rows(rows)
+    if profile_mat.ndim == 1:
+        cos = (vecs @ profile_mat.astype(np.float32, copy=False)).astype(np.float32)
+    else:
+        import math as _math
+        sims = vecs @ profile_mat.T.astype(np.float32)
+        n = sims.shape[1]
+        k = max(1, min(5, int(round(_math.log2(n + 1)))))
+        k = min(k, n)
+        if k <= 1:
+            cos = sims.max(axis=1).astype(np.float32)
+        else:
+            top_k = np.sort(sims, axis=1)[:, -k:]
+            cos = top_k.mean(axis=1).astype(np.float32)
+    features = []
+    for i, row in enumerate(rows):
+        src = str(getattr(row, "source", "") or "")
+        sec = str(getattr(row, "section", "") or "")
+        try:
+            sq = infer_source_quality(src, sec)
+            prestige = float(sq.prestige_score)
+        except Exception:
+            prestige = 0.5
+        features.append([
+            float(cos[i]),
+            float(_nov(row)),
+            float(_promo(row)),
+            float(_friction(row)),
+            prestige,
+            float(sec == "research"),
+            float(sec == "industry"),
+            float(sec == "regulatory"),
+            float(sec == "world"),
+        ])
+    return np.array(features, dtype=np.float32)
+
 
 MIN_VOTES_FOR_LR = 30
 _VOTE_REASONS_LOCK = Lock()
@@ -112,9 +159,6 @@ def parse_vote_line(line: str) -> tuple[list[str], list[str]]:
             down.append(label)
         else:
             up.append(label)
-        # Reset to '+' after each tagged token so a stray leading '-' does
-        # not bleed into subsequent tokens.
-        current_sign = "+"
 
     return up, down
 
@@ -326,6 +370,29 @@ def vote_counts() -> dict[str, int]:
     return counts
 
 
+def signed_vote_count() -> int:
+    """Count distinct items with a signed (+1/-1) latest vote."""
+    init_db()
+    try:
+        with session_scope() as s:
+            rows = s.execute(
+                select(VoteRow.item_id, VoteRow.value)
+                .where(VoteRow.value.in_((-1, 1)))
+                .order_by(VoteRow.item_id, VoteRow.created_at.desc(), VoteRow.id.desc())
+            ).all()
+        seen: set[int] = set()
+        count = 0
+        for item_id, _value in rows:
+            iid = int(item_id)
+            if iid not in seen:
+                seen.add(iid)
+                count += 1
+        return count
+    except Exception as e:  # noqa: BLE001
+        logger.warning("vote: failed to count votes: %s", e)
+        return 0
+
+
 def lr_training_status() -> dict[str, object]:
     """Return lightweight LR training/ranking status for web/API display."""
     counts = vote_counts()
@@ -386,14 +453,14 @@ def train_lr_ranker() -> dict[str, object]:
     X, y = dataset
     n_pos = int((y == 1).sum())
     n_neg = int((y == -1).sum())
-    if n_pos < 5 or n_neg < 5:
+    if n_pos < 10 or n_neg < 10:
         status = lr_training_status()
         return {
             "ok": False,
             "trained": False,
             "reason": "class_imbalance",
             "message": (
-                f"Need at least 5 votes of each sign for reliable LR training "
+                f"Need at least 10 votes of each sign for reliable LR training "
                 f"(have {n_pos} positive, {n_neg} negative). "
                 f"Keep voting to balance the dataset."
             ),
@@ -469,11 +536,9 @@ def _upsert_vote(s, item_id: int, value: int) -> None:
 
 
 def vote_dataset() -> tuple[np.ndarray, np.ndarray] | None:
-    """Build (X, y) for LR training from all stored votes.
+    """Build (X, y) for LR training using engineered features.
 
-    X: float32 embedding matrix of ``title + ". " + abstract`` for each
-    voted item. y: ``+1`` / ``-1`` labels. Returns ``None`` if fewer than
-    :data:`MIN_VOTES_FOR_LR` votes exist.
+    Returns None if fewer than MIN_VOTES_FOR_LR signed votes exist.
     """
     init_db()
     with session_scope() as s:
@@ -484,28 +549,45 @@ def vote_dataset() -> tuple[np.ndarray, np.ndarray] | None:
             .order_by(VoteRow.item_id, VoteRow.created_at.desc(), VoteRow.id.desc())
         ).all()
 
-        rows: list[tuple[int, ItemRow]] = []
-        seen_item_ids: set[int] = set()
+        seen_ids: set[int] = set()
+        voted_data: list[tuple] = []
         for item_id, value, row in raw_rows:
             iid = int(item_id)
-            if iid in seen_item_ids:
+            if iid in seen_ids:
                 continue
-            seen_item_ids.add(iid)
-            rows.append((int(value), row))
+            seen_ids.add(iid)
+            voted_data.append((
+                int(value),
+                str(getattr(row, "title", "") or ""),
+                str(getattr(row, "abstract", "") or ""),
+                str(getattr(row, "source", "") or ""),
+                str(getattr(row, "section", "") or ""),
+            ))
 
-        for _value, row in rows:
-            if row in s:
-                s.expunge(row)
-
-    if len(rows) < MIN_VOTES_FOR_LR:
+    if len(voted_data) < MIN_VOTES_FOR_LR:
         return None
 
-    voted_rows: list[ItemRow] = []
-    ys: list[int] = []
-    for value, row in rows:
-        voted_rows.append(row)
-        ys.append(1 if int(value) > 0 else -1)
+    from types import SimpleNamespace
+    rows = [
+        SimpleNamespace(title=t, abstract=a, source=src, section=sec)
+        for _v, t, a, src, sec in voted_data
+    ]
+    ys = [1 if v > 0 else -1 for v, *_ in voted_data]
 
-    X = embed_item_rows(voted_rows).astype(np.float32, copy=False)
+    try:
+        from .rank.profile import build_profile_matrix
+        from .config import load_settings
+        import yaml
+        from pathlib import Path
+        settings = load_settings()
+        profile_data = yaml.safe_load(Path(settings.profile_path).read_text(encoding="utf-8"))
+        from .models import Profile
+        profile = Profile(**profile_data)
+        profile_mat = build_profile_matrix(profile)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("vote_dataset: could not load profile: %s", e)
+        profile_mat = np.zeros((1, 384), dtype=np.float32)
+
+    X = _build_item_features(rows, profile_mat)
     y = np.asarray(ys, dtype=np.float32)
     return X, y

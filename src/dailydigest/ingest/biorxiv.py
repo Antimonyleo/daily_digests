@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 from datetime import datetime, timedelta, timezone
 
 import httpx
@@ -12,6 +13,8 @@ from tenacity import (
 )
 
 from ..models import Item, SourceSpec
+
+logger = logging.getLogger(__name__)
 
 
 @retry(
@@ -46,7 +49,8 @@ class BiorxivSource:
                 url = f"{self.BASE}/{server}/{frm}/{to}/{cursor}"
                 try:
                     data = _get_json(client, url)
-                except Exception:
+                except Exception as e:
+                    logger.warning("%s fetch failed: %s: %s", getattr(spec, "name", "BiorxivSource"), type(e).__name__, str(e)[:200])
                     break
                 if not data:
                     break

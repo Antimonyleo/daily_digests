@@ -63,6 +63,7 @@ def _make_row(title: str, section: str = "research", abstract: str = "") -> Magi
     row.abstract = abstract
     row.section = section
     row.source = ""
+    row.id = None
     return row
 
 
@@ -89,7 +90,7 @@ class TestApplyDownweight:
         assert result[0] == pytest.approx(0.8, abs=1e-6)
 
     def test_penalty_is_exactly_downweight_constant(self):
-        assert DOWNWEIGHT_PENALTY == 0.05
+        assert DOWNWEIGHT_PENALTY == 0.20
 
     def test_empty_downweight_list_no_change(self):
         base = np.array([0.5, 0.7], dtype=np.float32)
@@ -393,12 +394,13 @@ class TestLRRankerPersistence:
         from dailydigest import config as config_mod
 
         config_mod.reload_settings()
+        # 9-feature vectors: [cosine, novelty, promo, friction, prestige, sec×4]
         X = np.asarray(
             [
-                [1.0, 0.0, 0.0],
-                [0.9, 0.1, 0.0],
-                [0.0, 1.0, 0.0],
-                [0.1, 0.9, 0.0],
+                [0.9, 0.8, 0.0, 0.0, 0.9, 1.0, 0.0, 0.0, 0.0],
+                [0.8, 0.7, 0.1, 0.0, 0.8, 1.0, 0.0, 0.0, 0.0],
+                [0.2, 0.1, 0.8, 0.5, 0.3, 0.0, 1.0, 0.0, 0.0],
+                [0.1, 0.0, 0.9, 0.6, 0.2, 0.0, 1.0, 0.0, 0.0],
             ],
             dtype=np.float32,
         )
