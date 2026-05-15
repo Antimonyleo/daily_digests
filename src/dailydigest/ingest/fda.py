@@ -97,8 +97,13 @@ class FDASource:
         title = " - ".join(title_bits).strip()
 
         # Build a synthetic abstract from submission status info.
+        # Pick the submission with the most recent status date; default to last.
         submissions = entry.get("submissions") or []
-        latest = submissions[-1] if submissions else {}
+        latest = max(
+            submissions,
+            key=lambda s: s.get("submission_status_date") or "",
+            default={},
+        )
         abstract_bits = []
         for k in ("submission_type", "submission_status", "submission_status_date",
                   "submission_class_code_description"):

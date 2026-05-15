@@ -121,7 +121,7 @@ class RSSSource:
             title = _strip_html(entry.get("title", "")).strip()
             if not title:
                 continue
-            abstract = _extract_abstract(entry)[:3000]
+            abstract = _extract_abstract(entry)
             authors = ""
             if entry.get("authors"):
                 authors = ", ".join(a.get("name", "") for a in entry["authors"] if a.get("name"))

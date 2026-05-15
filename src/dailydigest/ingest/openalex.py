@@ -107,12 +107,17 @@ class OpenAlexSource:
                 title = (work.get("title") or work.get("display_name") or "").strip()
                 if not title:
                     continue
-                url = (
+                raw_url = (
                     work.get("doi")
                     or (work.get("primary_location") or {}).get("landing_page_url")
-                    or work.get("id")
                     or ""
                 )
+                openalex_id = work.get("id") or ""
+                if not raw_url and openalex_id:
+                    # Fall back to the canonical OpenAlex page URL so the item
+                    # has a working link rather than a bare API identifier.
+                    raw_url = openalex_id if openalex_id.startswith("http") else f"https://openalex.org/{openalex_id}"
+                url = raw_url
                 if not url:
                     continue
                 abstract = _reconstruct_abstract(work.get("abstract_inverted_index"))

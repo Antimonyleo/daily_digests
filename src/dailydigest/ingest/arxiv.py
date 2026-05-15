@@ -83,7 +83,9 @@ class ArxivSource:
             return out
 
         feed = feedparser.parse(body)
-        for entry in feed.entries[:100]:
+        if len(feed.entries) >= self.MAX_RESULTS:
+            logger.debug("%s: received %d entries (at cap); some papers may be missed", getattr(spec, "name", "ArxivSource"), len(feed.entries))
+        for entry in feed.entries:
             raw_id = entry.get("id", "") or ""
             # arXiv IDs come back as the abs URL; keep only the trailing arxiv id.
             arxiv_id = raw_id.rsplit("/abs/", 1)[-1] if "/abs/" in raw_id else raw_id

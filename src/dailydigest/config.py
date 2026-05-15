@@ -85,8 +85,13 @@ def load_profile(path: str | None = None) -> Profile:
             p = example
         else:
             raise FileNotFoundError(f"Profile not found: {p}")
-    data = yaml.safe_load(p.read_text())
-    return Profile(**data)
+    data = yaml.safe_load(p.read_text()) or {}
+    if not isinstance(data, dict):
+        raise ValueError(f"Profile at {p} must be a YAML mapping, got {type(data).__name__}")
+    try:
+        return Profile(**data)
+    except Exception as exc:
+        raise ValueError(f"Profile at {p} is invalid: {exc}") from exc
 
 
 def load_sources(path: str | None = None) -> list[SourceSpec]:

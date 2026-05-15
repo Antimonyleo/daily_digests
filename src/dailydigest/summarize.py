@@ -247,7 +247,7 @@ def _call_llm(batch: list[ItemRow]) -> dict[int, str]:
             {"role": "user", "content": user_prompt},
         ],
         "temperature": 0.2,
-        "max_tokens": min(300 * len(batch) + 300, 4096),
+        "max_tokens": min(300 * len(batch) + 300, 2048),
         "response_format": {"type": "json_object"},
     }
     headers = {
@@ -259,7 +259,10 @@ def _call_llm(batch: list[ItemRow]) -> dict[int, str]:
         resp = client.post(url, headers=headers, json=body)
         resp.raise_for_status()
         data = resp.json()
-    content = data["choices"][0]["message"]["content"]
+    choice = data["choices"][0]
+    if choice.get("finish_reason") == "length":
+        logger.warning("LLM response truncated (finish_reason=length); batch may be partially summarized")
+    content = choice["message"]["content"]
     return _filter_to_batch_ids(_parse_id_summary_map(content), batch)
 
 

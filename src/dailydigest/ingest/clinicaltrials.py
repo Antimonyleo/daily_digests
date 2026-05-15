@@ -66,18 +66,29 @@ class ClinicalTrialsSource:
             params["query.cond"] = spec.condition
 
         out: list[Item] = []
-        try:
-            payload = _get_json(self.BASE, params)
-        except Exception:
-            return out
-        if not payload:
-            return out
+        page_token: str | None = None
+        while len(out) < self.MAX_ITEMS:
+            if page_token:
+                params["pageToken"] = page_token
+            try:
+                payload = _get_json(self.BASE, params)
+            except Exception:
+                break
+            if not payload:
+                break
 
-        studies: list[dict[str, Any]] = payload.get("studies") or []
-        for study in studies[: self.MAX_ITEMS]:
-            item = self._parse_study(study, spec)
-            if item is not None:
-                out.append(item)
+            studies: list[dict[str, Any]] = payload.get("studies") or []
+            for study in studies:
+                if len(out) >= self.MAX_ITEMS:
+                    break
+                item = self._parse_study(study, spec)
+                if item is not None:
+                    out.append(item)
+
+            next_token = payload.get("nextPageToken")
+            if not next_token or next_token == page_token:
+                break
+            page_token = next_token
         return out
 
     def _parse_study(self, study: dict[str, Any], spec: SourceSpec) -> Item | None:

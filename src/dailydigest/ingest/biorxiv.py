@@ -12,6 +12,7 @@ from tenacity import (
     wait_exponential,
 )
 
+from ..dedupe import _canonical_doi
 from ..models import Item, SourceSpec
 
 logger = logging.getLogger(__name__)
@@ -79,7 +80,7 @@ class BiorxivSource:
                             pub_dt = None
                     except Exception:
                         pub_dt = None
-                    ext = doi or hashlib.sha1(link.encode()).hexdigest()[:16]
+                    ext = _canonical_doi(doi) or hashlib.sha1(link.encode()).hexdigest()[:16]
                     out.append(
                         Item(
                             source=spec.name,
