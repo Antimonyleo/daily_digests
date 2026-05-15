@@ -16,7 +16,7 @@ from typing import Any
 
 from ..models import SourceSpec
 
-RANKER_VERSION = "2026-05-15-source-balance-v4"
+RANKER_VERSION = "2026-05-15-ranking-improvements-v5"
 
 _ARXIV_CS_RE = re.compile(r"\barxiv[\s:_\-]*cs[\s:./\-]", re.IGNORECASE)
 
@@ -237,17 +237,11 @@ METHOD_OR_RESULT_TERMS = (
     "structure",
     "cryo-em",
     "single-cell",
-    "trial",
-    "phase",
     "approved",
     "approval",
     "efficacy",
     "survival",
     "mechanism",
-    "identified",
-    "demonstrates",
-    "reveals",
-    "reports",
 )
 
 SKIP_PATTERNS = (
@@ -479,7 +473,7 @@ def should_skip_item(row: Any) -> bool:
     if section == "research":
         source_lc = _row_source(row).lower()
         text = _row_text(row)
-        if "angew" in source_lc and any(pattern.search(text) for pattern in SKIP_PATTERNS):
+        if any(pattern.search(text) for pattern in SKIP_PATTERNS):
             return True
         text_lc = text.lower()
         is_commentary = any(term in text_lc for term in COMMENTARY_TERMS)
@@ -717,8 +711,8 @@ def quality_adjusted_score(row: Any, base_score: float) -> float:
         # Prestige is a tie-breaker, not the main ranking signal. A Nature or
         # Science item should not outrank a substantially better topic match
         # just because of venue.
-        source_bonus = 0.06 * max(source_quality.prestige_score - LOW_RESEARCH_PRESTIGE, 0.0)
-        score = base + source_bonus + (0.14 * novelty) - (0.35 * promo)
+        source_bonus = 0.08 * max(source_quality.prestige_score - LOW_RESEARCH_PRESTIGE, 0.0)
+        score = base + source_bonus + (0.08 * novelty) - (0.35 * promo)
         low_prestige = source_quality.prestige_score < LOW_RESEARCH_PRESTIGE
         exceptional = base >= 0.78 and novelty >= 0.50
         if low_prestige and not exceptional:
@@ -731,13 +725,17 @@ def quality_adjusted_score(row: Any, base_score: float) -> float:
         # preprint can still surface over a weakly matched journal paper.
         if source_quality.quality_tier in {"repository", "preprint"} and not exceptional:
             preprint_smooth = max(0.0, min(1.0, (0.76 - base) / 0.26))
-            score -= 0.08 * preprint_smooth
+            score -= 0.15 * preprint_smooth
         if is_arxiv_cs_source(row) and not exceptional:
             # arXiv CS can be useful for ML/AI methods, but it should not crowd
             # out peer-reviewed journal papers unless the topic fit is clearly
             # stronger. Smooth ramp from 0.76 down to 0.56.
             arxiv_smooth = max(0.0, min(1.0, (0.76 - base) / 0.20))
-            score -= 0.09 * arxiv_smooth
+            score -= 0.18 * arxiv_smooth
+        # Penalize editorial/commentary pieces that aren't primary research
+        ctype = content_type(row)
+        if ctype in {"editorial", "commentary"} and not exceptional:
+            score -= 0.10
         return score
 
     if section in {"industry", "world"}:

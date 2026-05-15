@@ -27,8 +27,26 @@ keywords:
   - AI in biology
   - machine learning for drug discovery
 
+# Optional: fine-tune broad facets without duplicating keywords.
+# 1.0 is neutral, <1.0 reduces this facet's contribution, >1.0 strengthens it.
+# NOTE: values < 1.0 reduce the weight but do NOT suppress — use negative_interests
+# for topics you want to avoid entirely.
+interest_weights:
+  RNA therapeutics: 1.25
+  clinical translation: 1.15
+  arXiv CS methods: 0.45
+  biotech financing: 0.65
+
 # Soft penalties applied during ranking to push items down even if embedding-similar.
 downweight:
   - cryptocurrency
   - stock market predictions
   - celebrity news
+
+# Topics to suppress: items semantically similar to these will be penalized.
+# Unlike downweight (lexical match), these work at the embedding level.
+negative_interests:
+  cryptocurrency: 1.0
+  stock trading: 1.0
+  celebrity news: 1.0
+  sports results: 1.0

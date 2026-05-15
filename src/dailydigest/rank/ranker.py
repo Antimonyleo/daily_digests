@@ -20,6 +20,7 @@ import numpy as np
 from ..store import ItemRow
 from .embedding_cache import embed_item_rows, item_text
 from .source_quality import (
+    RANKER_VERSION,
     is_arxiv_cs_source,
     is_high_quality_journal_source,
     is_preprint_source,
@@ -34,6 +35,8 @@ logger = logging.getLogger(__name__)
 DOWNWEIGHT_PENALTY = 0.20
 HYBRID_COSINE_W = 0.5
 HYBRID_LR_W = 0.5
+
+ScoreFeatureMap = dict[int, dict[str, Any]]
 
 
 def _lr_weights_path() -> Path:
@@ -197,15 +200,19 @@ def _vote_count() -> int:
 
 
 def _multi_cosine(vecs: np.ndarray, profile_mat: np.ndarray, k: int | None = None) -> np.ndarray:
+    """Score each item by 0.7*max_similarity + 0.3*top3_mean.
+
+    Rewards items that strongly match at least one profile facet (specialist match)
+    rather than items that weakly match many facets (generalist match).
+    """
     sims = vecs @ profile_mat.T.astype(np.float32)
     n = sims.shape[1]
-    if k is None:
-        k = max(1, min(5, int(round(math.log2(n + 1)))))
-    k = min(k, n)
-    if k <= 1:
+    if n <= 1:
         return sims.max(axis=1).astype(np.float32)
-    top_k = np.sort(sims, axis=1)[:, -k:]
-    return top_k.mean(axis=1).astype(np.float32)
+    top1 = sims.max(axis=1)
+    k3 = min(3, n)
+    top3 = np.sort(sims, axis=1)[:, -k3:].mean(axis=1)
+    return (0.7 * top1 + 0.3 * top3).astype(np.float32)
 
 
 def _cosine_sim(vecs: np.ndarray, profile: np.ndarray) -> np.ndarray:
@@ -284,6 +291,40 @@ def _reason_penalty_for(row: ItemRow, reason_penalty_map: Mapping[Any, float] | 
     return 0.0
 
 
+def _row_feature_key(row: ItemRow) -> int:
+    row_id = getattr(row, "id", None)
+    return int(row_id) if isinstance(row_id, int) else id(row)
+
+
+def _downweight_hit(row: ItemRow, downweight_terms: list[str]) -> bool:
+    txt = _item_text(row).lower()
+    return any(term.lower() in txt for term in downweight_terms if term and term.strip())
+
+
+def _feature_payload(
+    row: ItemRow,
+    *,
+    topic_score: float,
+    learned_score: float,
+    hybrid_score: float,
+    final_score: float,
+    reason_penalty: float,
+    downweight_penalty: float,
+    scoring_mode: str,
+) -> dict[str, Any]:
+    return {
+        "ranker_version": RANKER_VERSION,
+        "topic_score": float(topic_score),
+        "learned_score": float(learned_score),
+        "hybrid_score": float(hybrid_score),
+        "final_score": float(final_score),
+        "reason_penalty": float(reason_penalty),
+        "downweight_penalty": float(downweight_penalty),
+        "source_bucket": source_bucket(row),
+        "scoring_mode": scoring_mode,
+    }
+
+
 def _cosine_score_items(
     items: list[ItemRow],
     profile_vec: np.ndarray,
@@ -306,10 +347,115 @@ def _cosine_score_items(
     else:
         sims = _cosine_sim(vecs, profile_vec)
 
-    final = _apply_quality_adjustments(items, sims, downweight_terms, reason_penalty_map)
+    final, _features = _apply_quality_adjustments_with_features(
+        items,
+        sims,
+        downweight_terms,
+        reason_penalty_map,
+        learned_scores=np.zeros(len(items), dtype=np.float32),
+        hybrid_scores=sims,
+        scoring_mode="cosine",
+    )
     scored = list(zip(items, final, strict=True))
     scored.sort(key=lambda t: t[1], reverse=True)
     return scored
+
+
+def _freshness_penalty(row: Any) -> float:
+    """Return a score penalty [0, 0.12] based on item age. Fresh items get no penalty."""
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
+    published = getattr(row, "published_at", None)
+    fetched = getattr(row, "fetched_at", None)
+    ref = None
+    if isinstance(published, datetime):
+        ref = published if published.tzinfo else published.replace(tzinfo=timezone.utc)
+    elif isinstance(fetched, datetime):
+        ref = fetched if fetched.tzinfo else fetched.replace(tzinfo=timezone.utc)
+    if ref is None:
+        return 0.0
+    age_days = max(0.0, (now - ref).total_seconds() / 86400)
+    # No penalty for items < 1.5 days old; linear ramp to max 0.12 at 11+ days
+    return max(0.0, min(0.12, (age_days - 1.5) * 0.012))
+
+
+def _apply_quality_adjustments_with_features(
+    items: list[ItemRow],
+    base_scores: np.ndarray,
+    downweight_terms: list[str],
+    reason_penalty_map: Mapping[Any, float] | None = None,
+    *,
+    learned_scores: np.ndarray,
+    hybrid_scores: np.ndarray,
+    scoring_mode: str,
+) -> tuple[list[float], ScoreFeatureMap]:
+    texts = [_item_text(r) for r in items]
+    terms_lc = [t.lower() for t in downweight_terms if t and t.strip()]
+    result: list[float] = []
+    features: ScoreFeatureMap = {}
+    for row, base, learned, hybrid, txt in zip(
+        items,
+        base_scores,
+        learned_scores,
+        hybrid_scores,
+        texts,
+        strict=True,
+    ):
+        reason_penalty = _reason_penalty_for(row, reason_penalty_map)
+        score = quality_adjusted_score(row, float(base)) - reason_penalty
+        freshness_pen = _freshness_penalty(row)
+        if freshness_pen > 0:
+            score -= freshness_pen
+        downweight_penalty = (
+            DOWNWEIGHT_PENALTY
+            if terms_lc and any(term in txt.lower() for term in terms_lc)
+            else 0.0
+        )
+        if downweight_penalty:
+            score -= downweight_penalty
+        score_float = float(score)
+        result.append(score_float)
+        features[_row_feature_key(row)] = _feature_payload(
+            row,
+            topic_score=float(base),
+            learned_score=float(learned),
+            hybrid_score=float(hybrid),
+            final_score=score_float,
+            reason_penalty=float(reason_penalty),
+            downweight_penalty=float(downweight_penalty),
+            scoring_mode=scoring_mode,
+        )
+    return result, features
+
+
+def _cosine_score_items_with_features(
+    items: list[ItemRow],
+    profile_vec: np.ndarray,
+    downweight_terms: list[str],
+    reason_penalty_map: Mapping[Any, float] | None = None,
+) -> tuple[list[tuple[ItemRow, float]], ScoreFeatureMap]:
+    items = [item for item in items if not should_skip_item(item)]
+    if not items:
+        return [], {}
+
+    vecs = embed_item_rows(items)
+    if profile_vec.size == 0 or vecs.size == 0:
+        sims = np.zeros(len(items), dtype=np.float32)
+    else:
+        sims = _cosine_sim(vecs, profile_vec)
+
+    final, features = _apply_quality_adjustments_with_features(
+        items,
+        sims,
+        downweight_terms,
+        reason_penalty_map,
+        learned_scores=np.zeros(len(items), dtype=np.float32),
+        hybrid_scores=sims,
+        scoring_mode="cosine",
+    )
+    scored = list(zip(items, final, strict=True))
+    scored.sort(key=lambda t: t[1], reverse=True)
+    return scored, features
 
 
 def score_items_lr(
@@ -331,7 +477,13 @@ def score_items_lr(
 
     lr = get_lr_ranker()
     if lr is None or _vote_count() < MIN_VOTES_FOR_LR:
-        return _cosine_score_items(items, profile_vec, downweight_terms, reason_penalty_map)
+        scored, _features = _cosine_score_items_with_features(
+            items,
+            profile_vec,
+            downweight_terms,
+            reason_penalty_map,
+        )
+        return scored
 
     vecs = embed_item_rows(items)
     if profile_vec.size == 0 or vecs.size == 0:
@@ -348,15 +500,107 @@ def score_items_lr(
         lr_prob = lr.score(features)
     except Exception as e:  # noqa: BLE001
         logger.warning("LRRanker.score failed (%s); falling back to cosine", e)
-        return _cosine_score_items(items, profile_vec, downweight_terms, reason_penalty_map)
+        scored, _features = _cosine_score_items_with_features(
+            items,
+            profile_vec,
+            downweight_terms,
+            reason_penalty_map,
+        )
+        return scored
 
-    c_lo, c_hi = float(cosine.min()), float(cosine.max())
-    cosine_norm = (cosine - c_lo) / (c_hi - c_lo + 1e-6) if c_hi > c_lo else np.full_like(cosine, 0.5)
-    blended = HYBRID_COSINE_W * cosine_norm + HYBRID_LR_W * lr_prob
-    final = _apply_quality_adjustments(items, blended, downweight_terms, reason_penalty_map)
-    scored = list(zip(items, final, strict=True))
+    # Apply quality adjustments on raw cosine so calibrated thresholds remain meaningful
+    final, _features = _apply_quality_adjustments_with_features(
+        items,
+        cosine,  # raw cosine, not normalized blend
+        downweight_terms,
+        reason_penalty_map,
+        learned_scores=lr_prob,
+        hybrid_scores=cosine,
+        scoring_mode="hybrid_lr",
+    )
+    # Blend quality-adjusted score with LR probability for final ranking
+    qa = np.array(final, dtype=np.float32)
+    qa_lo, qa_hi = float(qa.min()), float(qa.max())
+    qa_norm = (qa - qa_lo) / (qa_hi - qa_lo + 1e-6) if qa_hi > qa_lo else np.full_like(qa, 0.5)
+    lr_lo, lr_hi = float(lr_prob.min()), float(lr_prob.max())
+    lr_norm = (lr_prob - lr_lo) / (lr_hi - lr_lo + 1e-6) if lr_hi > lr_lo else np.full_like(lr_prob, 0.5)
+    blended_rank = (HYBRID_COSINE_W * qa_norm + HYBRID_LR_W * lr_norm).tolist()
+    scored = list(zip(items, blended_rank, strict=True))
     scored.sort(key=lambda t: t[1], reverse=True)
     return scored
+
+
+def score_items_with_features(
+    items: list[ItemRow],
+    profile_vec: np.ndarray,
+    downweight_terms: list[str],
+    reason_penalty_map: Mapping[Any, float] | None = None,
+) -> tuple[list[tuple[ItemRow, float]], ScoreFeatureMap]:
+    """Score items and return per-row feature snapshots keyed by item id/id(row)."""
+    items = [item for item in items if not should_skip_item(item)]
+    if not items:
+        return [], {}
+
+    from ..votes import MIN_VOTES_FOR_LR
+
+    lr = get_lr_ranker()
+    if lr is None or _vote_count() < MIN_VOTES_FOR_LR:
+        return _cosine_score_items_with_features(
+            items,
+            profile_vec,
+            downweight_terms,
+            reason_penalty_map,
+        )
+
+    vecs = embed_item_rows(items)
+    if profile_vec.size == 0 or vecs.size == 0:
+        cosine = np.zeros(len(items), dtype=np.float32)
+    else:
+        cosine = _cosine_sim(vecs, profile_vec)
+
+    try:
+        from ..votes import _build_item_features
+        features_matrix = _build_item_features(
+            items,
+            profile_vec if profile_vec.ndim == 2 else profile_vec.reshape(1, -1),
+        )
+        lr_prob = lr.score(features_matrix)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("LRRanker.score failed (%s); falling back to cosine", e)
+        return _cosine_score_items_with_features(
+            items,
+            profile_vec,
+            downweight_terms,
+            reason_penalty_map,
+        )
+
+    # Apply quality adjustments on raw cosine so calibrated thresholds remain meaningful
+    final, features = _apply_quality_adjustments_with_features(
+        items,
+        cosine,  # raw cosine, not normalized blend
+        downweight_terms,
+        reason_penalty_map,
+        learned_scores=lr_prob,
+        hybrid_scores=cosine,
+        scoring_mode="hybrid_lr",
+    )
+    # Blend quality-adjusted score with LR probability for final ranking
+    qa = np.array(final, dtype=np.float32)
+    qa_lo, qa_hi = float(qa.min()), float(qa.max())
+    qa_norm = (qa - qa_lo) / (qa_hi - qa_lo + 1e-6) if qa_hi > qa_lo else np.full_like(qa, 0.5)
+    lr_lo, lr_hi = float(lr_prob.min()), float(lr_prob.max())
+    lr_norm = (lr_prob - lr_lo) / (lr_hi - lr_lo + 1e-6) if lr_hi > lr_lo else np.full_like(lr_prob, 0.5)
+    blended_rank = (HYBRID_COSINE_W * qa_norm + HYBRID_LR_W * lr_norm).tolist()
+    # Update features to record the hybrid blend
+    for i, (row, _) in enumerate(zip(items, blended_rank)):
+        key = _row_feature_key(row)
+        if key in features:
+            features[key]["hybrid_score"] = float(blended_rank[i])
+            features[key]["final_score"] = float(blended_rank[i])
+            features[key]["scoring_mode"] = "hybrid_lr"
+    scored = list(zip(items, blended_rank, strict=True))
+    scored.sort(key=lambda t: t[1], reverse=True)
+    return scored, features
 
 
 def score_items(
@@ -404,7 +648,7 @@ def _pick_research_balanced(
     max_preprints = max(max_arxiv_cs, math.ceil(cap * 0.20))
     max_aggregators = max(1, math.ceil(cap * 0.10))
     min_high_quality = min(math.ceil(cap * 0.20), _available(scored, is_high_quality_journal_source))
-    min_published = min(math.ceil(cap * 0.55), _available(scored, is_published_journal_source))
+    min_published = min(math.ceil(cap * 0.30), _available(scored, is_published_journal_source))
 
     selected: list[tuple[ItemRow, float]] = []
     selected_ids: set[int] = set()
@@ -446,7 +690,7 @@ def _pick_research_balanced(
             preprint_count = sum(
                 count
                 for name, count in bucket_counts.items()
-                if name in {"arxiv_cs", "arxiv_other", "bio_med_preprint"}
+                if name in {"arxiv_cs", "arxiv_other", "bio_med_preprint", "preprint_other"}
             )
             if preprint_count >= max_preprints:
                 continue

@@ -55,7 +55,15 @@ from .config import SETTINGS, get_settings, reload_settings
 from .email_render import SECTION_META, SECTION_ORDER, safe_url
 from .pipeline import _digest_id, run_all
 from .rank.source_quality import display_breakdown
-from .store import DigestRow, ItemRow, VoteRow, init_db, load_digest_features, session_scope
+from .store import (
+    DigestRow,
+    ItemRow,
+    VoteRow,
+    init_db,
+    load_digest_audit,
+    load_digest_features,
+    session_scope,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -127,6 +135,9 @@ def _breakdown_payload(row: ItemRow, persisted: dict | None = None) -> dict:
             "tags": list(persisted.get("tags") or []),
             "why_shown": list(persisted.get("why_shown") or []),
             "content_type": str(persisted.get("content_type") or "article"),
+            "source_bucket": str(persisted.get("source_bucket") or ""),
+            "selection_reason": str(persisted.get("selection_reason") or ""),
+            "ranker_version": str(persisted.get("ranker_version") or ""),
             "components": {
                 "topic": _bar_pct(float(persisted.get("topic") or 0.0)),
                 "source": _bar_pct(float(persisted.get("source") or 0.0)),
@@ -140,6 +151,9 @@ def _breakdown_payload(row: ItemRow, persisted: dict | None = None) -> dict:
         "tags": list(breakdown.tags),
         "why_shown": list(breakdown.why_shown),
         "content_type": breakdown.content_type,
+        "source_bucket": "",
+        "selection_reason": "",
+        "ranker_version": "",
         "components": {
             "topic": _bar_pct(breakdown.topic),
             "source": _bar_pct(breakdown.source),
@@ -174,7 +188,33 @@ def _digest_overview(sections: list[dict]) -> dict:
             key=lambda e: float(e.get("score_raw") or 0.0),
             reverse=True,
         )[:5],
+        "top_journals_shown": sum(
+            1
+            for entry in entries
+            if entry.get("ranking", {}).get("source_bucket") == "published_journal"
+        ),
     }
+
+
+_SUMMARY_FIELD_RE = re.compile(r"(?m)^(Key finding|Why read|Caveat):\s*(.*)$")
+
+
+def _summary_fields(summary: str) -> dict[str, str]:
+    """Parse stored three-field summaries for denser UI rendering."""
+    if not summary:
+        return {}
+    matches = list(_SUMMARY_FIELD_RE.finditer(summary))
+    if not matches:
+        return {}
+    out: dict[str, str] = {}
+    for idx, match in enumerate(matches):
+        label = match.group(1)
+        start = match.start(2)
+        end = matches[idx + 1].start() if idx + 1 < len(matches) else len(summary)
+        value = summary[start:end].strip()
+        if value:
+            out[label] = value
+    return out
 
 
 def _load_today(digest_id: str) -> tuple[list[dict], dict[int, int]]:
@@ -230,6 +270,7 @@ def _load_today(digest_id: str) -> tuple[list[dict], dict[int, int]]:
                     "source": row.source or "",
                     "published": _format_date(row),
                     "summary": row.summary or "",
+                    "summary_fields": _summary_fields(row.summary or ""),
                     "score_raw": float(row.score or 0.0),
                     "ranking": _breakdown_payload(row, persisted_features.get(int(row.id))),
                     "current_vote": current_vote.get(int(row.id)),
@@ -519,6 +560,9 @@ def index(request: Request) -> Response:
     sections, current_vote = _load_today(digest_id)
     brewed = bool(sections) or _digest_exists(digest_id)
     overview = _digest_overview(sections)
+    top_journal_audit = load_digest_audit(digest_id, "missed_top_journals") if brewed else []
+    for audit in top_journal_audit:
+        audit["url"] = safe_url(str(audit.get("url") or ""))
     response = templates.TemplateResponse(
         request,
         "digest_web.html.j2",
@@ -527,6 +571,7 @@ def index(request: Request) -> Response:
             "profile_name": _profile_name(),
             "sections": sections,
             "overview": overview,
+            "top_journal_audit": top_journal_audit,
             "current_vote_per_item": current_vote,
             "ranking_status": votes_mod.lr_training_status(),
             "empty": len(sections) == 0,

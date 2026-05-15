@@ -3,9 +3,8 @@ from __future__ import annotations
 import re
 from datetime import datetime
 from typing import Any
-from urllib.parse import parse_qsl, quote, unquote, urlencode, urlparse, urlunparse
+from urllib.parse import parse_qsl, quote, unquote, urlencode, urldefrag, urlparse, urlunparse
 
-from .ingest.rss import canonicalize_url
 from .models import Item
 
 
@@ -27,6 +26,24 @@ _ARXIV_RE = re.compile(
 _PMID_URL_RE = re.compile(r"pubmed\.ncbi\.nlm\.nih\.gov/(\d+)", re.IGNORECASE)
 _TRAILING_DOI_PUNCT = ".),;:"
 _TRACKING_PARAMS = {"fbclid", "gclid", "mc_cid", "mc_eid"}
+_RSS_TRACKING_PARAMS = {"utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content"}
+
+
+def canonicalize_url(url: str) -> str:
+    """Canonicalize URLs without importing ingest.rss and creating an import cycle."""
+    if not url:
+        return url
+    url, _fragment = urldefrag(url)
+    parsed = urlparse(url)
+    parsed = parsed._replace(scheme=parsed.scheme.lower(), netloc=parsed.netloc.lower())
+    if parsed.query:
+        kept = [
+            kv
+            for kv in parsed.query.split("&")
+            if kv and kv.split("=")[0].lower() not in _RSS_TRACKING_PARAMS
+        ]
+        parsed = parsed._replace(query="&".join(kept))
+    return urlunparse(parsed).rstrip("/")
 
 
 def dedupe_by_url(items: list[Item]) -> list[Item]:
@@ -89,6 +106,13 @@ def _candidate_keys(it: Any) -> list[str]:
     title_key = _same_day_title_key(title, _effective_date(it))
     if title_key:
         keys.append(f"title_day:{title_key}")
+        # Also emit the previous 12h bucket so items near a boundary still match
+        parts = title_key.split(":", 2)
+        if len(parts) == 3:
+            try:
+                keys.append(f"title_day:t12h:{int(parts[1]) - 1}:{parts[2]}")
+            except ValueError:
+                pass
 
     return keys
 
@@ -169,13 +193,23 @@ def _effective_date(it: Any) -> datetime | None:
 
 
 def _same_day_title_key(title: str, dt: datetime | None) -> str:
+    """Return a dedup key bucketed by 12-hour epoch windows.
+
+    Using 12-hour buckets (vs calendar-day) means items published within
+    ~12h of a midnight boundary (e.g. Nature RSS at 23:00 UTC and OpenAlex
+    at 02:00 UTC next day) still land in adjacent buckets and can be matched
+    via the two-key approach in _candidate_keys.
+    """
     if dt is None:
         return ""
     normalized = re.sub(r"[^a-z0-9]+", " ", title.lower()).strip()
     normalized = re.sub(r"\s+", " ", normalized)
     if len(normalized) < 20:
         return ""
-    return f"{dt.date().isoformat()}:{normalized}"
+    import calendar
+    ts = int(dt.timestamp()) if dt.tzinfo is not None else calendar.timegm(dt.timetuple())
+    bucket = ts // (12 * 3600)
+    return f"t12h:{bucket}:{normalized}"
 
 
 def filter_english(items: list[Item]) -> list[Item]:

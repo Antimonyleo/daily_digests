@@ -41,7 +41,7 @@
     letter-spacing: 0.08em; text-transform: uppercase;
   }
   .stat-value { font-size: 24px; font-weight: 820; margin-top: 4px; }
-  .source-mix, .must-read {
+  .source-mix, .must-read, .audit-panel {
     background: #fff; border: 1px solid var(--border); border-radius: 8px;
     padding: 14px; margin-bottom: 16px;
   }
@@ -68,6 +68,12 @@
     font-weight: 780; overflow-wrap: anywhere;
   }
   .must-meta { margin-top: 6px; color: var(--muted); font-size: 11px; }
+  .audit-summary { color: var(--muted); font-size: 13px; line-height: 1.45; margin: 0 0 8px; }
+  .audit-list { display: grid; gap: 7px; margin: 0; padding: 0; list-style: none; }
+  .audit-list li { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: start; font-size: 12px; }
+  .audit-list a { color: var(--text); text-decoration: none; font-weight: 720; overflow-wrap: anywhere; }
+  .audit-list a:hover { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
+  .audit-score { color: var(--muted); white-space: nowrap; }
   .digest-card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; box-shadow: var(--shadow); overflow: hidden; }
   .digest-toolbar {
     display: flex; justify-content: space-between; gap: 16px; align-items: center;
@@ -155,6 +161,13 @@
   .item a.title-link:hover { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
 	  .item .meta { font-size: 12px; color: var(--muted); margin: 6px 0 0; overflow-wrap: anywhere; }
 	  .item .summary { font-size: 14px; line-height: 1.55; margin: 9px 0 0; color: #334238; overflow-wrap: anywhere; }
+  .summary-fields {
+    display: grid; gap: 7px; margin: 10px 0 0; padding: 10px;
+    border: 1px solid #e4ebe5; border-radius: 8px; background: #fbfcf9;
+  }
+  .summary-field { display: grid; grid-template-columns: 92px 1fr; gap: 8px; }
+  .summary-label { color: var(--accent-strong); font-size: 11px; font-weight: 840; text-transform: uppercase; letter-spacing: 0.04em; }
+  .summary-text { color: #334238; font-size: 13px; line-height: 1.45; overflow-wrap: anywhere; }
   .reason-row { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
   .reason-badge {
     display: inline-flex; align-items: center; min-height: 22px; padding: 3px 7px;
@@ -235,6 +248,8 @@
     .ranking-panel { width: 100%; min-width: 0; }
     .reader-tools { align-items: flex-start; flex-direction: column; }
     .item { grid-template-columns: 1fr; gap: 10px; }
+    .summary-field { grid-template-columns: 1fr; gap: 3px; }
+    .audit-list li { grid-template-columns: 1fr; }
     .vote-panel { width: 100%; }
     .name-prompt { grid-template-columns: 1fr; }
   }
@@ -309,11 +324,26 @@
   </section>
   {% endif %}
 
+  {% if top_journal_audit %}
+  <section class="audit-panel">
+    <h2 class="panel-title">Top-journal audit</h2>
+    <p class="audit-summary">{{ overview.top_journals_shown }} published-journal picks shown. {{ top_journal_audit|length }} high-quality candidates were considered but missed the final cutoff.</p>
+    <ul class="audit-list">
+      {% for audit in top_journal_audit[:5] %}
+      <li>
+        <a href="{{ audit.url | default('#') }}" target="_blank" rel="noopener">{{ audit.title }}</a>
+        <span class="audit-score">{{ audit.source }} · {{ audit.score }}</span>
+      </li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% endif %}
+
   <main class="digest-card">
     <div class="digest-toolbar">
       <div>
         <div class="digest-date">{{ digest_id }}</div>
-	        <div class="feedback-note">Responses save instantly. Good and Bad teach the next ranking update; Neutral keeps the item out of your way without changing preferences.</div>
+	        <div class="feedback-note">Responses save instantly. Good and Bad teach future ranking updates; Neutral marks an item as reviewed.</div>
       </div>
       <div class="ranking-panel" aria-live="polite">
         <div class="ranking-kicker">Personalization</div>
@@ -344,6 +374,9 @@
         <button class="filter-chip active" data-filter="all" type="button" aria-pressed="true">All</button>
         <button class="filter-chip" data-filter="priority" type="button" aria-pressed="false">Priority</button>
         <button class="filter-chip" data-filter="unreviewed" type="button" aria-pressed="false">Unread</button>
+        <button class="filter-chip" data-filter="published" type="button" aria-pressed="false">Published journals</button>
+        <button class="filter-chip" data-filter="preprints" type="button" aria-pressed="false">Preprints</button>
+        <button class="filter-chip" data-filter="ai-cs" type="button" aria-pressed="false">AI / CS</button>
       </div>
       <div class="tool-group" role="group" aria-label="Filter by lane">
         <span class="tool-label">Lane</span>
@@ -375,7 +408,7 @@
       {% for item in section.entries %}
       {% set priority = 'spotlight' if item.score_raw >= 0.85 else ('read' if item.score_raw >= 0.65 else 'skim') %}
       {% set priority_label = 'Lead story' if priority == 'spotlight' else ('Worth reading' if priority == 'read' else 'Quick skim') %}
-      <div class="item" data-item-id="{{ item.id }}" data-section="{{ section.key }}" data-priority="{{ priority }}" data-reviewed="{{ 'true' if item.current_vote is not none else 'false' }}">
+      <div class="item" data-item-id="{{ item.id }}" data-section="{{ section.key }}" data-priority="{{ priority }}" data-source-bucket="{{ item.ranking.source_bucket }}" data-reviewed="{{ 'true' if item.current_vote is not none else 'false' }}">
         <div class="item-main">
           <div class="item-head">
             <span class="label-pill">{{ item.label }}</span>
@@ -403,6 +436,9 @@
                 {{ item.ranking.why_shown | join('; ') }}.
                 {% else %}
                 Selected because it looks relevant to your profile and carries useful editorial signals for today’s read.
+                {% endif %}
+                {% if item.ranking.selection_reason %}
+                {{ item.ranking.selection_reason | capitalize }}.
                 {% endif %}
               </div>
               <div class="editorial-signals" aria-label="Editorial signals for {{ item.label }}">
@@ -433,7 +469,16 @@
               </div>
             </div>
           </details>
-          {% if item.summary %}
+          {% if item.summary_fields %}
+          <div class="summary-fields" aria-label="Summary for {{ item.label }}">
+            {% for label, text in item.summary_fields.items() %}
+            <div class="summary-field">
+              <div class="summary-label">{{ label }}</div>
+              <div class="summary-text">{{ text }}</div>
+            </div>
+            {% endfor %}
+          </div>
+          {% elif item.summary %}
           <div class="summary">{{ item.summary }}</div>
           {% endif %}
           <div class="save-state{% if item.current_vote is not none %} saved{% endif %}" aria-live="polite">
@@ -586,10 +631,17 @@
     let shown = 0;
     items.forEach((itemEl) => {
       let visible = true;
+      const bucket = itemEl.dataset.sourceBucket || "";
       if (filter === "priority") {
         visible = itemEl.dataset.priority === "spotlight" || itemEl.dataset.priority === "read";
       } else if (filter === "unreviewed") {
         visible = itemEl.dataset.reviewed !== "true";
+      } else if (filter === "published") {
+        visible = bucket === "published_journal" || bucket === "published_database";
+      } else if (filter === "preprints") {
+        visible = bucket === "arxiv_cs" || bucket === "arxiv_other" || bucket === "bio_med_preprint";
+      } else if (filter === "ai-cs") {
+        visible = bucket === "arxiv_cs";
       } else if (filter && filter.startsWith("section:")) {
         visible = itemEl.dataset.section === filter.slice("section:".length);
       }

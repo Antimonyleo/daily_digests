@@ -20,6 +20,7 @@ from dailydigest.rank.ranker import (
     _cosine_score_items,
     pick_top_per_section,
     score_items,
+    score_items_with_features,
 )
 
 
@@ -386,6 +387,20 @@ class TestScoreItems:
 
         score_by_external_id = {row.external_id: score for row, score in scored}
         assert score_by_external_id["neutral"] > score_by_external_id["penalized"]
+
+    def test_score_items_with_features_returns_versioned_snapshots(self):
+        item = _make_row("CRISPR delivery method", "research", "Primary research reports a method.")
+        item.id = None
+        item.source = "Nature Biotechnology"
+
+        scored, features = score_items_with_features([item], _profile_vec(3), [])
+
+        assert scored[0][0] is item
+        payload = features[id(item)]
+        assert payload["ranker_version"]
+        assert payload["source_bucket"] == "published_journal"
+        assert payload["scoring_mode"] in {"cosine", "hybrid_lr"}
+        assert isinstance(payload["topic_score"], float)
 
 
 class TestLRRankerPersistence:

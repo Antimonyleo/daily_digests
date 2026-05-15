@@ -207,7 +207,11 @@ def test_index_renders_reader_card_hierarchy_and_feedback_controls(tmp_path, mon
                 title="First-in-class RNA delivery study",
                 abstract="A breakthrough primary result.",
                 published_at=datetime.now(timezone.utc),
-                summary="Summary.",
+                summary=(
+                    "Key finding: A delivery method improved tissue targeting.\n"
+                    "Why read: It may matter for RNA therapeutic design.\n"
+                    "Caveat: None obvious from the feed text."
+                ),
                 score=0.91,
                 digest_id="2026-05-05",
                 item_label="R1",
@@ -227,6 +231,11 @@ def test_index_renders_reader_card_hierarchy_and_feedback_controls(tmp_path, mon
     assert "High-quality source" in text
     assert 'data-filter="priority"' in text
     assert 'data-filter="unreviewed"' in text
+    assert 'data-filter="published"' in text
+    assert 'data-filter="preprints"' in text
+    assert 'data-filter="ai-cs"' in text
+    assert "summary-fields" in text
+    assert "Key finding" in text
     assert "More like this" in text
     assert "Less like this" in text
     assert "No response saved yet." in text

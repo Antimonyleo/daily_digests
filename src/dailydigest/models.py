@@ -32,7 +32,17 @@ class Profile(BaseModel):
     name: str = ""
     bio: str
     keywords: list[str] = Field(default_factory=list)
+    # Optional per-interest weights. Keys are embedded as additional profile
+    # facets, so broad interests can be strengthened or softened without
+    # duplicating keywords. Values below 1.0 downweight; above 1.0 upweight.
+    interest_weights: dict[str, float] = Field(default_factory=dict)
+    # Backward-compatible alias used in older docs/conversations.
+    facet_weights: dict[str, float] = Field(default_factory=dict)
     downweight: list[str] = Field(default_factory=list)
+    # Interests to suppress: embedded as negative query vectors during ranking.
+    # Items semantically similar to these topics will be penalized.
+    # Example: {"cryptocurrency": 1.0, "sports": 1.0}
+    negative_interests: dict[str, float] = Field(default_factory=dict)
 
 
 class SourceSpec(BaseModel):

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import time
 from collections.abc import Callable
 from datetime import datetime, timezone
@@ -28,9 +29,10 @@ from .store import (
     DigestRow,
     ItemRow,
     days_since_last_sent,
+    exclude_previously_shown,
+    exclude_reviewed_items,
     init_db,
     mark_sent,
-    exclude_reviewed_items,
     recent_items,
     session_scope,
     upsert_items,
@@ -41,8 +43,51 @@ from .store import (
 )
 from .summarize import summarize_items
 
+try:
+    from .rank.profile import build_profile_matrix_with_rocchio as _build_profile_with_rocchio
+except ImportError:
+    _build_profile_with_rocchio = None  # type: ignore[assignment]
+
+try:
+    from .rank.profile import build_negative_centroid as _build_neg_centroid
+except ImportError:
+    _build_neg_centroid = None  # type: ignore[assignment]
+
 logger = logging.getLogger(__name__)
 _ORIGINAL_SCORE_ITEMS = score_items
+
+_TITLE_BLOCKLIST = re.compile(
+    r"^(?:volume\s+\d|issue\s+\d|editorial\b|correspondence\b|correction\b|"
+    r"erratum\b|in\s+this\s+issue|table\s+of\s+contents|show\s+hn:|ask\s+hn:|"
+    r"sponsored:?|webinar:|save\s+the\s+date)",
+    re.IGNORECASE,
+)
+
+
+def _quality_gate(rows: list[ItemRow]) -> list[ItemRow]:
+    """Pre-filter obviously low-quality candidates before scoring.
+
+    Drops items that are clearly not useful: very short titles, editorial
+    metadata, content-farm patterns, and research items with no abstract.
+    Skipped when the pool is < 10 items to preserve test/backfill behaviour.
+    """
+    if len(rows) < 10:
+        return rows
+    out: list[ItemRow] = []
+    for r in rows:
+        title = (r.title or "").strip()
+        abstract = (r.abstract or "").strip()
+        if len(title) < 15:
+            continue
+        if _TITLE_BLOCKLIST.match(title):
+            continue
+        if (r.section or "").lower() == "research" and len(abstract) < 30:
+            continue
+        out.append(r)
+    dropped = len(rows) - len(out)
+    if dropped:
+        logger.info("quality_gate: dropped %d low-quality candidates", dropped)
+    return out
 
 SECTION_LABEL_PREFIX: dict[str, str] = {
     "research": "R",
@@ -308,7 +353,7 @@ def run_all(
 
     ``backfill_days`` widens the recency window used for ranking. When omitted,
     the window is set automatically: if the last sent digest was N days ago,
-    ``days = N + 1`` (capped at 14), so no day's content is ever skipped.
+    ``days = N + 1`` (capped at 7), so no recent day's content is missed.
     Pass an explicit value to override.
     """
     init_db()
@@ -331,15 +376,63 @@ def run_all(
     inserted = ingest_all(progress_callback=progress_callback)
     logger.info("upserted %d new items", inserted)
 
+    # Auto-retrain LR when model is stale (> 7 days old) and enough votes exist
+    try:
+        from .votes import MIN_VOTES_FOR_LR as _min_lr
+        from .votes import signed_vote_count as _svc
+
+        _current_votes = _svc()
+        if _current_votes >= _min_lr:
+            from pathlib import Path as _Path
+
+            _lr_path = _Path(get_settings().db_path).parent / "lr_ranker.npz"
+            _needs_retrain = not _lr_path.exists()
+            if not _needs_retrain and _lr_path.exists():
+                _lr_age_days = (time.time() - _lr_path.stat().st_mtime) / 86400
+                _needs_retrain = _lr_age_days > 7
+            if _needs_retrain:
+                from .votes import train_lr_ranker as _train_lr
+
+                _retrain_result = _train_lr()
+                if _retrain_result.get("trained"):
+                    logger.info(
+                        "auto-retrained LR ranker on %d votes",
+                        _retrain_result.get("trained_votes", 0),
+                    )
+                else:
+                    logger.info(
+                        "auto-retrain skipped: %s",
+                        _retrain_result.get("message", "unknown"),
+                    )
+    except Exception as _e:  # noqa: BLE001
+        logger.warning("auto-retrain check failed: %s", _e)
+
     profile = load_profile()
-    profile_vec = build_profile_matrix(profile)
+
+    # Use Rocchio-blended profile when available; fall back to static profile matrix.
+    _vote_count_now = 0
+    try:
+        from .votes import signed_vote_count as _vc_now
+        _vote_count_now = _vc_now()
+    except Exception:  # noqa: BLE001
+        pass
+    if _build_profile_with_rocchio is not None:
+        try:
+            profile_vec = _build_profile_with_rocchio(profile, vote_count=_vote_count_now)
+        except Exception as _e:  # noqa: BLE001
+            logger.warning("Rocchio blend failed, using static profile: %s", _e)
+            profile_vec = build_profile_matrix(profile)
+    else:
+        profile_vec = build_profile_matrix(profile)
+    logger.info("ranker: profile_rows=%d votes=%d", len(profile_vec), _vote_count_now)
 
     if backfill_days and backfill_days > 0:
         days = backfill_days
     else:
         gap = days_since_last_sent(exclude_digest_id=digest_id)
-        days = max(2, min(gap + 1, 14)) if gap >= 0 else 2
-    recent = exclude_reviewed_items(recent_items(days=days))
+        days = max(2, min(gap + 1, 7)) if gap >= 0 else 2
+    recent = exclude_previously_shown(exclude_reviewed_items(recent_items(days=days)))
+    recent = _quality_gate(recent)
     items = dedupe_ranking_candidates(recent)
     logger.info(
         "ranking %d recent items after cross-source dedupe (%d before, window=%d days)",
@@ -348,6 +441,22 @@ def run_all(
         days,
     )
     scored, score_features = _score_items_for_pipeline(items, profile_vec, profile.downweight)
+
+    # Apply negative-interest penalty when the profile has configured negative interests
+    if _build_neg_centroid is not None:
+        try:
+            _neg_centroid = _build_neg_centroid(profile)
+            if _neg_centroid is not None:
+                from .rank.embedding_cache import embed_item_rows as _embed_rows
+                _neg_vecs = _embed_rows([row for row, _ in scored])
+                _neg_sims = _neg_vecs @ _neg_centroid
+                scored = [
+                    (row, score - 0.28 * max(0.0, float(_neg_sims[i])))
+                    for i, (row, score) in enumerate(scored)
+                ]
+                scored.sort(key=lambda t: t[1], reverse=True)
+        except Exception as _e:  # noqa: BLE001
+            logger.warning("negative interest penalty failed: %s", _e)
     # Note: do NOT pre-truncate `scored` to a global top-K before per-section picking;
     # a single-domain profile (e.g. biotech-heavy) starves industry/regulatory/world.
     # `pick_top_per_section` already caps per-section, so summary cost is bounded.

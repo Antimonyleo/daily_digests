@@ -360,6 +360,43 @@ def exclude_reviewed_items(rows: list[ItemRow]) -> list[ItemRow]:
     return [r for r in rows if int(r.id) not in reviewed]
 
 
+def exclude_previously_shown(rows: list[ItemRow], days_lookback: int = 7) -> list[ItemRow]:
+    """Drop rows shown in recently sent digests unless explicitly upvoted.
+
+    Prevents items from re-appearing day after day when the user didn't vote
+    (which is the natural "not interested" signal). Upvoted items are kept so
+    they can resurface in backfill runs.
+    """
+    ids = [int(r.id) for r in rows if r.id is not None]
+    if not ids:
+        return rows
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days_lookback)
+    with session_scope() as s:
+        shown_ids = set(
+            s.execute(
+                select(DigestItemRow.item_id)
+                .join(DigestRow, DigestRow.id == DigestItemRow.digest_id)
+                .where(
+                    DigestRow.sent_at.isnot(None),
+                    DigestRow.sent_at >= cutoff,
+                    DigestItemRow.item_id.in_(ids),
+                )
+            ).scalars()
+        )
+        upvoted_ids = set(
+            s.execute(
+                select(VoteRow.item_id).where(
+                    VoteRow.item_id.in_(ids),
+                    VoteRow.value == 1,
+                )
+            ).scalars()
+        )
+    hidden = {int(i) for i in shown_ids} - {int(i) for i in upvoted_ids}
+    if not hidden:
+        return rows
+    return [r for r in rows if int(r.id) not in hidden]
+
+
 def prune(days: int) -> int:
     """Delete items older than ``days``, but preserve voted items.
 

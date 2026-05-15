@@ -4,16 +4,19 @@ DailyDigest is a personalized morning research and news digest. It pulls from jo
 
 It is built for researchers who want signal without opening 40 tabs before breakfast.
 
-**Status:** public-release hardened local app. Verified with `133` passing tests plus a live local web smoke test. See [docs/STATUS.md](docs/STATUS.md).
+**Status:** public-release hardened local app. Verified with `149` passing tests plus a live local web smoke test. See [docs/STATUS.md](docs/STATUS.md).
 
 ## Features
 
 - One-command local web app with `./scripts/start.sh`
 - First-run setup wizard for name, research profile, keywords, downweights, digest size, and summarizer backend
 - Broad source coverage: journals, bioRxiv/medRxiv/arXiv, PubMed/OpenAlex, FDA/ClinicalTrials.gov, biotech news, and world news
-- Profile-aware ranking with local embeddings, source-quality boosts, novelty signals, freshness gates, cross-source dedupe, and anti-promo penalties
+- Profile-aware ranking with local embeddings, source-quality boosts, novelty signals, freshness gates, cross-source dedupe, anti-promo penalties, and source-balance caps
+- Interest facet weights in `data/profile.yaml` so you can strengthen or soften topics without editing code
+- Rank-feature snapshots and a top-journal audit so you can see when high-quality journal candidates were considered but missed the final cutoff
 - SQLite embedding cache so repeated brews only embed new or changed items
-- Graphical digest overview with scanned/selected counts, must-read cards, source-mix bars, and per-item ranking signals
+- Graphical digest overview with scanned/selected counts, must-read cards, source-mix bars, top-journal audit, structured summaries, and per-item ranking signals
+- Reader filters for priority, unread, published journals, preprints, AI/CS, and digest sections
 - Good / Neutral / Bad feedback saved instantly, with optional toggleable reason chips like `Low impact`, `Promo`, `Access`, and `Duplicate`
 - Optional learned ranking after enough Good/Bad votes from the UI or `uv run dd vote --train`
 - Extractive summaries by default, with optional OpenAI-compatible API, Claude Code CLI, or Codex CLI backends
@@ -55,6 +58,17 @@ Good and Bad responses teach future ranking updates. Neutral only marks an item 
 DailyDigest balances personal topic fit with editorial quality. Top journals still help as a tie-breaker, but a weakly matched Nature or Science item should not beat a substantially better match from a less prestigious venue. Ranking candidates are freshness-filtered, deduped across sources, and checked for promotional wording and low-information commentary so stale items, repeated papers, press-release-style posts, and editorials without new methods/results are pushed below independent, substantive coverage.
 
 You can tune source hints in `config/sources.yaml` with `quality_tier`, `prestige_score`, `impact_floor`, and `promo_risk`. Exact impact factors are not fetched during brewing; the app uses stable local tiers to stay fast and reproducible.
+
+You can tune personal facets in `data/profile.yaml`:
+
+```yaml
+interest_weights:
+  RNA therapeutics: 1.25
+  clinical translation: 1.15
+  arXiv CS methods: 0.45
+```
+
+Values above `1.0` strengthen a topic; values below `1.0` soften it. This is useful when a topic is relevant but should not crowd out published journal papers.
 
 ## Summarizer Backends
 

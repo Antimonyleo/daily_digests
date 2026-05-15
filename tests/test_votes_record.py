@@ -80,6 +80,42 @@ def test_reason_penalty_map_sums_reason_weights(tmp_path, monkeypatch):
     assert abs(penalties[str(item_id)] - 0.24) < 1e-9
 
 
+def test_reason_penalty_map_generalizes_to_matching_future_sources(tmp_path, monkeypatch):
+    store_mod = _reset_store_for_tmp_db(monkeypatch, tmp_path)
+    from dailydigest import votes as votes_mod
+
+    store_mod.init_db()
+    with store_mod.session_scope() as s:
+        voted = store_mod.ItemRow(
+            source="Company Press Release",
+            section="industry",
+            external_id="old-promo",
+            url="https://example.com/old-promo",
+            title="Company today announced sponsored product launch",
+        )
+        future = store_mod.ItemRow(
+            source="Company Press Release",
+            section="industry",
+            external_id="new-promo",
+            url="https://example.com/new-promo",
+            title="Company today announced another product launch",
+        )
+        s.add_all([voted, future])
+        s.flush()
+        voted_id = int(voted.id)
+        future_id = int(future.id)
+
+    assert votes_mod.record_vote_reason(voted_id, "promotional") is True
+    with store_mod.session_scope() as s:
+        future = s.get(store_mod.ItemRow, future_id)
+        s.expunge(future)
+
+    penalties = votes_mod.reason_penalty_map([future])
+
+    assert penalties[str(future_id)] > 0
+    assert penalties[str(future_id)] < votes_mod.REASON_PENALTIES["promotional"]
+
+
 def test_vote_reason_rejects_unknown_reason_or_item(tmp_path, monkeypatch):
     store_mod = _reset_store_for_tmp_db(monkeypatch, tmp_path)
     from dailydigest import votes as votes_mod

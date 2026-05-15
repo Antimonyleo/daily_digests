@@ -49,14 +49,44 @@ REASON_PENALTIES = {
 }
 
 def _build_item_features(rows: list, profile_mat: np.ndarray) -> np.ndarray:
-    """Build 9 engineered features per item for LR training/inference."""
+    """Build 9 engineered features per item for LR training/inference.
+
+    Feature vector (9 dims):
+    0. cosine similarity to profile (top-k-mean or max)
+    1. novelty score
+    2. promotional score
+    3. access friction score
+    4. prestige score
+    5. is_preprint (1.0 if preprint source, else 0.0)
+    6. is_high_quality_journal (1.0 if top/high/strong tier, else 0.0)
+    7. age_norm (days since published, normalized: 0=today, 1=14+ days; 0.5 if unknown)
+    8. source_bucket_score (numerical: published_journal=1.0, published_database=0.8,
+                             aggregator=0.5, bio_med_preprint=0.4, arxiv_other=0.35,
+                             preprint_other=0.3, arxiv_cs=0.25, other=0.6)
+    """
     from .rank.embedding_cache import embed_item_rows
     from .rank.source_quality import (
         novelty_score as _nov,
         promotional_score as _promo,
         access_friction_score as _friction,
         infer_source_quality,
+        is_preprint_source,
+        is_high_quality_journal_source,
+        source_bucket,
     )
+    from datetime import datetime, timezone
+
+    _BUCKET_SCORES = {
+        "published_journal": 1.0,
+        "published_database": 0.8,
+        "other_research": 0.65,
+        "aggregator": 0.5,
+        "bio_med_preprint": 0.4,
+        "arxiv_other": 0.35,
+        "preprint_other": 0.3,
+        "arxiv_cs": 0.25,
+    }
+
     vecs = embed_item_rows(rows)
     if profile_mat.ndim == 1:
         cos = (vecs @ profile_mat.astype(np.float32, copy=False)).astype(np.float32)
@@ -64,13 +94,15 @@ def _build_item_features(rows: list, profile_mat: np.ndarray) -> np.ndarray:
         import math as _math
         sims = vecs @ profile_mat.T.astype(np.float32)
         n = sims.shape[1]
-        k = max(1, min(5, int(round(_math.log2(n + 1)))))
-        k = min(k, n)
-        if k <= 1:
+        if n <= 1:
             cos = sims.max(axis=1).astype(np.float32)
         else:
-            top_k = np.sort(sims, axis=1)[:, -k:]
-            cos = top_k.mean(axis=1).astype(np.float32)
+            top1 = sims.max(axis=1)
+            k3 = min(3, n)
+            top3 = np.sort(sims, axis=1)[:, -k3:].mean(axis=1)
+            cos = (0.7 * top1 + 0.3 * top3).astype(np.float32)
+
+    now = datetime.now(timezone.utc)
     features = []
     for i, row in enumerate(rows):
         src = str(getattr(row, "source", "") or "")
@@ -80,21 +112,88 @@ def _build_item_features(rows: list, profile_mat: np.ndarray) -> np.ndarray:
             prestige = float(sq.prestige_score)
         except Exception:
             prestige = 0.5
+
+        # Age normalization (0=today, 1=14+ days old, 0.5=unknown)
+        published = getattr(row, "published_at", None)
+        if isinstance(published, datetime):
+            ref = published if published.tzinfo else published.replace(tzinfo=timezone.utc)
+            age_days = max(0.0, (now - ref).total_seconds() / 86400)
+            age_norm = min(1.0, age_days / 14.0)
+        else:
+            age_norm = 0.5
+
+        bucket = source_bucket(row)
+        bucket_score = _BUCKET_SCORES.get(bucket, 0.6)
+
         features.append([
-            float(cos[i]),
-            float(_nov(row)),
-            float(_promo(row)),
-            float(_friction(row)),
-            prestige,
-            float(sec == "research"),
-            float(sec == "industry"),
-            float(sec == "regulatory"),
-            float(sec == "world"),
+            float(cos[i]),                                 # 0. cosine
+            float(_nov(row)),                              # 1. novelty
+            float(_promo(row)),                            # 2. promotional
+            float(_friction(row)),                         # 3. access friction
+            prestige,                                      # 4. prestige
+            1.0 if is_preprint_source(row) else 0.0,       # 5. is_preprint
+            1.0 if is_high_quality_journal_source(row) else 0.0,  # 6. is_hq_journal
+            age_norm,                                      # 7. age_norm
+            bucket_score,                                  # 8. bucket_score
         ])
     return np.array(features, dtype=np.float32)
 
 
-MIN_VOTES_FOR_LR = 30
+def _learned_profile_path() -> Path:
+    from .config import get_settings
+    return Path(get_settings().db_path).parent / "learned_profile.npz"
+
+
+def _update_rocchio(item_id: int, vote_value: int) -> None:
+    """Update the Rocchio-style learned profile vector after each vote.
+
+    Uses alpha=0.08 for upvotes and beta=0.04 for downvotes to accumulate
+    a learned direction in embedding space. Called outside DB session.
+    """
+    if vote_value not in (1, -1):
+        return
+    alpha, beta = 0.08, 0.04
+    try:
+        from .store import ItemRow, session_scope
+        with session_scope() as s:
+            item = s.get(ItemRow, item_id)
+            if item is None:
+                return
+            s.expunge(item)
+
+        from .rank.embedding_cache import embed_item_rows
+        vecs = embed_item_rows([item])
+        if vecs.size == 0 or vecs.shape[0] == 0:
+            return
+        vec = vecs[0].astype(np.float32)
+
+        path = _learned_profile_path()
+        if path.exists():
+            try:
+                data = np.load(path)
+                learned = data["profile"].astype(np.float32)
+                stored_count = int(data["vote_count"][0])
+            except Exception:
+                learned = np.zeros(vec.shape, dtype=np.float32)
+                stored_count = 0
+        else:
+            learned = np.zeros(vec.shape, dtype=np.float32)
+            stored_count = 0
+
+        if vote_value == 1:
+            learned = learned + alpha * vec
+        else:
+            learned = learned - beta * vec
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".npz.tmp")
+        np.savez(tmp, profile=learned, vote_count=np.array([stored_count + 1], dtype=np.int32))
+        tmp.replace(path)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Rocchio update failed: %s", exc)
+
+
+MIN_VOTES_FOR_LR = 20
 _VOTE_REASONS_LOCK = Lock()
 
 
@@ -236,6 +335,12 @@ def record_votes(line: str, digest_id: str | None = None) -> dict[str, int]:
         counts["down"] = len(down_ids)
         counts["unknown"] = len(up_missing) + len(down_missing)
 
+    # Update Rocchio learned profile outside DB session
+    for item_id in up_ids:
+        _update_rocchio(item_id, 1)
+    for item_id in down_ids:
+        _update_rocchio(item_id, -1)
+
     return counts
 
 
@@ -260,7 +365,10 @@ def record_vote_by_id(item_id: int, value: int) -> bool:
             return False
 
         _upsert_vote(s, item_id, value)
-        return True
+
+    if value in (1, -1):
+        _update_rocchio(item_id, value)
+    return True
 
 
 def get_vote_value(item_id: int) -> int | None:
@@ -321,8 +429,14 @@ def get_vote_reasons(item_id: int) -> list[str]:
     return [r for r in reasons if r in ALLOWED_REASONS]
 
 
-def reason_penalty_map() -> dict[str, float]:
-    """Return item-id keyed penalties derived from qualitative reason chips."""
+def reason_penalty_map(rows: Iterable[object] | None = None) -> dict[str, float]:
+    """Return penalties derived from qualitative reason chips.
+
+    Without ``rows`` this returns exact item-id penalties for compatibility.
+    With current ranking candidates, it also applies soft generalized
+    penalties by source, source bucket, and content type so feedback can affect
+    future articles from similar feeds.
+    """
     with _VOTE_REASONS_LOCK:
         data = _load_vote_reasons()
     penalties: dict[str, float] = {}
@@ -332,6 +446,85 @@ def reason_penalty_map() -> dict[str, float]:
             total += REASON_PENALTIES.get(str(reason), 0.0)
         if total > 0:
             penalties[str(item_id)] = min(total, 0.30)
+    if rows is None or not data:
+        return penalties
+
+    try:
+        from .rank.source_quality import content_type, source_bucket
+    except Exception as e:  # noqa: BLE001
+        logger.warning("vote: could not load source-quality helpers: %s", e)
+        return penalties
+
+    reasoned_ids: list[int] = []
+    for key in data:
+        try:
+            reasoned_ids.append(int(key))
+        except (TypeError, ValueError):
+            continue
+    if not reasoned_ids:
+        return penalties
+
+    init_db()
+    with session_scope() as s:
+        voted_rows = (
+            s.execute(select(ItemRow).where(ItemRow.id.in_(reasoned_ids)))
+            .scalars()
+            .all()
+        )
+        for row in voted_rows:
+            s.expunge(row)
+
+    source_penalties: dict[str, float] = {}
+    bucket_penalties: dict[str, float] = {}
+    content_penalties: dict[str, float] = {}
+    generalizable = {
+        "off_topic",
+        "low_impact",
+        "promotional",
+        "already_known",
+        "not_urgent",
+        "access_friction",
+        "duplicate",
+    }
+    for row in voted_rows:
+        total = 0.0
+        for reason in list(data.get(str(int(row.id))) or []):
+            if str(reason) in generalizable:
+                total += REASON_PENALTIES.get(str(reason), 0.0)
+        if total <= 0:
+            continue
+        source = str(row.source or "").strip().lower()
+        if source:
+            source_penalties[source] = source_penalties.get(source, 0.0) + (total * 0.35)
+        bucket = source_bucket(row)
+        bucket_penalties[bucket] = bucket_penalties.get(bucket, 0.0) + (total * 0.20)
+        ctype = content_type(row)
+        content_penalties[ctype] = content_penalties.get(ctype, 0.0) + (total * 0.15)
+
+    for row in rows:
+        row_id = getattr(row, "id", None)
+        keys: list[str] = []
+        if isinstance(row_id, int):
+            keys.append(str(row_id))
+        external = getattr(row, "external_id", None)
+        if isinstance(external, str) and external:
+            keys.append(external)
+        url = getattr(row, "url", None)
+        if isinstance(url, str) and url:
+            keys.append(url)
+        if not keys:
+            continue
+        source = str(getattr(row, "source", "") or "").strip().lower()
+        generalized = 0.0
+        if source:
+            generalized += source_penalties.get(source, 0.0)
+        generalized += bucket_penalties.get(source_bucket(row), 0.0)
+        generalized += content_penalties.get(content_type(row), 0.0)
+        if generalized <= 0:
+            continue
+        value = min(0.30, generalized)
+        for key in keys:
+            penalties[key] = min(0.30, penalties.get(key, 0.0) + value)
     return penalties
 
 
@@ -453,14 +646,14 @@ def train_lr_ranker() -> dict[str, object]:
     X, y = dataset
     n_pos = int((y == 1).sum())
     n_neg = int((y == -1).sum())
-    if n_pos < 10 or n_neg < 10:
+    if n_pos < 3 or n_neg < 3:
         status = lr_training_status()
         return {
             "ok": False,
             "trained": False,
             "reason": "class_imbalance",
             "message": (
-                f"Need at least 10 votes of each sign for reliable LR training "
+                f"Need at least 3 votes of each sign for reliable LR training "
                 f"(have {n_pos} positive, {n_neg} negative). "
                 f"Keep voting to balance the dataset."
             ),
@@ -539,6 +732,8 @@ def vote_dataset() -> tuple[np.ndarray, np.ndarray] | None:
     """Build (X, y) for LR training using engineered features.
 
     Returns None if fewer than MIN_VOTES_FOR_LR signed votes exist.
+    Uses real ItemRow objects (not SimpleNamespace) so embeddings are identical
+    to what inference uses — preventing train/infer feature distribution mismatch.
     """
     init_db()
     with session_scope() as s:
@@ -550,29 +745,19 @@ def vote_dataset() -> tuple[np.ndarray, np.ndarray] | None:
         ).all()
 
         seen_ids: set[int] = set()
-        voted_data: list[tuple] = []
+        rows: list[ItemRow] = []
+        ys: list[int] = []
         for item_id, value, row in raw_rows:
             iid = int(item_id)
             if iid in seen_ids:
                 continue
             seen_ids.add(iid)
-            voted_data.append((
-                int(value),
-                str(getattr(row, "title", "") or ""),
-                str(getattr(row, "abstract", "") or ""),
-                str(getattr(row, "source", "") or ""),
-                str(getattr(row, "section", "") or ""),
-            ))
+            s.expunge(row)
+            rows.append(row)
+            ys.append(1 if int(value) > 0 else -1)
 
-    if len(voted_data) < MIN_VOTES_FOR_LR:
+    if len(rows) < MIN_VOTES_FOR_LR:
         return None
-
-    from types import SimpleNamespace
-    rows = [
-        SimpleNamespace(title=t, abstract=a, source=src, section=sec)
-        for _v, t, a, src, sec in voted_data
-    ]
-    ys = [1 if v > 0 else -1 for v, *_ in voted_data]
 
     try:
         from .rank.profile import build_profile_matrix
