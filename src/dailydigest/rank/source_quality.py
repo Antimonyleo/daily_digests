@@ -245,6 +245,8 @@ METHOD_OR_RESULT_TERMS = (
 )
 
 SKIP_PATTERNS = (
+    re.compile(r"^\s*issue\s+(?:publication\s+information|editorial\s+masthead)\s*$", re.IGNORECASE),
+    re.compile(r"^\s*introducing\s+our\s+authors\s*$", re.IGNORECASE),
     re.compile(r"\bfront\s+cover\b", re.IGNORECASE),
     re.compile(r"\binside\s+cover\b", re.IGNORECASE),
     re.compile(r"\bback\s+cover\b", re.IGNORECASE),
@@ -473,6 +475,13 @@ def should_skip_item(row: Any) -> bool:
     if section == "research":
         source_lc = _row_source(row).lower()
         text = _row_text(row)
+        title_lc = title.lower()
+        if title_lc in {
+            "issue publication information",
+            "issue editorial masthead",
+            "introducing our authors",
+        }:
+            return True
         if any(pattern.search(text) for pattern in SKIP_PATTERNS):
             return True
         text_lc = text.lower()
@@ -586,6 +595,7 @@ def score_breakdown(
     base_score: float,
     learned_score: float = 0.0,
     reason_penalty: float = 0.0,
+    negative_interest_penalty: float = 0.0,
 ) -> ScoreBreakdown:
     """Return display/debug components for a ranked item.
 
@@ -599,9 +609,12 @@ def score_breakdown(
     access = access_friction_score(row)
     final = quality_adjusted_score(row, base_score)
     reason_penalty = _clip(float(reason_penalty))
+    negative_interest_penalty = _clip(float(negative_interest_penalty))
     if reason_penalty:
         final -= reason_penalty
-    penalty = _clip(promo + reason_penalty)
+    if negative_interest_penalty:
+        final -= negative_interest_penalty
+    penalty = _clip(promo + reason_penalty + negative_interest_penalty)
     tags = _reason_tags(row, source_quality, novelty, promo, access, learned_score)
     quality_tags = _quality_tags(source_quality, promo, access, row)
     freshness_tags = _freshness_tags(novelty)
@@ -667,6 +680,9 @@ def breakdown_payload(
     reason_penalty: float = 0.0,
     *,
     final_score: float | None = None,
+    rank_score: float | None = None,
+    confidence_score: float | None = None,
+    negative_interest_penalty: float = 0.0,
     selection_reason: str | None = None,
     scoring_mode: str | None = None,
 ) -> dict[str, Any]:
@@ -676,10 +692,15 @@ def breakdown_payload(
         base_score,
         learned_score=learned_score,
         reason_penalty=reason_penalty,
+        negative_interest_penalty=negative_interest_penalty,
     )
+    display_score = float(final_score if final_score is not None else breakdown.final)
+    confidence = float(confidence_score if confidence_score is not None else display_score)
     return {
         "ranker_version": RANKER_VERSION,
-        "score": round(float(final_score if final_score is not None else breakdown.final), 4),
+        "score": round(display_score, 4),
+        "rank_score": round(float(rank_score if rank_score is not None else display_score), 4),
+        "confidence_score": round(confidence, 4),
         "topic": round(float(breakdown.topic), 4),
         "source": round(float(breakdown.source), 4),
         "novelty": round(float(breakdown.novelty), 4),
@@ -688,6 +709,7 @@ def breakdown_payload(
         "promo_penalty": round(float(breakdown.promo_penalty), 4),
         "access_penalty": round(float(breakdown.access_penalty), 4),
         "reason_penalty": round(float(breakdown.reason_penalty), 4),
+        "negative_interest_penalty": round(float(negative_interest_penalty), 4),
         "content_type": breakdown.content_type,
         "source_bucket": source_bucket(row),
         "selection_reason": selection_reason or "",
@@ -711,7 +733,7 @@ def quality_adjusted_score(row: Any, base_score: float) -> float:
         # Prestige is a tie-breaker, not the main ranking signal. A Nature or
         # Science item should not outrank a substantially better topic match
         # just because of venue.
-        source_bonus = 0.08 * max(source_quality.prestige_score - LOW_RESEARCH_PRESTIGE, 0.0)
+        source_bonus = 0.18 * max(source_quality.prestige_score - LOW_RESEARCH_PRESTIGE, 0.0)
         score = base + source_bonus + (0.08 * novelty) - (0.35 * promo)
         low_prestige = source_quality.prestige_score < LOW_RESEARCH_PRESTIGE
         exceptional = base >= 0.78 and novelty >= 0.50
@@ -723,15 +745,14 @@ def quality_adjusted_score(row: Any, base_score: float) -> float:
         # Apply a mild penalty so a peer-reviewed paper with similar topic fit
         # is preferred. Fades to zero at high base scores so a highly relevant
         # preprint can still surface over a weakly matched journal paper.
-        if source_quality.quality_tier in {"repository", "preprint"} and not exceptional:
+        # arXiv CS gets a slightly higher penalty but we take the MAX of the two,
+        # not both, to avoid double-stacking.
+        if (source_quality.quality_tier in {"repository", "preprint"} or is_arxiv_cs_source(row)) and not exceptional:
             preprint_smooth = max(0.0, min(1.0, (0.76 - base) / 0.26))
-            score -= 0.15 * preprint_smooth
-        if is_arxiv_cs_source(row) and not exceptional:
-            # arXiv CS can be useful for ML/AI methods, but it should not crowd
-            # out peer-reviewed journal papers unless the topic fit is clearly
-            # stronger. Smooth ramp from 0.76 down to 0.56.
-            arxiv_smooth = max(0.0, min(1.0, (0.76 - base) / 0.20))
-            score -= 0.18 * arxiv_smooth
+            arxiv_smooth = max(0.0, min(1.0, (0.76 - base) / 0.20)) if is_arxiv_cs_source(row) else 0.0
+            # Instead of stacking both penalties, use the larger of the two
+            preprint_or_arxiv_penalty = max(0.15 * preprint_smooth, 0.18 * arxiv_smooth)
+            score -= preprint_or_arxiv_penalty
         # Penalize editorial/commentary pieces that aren't primary research
         ctype = content_type(row)
         if ctype in {"editorial", "commentary"} and not exceptional:

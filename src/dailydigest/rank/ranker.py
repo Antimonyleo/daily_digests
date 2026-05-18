@@ -44,6 +44,26 @@ def _lr_weights_path() -> Path:
     return Path(get_settings().db_path).parent / "lr_ranker.npz"
 
 
+def _current_feature_schema() -> tuple[str, int]:
+    from ..votes import LR_FEATURE_DIM, LR_FEATURE_SCHEMA_VERSION
+
+    return LR_FEATURE_SCHEMA_VERSION, LR_FEATURE_DIM
+
+
+def _npz_scalar(data: Any, key: str) -> Any:
+    value = np.asarray(data[key])
+    if value.size == 0:
+        raise ValueError(f"{key} is empty")
+    return value.reshape(-1)[0]
+
+
+def _schema_version_from_npz(data: Any) -> str:
+    version = _npz_scalar(data, "feature_schema_version")
+    if isinstance(version, bytes):
+        return version.decode("utf-8")
+    return str(version)
+
+
 def _item_text(row: ItemRow) -> str:
     return item_text(row)
 
@@ -77,6 +97,15 @@ class LRRanker:
         if np.unique(y).size < 2:
             raise ValueError("LRRanker.fit needs both +1 and -1 examples")
 
+        feature_schema_version, feature_dim = _current_feature_schema()
+        actual_dim = int(X.shape[1]) if X.ndim == 2 else -1
+        if actual_dim != feature_dim:
+            raise ValueError(
+                "LRRanker.fit expected "
+                f"{feature_dim} features for schema {feature_schema_version}, "
+                f"got {actual_dim}"
+            )
+
         model = LogisticRegression(max_iter=1000, C=1.0)
         model.fit(X, y)
         self._sk_model = model
@@ -93,7 +122,8 @@ class LRRanker:
                 coef=self.coef_,
                 intercept=np.asarray([self.intercept_], dtype=np.float32),
                 classes=self._classes,
-                feature_dim=np.asarray([self.coef_.shape[1]], dtype=np.int32),
+                feature_dim=np.asarray([feature_dim], dtype=np.int32),
+                feature_schema_version=np.asarray([feature_schema_version]),
             )
         tmp.replace(target)
         logger.info("LRRanker: saved weights to %s", target)
@@ -105,21 +135,50 @@ class LRRanker:
         if not path.exists():
             return False
         try:
-            data = np.load(path)
-            self.coef_ = data["coef"].astype(np.float32, copy=False)
-            self.intercept_ = float(data["intercept"][0])
-            if "classes" in data.files:
-                self._classes = data["classes"].astype(np.int32)
-            else:
-                self._classes = np.asarray([-1, 1], dtype=np.int32)
-            if "feature_dim" in data.files:
-                saved_dim = int(data["feature_dim"][0])
-                if saved_dim != 9:
+            feature_schema_version, feature_dim = _current_feature_schema()
+            with np.load(path) as data:
+                coef = data["coef"].astype(np.float32, copy=False)
+                intercept = float(data["intercept"][0])
+                classes = (
+                    data["classes"].astype(np.int32)
+                    if "classes" in data.files
+                    else np.asarray([-1, 1], dtype=np.int32)
+                )
+
+                if "feature_schema_version" not in data.files:
                     logger.warning(
-                        "LRRanker: stale weights (dim=%d, expected=9); will retrain",
-                        saved_dim,
+                        "LRRanker: stale weights missing feature_schema_version; "
+                        "will retrain"
                     )
                     return False
+                saved_schema_version = _schema_version_from_npz(data)
+                if saved_schema_version != feature_schema_version:
+                    logger.warning(
+                        "LRRanker: stale weights (feature_schema_version=%r, "
+                        "expected=%r); will retrain",
+                        saved_schema_version,
+                        feature_schema_version,
+                    )
+                    return False
+
+                if "feature_dim" not in data.files:
+                    logger.warning("LRRanker: stale weights missing feature_dim; will retrain")
+                    return False
+                saved_dim = int(_npz_scalar(data, "feature_dim"))
+                actual_dim = int(coef.shape[1] if coef.ndim > 1 else coef.shape[0])
+                if saved_dim != feature_dim or actual_dim != feature_dim:
+                    logger.warning(
+                        "LRRanker: stale weights (dim=%d, coef_dim=%d, expected=%d); "
+                        "will retrain",
+                        saved_dim,
+                        actual_dim,
+                        feature_dim,
+                    )
+                    return False
+
+            self.coef_ = coef
+            self.intercept_ = intercept
+            self._classes = classes
             self._sk_model = None
             return True
         except Exception as e:  # noqa: BLE001
@@ -318,6 +377,8 @@ def _feature_payload(
         "learned_score": float(learned_score),
         "hybrid_score": float(hybrid_score),
         "final_score": float(final_score),
+        "rank_score": float(final_score),
+        "confidence_score": float(final_score),
         "reason_penalty": float(reason_penalty),
         "downweight_penalty": float(downweight_penalty),
         "source_bucket": source_bucket(row),
@@ -362,21 +423,31 @@ def _cosine_score_items(
 
 
 def _freshness_penalty(row: Any) -> float:
-    """Return a score penalty [0, 0.12] based on item age. Fresh items get no penalty."""
+    """Return a score penalty based on item age, with per-section decay curves."""
     from datetime import datetime, timezone
-    now = datetime.now(timezone.utc)
     published = getattr(row, "published_at", None)
-    fetched = getattr(row, "fetched_at", None)
-    ref = None
-    if isinstance(published, datetime):
-        ref = published if published.tzinfo else published.replace(tzinfo=timezone.utc)
-    elif isinstance(fetched, datetime):
-        ref = fetched if fetched.tzinfo else fetched.replace(tzinfo=timezone.utc)
-    if ref is None:
-        return 0.0
+    if not isinstance(published, datetime):
+        return 0.0  # unknown date — don't guess from fetched_at
+    ref = published if published.tzinfo is not None else published.replace(tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc)
     age_days = max(0.0, (now - ref).total_seconds() / 86400)
-    # No penalty for items < 1.5 days old; linear ramp to max 0.12 at 11+ days
-    return max(0.0, min(0.12, (age_days - 1.5) * 0.012))
+    age_hours = age_days * 24
+    section = str(getattr(row, "section", "") or "").lower()
+
+    if section == "research":
+        # Academic papers stay fresh for weeks; bonus for very new papers
+        if age_days < 2.0:
+            return -0.05  # freshness bonus
+        return min(0.08, max(0.0, (age_days - 2.0) / 28.0) * 0.08)
+    elif section in ("world", "industry"):
+        # News decays fast — HN-style gravity
+        return min(0.20, ((age_hours / 72.0) ** 1.5) * 0.20)
+    elif section == "regulatory":
+        # Regulatory updates stay relevant longer than news
+        return min(0.10, max(0.0, (age_days - 1.0) / 90.0) * 0.10)
+    else:
+        # Default: gentle linear ramp
+        return min(0.10, max(0.0, (age_days - 1.5) * 0.010))
 
 
 def _apply_quality_adjustments_with_features(
@@ -595,6 +666,8 @@ def score_items_with_features(
     for i, (row, _) in enumerate(zip(items, blended_rank)):
         key = _row_feature_key(row)
         if key in features:
+            features[key]["confidence_score"] = float(final[i])
+            features[key]["rank_score"] = float(blended_rank[i])
             features[key]["hybrid_score"] = float(blended_rank[i])
             features[key]["final_score"] = float(blended_rank[i])
             features[key]["scoring_mode"] = "hybrid_lr"
@@ -637,6 +710,57 @@ def pick_top_per_section(
     return out
 
 
+def _mmr_select(
+    candidates: list[tuple[ItemRow, float]],
+    cap: int,
+    lambda_: float = 0.7,
+) -> list[tuple[ItemRow, float]]:
+    """Greedy Maximal Marginal Relevance selection for diversity within section.
+
+    Selects `cap` items from candidates, balancing relevance (score) and
+    diversity (low similarity to already-selected items). lambda_=0.7 means
+    70% weight on relevance, 30% on diversity.
+    """
+    if len(candidates) <= cap:
+        return list(candidates)
+
+    try:
+        vecs = embed_item_rows([row for row, _ in candidates])
+        norms = np.linalg.norm(vecs, axis=1, keepdims=True)
+        emb = vecs / (norms + 1e-9)
+    except Exception:
+        return candidates[:cap]
+
+    scores = np.array([s for _, s in candidates], dtype=np.float32)
+    # Normalize scores to [0,1]
+    lo, hi = scores.min(), scores.max()
+    if hi > lo:
+        scores_norm = (scores - lo) / (hi - lo)
+    else:
+        scores_norm = np.ones_like(scores) * 0.5
+
+    selected: list[int] = []
+    remaining = list(range(len(candidates)))
+
+    while len(selected) < cap and remaining:
+        if not selected:
+            best = max(remaining, key=lambda i: scores_norm[i])
+        else:
+            sel_emb = emb[selected]
+            best_score = -np.inf
+            best = remaining[0]
+            for idx in remaining:
+                max_sim = float((emb[idx] @ sel_emb.T).max())
+                mmr = lambda_ * float(scores_norm[idx]) - (1.0 - lambda_) * max_sim
+                if mmr > best_score:
+                    best_score = mmr
+                    best = idx
+        selected.append(best)
+        remaining.remove(best)
+
+    return [candidates[i] for i in selected]
+
+
 def _pick_research_balanced(
     scored: list[tuple[ItemRow, float]],
     cap: int,
@@ -647,22 +771,34 @@ def _pick_research_balanced(
     max_arxiv_cs = max(1, min(3, math.ceil(cap * 0.10)))
     max_preprints = max(max_arxiv_cs, math.ceil(cap * 0.20))
     max_aggregators = max(1, math.ceil(cap * 0.10))
+    max_per_source = max(2, math.ceil(cap * 0.20)) if cap >= 5 else None
     min_high_quality = min(math.ceil(cap * 0.20), _available(scored, is_high_quality_journal_source))
     min_published = min(math.ceil(cap * 0.30), _available(scored, is_published_journal_source))
 
     selected: list[tuple[ItemRow, float]] = []
     selected_ids: set[int] = set()
     bucket_counts: dict[str, int] = {}
+    source_counts: dict[str, int] = {}
 
-    def add(row: ItemRow, score: float) -> bool:
+    def add(row: ItemRow, score: float, *, enforce_source_cap: bool = True) -> bool:
         row_id = getattr(row, "id", None)
         key = int(row_id) if isinstance(row_id, int) else id(row)
         if key in selected_ids or len(selected) >= cap:
+            return False
+        source = str(getattr(row, "source", "") or "").strip().lower()
+        if (
+            enforce_source_cap
+            and max_per_source is not None
+            and source
+            and source_counts.get(source, 0) >= max_per_source
+        ):
             return False
         selected.append((row, score))
         selected_ids.add(key)
         bucket = source_bucket(row)
         bucket_counts[bucket] = bucket_counts.get(bucket, 0) + 1
+        if source:
+            source_counts[source] = source_counts.get(source, 0) + 1
         return True
 
     for predicate, target in (
@@ -679,6 +815,28 @@ def _pick_research_balanced(
                     break
             if not added:
                 break
+
+    exceptional_preprint_slots = max(1, min(max_preprints, math.ceil(cap * 0.10)))
+    # Compute dynamic exceptional threshold from all section scores
+    _all_scores = [s for _, s in scored]
+    _exceptional_threshold = float(np.percentile(_all_scores, 90)) if len(_all_scores) >= 5 else 0.75
+    for row, score in scored:
+        if len(selected) >= cap:
+            break
+        if not is_preprint_source(row):
+            continue
+        preprint_count = sum(
+            count
+            for name, count in bucket_counts.items()
+            if name in {"arxiv_cs", "arxiv_other", "bio_med_preprint", "preprint_other"}
+        )
+        if preprint_count >= exceptional_preprint_slots:
+            break
+        if score < _exceptional_threshold:
+            continue
+        if is_arxiv_cs_source(row) and bucket_counts.get(source_bucket(row), 0) >= max_arxiv_cs:
+            continue
+        add(row, score)
 
     for row, score in scored:
         if len(selected) >= cap:
@@ -718,6 +876,10 @@ def _pick_research_balanced(
                 if len(selected) >= cap:
                     break
                 add(row, score)
+
+    # Apply MMR diversity re-ranking over the selected pool
+    if len(selected) > 1:
+        selected = _mmr_select(selected, cap=len(selected), lambda_=0.7)
 
     selected.sort(key=lambda t: t[1], reverse=True)
     return selected

@@ -89,10 +89,49 @@ def build_profile_matrix(profile: Profile) -> np.ndarray:
         )
         return np.zeros((1, 384), dtype=np.float32)
     vecs = embed_texts(parts, is_query=True)  # [N, 384], L2-normalized
-    return (vecs * np.asarray(weights, dtype=np.float32).reshape(-1, 1)).astype(
+    result = (vecs * np.asarray(weights, dtype=np.float32).reshape(-1, 1)).astype(
         np.float32,
         copy=False,
     )
+    if np.allclose(result, 0):
+        import logging
+        logging.getLogger(__name__).error(
+            "Profile matrix is all zeros — check that bio and keywords are non-empty. "
+            "All items will score equally and ranking will be arbitrary."
+        )
+    return result
+
+
+def query_aware_cosine(vecs: np.ndarray, profile_mat: np.ndarray) -> np.ndarray:
+    """Attention-weighted cosine: weight profile rows by their similarity to each item.
+
+    Instead of treating all profile rows equally, this weights each profile row by
+    how similar the item is to that row. This means 'for a CRISPR paper, weight the
+    CRISPR keyword row more.' Captures the NRMS/attention insight cheaply.
+
+    Falls back to uniform weighting when profile_mat has 1 row.
+    """
+    if profile_mat.ndim == 1 or profile_mat.shape[0] == 1:
+        # Single row: standard cosine
+        flat = profile_mat.reshape(-1).astype(np.float32)
+        norms_v = np.linalg.norm(vecs, axis=1, keepdims=True)
+        norms_p = float(np.linalg.norm(flat)) + 1e-9
+        return ((vecs / (norms_v + 1e-9)) @ (flat / norms_p)).astype(np.float32)
+
+    # Compute similarity matrix: (n_items, n_profile_rows)
+    vecs_n = vecs / (np.linalg.norm(vecs, axis=1, keepdims=True) + 1e-9)
+    prof_n = profile_mat / (np.linalg.norm(profile_mat, axis=1, keepdims=True) + 1e-9)
+    sims = (vecs_n @ prof_n.T).astype(np.float32)  # (n_items, n_rows)
+
+    # Softmax attention weights per item over profile rows
+    exp_sims = np.exp(sims * 3.0)  # temperature=3 sharpens attention
+    attn = exp_sims / (exp_sims.sum(axis=1, keepdims=True) + 1e-9)
+
+    # Weighted profile vector per item
+    weighted_profiles = attn @ prof_n  # (n_items, embed_dim)
+    # Final cosine between item and its attention-weighted profile
+    cos = (vecs_n * weighted_profiles).sum(axis=1).astype(np.float32)
+    return cos
 
 
 def build_negative_centroid(profile: "Profile") -> np.ndarray | None:
@@ -115,6 +154,27 @@ def build_negative_centroid(profile: "Profile") -> np.ndarray | None:
     except Exception:
         logger.warning("build_negative_centroid: embedding failed")
         return None
+
+
+def build_negative_vectors(profile: "Profile") -> list[np.ndarray]:
+    """Return individual embedding vectors for each negative interest.
+
+    Unlike build_negative_centroid (which averages), this returns per-topic vectors
+    so the penalty can use max(cos(item, neg_i)) instead of cos(item, mean(neg)).
+    """
+    neg = getattr(profile, "negative_interests", None) or {}
+    if not neg:
+        return []
+    texts = list(neg.keys())
+    if not texts:
+        return []
+    try:
+        vecs = embed_texts(texts, is_query=True)
+        norms = np.linalg.norm(vecs, axis=1, keepdims=True)
+        normalized = vecs / (norms + 1e-9)
+        return [normalized[i] for i in range(len(normalized))]
+    except Exception:
+        return []
 
 
 def build_profile_vector(profile: Profile) -> np.ndarray:
@@ -161,8 +221,8 @@ def build_profile_matrix_with_rocchio(profile: "Profile", vote_count: int = 0) -
         if norm < 1e-6:
             return static_mat
         learned_normalized = learned / norm
-        # gamma ramps from 0 → 0.45 as votes go from 0 → 30
-        gamma = min(0.45, vote_count / 67.0)
+        # gamma ramps from 0 → 0.25 as votes go from 0 → ~17, capped at 0.25
+        gamma = min(0.25, vote_count / 60.0)
         if gamma < 0.02:
             return static_mat
         # Add learned vector as an extra row scaled to represent gamma fraction

@@ -596,21 +596,29 @@ class TestPickTopPerSection:
         assert by_section["general"] == 1
 
     def test_research_selection_caps_arxiv_cs_when_journals_are_available(self):
+        # arXiv CS items score higher but journals must still appear due to mandatory
+        # quality fill. Per-source cap (Fix 7) means a single journal source is also
+        # capped, so we check the arXiv ceiling and that journals are present.
         arxiv_items = []
         for idx in range(12):
             row = _make_row(f"arXiv CS method {idx}", "research")
             row.source = "arXiv cs.LG"
             arxiv_items.append((row, 0.95 - idx * 0.01))
         journal_items = []
+        journal_sources = ["Nature Biotechnology", "Nature Methods", "Nature Medicine",
+                           "Nature Chemistry", "Nature Materials"]
         for idx in range(10):
             row = _make_row(f"Nature family paper {idx}", "research")
-            row.source = "Nature Biotechnology"
+            row.source = journal_sources[idx % len(journal_sources)]
             journal_items.append((row, 0.70 - idx * 0.01))
 
         result = pick_top_per_section(arxiv_items + journal_items, {"research": 10})
 
         arxiv_count = sum(1 for row, _score in result if row.source == "arXiv cs.LG")
-        journal_count = sum(1 for row, _score in result if row.source == "Nature Biotechnology")
+        journal_count = sum(
+            1 for row, _score in result
+            if row.source in journal_sources
+        )
         assert arxiv_count <= 1
         assert journal_count >= 6
 
