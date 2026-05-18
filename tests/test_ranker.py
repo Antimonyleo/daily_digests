@@ -14,8 +14,7 @@ import pytest
 from dailydigest.rank.ranker import (
     DOWNWEIGHT_PENALTY,
     LRRanker,
-    _apply_downweight,
-    _apply_quality_adjustments,
+    _apply_quality_adjustments_with_features,
     _lr_weights_path,
     _cosine_score_items,
     pick_top_per_section,
@@ -80,42 +79,54 @@ def _current_lr_schema() -> tuple[str, int]:
 
 
 # ---------------------------------------------------------------------------
-# _apply_downweight
+# downweight via _cosine_score_items
 # ---------------------------------------------------------------------------
 
 class TestApplyDownweight:
-    def test_penalty_applied_when_term_in_text(self):
-        base = np.array([0.8], dtype=np.float32)
-        texts = ["CRISPR and cryptocurrency markets"]
-        result = _apply_downweight(base, texts, ["cryptocurrency"])
-        assert result[0] == pytest.approx(0.8 - DOWNWEIGHT_PENALTY, abs=1e-6)
-
-    def test_no_penalty_when_no_match(self):
-        base = np.array([0.8], dtype=np.float32)
-        texts = ["CRISPR gene editing advances"]
-        result = _apply_downweight(base, texts, ["cryptocurrency"])
-        assert result[0] == pytest.approx(0.8, abs=1e-6)
-
     def test_penalty_is_exactly_downweight_constant(self):
         assert DOWNWEIGHT_PENALTY == 0.20
 
+    def test_downweight_reduces_score_via_cosine_scorer(self):
+        item = _make_row("CRISPR and cryptocurrency markets", "research")
+        profile = _profile_vec(3)
+        scored_pen = _cosine_score_items([item], profile, ["cryptocurrency"])
+        scored_norm = _cosine_score_items([item], profile, [])
+        assert scored_norm[0][1] - scored_pen[0][1] == pytest.approx(DOWNWEIGHT_PENALTY, abs=1e-6)
+
+    def test_no_penalty_when_no_match(self):
+        item = _make_row("CRISPR gene editing advances", "research")
+        profile = _profile_vec(3)
+        scored_pen = _cosine_score_items([item], profile, ["cryptocurrency"])
+        scored_norm = _cosine_score_items([item], profile, [])
+        assert scored_norm[0][1] == pytest.approx(scored_pen[0][1], abs=1e-6)
+
     def test_empty_downweight_list_no_change(self):
-        base = np.array([0.5, 0.7], dtype=np.float32)
-        texts = ["some text", "other text"]
-        result = _apply_downweight(base, texts, [])
-        assert result == pytest.approx([0.5, 0.7], abs=1e-6)
-
-    def test_case_insensitive_matching(self):
-        # downweight terms are lowercased before comparison
-        base = np.array([0.9], dtype=np.float32)
-        texts = ["CRYPTOCURRENCY news today"]
-        result = _apply_downweight(base, texts, ["cryptocurrency"])
-        assert result[0] == pytest.approx(0.9 - DOWNWEIGHT_PENALTY, abs=1e-6)
+        items = [_make_row("some text", "research"), _make_row("other text", "research")]
+        profile = _profile_vec(3)
+        scored_pen = _cosine_score_items(items, profile, [])
+        scored_norm = _cosine_score_items(items, profile, [])
+        for (_, s1), (_, s2) in zip(scored_pen, scored_norm):
+            assert s1 == pytest.approx(s2, abs=1e-6)
 
 
 # ---------------------------------------------------------------------------
-# _apply_quality_adjustments
+# _apply_quality_adjustments_with_features
 # ---------------------------------------------------------------------------
+
+def _apply_qa(items, base_scores, downweight_terms=None, reason_penalty_map=None):
+    """Helper to call _apply_quality_adjustments_with_features and return just the scores."""
+    n = len(items)
+    result, _features = _apply_quality_adjustments_with_features(
+        items,
+        np.asarray(base_scores, dtype=np.float32),
+        downweight_terms or [],
+        reason_penalty_map,
+        learned_scores=np.zeros(n, dtype=np.float32),
+        hybrid_scores=np.asarray(base_scores, dtype=np.float32),
+        scoring_mode="cosine",
+    )
+    return result
+
 
 class TestApplyQualityAdjustments:
     def test_top_journal_bonus_is_only_a_tiebreaker(self):
@@ -132,11 +143,7 @@ class TestApplyQualityAdjustments:
         )
         minor.source = "Minor Journal"
 
-        adjusted = _apply_quality_adjustments(
-            [nature, minor],
-            np.asarray([0.55, 0.58], dtype=np.float32),
-            [],
-        )
+        adjusted = _apply_qa([nature, minor], [0.55, 0.58])
 
         assert adjusted[0] > adjusted[1]
 
@@ -154,11 +161,7 @@ class TestApplyQualityAdjustments:
         )
         unknown.source = "Minor Journal"
 
-        adjusted = _apply_quality_adjustments(
-            [high_impact, unknown],
-            np.asarray([0.62, 0.62], dtype=np.float32),
-            [],
-        )
+        adjusted = _apply_qa([high_impact, unknown], [0.62, 0.62])
 
         assert adjusted[0] > adjusted[1]
 
@@ -176,11 +179,7 @@ class TestApplyQualityAdjustments:
         )
         relevant.source = "Minor Journal"
 
-        adjusted = _apply_quality_adjustments(
-            [nature, relevant],
-            np.asarray([0.55, 0.70], dtype=np.float32),
-            [],
-        )
+        adjusted = _apply_qa([nature, relevant], [0.55, 0.70])
 
         assert adjusted[1] > adjusted[0]
 
@@ -198,11 +197,7 @@ class TestApplyQualityAdjustments:
         )
         routine.source = "Nature Reviews Drug Discovery"
 
-        adjusted = _apply_quality_adjustments(
-            [novel, routine],
-            np.asarray([0.82, 0.54], dtype=np.float32),
-            [],
-        )
+        adjusted = _apply_qa([novel, routine], [0.82, 0.54])
 
         assert adjusted[0] > adjusted[1]
 
@@ -220,11 +215,7 @@ class TestApplyQualityAdjustments:
         )
         news.source = "STAT News"
 
-        adjusted = _apply_quality_adjustments(
-            [promo, news],
-            np.asarray([0.70, 0.70], dtype=np.float32),
-            [],
-        )
+        adjusted = _apply_qa([promo, news], [0.70, 0.70])
 
         assert adjusted[1] > adjusted[0]
 
@@ -242,11 +233,7 @@ class TestApplyQualityAdjustments:
         )
         clean.source = "Nature"
 
-        adjusted = _apply_quality_adjustments(
-            [promo, clean],
-            np.asarray([0.70, 0.70], dtype=np.float32),
-            [],
-        )
+        adjusted = _apply_qa([promo, clean], [0.70, 0.70])
 
         assert adjusted[1] > adjusted[0]
 
@@ -264,11 +251,7 @@ class TestApplyQualityAdjustments:
         )
         clean.source = "FDA Drug Approvals (CDER)"
 
-        adjusted = _apply_quality_adjustments(
-            [promo, clean],
-            np.asarray([0.70, 0.70], dtype=np.float32),
-            [],
-        )
+        adjusted = _apply_qa([promo, clean], [0.70, 0.70])
 
         assert adjusted[1] > adjusted[0]
 
@@ -286,12 +269,7 @@ class TestApplyQualityAdjustments:
         )
         neutral.id = 102
 
-        adjusted = _apply_quality_adjustments(
-            [low_impact, neutral],
-            np.asarray([0.70, 0.70], dtype=np.float32),
-            [],
-            {101: 0.09},
-        )
+        adjusted = _apply_qa([low_impact, neutral], [0.70, 0.70], reason_penalty_map={101: 0.09})
 
         assert adjusted[1] - adjusted[0] == pytest.approx(0.09, abs=1e-6)
 

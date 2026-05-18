@@ -106,7 +106,9 @@ class LRRanker:
                 f"got {actual_dim}"
             )
 
-        model = LogisticRegression(max_iter=1000, C=1.0)
+        C = 0.5 if len(X) < 50 else 1.0
+        clf = LogisticRegression(C=C, max_iter=1000, class_weight="balanced")
+        model = clf
         model.fit(X, y)
         self._sk_model = model
         self._classes = model.classes_.astype(np.int32)
@@ -191,7 +193,8 @@ class LRRanker:
         if self._sk_model is not None:
             probs = self._sk_model.predict_proba(embeddings)
             classes = self._sk_model.classes_
-            pos_idx = int(np.argmax(classes))  # +1 column
+            pos_indices = np.where(classes == 1)[0]
+            pos_idx = int(pos_indices[0]) if len(pos_indices) > 0 else 1
             return probs[:, pos_idx].astype(np.float32, copy=False)
 
         if self.coef_ is None or self.intercept_ is None:
@@ -202,10 +205,6 @@ class LRRanker:
         z = embeddings.astype(np.float32, copy=False) @ self.coef_.reshape(-1)
         z = z + np.float32(self.intercept_)
         prob_pos = 1.0 / (1.0 + np.exp(-z))
-
-        if self._classes is not None and self._classes[-1] != 1:
-            # Defensive: if class ordering is reversed, flip.
-            prob_pos = 1.0 - prob_pos
         return prob_pos.astype(np.float32, copy=False)
 
 
@@ -279,45 +278,6 @@ def _cosine_sim(vecs: np.ndarray, profile: np.ndarray) -> np.ndarray:
     if profile.ndim == 1:
         return (vecs @ profile.astype(np.float32, copy=False)).astype(np.float32)
     return _multi_cosine(vecs, profile)
-
-
-def _apply_downweight(
-    base_scores: np.ndarray,
-    texts: list[str],
-    downweight_terms: list[str],
-) -> list[float]:
-    terms_lc = [t.lower() for t in downweight_terms if t and t.strip()]
-    out: list[float] = []
-    for s, txt in zip(base_scores, texts, strict=True):
-        score = float(s)
-        if terms_lc and any(term in txt.lower() for term in terms_lc):
-            score -= DOWNWEIGHT_PENALTY
-        out.append(score)
-    return out
-
-
-def _apply_quality_adjustments(
-    items: list[ItemRow],
-    base_scores: np.ndarray,
-    downweight_terms: list[str],
-    reason_penalty_map: Mapping[Any, float] | None = None,
-) -> list[float]:
-    """Apply quality adjustments and then user downweight / reason penalties.
-
-    Quality adjustment (prestige, novelty, promo) is computed from the raw
-    cosine score so it is not distorted by the downweight penalty.  User
-    editorial penalties (downweight terms, reason chips) are applied after so
-    that the net effect on the final score is always exactly their stated value.
-    """
-    texts = [_item_text(r) for r in items]
-    terms_lc = [t.lower() for t in downweight_terms if t and t.strip()]
-    result: list[float] = []
-    for row, base, txt in zip(items, base_scores, texts, strict=True):
-        score = quality_adjusted_score(row, float(base)) - _reason_penalty_for(row, reason_penalty_map)
-        if terms_lc and any(term in txt.lower() for term in terms_lc):
-            score -= DOWNWEIGHT_PENALTY
-        result.append(score)
-    return result
 
 
 def _reason_penalty_for(row: ItemRow, reason_penalty_map: Mapping[Any, float] | None) -> float:
@@ -475,8 +435,7 @@ def _apply_quality_adjustments_with_features(
         reason_penalty = _reason_penalty_for(row, reason_penalty_map)
         score = quality_adjusted_score(row, float(base)) - reason_penalty
         freshness_pen = _freshness_penalty(row)
-        if freshness_pen > 0:
-            score -= freshness_pen
+        score -= freshness_pen  # negative value = bonus (score increases)
         downweight_penalty = (
             DOWNWEIGHT_PENALTY
             if terms_lc and any(term in txt.lower() for term in terms_lc)
@@ -819,7 +778,7 @@ def _pick_research_balanced(
     exceptional_preprint_slots = max(1, min(max_preprints, math.ceil(cap * 0.10)))
     # Compute dynamic exceptional threshold from all section scores
     _all_scores = [s for _, s in scored]
-    _exceptional_threshold = float(np.percentile(_all_scores, 90)) if len(_all_scores) >= 5 else 0.75
+    _exceptional_threshold = max(0.55, float(np.percentile(_all_scores, 90)) if len(_all_scores) >= 5 else 0.75)
     for row, score in scored:
         if len(selected) >= cap:
             break
@@ -881,7 +840,6 @@ def _pick_research_balanced(
     if len(selected) > 1:
         selected = _mmr_select(selected, cap=len(selected), lambda_=0.7)
 
-    selected.sort(key=lambda t: t[1], reverse=True)
     return selected
 
 

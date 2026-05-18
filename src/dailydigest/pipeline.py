@@ -19,7 +19,7 @@ from .health import IngestStats
 from .ingest import dispatch_source
 from .models import Item
 from .rank.profile import build_profile_matrix
-from .rank.ranker import HYBRID_COSINE_W, HYBRID_LR_W, pick_top_per_section, score_items, score_items_with_features
+from .rank.ranker import pick_top_per_section, score_items, score_items_with_features
 from .rank.source_quality import (
     RANKER_VERSION,
     breakdown_payload,
@@ -489,11 +489,7 @@ def run_all(
             from .rank.embedding_cache import embed_item_rows as _embed_rows
             _neg_vecs = _embed_rows([row for row, _ in scored])
 
-            # Detect scoring mode to scale penalty correctly
-            _first_mode = next(
-                (v.get("scoring_mode", "cosine") for v in score_features.values()), "cosine"
-            )
-            _neg_scale = HYBRID_LR_W if _first_mode == "hybrid_lr" else 1.0
+            _neg_scale = 1.0
 
             # Try per-axis penalty (max similarity to any individual negative interest)
             _neg_sims = None
@@ -510,38 +506,48 @@ def run_all(
                 _neg_mat_n = _neg_mat / (_neg_norms + 1e-9)
                 _neg_vecs_n = _neg_vecs / (np.linalg.norm(_neg_vecs, axis=1, keepdims=True) + 1e-9)
                 all_neg_sims = _neg_vecs_n @ _neg_mat_n.T  # (n_items, n_neg)
+                try:
+                    from .rank import profile as profile_mod
+                    _neg_weights = np.array(profile_mod.get_negative_interest_weights(profile), dtype=np.float32)
+                    if len(_neg_weights) == all_neg_sims.shape[1]:
+                        all_neg_sims = all_neg_sims * _neg_weights  # broadcast: scale each axis
+                except Exception:  # noqa: BLE001
+                    pass
                 # Use max over negative interests, threshold at 0.35
                 _neg_sims = np.maximum(0.0, all_neg_sims.max(axis=1) - 0.35)
             elif _build_neg_centroid is not None:
                 _neg_centroid = _build_neg_centroid(profile)
                 if _neg_centroid is not None:
-                    _neg_sims = _neg_vecs @ _neg_centroid
+                    _neg_sims = np.maximum(0.0, _neg_vecs @ _neg_centroid - 0.35)
                 else:
                     _neg_sims = None
             else:
                 _neg_sims = None
 
             if _neg_sims is not None:
-                scored = [
-                    (row, score - (0.28 * _neg_scale) * max(0.0, float(_neg_sims[i])))
-                    for i, (row, score) in enumerate(scored)
-                ]
+                # Capture penalties BEFORE creating the new scored list
+                _penalty_list = []
                 for i, (row, score) in enumerate(scored):
-                    penalty = (0.28 * _neg_scale) * max(0.0, float(_neg_sims[i]))
+                    if i < len(_neg_sims):
+                        raw_sim = float(_neg_sims[i])
+                        penalty = (0.28 * _neg_scale) * max(0.0, raw_sim)
+                    else:
+                        penalty = 0.0
+                    _penalty_list.append(penalty)
+
+                # Apply penalties to scores
+                scored = [(row, score - _penalty_list[i]) for i, (row, score) in enumerate(scored)]
+
+                # Update score_features using captured penalties
+                for i, (row, score) in enumerate(scored):
                     key = _row_feature_key(row)
                     if key in score_features:
-                        previous_confidence = float(
-                            score_features[key].get(
-                                "confidence_score",
-                                score_features[key].get("final_score", score + penalty),
-                            )
+                        penalty = _penalty_list[i]
+                        score_features[key]["negative_interest_penalty"] = round(penalty, 4)
+                        score_features[key]["confidence_score"] = round(
+                            score_features[key]["confidence_score"] - penalty, 4
                         )
-                        score_features[key]["negative_interest_penalty"] = float(penalty)
-                        score_features[key]["confidence_score"] = float(
-                            previous_confidence - penalty
-                        )
-                        score_features[key]["rank_score"] = float(score)
-                        score_features[key]["final_score"] = float(score)
+                        score_features[key]["final_score"] = round(score, 4)
                 scored.sort(key=lambda t: t[1], reverse=True)
         except Exception as _e:  # noqa: BLE001
             logger.warning("negative interest penalty failed: %s", _e)

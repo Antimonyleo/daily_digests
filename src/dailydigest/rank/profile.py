@@ -177,6 +177,12 @@ def build_negative_vectors(profile: "Profile") -> list[np.ndarray]:
         return []
 
 
+def get_negative_interest_weights(profile: "Profile") -> list[float]:
+    """Return weights for each negative interest vector, in same order as build_negative_vectors."""
+    neg = getattr(profile, "negative_interests", None) or {}
+    return [float(v) for v in neg.values()]
+
+
 def build_profile_vector(profile: Profile) -> np.ndarray:
     """Mean of L2-normalized embeddings of [bio, *keywords], re-normalized.
 

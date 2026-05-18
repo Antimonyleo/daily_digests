@@ -245,7 +245,7 @@ def _update_rocchio(item_id: int, vote_value: int) -> None:
         logger.warning("Rocchio update failed: %s", exc)
 
 
-MIN_VOTES_FOR_LR = 20
+MIN_VOTES_FOR_LR = 10
 _VOTE_REASONS_LOCK = Lock()
 
 
@@ -793,10 +793,10 @@ def train_lr_ranker() -> dict[str, object]:
             "status": status,
         }
 
-    X, y = dataset
-    n_pos = int((y == 1).sum())
-    n_neg = int((y == -1).sum())
-    if n_pos < 3 or n_neg < 3:
+    counts = vote_counts()
+    n_pos_raw = counts.get("good", 0)
+    n_neg_raw = counts.get("bad", 0)
+    if n_pos_raw < 3 or n_neg_raw < 3:
         status = lr_training_status()
         return {
             "ok": False,
@@ -804,12 +804,13 @@ def train_lr_ranker() -> dict[str, object]:
             "reason": "class_imbalance",
             "message": (
                 f"Need at least 3 votes of each sign for reliable LR training "
-                f"(have {n_pos} positive, {n_neg} negative). "
+                f"(have {n_pos_raw} positive, {n_neg_raw} negative). "
                 f"Keep voting to balance the dataset."
             ),
             "status": status,
         }
 
+    X, y = dataset
     ranker = LRRanker()
     try:
         ranker.fit(X, y)
@@ -959,9 +960,8 @@ def vote_dataset() -> tuple[np.ndarray, np.ndarray] | None:
             if pair_count >= max_pairs:
                 break
         if pairs_X:
-            X_pairs = np.array(pairs_X, dtype=np.float32)
-            y_pairs = np.array(pairs_y, dtype=np.float32)
-            X = np.vstack([X, X_pairs])
-            y = np.concatenate([y, y_pairs])
+            all_X = np.array(pairs_X, dtype=np.float32)
+            all_y = np.array(pairs_y, dtype=np.float32)
+            return all_X, all_y
 
-    return X, y
+    return X, y  # fallback: pure pointwise if not enough for pairs
