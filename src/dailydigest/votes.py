@@ -47,22 +47,83 @@ REASON_PENALTIES = {
     "access_friction": 0.08,
     "duplicate": 0.10,
 }
+_GENERALIZED_REASON_HALF_LIFE_DAYS = 60.0
+_GOOD_VOTE_COUNTER_SIGNAL = 0.14
+_SOURCE_GENERALIZATION_CAP = 0.12
+_BUCKET_GENERALIZATION_CAP = 0.06
+_CONTENT_GENERALIZATION_CAP = 0.045
+
+LR_FEATURE_SCHEMA_VERSION = "lr_ranker_engineered_features_v3"
+LR_FEATURE_NAMES = (
+    "cosine_similarity",
+    "novelty_score",
+    "promotional_score",
+    "access_friction_score",
+    "prestige_score",
+    "age_norm",
+    "source_bucket_score",
+    "cosine_x_bucket_score",
+    "cosine_x_prestige",
+    "cosine_x_freshness",
+)
+LR_FEATURE_DIM = len(LR_FEATURE_NAMES)
+LR_DEFAULT_SOURCE_BUCKET_SCORE = 0.6
+LR_SOURCE_BUCKET_SCORES = {
+    "published_journal": 1.0,
+    "published_database": 0.8,
+    "other_research": 0.65,
+    "aggregator": 0.5,
+    "bio_med_preprint": 0.4,
+    "arxiv_other": 0.35,
+    "preprint_other": 0.3,
+    "arxiv_cs": 0.25,
+}
+
+
+def _as_utc(value: object) -> datetime | None:
+    if not isinstance(value, datetime):
+        return None
+    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+
+def _first_timestamp(*values: object) -> datetime | None:
+    for value in values:
+        timestamp = _as_utc(value)
+        if timestamp is not None:
+            return timestamp
+    return None
+
+
+def _recency_decay(timestamp: datetime | None, now: datetime) -> float:
+    if timestamp is None:
+        return 1.0
+    age_days = max(0.0, (now - timestamp).total_seconds() / 86400)
+    return 0.5 ** (age_days / _GENERALIZED_REASON_HALF_LIFE_DAYS)
+
+
+def _add_capped_signal(target: dict[str, float], key: str, delta: float, cap: float) -> None:
+    if not key:
+        return
+    target[key] = max(0.0, min(cap, target.get(key, 0.0) + delta))
+
 
 def _build_item_features(rows: list, profile_mat: np.ndarray) -> np.ndarray:
-    """Build 9 engineered features per item for LR training/inference.
+    """Build the current engineered features per item for LR training/inference.
 
-    Feature vector (9 dims):
+    Feature vector (``LR_FEATURE_SCHEMA_VERSION`` / ``LR_FEATURE_DIM`` dims):
     0. cosine similarity to profile (top-k-mean or max)
     1. novelty score
     2. promotional score
     3. access friction score
     4. prestige score
-    5. is_preprint (1.0 if preprint source, else 0.0)
-    6. is_high_quality_journal (1.0 if top/high/strong tier, else 0.0)
-    7. age_norm (days since published, normalized: 0=today, 1=14+ days; 0.5 if unknown)
-    8. source_bucket_score (numerical: published_journal=1.0, published_database=0.8,
+    5. age_norm (days since published, normalized: 0=today, 1=14+ days; 0.5 if unknown)
+    6. source_bucket_score (numerical: published_journal=1.0, published_database=0.8,
                              aggregator=0.5, bio_med_preprint=0.4, arxiv_other=0.35,
-                             preprint_other=0.3, arxiv_cs=0.25, other=0.6)
+                             preprint_other=0.3, arxiv_cs=0.25, default=0.6)
+    7. cosine × bucket_score  (interaction: high-cosine journal papers preferred)
+    8. cosine × prestige       (interaction: high-cosine prestigious papers preferred)
+    9. cosine × freshness      (interaction: high-cosine fresh papers preferred;
+                                freshness = 1.0 - age_norm)
     """
     from .rank.embedding_cache import embed_item_rows
     from .rank.source_quality import (
@@ -70,22 +131,9 @@ def _build_item_features(rows: list, profile_mat: np.ndarray) -> np.ndarray:
         promotional_score as _promo,
         access_friction_score as _friction,
         infer_source_quality,
-        is_preprint_source,
-        is_high_quality_journal_source,
         source_bucket,
     )
     from datetime import datetime, timezone
-
-    _BUCKET_SCORES = {
-        "published_journal": 1.0,
-        "published_database": 0.8,
-        "other_research": 0.65,
-        "aggregator": 0.5,
-        "bio_med_preprint": 0.4,
-        "arxiv_other": 0.35,
-        "preprint_other": 0.3,
-        "arxiv_cs": 0.25,
-    }
 
     vecs = embed_item_rows(rows)
     if profile_mat.ndim == 1:
@@ -123,20 +171,24 @@ def _build_item_features(rows: list, profile_mat: np.ndarray) -> np.ndarray:
             age_norm = 0.5
 
         bucket = source_bucket(row)
-        bucket_score = _BUCKET_SCORES.get(bucket, 0.6)
+        bucket_score = LR_SOURCE_BUCKET_SCORES.get(bucket, LR_DEFAULT_SOURCE_BUCKET_SCORE)
 
+        cos_val = float(cos[i])
         features.append([
-            float(cos[i]),                                 # 0. cosine
-            float(_nov(row)),                              # 1. novelty
-            float(_promo(row)),                            # 2. promotional
-            float(_friction(row)),                         # 3. access friction
-            prestige,                                      # 4. prestige
-            1.0 if is_preprint_source(row) else 0.0,       # 5. is_preprint
-            1.0 if is_high_quality_journal_source(row) else 0.0,  # 6. is_hq_journal
-            age_norm,                                      # 7. age_norm
-            bucket_score,                                  # 8. bucket_score
+            cos_val,                                    # 0. cosine
+            float(_nov(row)),                           # 1. novelty
+            float(_promo(row)),                         # 2. promotional
+            float(_friction(row)),                      # 3. access friction
+            prestige,                                   # 4. prestige
+            age_norm,                                   # 5. age_norm
+            bucket_score,                               # 6. bucket_score
+            cos_val * bucket_score,                     # 7. cosine × bucket_score
+            cos_val * prestige,                         # 8. cosine × prestige
+            cos_val * (1.0 - age_norm),                 # 9. cosine × freshness
         ])
-    return np.array(features, dtype=np.float32)
+    if not features:
+        return np.zeros((0, LR_FEATURE_DIM), dtype=np.float32)
+    return np.asarray(features, dtype=np.float32)
 
 
 def _learned_profile_path() -> Path:
@@ -338,6 +390,7 @@ def record_votes(line: str, digest_id: str | None = None) -> dict[str, int]:
     # Update Rocchio learned profile outside DB session
     for item_id in up_ids:
         _update_rocchio(item_id, 1)
+        _clear_vote_reasons(item_id)
     for item_id in down_ids:
         _update_rocchio(item_id, -1)
 
@@ -368,6 +421,8 @@ def record_vote_by_id(item_id: int, value: int) -> bool:
 
     if value in (1, -1):
         _update_rocchio(item_id, value)
+    if value == 1:
+        _clear_vote_reasons(item_id)
     return True
 
 
@@ -383,14 +438,54 @@ def get_vote_value(item_id: int) -> int | None:
         ).scalar_one_or_none()
 
 
+def _latest_vote_values(item_ids: Iterable[int] | None = None) -> dict[int, int]:
+    """Return latest vote values keyed by item id.
+
+    Older local databases can contain duplicate vote rows from before the
+    UNIQUE(item_id) migration. Always order before deduping so neutral/latest
+    votes are not hidden by older signed rows.
+    """
+    ids = [] if item_ids is None else [int(item_id) for item_id in item_ids]
+    if item_ids is not None and not ids:
+        return {}
+    init_db()
+    with session_scope() as s:
+        stmt = select(VoteRow.item_id, VoteRow.value).order_by(
+            VoteRow.item_id,
+            VoteRow.created_at.desc(),
+            VoteRow.id.desc(),
+        )
+        if ids:
+            stmt = stmt.where(VoteRow.item_id.in_(ids))
+        rows = s.execute(stmt).all()
+
+    latest: dict[int, int] = {}
+    for item_id, value in rows:
+        iid = int(item_id)
+        if iid in latest:
+            continue
+        latest[iid] = int(value)
+    return latest
+
+
+def _clear_vote_reasons(item_id: int) -> None:
+    """Remove stale reason chips for an item that is now marked Relevant."""
+    with _VOTE_REASONS_LOCK:
+        data = _load_vote_reasons()
+        if data.pop(str(int(item_id)), None) is not None:
+            _write_vote_reasons(data)
+
+
 def record_vote_reason(item_id: int, reason: str) -> bool:
-    """Persist an optional qualitative feedback reason for a voted item."""
+    """Persist an optional qualitative feedback reason for a non-positive vote."""
     if reason not in ALLOWED_REASONS:
         return False
     init_db()
     with session_scope() as s:
         if s.get(ItemRow, item_id) is None:
             return False
+    if _latest_vote_values([item_id]).get(int(item_id)) not in (-1, 0):
+        return False
     with _VOTE_REASONS_LOCK:
         data = _load_vote_reasons()
         key = str(int(item_id))
@@ -439,14 +534,26 @@ def reason_penalty_map(rows: Iterable[object] | None = None) -> dict[str, float]
     """
     with _VOTE_REASONS_LOCK:
         data = _load_vote_reasons()
+    reasoned_ids: list[int] = []
+    for key in data:
+        try:
+            reasoned_ids.append(int(key))
+        except (TypeError, ValueError):
+            continue
+    latest_votes = _latest_vote_values(reasoned_ids) if reasoned_ids else {}
+    valid_data = {
+        str(item_id): data.get(str(item_id)) or []
+        for item_id in reasoned_ids
+        if latest_votes.get(item_id) in (-1, 0)
+    }
     penalties: dict[str, float] = {}
-    for item_id, reasons in data.items():
+    for item_id, reasons in valid_data.items():
         total = 0.0
         for reason in list(reasons or []):
             total += REASON_PENALTIES.get(str(reason), 0.0)
         if total > 0:
             penalties[str(item_id)] = min(total, 0.30)
-    if rows is None or not data:
+    if rows is None or not valid_data:
         return penalties
 
     try:
@@ -455,24 +562,50 @@ def reason_penalty_map(rows: Iterable[object] | None = None) -> dict[str, float]
         logger.warning("vote: could not load source-quality helpers: %s", e)
         return penalties
 
-    reasoned_ids: list[int] = []
-    for key in data:
-        try:
-            reasoned_ids.append(int(key))
-        except (TypeError, ValueError):
-            continue
-    if not reasoned_ids:
-        return penalties
-
     init_db()
     with session_scope() as s:
-        voted_rows = (
-            s.execute(select(ItemRow).where(ItemRow.id.in_(reasoned_ids)))
-            .scalars()
-            .all()
-        )
-        for row in voted_rows:
+        raw_reasoned_rows = s.execute(
+            select(ItemRow, VoteRow.created_at)
+            .outerjoin(VoteRow, VoteRow.item_id == ItemRow.id)
+            .where(ItemRow.id.in_([int(item_id) for item_id in valid_data]))
+            .order_by(ItemRow.id, VoteRow.created_at.desc(), VoteRow.id.desc())
+        ).all()
+        voted_rows: list[tuple[ItemRow, datetime | None]] = []
+        seen_reasoned: set[int] = set()
+        for row, vote_created_at in raw_reasoned_rows:
+            row_id = int(row.id)
+            if row_id in seen_reasoned:
+                continue
+            seen_reasoned.add(row_id)
             s.expunge(row)
+            timestamp = _first_timestamp(
+                vote_created_at,
+                getattr(row, "fetched_at", None),
+                getattr(row, "published_at", None),
+            )
+            voted_rows.append((row, timestamp))
+
+        raw_vote_rows = s.execute(
+            select(VoteRow.item_id, VoteRow.value, VoteRow.created_at, ItemRow)
+            .join(ItemRow, VoteRow.item_id == ItemRow.id)
+            .order_by(VoteRow.item_id, VoteRow.created_at.desc(), VoteRow.id.desc())
+        ).all()
+        good_rows: list[tuple[ItemRow, datetime | None]] = []
+        seen_votes: set[int] = set()
+        for item_id, value, vote_created_at, row in raw_vote_rows:
+            row_id = int(item_id)
+            if row_id in seen_votes:
+                continue
+            seen_votes.add(row_id)
+            if int(value) != 1:
+                continue
+            s.expunge(row)
+            timestamp = _first_timestamp(
+                vote_created_at,
+                getattr(row, "fetched_at", None),
+                getattr(row, "published_at", None),
+            )
+            good_rows.append((row, timestamp))
 
     source_penalties: dict[str, float] = {}
     bucket_penalties: dict[str, float] = {}
@@ -486,20 +619,60 @@ def reason_penalty_map(rows: Iterable[object] | None = None) -> dict[str, float]
         "access_friction",
         "duplicate",
     }
-    for row in voted_rows:
+    now = datetime.now(timezone.utc)
+    for row, timestamp in voted_rows:
         total = 0.0
-        for reason in list(data.get(str(int(row.id))) or []):
+        for reason in list(valid_data.get(str(int(row.id))) or []):
             if str(reason) in generalizable:
                 total += REASON_PENALTIES.get(str(reason), 0.0)
         if total <= 0:
             continue
+        signal = total * _recency_decay(timestamp, now)
         source = str(row.source or "").strip().lower()
         if source:
-            source_penalties[source] = source_penalties.get(source, 0.0) + (total * 0.35)
+            _add_capped_signal(
+                source_penalties,
+                source,
+                signal * 0.35,
+                _SOURCE_GENERALIZATION_CAP,
+            )
         bucket = source_bucket(row)
-        bucket_penalties[bucket] = bucket_penalties.get(bucket, 0.0) + (total * 0.20)
+        _add_capped_signal(
+            bucket_penalties,
+            bucket,
+            signal * 0.20,
+            _BUCKET_GENERALIZATION_CAP,
+        )
         ctype = content_type(row)
-        content_penalties[ctype] = content_penalties.get(ctype, 0.0) + (total * 0.15)
+        _add_capped_signal(
+            content_penalties,
+            ctype,
+            signal * 0.15,
+            _CONTENT_GENERALIZATION_CAP,
+        )
+
+    for row, timestamp in good_rows:
+        signal = _GOOD_VOTE_COUNTER_SIGNAL * _recency_decay(timestamp, now)
+        source = str(row.source or "").strip().lower()
+        if source:
+            _add_capped_signal(
+                source_penalties,
+                source,
+                -(signal * 0.35),
+                _SOURCE_GENERALIZATION_CAP,
+            )
+        _add_capped_signal(
+            bucket_penalties,
+            source_bucket(row),
+            -(signal * 0.20),
+            _BUCKET_GENERALIZATION_CAP,
+        )
+        _add_capped_signal(
+            content_penalties,
+            content_type(row),
+            -(signal * 0.15),
+            _CONTENT_GENERALIZATION_CAP,
+        )
 
     for row in rows:
         row_id = getattr(row, "id", None)
@@ -513,6 +686,9 @@ def reason_penalty_map(rows: Iterable[object] | None = None) -> dict[str, float]
         if isinstance(url, str) and url:
             keys.append(url)
         if not keys:
+            continue
+        exact_key = str(row_id) if isinstance(row_id, int) else None
+        if exact_key is not None and exact_key in penalties:
             continue
         source = str(getattr(row, "source", "") or "").strip().lower()
         generalized = 0.0
@@ -537,20 +713,7 @@ def vote_counts() -> dict[str, int]:
     """
     init_db()
     counts = {"good": 0, "bad": 0, "neutral": 0, "signed": 0, "total": 0}
-    with session_scope() as s:
-        rows = s.execute(
-            select(VoteRow.item_id, VoteRow.value)
-            .order_by(VoteRow.item_id, VoteRow.created_at.desc(), VoteRow.id.desc())
-        ).all()
-
-    latest_by_item: dict[int, int] = {}
-    for item_id, value in rows:
-        iid = int(item_id)
-        if iid in latest_by_item:
-            continue
-        latest_by_item[iid] = int(value)
-
-    for value in latest_by_item.values():
+    for value in _latest_vote_values().values():
         if int(value) == 1:
             counts["good"] += 1
         elif int(value) == -1:
@@ -567,20 +730,7 @@ def signed_vote_count() -> int:
     """Count distinct items with a signed (+1/-1) latest vote."""
     init_db()
     try:
-        with session_scope() as s:
-            rows = s.execute(
-                select(VoteRow.item_id, VoteRow.value)
-                .where(VoteRow.value.in_((-1, 1)))
-                .order_by(VoteRow.item_id, VoteRow.created_at.desc(), VoteRow.id.desc())
-            ).all()
-        seen: set[int] = set()
-        count = 0
-        for item_id, _value in rows:
-            iid = int(item_id)
-            if iid not in seen:
-                seen.add(iid)
-                count += 1
-        return count
+        return sum(1 for value in _latest_vote_values().values() if value in (-1, 1))
     except Exception as e:  # noqa: BLE001
         logger.warning("vote: failed to count votes: %s", e)
         return 0
@@ -740,7 +890,6 @@ def vote_dataset() -> tuple[np.ndarray, np.ndarray] | None:
         raw_rows = s.execute(
             select(VoteRow.item_id, VoteRow.value, ItemRow)
             .join(ItemRow, VoteRow.item_id == ItemRow.id)
-            .where(VoteRow.value.in_((-1, 1)))
             .order_by(VoteRow.item_id, VoteRow.created_at.desc(), VoteRow.id.desc())
         ).all()
 
@@ -752,6 +901,8 @@ def vote_dataset() -> tuple[np.ndarray, np.ndarray] | None:
             if iid in seen_ids:
                 continue
             seen_ids.add(iid)
+            if int(value) not in (-1, 1):
+                continue
             s.expunge(row)
             rows.append(row)
             ys.append(1 if int(value) > 0 else -1)
@@ -760,7 +911,6 @@ def vote_dataset() -> tuple[np.ndarray, np.ndarray] | None:
         return None
 
     try:
-        from .rank.profile import build_profile_matrix
         from .config import load_settings
         import yaml
         from pathlib import Path
@@ -768,11 +918,50 @@ def vote_dataset() -> tuple[np.ndarray, np.ndarray] | None:
         profile_data = yaml.safe_load(Path(settings.profile_path).read_text(encoding="utf-8"))
         from .models import Profile
         profile = Profile(**profile_data)
-        profile_mat = build_profile_matrix(profile)
+        try:
+            from .rank.profile import build_profile_matrix_with_rocchio
+            vote_count = int(signed_vote_count())
+            profile_mat = build_profile_matrix_with_rocchio(profile, vote_count)
+        except Exception:
+            from .rank.profile import build_profile_matrix
+            profile_mat = build_profile_matrix(profile)
     except Exception as e:  # noqa: BLE001
         logger.warning("vote_dataset: could not load profile: %s", e)
         profile_mat = np.zeros((1, 384), dtype=np.float32)
 
     X = _build_item_features(rows, profile_mat)
     y = np.asarray(ys, dtype=np.float32)
+
+    # Generate pairwise training examples (RankNet/Bradley-Terry approach).
+    # For each (upvoted item, downvoted item) pair, the difference vector
+    # encodes "what makes a good item better than a bad one."
+    # At inference, the LR weights apply to individual feature vectors directly —
+    # this is valid because the weight vector encodes gradient from bad to good.
+    up_indices = [i for i, label in enumerate(ys) if label == 1]
+    down_indices = [i for i, label in enumerate(ys) if label == -1]
+    if up_indices and down_indices:
+        pairs_X: list[np.ndarray] = []
+        pairs_y: list[float] = []
+        # Cap at 300 pairs to avoid memory explosion with many votes
+        max_pairs = 300
+        pair_count = 0
+        for ui in up_indices:
+            for di in down_indices:
+                if pair_count >= max_pairs:
+                    break
+                diff = X[ui] - X[di]
+                pairs_X.append(diff)
+                pairs_y.append(1.0)
+                # Add reverse for class balance
+                pairs_X.append(-diff)
+                pairs_y.append(-1.0)
+                pair_count += 1
+            if pair_count >= max_pairs:
+                break
+        if pairs_X:
+            X_pairs = np.array(pairs_X, dtype=np.float32)
+            y_pairs = np.array(pairs_y, dtype=np.float32)
+            X = np.vstack([X, X_pairs])
+            y = np.concatenate([y, y_pairs])
+
     return X, y

@@ -73,6 +73,12 @@ def _profile_vec(dim: int = 3) -> np.ndarray:
     return v / np.linalg.norm(v)
 
 
+def _current_lr_schema() -> tuple[str, int]:
+    from dailydigest.votes import LR_FEATURE_DIM, LR_FEATURE_SCHEMA_VERSION
+
+    return LR_FEATURE_SCHEMA_VERSION, LR_FEATURE_DIM
+
+
 # ---------------------------------------------------------------------------
 # _apply_downweight
 # ---------------------------------------------------------------------------
@@ -409,26 +415,91 @@ class TestLRRankerPersistence:
         from dailydigest import config as config_mod
 
         config_mod.reload_settings()
-        # 9-feature vectors: [cosine, novelty, promo, friction, prestige, sec×4]
+        feature_schema_version, feature_dim = _current_lr_schema()
+        # Current engineered feature vectors from votes.py (10 features).
         X = np.asarray(
             [
-                [0.9, 0.8, 0.0, 0.0, 0.9, 1.0, 0.0, 0.0, 0.0],
-                [0.8, 0.7, 0.1, 0.0, 0.8, 1.0, 0.0, 0.0, 0.0],
-                [0.2, 0.1, 0.8, 0.5, 0.3, 0.0, 1.0, 0.0, 0.0],
-                [0.1, 0.0, 0.9, 0.6, 0.2, 0.0, 1.0, 0.0, 0.0],
+                [0.9, 0.8, 0.0, 0.0, 0.9, 1.0, 0.0, 0.0, 0.0, 0.0],
+                [0.8, 0.7, 0.1, 0.0, 0.8, 1.0, 0.0, 0.0, 0.0, 0.0],
+                [0.2, 0.1, 0.8, 0.5, 0.3, 0.0, 1.0, 0.0, 0.0, 0.0],
+                [0.1, 0.0, 0.9, 0.6, 0.2, 0.0, 1.0, 0.0, 0.0, 0.0],
             ],
             dtype=np.float32,
         )
+        assert X.shape[1] == feature_dim
         y = np.asarray([1, 1, -1, -1], dtype=np.float32)
 
         ranker = LRRanker()
         ranker.fit(X, y)
 
         assert _lr_weights_path().exists()
+        with np.load(_lr_weights_path()) as data:
+            assert str(data["feature_schema_version"][0]) == feature_schema_version
+            assert int(data["feature_dim"][0]) == feature_dim
         loaded = LRRanker()
         assert loaded.load() is True
         scores = loaded.score(X)
         assert scores.shape == (4,)
+
+    def test_legacy_nine_dim_weights_without_schema_are_rejected(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("DB_PATH", str(tmp_path / "digest.db"))
+        from dailydigest import config as config_mod
+
+        config_mod.reload_settings()
+        path = _lr_weights_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        np.savez(
+            path,
+            coef=np.ones((1, 9), dtype=np.float32),
+            intercept=np.asarray([0.0], dtype=np.float32),
+            classes=np.asarray([-1, 1], dtype=np.int32),
+            feature_dim=np.asarray([9], dtype=np.int32),
+        )
+
+        assert LRRanker().load() is False
+
+    def test_mismatched_feature_schema_is_rejected(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("DB_PATH", str(tmp_path / "digest.db"))
+        from dailydigest import config as config_mod
+
+        config_mod.reload_settings()
+        _, feature_dim = _current_lr_schema()
+        path = _lr_weights_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        np.savez(
+            path,
+            coef=np.ones((1, feature_dim), dtype=np.float32),
+            intercept=np.asarray([0.0], dtype=np.float32),
+            classes=np.asarray([-1, 1], dtype=np.int32),
+            feature_dim=np.asarray([feature_dim], dtype=np.int32),
+            feature_schema_version=np.asarray(["old_schema"]),
+        )
+
+        assert LRRanker().load() is False
+
+    def test_current_feature_schema_weights_load(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("DB_PATH", str(tmp_path / "digest.db"))
+        from dailydigest import config as config_mod
+
+        config_mod.reload_settings()
+        feature_schema_version, feature_dim = _current_lr_schema()
+        coef = np.zeros((1, feature_dim), dtype=np.float32)
+        coef[0, 0] = 1.0
+        path = _lr_weights_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        np.savez(
+            path,
+            coef=coef,
+            intercept=np.asarray([0.0], dtype=np.float32),
+            classes=np.asarray([-1, 1], dtype=np.int32),
+            feature_dim=np.asarray([feature_dim], dtype=np.int32),
+            feature_schema_version=np.asarray([feature_schema_version]),
+        )
+
+        loaded = LRRanker()
+        assert loaded.load() is True
+        scores = loaded.score(np.zeros((2, feature_dim), dtype=np.float32))
+        assert scores.shape == (2,)
 
     def test_missing_weight_cache_rechecks_when_weights_appear(self, tmp_path, monkeypatch):
         monkeypatch.setenv("DB_PATH", str(tmp_path / "digest.db"))
@@ -437,13 +508,18 @@ class TestLRRankerPersistence:
 
         config_mod.reload_settings()
         ranker_mod._LR_SINGLETON = False
+        feature_schema_version, feature_dim = _current_lr_schema()
+        coef = np.zeros((1, feature_dim), dtype=np.float32)
+        coef[0, 0] = 1.0
         path = _lr_weights_path()
         path.parent.mkdir(parents=True, exist_ok=True)
         np.savez(
             path,
-            coef=np.asarray([[1.0, 0.0, 0.0]], dtype=np.float32),
+            coef=coef,
             intercept=np.asarray([0.0], dtype=np.float32),
             classes=np.asarray([-1, 1], dtype=np.int32),
+            feature_dim=np.asarray([feature_dim], dtype=np.int32),
+            feature_schema_version=np.asarray([feature_schema_version]),
         )
 
         try:
@@ -553,3 +629,46 @@ class TestPickTopPerSection:
 
         assert any(row.source == "Cell" for row, _score in result)
         assert sum(1 for row, _score in result if row.source == "bioRxiv (recent)") <= 2
+
+    def test_research_selection_caps_single_source_dominance(self):
+        scored = []
+        for idx in range(18):
+            row = _make_row(f"Advanced Materials paper {idx}", "research")
+            row.source = "Advanced Materials"
+            scored.append((row, 1.00 - idx * 0.005))
+        for idx in range(8):
+            row = _make_row(f"Science paper {idx}", "research")
+            row.source = "Science"
+            scored.append((row, 0.82 - idx * 0.005))
+        for idx in range(8):
+            row = _make_row(f"Nature paper {idx}", "research")
+            row.source = "Nature"
+            scored.append((row, 0.78 - idx * 0.005))
+
+        result = pick_top_per_section(scored, {"research": 30})
+
+        source_counts: dict[str, int] = {}
+        for row, _score in result:
+            source_counts[row.source] = source_counts.get(row.source, 0) + 1
+        assert source_counts["Advanced Materials"] <= 6
+        assert source_counts["Science"] >= 6
+        assert source_counts["Nature"] >= 6
+
+    def test_exceptional_preprint_can_displace_marginal_journal_item(self):
+        scored = []
+        for idx in range(12):
+            row = _make_row(f"Published journal paper {idx}", "research")
+            row.source = "Advanced Materials" if idx < 6 else "Science"
+            scored.append((row, 1.00 - idx * 0.01))
+        strong_preprint = _make_row(
+            "BioRxiv breakthrough RNA delivery preprint",
+            "research",
+            "Highly relevant method and mechanism.",
+        )
+        strong_preprint.source = "bioRxiv (recent)"
+        scored.append((strong_preprint, 0.905))
+
+        result = pick_top_per_section(scored, {"research": 10})
+
+        assert strong_preprint in [row for row, _score in result]
+        assert sum(1 for row, _score in result if row.source == "bioRxiv (recent)") == 1
