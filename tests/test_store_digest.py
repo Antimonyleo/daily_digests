@@ -12,6 +12,7 @@ def _reset_store(monkeypatch, tmp_path):
     store_mod.SETTINGS = config_mod.SETTINGS
     store_mod._ENGINE = None
     store_mod._SessionLocal = None
+    store_mod._INITIALIZED = False
 
 
 def _item(source: str, external_id: str, title: str = "Item") -> store_mod.ItemRow:
@@ -119,6 +120,7 @@ def test_init_db_adds_columns_to_legacy_sqlite_database(monkeypatch, tmp_path):
     store_mod.SETTINGS = config_mod.SETTINGS
     store_mod._ENGINE = None
     store_mod._SessionLocal = None
+    store_mod._INITIALIZED = False
 
     store_mod.init_db()
 

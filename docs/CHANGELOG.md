@@ -4,6 +4,17 @@ Chronological log of how the MVP was built. Useful when you want to understand *
 
 ---
 
+## 2026-05-15 — Release hardening: ranking quality, diagnostics, and feedback safety
+
+- Split hybrid LR rank scores from absolute confidence so a weak daily pool cannot create fake `Lead story` or `Must read first` UI labels.
+- Cross-source candidate dedupe now keeps the best/highest-quality representative, so OpenAlex or preprint metadata does not mask a Nature/Cell/PubMed publisher row for the same paper.
+- Legacy duplicate vote rows now consistently use the latest vote for counts, reviewed-item filters, previously-shown filters, and LR training.
+- Reason chips now require a `Seen` or `Not for me` response; `Relevant` clears stale reasons so positive feedback cannot accidentally downrank similar future items.
+- Added a collapsed `Brew diagnostics` drawer that surfaces candidate funnel counts and quality-gate drop reasons alongside the top-journal diagnostic.
+- LR feature weights now persist a schema version and reject stale/mismatched weight files before inference.
+- Research ranking now caps single-source dominance, reserves a small lane for exceptional preprints, dedupes journal issue-suffix variants, and skips ACS issue/author metadata entries.
+- Full suite verified: `177` tests passing locally.
+
 ## 2026-05-12 — Graphical digest UI and richer feedback
 
 - Added a graphical web overview: scanned/selected/source counts, source-issue count, must-read cards, and source-mix bars.

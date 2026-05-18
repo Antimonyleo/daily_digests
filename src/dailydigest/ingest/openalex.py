@@ -75,6 +75,7 @@ class OpenAlexSource:
             "filter": f"from_publication_date:{yesterday},type:article",
             "per-page": str(self.PER_PAGE),
             "cursor": "*",
+            "sort": "publication_date:desc",
         }
         if query:
             base_params["search"] = query

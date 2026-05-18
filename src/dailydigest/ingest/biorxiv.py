@@ -45,7 +45,7 @@ class BiorxivSource:
         to = today.isoformat()
         out: list[Item] = []
         cursor = 0
-        with httpx.Client(timeout=20.0, follow_redirects=True) as client:
+        with httpx.Client(timeout=20.0, follow_redirects=True, headers={"User-Agent": "dailydigest/0.1"}) as client:
             while True:
                 url = f"{self.BASE}/{server}/{frm}/{to}/{cursor}"
                 try:
@@ -100,6 +100,9 @@ class BiorxivSource:
                 except (TypeError, ValueError):
                     total = 0
                 cursor += len(collection)
-                if cursor >= total or cursor >= 200:  # cap at 200/run for safety
+                if cursor >= total:
+                    break
+                if cursor >= 500:
+                    logger.warning("biorxiv %s hit pagination cap (%d/%d); some items may be dropped", server, cursor, total)
                     break
         return out

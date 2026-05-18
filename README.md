@@ -4,7 +4,7 @@ DailyDigest is a personalized morning research and news digest. It pulls from jo
 
 It is built for researchers who want signal without opening 40 tabs before breakfast.
 
-**Status:** public-release hardened local app. Verified with `149` passing tests plus a live local web smoke test. See [docs/STATUS.md](docs/STATUS.md).
+**Status:** public-release hardened local app. Verified with `177` passing tests plus a live local web smoke test. See [docs/STATUS.md](docs/STATUS.md).
 
 ## Features
 
@@ -13,12 +13,12 @@ It is built for researchers who want signal without opening 40 tabs before break
 - Broad source coverage: journals, bioRxiv/medRxiv/arXiv, PubMed/OpenAlex, FDA/ClinicalTrials.gov, biotech news, and world news
 - Profile-aware ranking with local embeddings, source-quality boosts, novelty signals, freshness gates, cross-source dedupe, anti-promo penalties, and source-balance caps
 - Interest facet weights in `data/profile.yaml` so you can strengthen or soften topics without editing code
-- Rank-feature snapshots and a top-journal audit so you can see when high-quality journal candidates were considered but missed the final cutoff
+- Rank-feature snapshots, top-journal audit, and brew diagnostics so you can see when high-quality candidates were considered, filtered, or deduped
 - SQLite embedding cache so repeated brews only embed new or changed items
-- Graphical digest overview with scanned/selected counts, must-read cards, source-mix bars, top-journal audit, structured summaries, and per-item ranking signals
+- Graphical digest overview with scanned/selected counts, confidence-aware must-read cards, source-mix bars, diagnostic drawers, structured summaries, and per-item ranking signals
 - Reader filters for priority, unread, published journals, preprints, AI/CS, and digest sections
-- Good / Neutral / Bad feedback saved instantly, with optional toggleable reason chips like `Low impact`, `Promo`, `Access`, and `Duplicate`
-- Optional learned ranking after enough Good/Bad votes from the UI or `uv run dd vote --train`
+- `Relevant` / `Seen` / `Not for me` feedback saved instantly, with optional toggleable reason chips like `Low impact`, `Promo`, `Access`, and `Duplicate`
+- Optional learned ranking after enough Relevant/Not-for-me votes from the UI or `uv run dd vote --train`
 - Extractive summaries by default, with optional OpenAI-compatible API, Claude Code CLI, or Codex CLI backends
 - Dry-run HTML previews and optional Resend email delivery
 - Local-first safety: loopback-only web server, CSRF-protected write routes, escaped templates, ignored user profile/data
@@ -48,14 +48,14 @@ DailyDigest expects to be run from a repo checkout. `uv` is required; the startu
 3. Choose `Extractive` for the easiest first run. It needs no login or API key.
 4. Click `Brew my morning cup of tea`.
 5. Read the `Must read first` cards, then scan each section.
-6. Mark entries Good, Neutral, or Bad. Add a reason chip when something is off.
-7. When enough Good/Bad feedback is collected, click `Update my ranking`.
+6. Mark entries Relevant, Seen, or Not for me. Add a reason chip after Seen or Not for me when something is off.
+7. When enough Relevant/Not-for-me feedback is collected, click `Update my ranking`.
 
-Good and Bad responses teach future ranking updates. Neutral only marks an item reviewed.
+Relevant and Not-for-me responses teach future ranking updates. Seen only marks an item reviewed unless you add a reason chip.
 
 ## Ranking Quality
 
-DailyDigest balances personal topic fit with editorial quality. Top journals still help as a tie-breaker, but a weakly matched Nature or Science item should not beat a substantially better match from a less prestigious venue. Ranking candidates are freshness-filtered, deduped across sources, and checked for promotional wording and low-information commentary so stale items, repeated papers, press-release-style posts, and editorials without new methods/results are pushed below independent, substantive coverage.
+DailyDigest balances personal topic fit with editorial quality. Top journals still help as a tie-breaker, but a weakly matched Nature or Science item should not beat a substantially better match from a less prestigious venue. Ranking candidates are freshness-filtered, deduped across sources while keeping the best publisher/high-quality representative, and checked for promotional wording and low-information commentary so stale items, repeated papers, press-release-style posts, and editorials without new methods/results are pushed below independent, substantive coverage.
 
 You can tune source hints in `config/sources.yaml` with `quality_tier`, `prestige_score`, `impact_floor`, and `promo_risk`. Exact impact factors are not fetched during brewing; the app uses stable local tiers to stay fast and reproducible.
 
@@ -118,7 +118,7 @@ uv run dd run-all                 # Full pipeline + email send
 uv run dd run-all --dry-run       # Render HTML to data/, no email
 uv run dd run-all --backfill 7    # Widen recency window
 uv run dd vote "+R3 R7 -I5"       # Record label-based feedback
-uv run dd vote --train            # Train learned ranker, needs >=30 Good/Bad votes
+uv run dd vote --train            # Train learned ranker, needs >=20 Relevant/Not-for-me votes
 uv run dd prune                   # Delete old items
 ```
 

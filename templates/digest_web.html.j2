@@ -69,11 +69,27 @@
   }
   .must-meta { margin-top: 6px; color: var(--muted); font-size: 11px; }
   .audit-summary { color: var(--muted); font-size: 13px; line-height: 1.45; margin: 0 0 8px; }
+  .audit-panel summary {
+    cursor: pointer; display: flex; align-items: center; justify-content: space-between;
+    gap: 10px; font-size: 13px; color: var(--text); font-weight: 820;
+    letter-spacing: 0.02em; list-style: none;
+  }
+  .audit-panel summary::-webkit-details-marker { display: none; }
+  .audit-panel summary::after { content: "+"; color: var(--muted); font-size: 16px; }
+  .audit-panel[open] summary::after { content: "-"; }
+  .audit-body { margin-top: 10px; }
   .audit-list { display: grid; gap: 7px; margin: 0; padding: 0; list-style: none; }
   .audit-list li { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: start; font-size: 12px; }
   .audit-list a { color: var(--text); text-decoration: none; font-weight: 720; overflow-wrap: anywhere; }
   .audit-list a:hover { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
   .audit-score { color: var(--muted); white-space: nowrap; }
+  .audit-metrics { display: flex; flex-wrap: wrap; gap: 7px; margin: 0 0 10px; }
+  .audit-metric {
+    display: inline-flex; gap: 5px; align-items: baseline; padding: 6px 8px;
+    border: 1px solid #e1e8e2; border-radius: 999px; background: #fbfcf9;
+    color: var(--muted); font-size: 12px;
+  }
+  .audit-metric strong { color: var(--text); font-size: 13px; }
   .digest-card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; box-shadow: var(--shadow); overflow: hidden; }
   .digest-toolbar {
     display: flex; justify-content: space-between; gap: 16px; align-items: center;
@@ -174,6 +190,7 @@
     border: 1px solid #dce6dd; border-radius: 999px; background: #f4f8f5;
     color: #365343; font-size: 11px; font-weight: 700;
   }
+  .ranking-sentence { color: #405047; font-size: 12px; line-height: 1.45; margin-top: 8px; }
   .why-shown {
     margin-top: 10px; border: 1px solid #e1e8e2; border-radius: 8px;
     background: #fbfcf9; overflow: hidden;
@@ -325,42 +342,67 @@
   {% endif %}
 
   {% if top_journal_audit %}
-  <section class="audit-panel">
-    <h2 class="panel-title">Top-journal audit</h2>
-    <p class="audit-summary">{{ overview.top_journals_shown }} published-journal picks shown. {{ top_journal_audit|length }} high-quality candidates were considered but missed the final cutoff.</p>
-    <ul class="audit-list">
-      {% for audit in top_journal_audit[:5] %}
-      <li>
-        <a href="{{ audit.url | default('#') }}" target="_blank" rel="noopener">{{ audit.title }}</a>
-        <span class="audit-score">{{ audit.source }} · {{ audit.score }}</span>
-      </li>
-      {% endfor %}
-    </ul>
-  </section>
+  <details class="audit-panel diagnostic-drawer">
+    <summary>Not shown today</summary>
+    <div class="audit-body">
+      <p class="audit-summary">{{ overview.top_journals_shown }} published-journal picks shown. {{ top_journal_audit|length }} high-quality candidates were considered but did not make today’s shown list.</p>
+      <ul class="audit-list">
+        {% for audit in top_journal_audit[:5] %}
+        <li>
+          <a href="{{ audit.url | default('#') }}" target="_blank" rel="noopener">{{ audit.title }}</a>
+          <span class="audit-score">{{ audit.source }} · {{ audit.score }}</span>
+        </li>
+        {% endfor %}
+      </ul>
+    </div>
+  </details>
+  {% endif %}
+
+  {% if candidate_funnel %}
+  <details class="audit-panel diagnostic-drawer">
+    <summary>Brew diagnostics</summary>
+    <div class="audit-body">
+      <p class="audit-summary">Candidate flow from recent source items through reviewed-item filtering, quality gates, and cross-source dedupe.</p>
+      <div class="audit-metrics">
+        <span class="audit-metric"><strong>{{ candidate_funnel.recent_items | default(0) }}</strong> recent</span>
+        <span class="audit-metric"><strong>{{ candidate_funnel.after_reviewed_filter | default(0) }}</strong> after reviewed filter</span>
+        <span class="audit-metric"><strong>{{ candidate_funnel.after_recently_dismissed_filter | default(0) }}</strong> after dismissed filter</span>
+        <span class="audit-metric"><strong>{{ candidate_funnel.after_quality_gate | default(0) }}</strong> after quality gate</span>
+        <span class="audit-metric"><strong>{{ candidate_funnel.after_cross_source_dedupe | default(0) }}</strong> after dedupe</span>
+      </div>
+      {% if candidate_funnel.quality_drop_reason_counts %}
+      <ul class="audit-list">
+        {% for row in candidate_funnel.quality_drop_reason_counts %}
+        <li><span>{{ row.reason }}</span><span class="audit-score">{{ row.count }}</span></li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+    </div>
+  </details>
   {% endif %}
 
   <main class="digest-card">
     <div class="digest-toolbar">
       <div>
         <div class="digest-date">{{ digest_id }}</div>
-	        <div class="feedback-note">Responses save instantly. Good and Bad teach future ranking updates; Neutral marks an item as reviewed.</div>
+	        <div class="feedback-note">Responses save instantly. Relevant and Not for me guide future ranking updates; Seen marks an item as reviewed.</div>
       </div>
       <div class="ranking-panel" aria-live="polite">
         <div class="ranking-kicker">Personalization</div>
         <div class="ranking-counts">
-          <span class="count-pill good">Good <span id="vote-good">{{ ranking_status.vote_counts.good }}</span></span>
-          <span class="count-pill bad">Bad <span id="vote-bad">{{ ranking_status.vote_counts.bad }}</span></span>
+          <span class="count-pill good">Relevant <span id="vote-good">{{ ranking_status.vote_counts.good }}</span></span>
+          <span class="count-pill bad">Not for me <span id="vote-bad">{{ ranking_status.vote_counts.bad }}</span></span>
           <span class="count-pill">Helpful ratings <span id="vote-signed">{{ ranking_status.vote_counts.signed }}</span>/<span id="vote-threshold">{{ ranking_status.min_votes_for_lr }}</span></span>
         </div>
         <div class="ranking-message" id="ranking-message">
           {% if ranking_status.ranking_status == "lr_active" %}
           Personal ranking is active.
           {% elif ranking_status.model_trained %}
-          Personal ranking is trained; {{ ranking_status.remaining_votes_for_lr }} more Good/Bad responses will refresh it.
+          Personal ranking is trained; {{ ranking_status.remaining_votes_for_lr }} more Relevant/Not for me responses will refresh it.
           {% elif ranking_status.can_train %}
           Enough feedback is ready. Update your personal ranking.
           {% else %}
-          {{ ranking_status.remaining_votes_for_lr }} more Good/Bad responses unlock personal ranking.
+          {{ ranking_status.remaining_votes_for_lr }} more Relevant/Not for me responses unlock personal ranking.
           {% endif %}
         </div>
         <button class="btn primary" id="train-ranker-btn" type="button"{% if not ranking_status.can_train %} disabled{% endif %}>Update my ranking</button>
@@ -369,19 +411,25 @@
 
     {% if not empty %}
     <div class="reader-tools" aria-label="Digest filters">
-      <div class="tool-group" role="group" aria-label="Filter items">
+      <div class="tool-group" role="group" aria-label="Clear filters">
         <span class="tool-label">View</span>
         <button class="filter-chip active" data-filter="all" type="button" aria-pressed="true">All</button>
-        <button class="filter-chip" data-filter="priority" type="button" aria-pressed="false">Priority</button>
-        <button class="filter-chip" data-filter="unreviewed" type="button" aria-pressed="false">Unread</button>
-        <button class="filter-chip" data-filter="published" type="button" aria-pressed="false">Published journals</button>
-        <button class="filter-chip" data-filter="preprints" type="button" aria-pressed="false">Preprints</button>
-        <button class="filter-chip" data-filter="ai-cs" type="button" aria-pressed="false">AI / CS</button>
+      </div>
+      <div class="tool-group" role="group" aria-label="Filter by read state">
+        <span class="tool-label">Status</span>
+        <button class="filter-chip" data-filter="priority" data-filter-group="status" data-filter-value="priority" type="button" aria-pressed="false">Priority</button>
+        <button class="filter-chip" data-filter="unreviewed" data-filter-group="status" data-filter-value="unreviewed" type="button" aria-pressed="false">Unread</button>
+      </div>
+      <div class="tool-group" role="group" aria-label="Filter by source type">
+        <span class="tool-label">Source</span>
+        <button class="filter-chip" data-filter="published" data-filter-group="source" data-filter-value="published" type="button" aria-pressed="false">Published journals</button>
+        <button class="filter-chip" data-filter="preprints" data-filter-group="source" data-filter-value="preprints" type="button" aria-pressed="false">Preprints</button>
+        <button class="filter-chip" data-filter="ai-cs" data-filter-group="source" data-filter-value="ai-cs" type="button" aria-pressed="false">AI / CS</button>
       </div>
       <div class="tool-group" role="group" aria-label="Filter by lane">
         <span class="tool-label">Lane</span>
         {% for section in sections %}
-        <button class="filter-chip" data-filter="section:{{ section.key }}" type="button" aria-pressed="false">{{ section.title }}</button>
+        <button class="filter-chip" data-filter="section:{{ section.key }}" data-filter-group="section" data-filter-value="{{ section.key }}" type="button" aria-pressed="false">{{ section.title }}</button>
         {% endfor %}
       </div>
       <div class="filter-count" id="filter-count">{{ overview.selected }} shown</div>
@@ -406,9 +454,10 @@
         <span class="section-count">{{ section.entries|length }}</span>
       </h2>
       {% for item in section.entries %}
-      {% set priority = 'spotlight' if item.score_raw >= 0.85 else ('read' if item.score_raw >= 0.65 else 'skim') %}
+      {% set priority_score = item.confidence_score | default(item.score_raw) %}
+      {% set priority = 'spotlight' if priority_score >= 0.85 else ('read' if priority_score >= 0.65 else 'skim') %}
       {% set priority_label = 'Lead story' if priority == 'spotlight' else ('Worth reading' if priority == 'read' else 'Quick skim') %}
-      <div class="item" data-item-id="{{ item.id }}" data-section="{{ section.key }}" data-priority="{{ priority }}" data-source-bucket="{{ item.ranking.source_bucket }}" data-reviewed="{{ 'true' if item.current_vote is not none else 'false' }}">
+      <div class="item" data-item-id="{{ item.id }}" data-section="{{ section.key }}" data-priority="{{ priority }}" data-source-bucket="{{ item.ranking.source_bucket }}" data-reviewed="{{ 'true' if item.current_vote is not none else 'false' }}" data-current-vote="{{ item.current_vote if item.current_vote is not none else '' }}">
         <div class="item-main">
           <div class="item-head">
             <span class="label-pill">{{ item.label }}</span>
@@ -421,6 +470,7 @@
           <div class="meta">
             {{ item.source }}{% if item.published %} &middot; {{ item.published }}{% endif %}
           </div>
+          <div class="ranking-sentence">{{ item.ranking_sentence }}</div>
           {% if item.ranking.tags %}
           <div class="reason-row">
             {% for tag in item.ranking.tags %}
@@ -483,11 +533,11 @@
           {% endif %}
           <div class="save-state{% if item.current_vote is not none %} saved{% endif %}" aria-live="polite">
             {% if item.current_vote == 1 %}
-            Good saved.
+            Relevant saved.
             {% elif item.current_vote == 0 %}
-            Neutral saved.
+            Seen saved.
             {% elif item.current_vote == -1 %}
-            Bad saved.
+            Not for me saved.
             {% else %}
             No response saved yet.
             {% endif %}
@@ -498,15 +548,15 @@
           <div class="vote-row" role="group" aria-label="Evaluate {{ item.label }}">
             <button class="vote-btn good{% if item.current_vote == 1 %} active{% endif %}"
                     data-value="1" type="button" aria-pressed="{{ 'true' if item.current_vote == 1 else 'false' }}">
-              <span class="vote-label">Good</span><span class="vote-help">More like this</span>
+              <span class="vote-label">Relevant</span><span class="vote-help">More like this</span>
             </button>
             <button class="vote-btn neutral{% if item.current_vote == 0 %} active{% endif %}"
                     data-value="0" type="button" aria-pressed="{{ 'true' if item.current_vote == 0 else 'false' }}">
-              <span class="vote-label">Neutral</span><span class="vote-help">Seen</span>
+              <span class="vote-label">Seen</span><span class="vote-help">Reviewed</span>
             </button>
             <button class="vote-btn bad{% if item.current_vote == -1 %} active{% endif %}"
                     data-value="-1" type="button" aria-pressed="{{ 'true' if item.current_vote == -1 else 'false' }}">
-              <span class="vote-label">Bad</span><span class="vote-help">Less like this</span>
+              <span class="vote-label">Not for me</span><span class="vote-help">Less like this</span>
             </button>
           </div>
           <div class="reason-prompt">Reason</div>
@@ -536,13 +586,14 @@
 <script>
 (function () {
 	  const VALUE_CLASS = { "1": "good", "0": "neutral", "-1": "bad" };
-	  const VALUE_LABEL = { "1": "Good", "0": "Neutral", "-1": "Bad" };
+	  const VALUE_LABEL = { "1": "Relevant", "0": "Seen", "-1": "Not for me" };
 	  const CSRF_TOKEN = {{ csrf_token|tojson }};
   const toastEl = document.getElementById("toast");
   const trainBtn = document.getElementById("train-ranker-btn");
   let toastTimer = null;
 
   function setActive(itemEl, value) {
+    itemEl.dataset.currentVote = String(value);
     itemEl.querySelectorAll(".vote-btn").forEach((b) => {
       const v = b.dataset.value;
       b.classList.toggle("active", v === String(value));
@@ -550,7 +601,25 @@
       ["good", "neutral", "bad"].forEach((c) => b.classList.remove(c));
       b.classList.add(VALUE_CLASS[v]);
     });
+    if (String(value) === "1") {
+      itemEl.querySelectorAll(".reason-chip.active").forEach((chip) => {
+        chip.classList.remove("active");
+        chip.setAttribute("aria-pressed", "false");
+      });
+    }
+    syncReasonChips(itemEl);
     itemEl.dataset.reviewed = "true";
+  }
+
+  function reasonFeedbackEnabled(itemEl) {
+    return itemEl.dataset.currentVote === "0" || itemEl.dataset.currentVote === "-1";
+  }
+
+  function syncReasonChips(itemEl) {
+    const enabled = reasonFeedbackEnabled(itemEl);
+    itemEl.querySelectorAll(".reason-chip").forEach((chip) => {
+      chip.disabled = !enabled && !chip.classList.contains("active");
+    });
   }
 
   function setSaving(itemEl, saving) {
@@ -595,11 +664,11 @@
     if (status.ranking_status === "lr_active") {
       msgEl.textContent = "Personal ranking is active.";
     } else if (status.model_trained) {
-      msgEl.textContent = `Personal ranking is trained; ${status.remaining_votes_for_lr} more Good/Bad responses will refresh it.`;
+      msgEl.textContent = `Personal ranking is trained; ${status.remaining_votes_for_lr} more Relevant/Not for me responses will refresh it.`;
     } else if (status.can_train) {
       msgEl.textContent = "Enough feedback is ready. Update your personal ranking.";
     } else {
-      msgEl.textContent = `${status.remaining_votes_for_lr} more Good/Bad responses unlock personal ranking.`;
+      msgEl.textContent = `${status.remaining_votes_for_lr} more Relevant/Not for me responses unlock personal ranking.`;
     }
   }
 
@@ -626,28 +695,55 @@
     }
   }
 
-  function applyReaderFilter(filter) {
+  function activeFilterState() {
+    const activeSections = new Set();
+    const activeSourceTypes = new Set();
+    let priorityOnly = false;
+    let unreadOnly = false;
+
+    document.querySelectorAll(".filter-chip.active[data-filter-group]").forEach((btn) => {
+      const group = btn.dataset.filterGroup;
+      const value = btn.dataset.filterValue || "";
+      if (group === "section" && value) activeSections.add(value);
+      if (group === "source" && value) activeSourceTypes.add(value);
+      if (group === "status" && value === "priority") priorityOnly = true;
+      if (group === "status" && value === "unreviewed") unreadOnly = true;
+    });
+    return { activeSections, activeSourceTypes, priorityOnly, unreadOnly };
+  }
+
+  function matchesSourceType(bucket, activeSourceTypes) {
+    if (activeSourceTypes.size === 0) return true;
+    const checks = {
+      published: bucket === "published_journal" || bucket === "published_database",
+      preprints: bucket === "arxiv_cs" || bucket === "arxiv_other" || bucket === "bio_med_preprint" || bucket === "preprint_other",
+      "ai-cs": bucket === "arxiv_cs",
+    };
+    return Array.from(activeSourceTypes).some((sourceType) => Boolean(checks[sourceType]));
+  }
+
+  function syncAllChip(state) {
+    const allBtn = document.querySelector('.filter-chip[data-filter="all"]');
+    if (!allBtn) return;
+    const hasFilters = state.priorityOnly || state.unreadOnly || state.activeSections.size > 0 || state.activeSourceTypes.size > 0;
+    allBtn.classList.toggle("active", !hasFilters);
+    allBtn.setAttribute("aria-pressed", hasFilters ? "false" : "true");
+  }
+
+  function applyReaderFilters() {
+    const state = activeFilterState();
     const items = Array.from(document.querySelectorAll(".item"));
     let shown = 0;
     items.forEach((itemEl) => {
-      let visible = true;
       const bucket = itemEl.dataset.sourceBucket || "";
-      if (filter === "priority") {
-        visible = itemEl.dataset.priority === "spotlight" || itemEl.dataset.priority === "read";
-      } else if (filter === "unreviewed") {
-        visible = itemEl.dataset.reviewed !== "true";
-      } else if (filter === "published") {
-        visible = bucket === "published_journal" || bucket === "published_database";
-      } else if (filter === "preprints") {
-        visible = bucket === "arxiv_cs" || bucket === "arxiv_other" || bucket === "bio_med_preprint";
-      } else if (filter === "ai-cs") {
-        visible = bucket === "arxiv_cs";
-      } else if (filter && filter.startsWith("section:")) {
-        visible = itemEl.dataset.section === filter.slice("section:".length);
-      }
+      const priorityMatch = !state.priorityOnly || itemEl.dataset.priority === "spotlight" || itemEl.dataset.priority === "read";
+      const unreadMatch = !state.unreadOnly || itemEl.dataset.reviewed !== "true";
+      const sectionMatch = state.activeSections.size === 0 || state.activeSections.has(itemEl.dataset.section || "");
+      const visible = priorityMatch && unreadMatch && sectionMatch && matchesSourceType(bucket, state.activeSourceTypes);
       itemEl.hidden = !visible;
       if (visible) shown += 1;
     });
+    syncAllChip(state);
 
     document.querySelectorAll(".section-block").forEach((sectionEl) => {
       const hasVisibleItem = Array.from(sectionEl.querySelectorAll(".item")).some((itemEl) => !itemEl.hidden);
@@ -662,16 +758,22 @@
 
   document.querySelectorAll(".filter-chip").forEach((btn) => {
     btn.addEventListener("click", () => {
-      document.querySelectorAll(".filter-chip").forEach((other) => {
-        const active = other === btn;
-        other.classList.toggle("active", active);
-        other.setAttribute("aria-pressed", active ? "true" : "false");
-      });
-      applyReaderFilter(btn.dataset.filter || "all");
+      if (btn.dataset.filter === "all") {
+        document.querySelectorAll(".filter-chip[data-filter-group]").forEach((other) => {
+          other.classList.remove("active");
+          other.setAttribute("aria-pressed", "false");
+        });
+      } else {
+        const active = !btn.classList.contains("active");
+        btn.classList.toggle("active", active);
+        btn.setAttribute("aria-pressed", active ? "true" : "false");
+      }
+      applyReaderFilters();
     });
   });
 
   document.querySelectorAll(".item").forEach((itemEl) => {
+    syncReasonChips(itemEl);
     itemEl.querySelectorAll(".vote-btn").forEach((btn) => {
       btn.addEventListener("click", async () => {
         const id = itemEl.dataset.itemId;
@@ -686,7 +788,7 @@
           if (!r.ok) throw new Error("HTTP " + r.status);
           const payload = await r.json();
           setActive(itemEl, value);
-          applyReaderFilter(document.querySelector(".filter-chip.active")?.dataset.filter || "all");
+          applyReaderFilters();
           updateRankingStatus(payload.ranking_status);
           const stamp = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
           setStatus(itemEl, `${VALUE_LABEL[value]} saved at ${stamp}`, "saved");
@@ -704,6 +806,11 @@
         const id = itemEl.dataset.itemId;
         const reason = chip.dataset.reason;
         const removing = chip.classList.contains("active");
+        if (!removing && !reasonFeedbackEnabled(itemEl)) {
+          setStatus(itemEl, "Choose Seen or Not for me before adding a reason.", "");
+          showToast("Choose a read response first");
+          return;
+        }
         chip.disabled = true;
         setStatus(itemEl, removing ? "Removing reason..." : "Saving reason...", "");
         try {
@@ -714,6 +821,7 @@
           if (!r.ok) throw new Error("HTTP " + r.status);
           chip.classList.toggle("active", !removing);
           chip.setAttribute("aria-pressed", removing ? "false" : "true");
+          syncReasonChips(itemEl);
           const stamp = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
           setStatus(itemEl, `${removing ? "Reason removed" : "Reason saved"} at ${stamp}`, "saved");
           showToast(removing ? "Reason removed" : "Reason saved");
@@ -722,6 +830,7 @@
           flash(itemEl);
         } finally {
           chip.disabled = false;
+          syncReasonChips(itemEl);
         }
       });
     });

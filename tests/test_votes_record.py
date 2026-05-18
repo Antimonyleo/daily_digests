@@ -16,6 +16,7 @@ def _reset_store_for_tmp_db(monkeypatch, tmp_path):
     store_mod.SETTINGS = config_mod.SETTINGS
     store_mod._ENGINE = None
     store_mod._SessionLocal = None
+    store_mod._INITIALIZED = False
     return store_mod
 
 
@@ -396,6 +397,7 @@ def test_legacy_duplicate_vote_rows_use_latest_vote_for_counts_and_training(tmp_
     store_mod.SETTINGS = config_mod.SETTINGS
     store_mod._ENGINE = None
     store_mod._SessionLocal = None
+    store_mod._INITIALIZED = False
     monkeypatch.setattr(votes_mod, "MIN_VOTES_FOR_LR", 1)
     monkeypatch.setattr(
         votes_mod,
@@ -471,6 +473,7 @@ def test_legacy_duplicate_latest_neutral_is_not_signed_for_training(tmp_path, mo
     store_mod.SETTINGS = config_mod.SETTINGS
     store_mod._ENGINE = None
     store_mod._SessionLocal = None
+    store_mod._INITIALIZED = False
     monkeypatch.setattr(votes_mod, "MIN_VOTES_FOR_LR", 1)
     monkeypatch.setattr(
         votes_mod,

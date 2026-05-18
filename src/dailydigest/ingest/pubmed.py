@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import time
 import xml.etree.ElementTree as ET  # types/ParseError only; parsing uses defusedxml
 from datetime import datetime, timezone
@@ -41,7 +42,7 @@ class PubMedSource:
     BASE = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
     HEADERS = {"User-Agent": "dailydigest/0.1 (mailto:noreply@example.com)"}
     SLEEP = 0.34
-    RETMAX = 50
+    RETMAX = 200
     MAX_ITEMS = 100
 
     def fetch(self, spec: SourceSpec) -> list[Item]:
@@ -141,11 +142,16 @@ class PubMedSource:
             year = pubdate.findtext("Year")
             month = pubdate.findtext("Month") or "1"
             day = pubdate.findtext("Day") or "1"
+            if year is None:
+                medline = pubdate.findtext("MedlineDate") or ""
+                m_year = re.search(r"(\d{4})", medline)
+                if m_year:
+                    year = m_year.group(1)
             if year:
                 try:
                     m = int(month) if month.isdigit() else _MONTH_ABBR.get(month.lower()[:3], 1)
                     d = int(day) if day.isdigit() else 1
-                    pub_dt = datetime(int(year), m, d, tzinfo=timezone.utc)
+                    pub_dt = datetime(int(year), m, d, 12, 0, 0, tzinfo=timezone.utc)
                 except Exception:
                     pub_dt = None
 

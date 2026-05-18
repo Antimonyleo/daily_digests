@@ -62,7 +62,7 @@ class ArxivSource:
     expressions like ``q-bio.GN+OR+q-bio.QM``).
     """
 
-    BASE = "http://export.arxiv.org/api/query"
+    BASE = "https://export.arxiv.org/api/query"
     MAX_RESULTS = 50
 
     def fetch(self, spec: SourceSpec) -> list[Item]:
@@ -89,6 +89,7 @@ class ArxivSource:
             raw_id = entry.get("id", "") or ""
             # arXiv IDs come back as the abs URL; keep only the trailing arxiv id.
             arxiv_id = raw_id.rsplit("/abs/", 1)[-1] if "/abs/" in raw_id else raw_id
+            arxiv_id = re.sub(r"^(?:oai:arxiv\.org:|arxiv:)", "", arxiv_id, flags=re.IGNORECASE)
             arxiv_id = arxiv_id.strip()
             arxiv_id = re.sub(r"v\d+$", "", arxiv_id)
             if not arxiv_id:
@@ -107,7 +108,7 @@ class ArxivSource:
                 authors = entry["author"]
 
             pub_dt: datetime | None = None
-            for key in ("published_parsed", "updated_parsed"):
+            for key in ("updated_parsed", "published_parsed"):
                 val = entry.get(key)
                 if val:
                     try:

@@ -173,6 +173,7 @@ class RunRow(Base):
 
 _ENGINE = None
 _ENGINE_LOCK = Lock()
+_INITIALIZED: bool = False
 
 
 def _engine():
@@ -202,9 +203,20 @@ def _engine():
 
 
 def init_db() -> None:
+    global _INITIALIZED
+    if _INITIALIZED:
+        return
     eng = _engine()
     Base.metadata.create_all(eng)
     _migrate_sqlite_schema(eng)
+    _INITIALIZED = True
+
+
+def _reset_init_for_testing() -> None:
+    global _INITIALIZED, _ENGINE, _SessionLocal
+    _INITIALIZED = False
+    _ENGINE = None
+    _SessionLocal = None
 
 
 def _migrate_sqlite_schema(eng) -> None:
@@ -345,35 +357,49 @@ def exclude_reviewed_items(rows: list[ItemRow]) -> list[ItemRow]:
     ids = [int(r.id) for r in rows if r.id is not None]
     if not ids:
         return rows
-    with session_scope() as s:
-        reviewed = {
-            int(item_id)
-            for item_id in s.execute(
-                select(VoteRow.item_id).where(
-                    VoteRow.item_id.in_(ids),
-                    VoteRow.value != 1,
-                )
-            ).scalars()
-        }
+    reviewed = {
+        item_id
+        for item_id, value in _latest_vote_values(ids).items()
+        if value != 1
+    }
     if not reviewed:
         return rows
-    return [r for r in rows if int(r.id) not in reviewed]
+    return [r for r in rows if r.id is None or int(r.id) not in reviewed]
+
+
+def _latest_vote_values(item_ids: list[int]) -> dict[int, int]:
+    """Return latest vote values for ids, tolerating legacy duplicate rows."""
+    if not item_ids:
+        return {}
+    with session_scope() as s:
+        rows = s.execute(
+            select(VoteRow.item_id, VoteRow.value)
+            .where(VoteRow.item_id.in_(item_ids))
+            .order_by(VoteRow.item_id, VoteRow.created_at.desc(), VoteRow.id.desc())
+        ).all()
+    latest: dict[int, int] = {}
+    for item_id, value in rows:
+        iid = int(item_id)
+        if iid not in latest:
+            latest[iid] = int(value)
+    return latest
 
 
 def exclude_previously_shown(rows: list[ItemRow], days_lookback: int = 7) -> list[ItemRow]:
-    """Drop rows shown in recently sent digests unless explicitly upvoted.
+    """Drop only explicitly dismissed rows shown in recent sent digests.
 
-    Prevents items from re-appearing day after day when the user didn't vote
-    (which is the natural "not interested" signal). Upvoted items are kept so
-    they can resurface in backfill runs.
+    A missing vote is ambiguous: the user may simply not have had time to read.
+    Treat only Neutral/Bad as a hide signal. Good items are preserved for
+    training and possible backfill resurfacing.
     """
     ids = [int(r.id) for r in rows if r.id is not None]
     if not ids:
         return rows
     cutoff = datetime.now(timezone.utc) - timedelta(days=days_lookback)
     with session_scope() as s:
-        shown_ids = set(
-            s.execute(
+        shown_ids = {
+            int(item_id)
+            for item_id in s.execute(
                 select(DigestItemRow.item_id)
                 .join(DigestRow, DigestRow.id == DigestItemRow.digest_id)
                 .where(
@@ -382,19 +408,17 @@ def exclude_previously_shown(rows: list[ItemRow], days_lookback: int = 7) -> lis
                     DigestItemRow.item_id.in_(ids),
                 )
             ).scalars()
-        )
-        upvoted_ids = set(
-            s.execute(
-                select(VoteRow.item_id).where(
-                    VoteRow.item_id.in_(ids),
-                    VoteRow.value == 1,
-                )
-            ).scalars()
-        )
-    hidden = {int(i) for i in shown_ids} - {int(i) for i in upvoted_ids}
+        }
+    latest_votes = _latest_vote_values(list(shown_ids))
+    dismissed_ids = {
+        item_id
+        for item_id, value in latest_votes.items()
+        if value != 1
+    }
+    hidden = dismissed_ids
     if not hidden:
         return rows
-    return [r for r in rows if int(r.id) not in hidden]
+    return [r for r in rows if r.id is None or int(r.id) not in hidden]
 
 
 def prune(days: int) -> int:
@@ -408,10 +432,11 @@ def prune(days: int) -> int:
     init_db()
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     with session_scope() as s:
-        voted_ids = s.execute(select(VoteRow.item_id)).scalars().all()
-        stmt = delete(ItemRow).where(ItemRow.fetched_at < cutoff)
-        if voted_ids:
-            stmt = stmt.where(ItemRow.id.not_in(list(voted_ids)))
+        voted_subq = select(VoteRow.item_id).distinct().scalar_subquery()
+        stmt = delete(ItemRow).where(
+            ItemRow.fetched_at < cutoff,
+            ItemRow.id.not_in(voted_subq),
+        )
         result = s.execute(stmt)
         return result.rowcount or 0
 

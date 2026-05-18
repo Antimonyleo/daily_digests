@@ -36,6 +36,7 @@ def _isolate_env(tmp_path, monkeypatch):
                 pass
         _store._ENGINE = None
         _store._SessionLocal = None
+        _store._INITIALIZED = False
     except Exception:
         pass
 
@@ -56,6 +57,7 @@ def _isolate_env(tmp_path, monkeypatch):
                 pass
         _store._ENGINE = None
         _store._SessionLocal = None
+        _store._INITIALIZED = False
     except Exception:
         pass
 

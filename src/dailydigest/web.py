@@ -23,6 +23,7 @@ Routes:
 from __future__ import annotations
 
 import asyncio
+from collections import Counter
 import hmac
 import json
 import logging
@@ -54,7 +55,7 @@ from . import health, votes as votes_mod
 from .config import SETTINGS, get_settings, reload_settings
 from .email_render import SECTION_META, SECTION_ORDER, safe_url
 from .pipeline import _digest_id, run_all
-from .rank.source_quality import display_breakdown
+from .rank.source_quality import display_breakdown, source_bucket
 from .store import (
     DigestRow,
     ItemRow,
@@ -130,12 +131,18 @@ def _bar_pct(value: float) -> int:
 def _breakdown_payload(row: ItemRow, persisted: dict | None = None) -> dict:
     if persisted:
         score = persisted.get("score", row.score or 0.0)
+        rank_score = persisted.get("rank_score", score)
+        confidence_score = persisted.get("confidence_score", score)
         return {
             "score": f"{float(score):.2f}" if isinstance(score, (int, float)) else str(score),
+            "rank_score": float(rank_score) if isinstance(rank_score, (int, float)) else 0.0,
+            "confidence_score": (
+                float(confidence_score) if isinstance(confidence_score, (int, float)) else 0.0
+            ),
             "tags": list(persisted.get("tags") or []),
             "why_shown": list(persisted.get("why_shown") or []),
             "content_type": str(persisted.get("content_type") or "article"),
-            "source_bucket": str(persisted.get("source_bucket") or ""),
+            "source_bucket": str(persisted.get("source_bucket") or source_bucket(row)),
             "selection_reason": str(persisted.get("selection_reason") or ""),
             "ranker_version": str(persisted.get("ranker_version") or ""),
             "components": {
@@ -148,10 +155,12 @@ def _breakdown_payload(row: ItemRow, persisted: dict | None = None) -> dict:
     breakdown = display_breakdown(row)
     return {
         "score": f"{breakdown.final:.2f}",
+        "rank_score": float(breakdown.final),
+        "confidence_score": float(breakdown.final),
         "tags": list(breakdown.tags),
         "why_shown": list(breakdown.why_shown),
         "content_type": breakdown.content_type,
-        "source_bucket": "",
+        "source_bucket": source_bucket(row),
         "selection_reason": "",
         "ranker_version": "",
         "components": {
@@ -161,6 +170,47 @@ def _breakdown_payload(row: ItemRow, persisted: dict | None = None) -> dict:
             "penalty": _bar_pct(breakdown.penalty),
         },
     }
+
+
+def _ranking_phrase(value: str | None) -> str:
+    text = " ".join(str(value or "").replace("_", " ").split()).rstrip(".")
+    if not text:
+        return ""
+    if text[:1].islower() and any(ch.isupper() for ch in text[1:]):
+        return text
+    return text[:1].upper() + text[1:]
+
+
+def _ranking_reason(value: str | None) -> str:
+    return " ".join(str(value or "").replace("_", " ").split()).rstrip(".")
+
+
+def _ranking_sentence(ranking: dict) -> str:
+    signals: list[str] = []
+    for raw in list(ranking.get("tags") or []) + list(ranking.get("why_shown") or []):
+        phrase = _ranking_phrase(raw)
+        if phrase and phrase not in signals:
+            signals.append(phrase)
+        if len(signals) == 2:
+            break
+
+    reason = _ranking_reason(str(ranking.get("selection_reason") or ""))
+    if signals and reason:
+        return f"Ranked for {', '.join(signals)}; selected via {reason}."
+    if signals:
+        return f"Ranked for {', '.join(signals)}."
+    if reason:
+        return f"Selected via {reason}."
+    return "Ranked for profile fit and source signals."
+
+
+def _entry_confidence(entry: dict) -> float:
+    ranking = entry.get("ranking") or {}
+    value = ranking.get("confidence_score", entry.get("score_raw") or 0.0)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def _digest_overview(sections: list[dict]) -> dict:
@@ -184,8 +234,8 @@ def _digest_overview(sections: list[dict]) -> dict:
         ],
         "source_mix": source_mix,
         "must_read": sorted(
-            entries,
-            key=lambda e: float(e.get("score_raw") or 0.0),
+            [entry for entry in entries if _entry_confidence(entry) >= 0.65],
+            key=_entry_confidence,
             reverse=True,
         )[:5],
         "top_journals_shown": sum(
@@ -194,6 +244,20 @@ def _digest_overview(sections: list[dict]) -> dict:
             if entry.get("ranking", {}).get("source_bucket") == "published_journal"
         ),
     }
+
+
+def _prepare_candidate_funnel(raw: list[dict]) -> dict:
+    if not raw:
+        return {}
+    funnel = dict(raw[0] or {})
+    drops = list(funnel.get("quality_gate_drops") or [])
+    reason_counts = Counter(str(drop.get("reason") or "other") for drop in drops)
+    funnel["quality_drop_reason_counts"] = [
+        {"reason": reason, "count": count}
+        for reason, count in reason_counts.most_common(5)
+    ]
+    funnel["quality_gate_drops"] = drops[:6]
+    return funnel
 
 
 _SUMMARY_FIELD_RE = re.compile(r"(?m)^(Key finding|Why read|Caveat):\s*(.*)$")
@@ -240,8 +304,10 @@ def _load_today(digest_id: str) -> tuple[list[dict], dict[int, int]]:
             iid = int(item_id)
             if iid not in current_vote:
                 current_vote[iid] = int(value)
+        # Load all vote reasons in one read instead of N+1 reads
+        _all_reasons = votes_mod._load_vote_reasons()
         current_reasons = {
-            int(item_id): votes_mod.get_vote_reasons(int(item_id))
+            int(item_id): _all_reasons.get(str(int(item_id)), [])
             for item_id in item_ids
         }
         persisted_features = load_digest_features(digest_id)
@@ -258,6 +324,10 @@ def _load_today(digest_id: str) -> tuple[list[dict], dict[int, int]]:
         by_section: dict[str, list[dict]] = {}
         for row in rows:
             key = row.section or "other"
+            ranking = _breakdown_payload(row, persisted_features.get(int(row.id)))
+            confidence_score = _entry_confidence(
+                {"ranking": ranking, "score_raw": float(row.score or 0.0)}
+            )
             if key not in by_section:
                 by_section[key] = []
                 seen_keys.append(key)
@@ -272,7 +342,9 @@ def _load_today(digest_id: str) -> tuple[list[dict], dict[int, int]]:
                     "summary": row.summary or "",
                     "summary_fields": _summary_fields(row.summary or ""),
                     "score_raw": float(row.score or 0.0),
-                    "ranking": _breakdown_payload(row, persisted_features.get(int(row.id))),
+                    "confidence_score": confidence_score,
+                    "ranking": ranking,
+                    "ranking_sentence": _ranking_sentence(ranking),
                     "current_vote": current_vote.get(int(row.id)),
                     "current_reasons": current_reasons.get(int(row.id), []),
                 }
@@ -561,6 +633,11 @@ def index(request: Request) -> Response:
     brewed = bool(sections) or _digest_exists(digest_id)
     overview = _digest_overview(sections)
     top_journal_audit = load_digest_audit(digest_id, "missed_top_journals") if brewed else []
+    candidate_funnel = (
+        _prepare_candidate_funnel(load_digest_audit(digest_id, "candidate_funnel"))
+        if brewed
+        else {}
+    )
     for audit in top_journal_audit:
         audit["url"] = safe_url(str(audit.get("url") or ""))
     response = templates.TemplateResponse(
@@ -572,6 +649,7 @@ def index(request: Request) -> Response:
             "sections": sections,
             "overview": overview,
             "top_journal_audit": top_journal_audit,
+            "candidate_funnel": candidate_funnel,
             "current_vote_per_item": current_vote,
             "ranking_status": votes_mod.lr_training_status(),
             "empty": len(sections) == 0,
@@ -606,7 +684,10 @@ def vote_reason(request: Request, item_id: int, reason: str) -> JSONResponse:
     _require_csrf(request)
     ok = votes_mod.record_vote_reason(item_id, reason)
     if not ok:
-        raise HTTPException(status_code=400, detail="unknown item or reason")
+        raise HTTPException(
+            status_code=400,
+            detail="choose Seen or Not for me before adding a reason",
+        )
     return JSONResponse(
         {
             "ok": True,
@@ -681,7 +762,21 @@ def ranking_train(request: Request) -> JSONResponse:
         _TRAIN_JOB["last_result"] = None
 
     def _target() -> None:
-        result = votes_mod.train_lr_ranker()
+        try:
+            result = votes_mod.train_lr_ranker()
+        except Exception as e:  # noqa: BLE001
+            logger.exception("ranking training failed")
+            try:
+                status_after_error = votes_mod.lr_training_status()
+            except Exception:
+                status_after_error = status
+            result = {
+                "ok": False,
+                "trained": False,
+                "reason": "training_error",
+                "message": f"Ranking training failed: {type(e).__name__}: {e}",
+                "status": status_after_error,
+            }
         with _TRAIN_LOCK:
             _TRAIN_JOB["running"] = False
             _TRAIN_JOB["last_result"] = result

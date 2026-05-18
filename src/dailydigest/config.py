@@ -44,6 +44,12 @@ class Settings(BaseSettings):
 
     candidates_for_summary: int = Field(default=60, ge=1, description="top-K after Stage A ranking")
 
+    imap_host: str = ""
+    imap_port: int = 993
+    imap_user: str = ""
+    imap_password: str = ""
+    imap_mailbox: str = "INBOX"
+
     @field_validator("user_tz")
     @classmethod
     def _validate_tz(cls, v: str) -> str:
@@ -55,7 +61,10 @@ class Settings(BaseSettings):
             return v
         except Exception:
             import logging
-            logging.getLogger(__name__).warning("USER_TZ=%r is not a valid timezone; using UTC", v)
+            logging.getLogger(__name__).error(
+                "USER_TZ=%r is not a valid timezone; using UTC instead. "
+                "This will cause the digest to run at 8am UTC, not your local 8am.", v
+            )
             return "UTC"
 
 
@@ -76,7 +85,7 @@ def load_settings() -> Settings:
 
 
 def load_profile(path: str | None = None) -> Profile:
-    settings = load_settings()
+    settings = get_settings()
     p = Path(path or settings.profile_path)
     if not p.exists():
         # fall back to example so a fresh checkout still runs
@@ -95,7 +104,7 @@ def load_profile(path: str | None = None) -> Profile:
 
 
 def load_sources(path: str | None = None) -> list[SourceSpec]:
-    settings = load_settings()
+    settings = get_settings()
     p = Path(path or settings.sources_path)
     data = yaml.safe_load(p.read_text())
     out: list[SourceSpec] = []

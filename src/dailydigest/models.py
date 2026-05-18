@@ -5,6 +5,9 @@ from datetime import datetime
 from pydantic import BaseModel, Field, field_validator
 
 
+_VALID_SECTIONS = {"research", "industry", "regulatory", "world"}
+
+
 class Item(BaseModel):
     """Normalized article/paper item flowing through the pipeline."""
 
@@ -26,6 +29,17 @@ class Item(BaseModel):
         if not v:
             return ""
         return str(v)[:4000]
+
+    @field_validator("section")
+    @classmethod
+    def _validate_section(cls, v: str) -> str:
+        if v not in _VALID_SECTIONS:
+            import logging
+            logging.getLogger(__name__).warning(
+                "Unknown section %r — item will not appear in rendered email. "
+                "Valid sections: %s", v, sorted(_VALID_SECTIONS)
+            )
+        return v
 
 
 class Profile(BaseModel):
@@ -51,6 +65,17 @@ class SourceSpec(BaseModel):
     url: str | None = None
     server: str | None = None
     section: str = "research"
+
+    @field_validator("section")
+    @classmethod
+    def _validate_section(cls, v: str) -> str:
+        _VALID = {"research", "industry", "regulatory", "world"}
+        if v not in _VALID:
+            import logging
+            logging.getLogger(__name__).warning(
+                "SourceSpec has unknown section %r; items from this source will be dropped from email", v
+            )
+        return v
     # Optional ranking metadata. These are deliberately coarse, stable knobs:
     # exact impact factors drift yearly, while source tiers are maintainable.
     quality_tier: str | None = None

@@ -159,7 +159,53 @@ class TestDedupeRankingCandidates:
         result = dedupe_ranking_candidates(items)
 
         assert len(result) == 1
-        assert result[0].source == "OpenAlex"
+        assert result[0].source == "Journal"
+
+    def test_doi_duplicate_keeps_top_journal_over_aggregator(self):
+        aggregator = _make_item(
+            "https://doi.org/10.1038/example",
+            "Important RNA delivery result",
+            "OpenAlex",
+        )
+        aggregator.abstract = "Thin metadata."
+        nature = _make_item(
+            "https://www.nature.com/articles/example",
+            "Important RNA delivery result",
+            "Nature Biotechnology",
+        )
+        nature.external_id = "10.1038/example"
+        nature.abstract = "Primary research with methods, efficacy, and mechanism details."
+
+        result = dedupe_ranking_candidates([aggregator, nature])
+
+        assert len(result) == 1
+        assert result[0].source == "Nature Biotechnology"
+
+    def test_same_day_title_duplicate_ignores_journal_issue_suffix(self):
+        published_at = datetime(2026, 5, 15, tzinfo=timezone.utc)
+        primary = Item(
+            source="Advanced Materials",
+            section="research",
+            external_id="primary",
+            url="https://example.com/primary",
+            title="Orally Administered Nanoparticle Coacervate for Therapeutic Coating of Full Gastrointestinal Tract",
+            abstract="Primary research with methods, mechanism, and delivery results.",
+            published_at=published_at,
+        )
+        issue_teaser = Item(
+            source="Advanced Materials",
+            section="research",
+            external_id="issue-teaser",
+            url="https://example.com/issue-teaser",
+            title="Orally Administered Nanoparticle Coacervate for Therapeutic Coating of Full Gastrointestinal Tract (Adv. Mater. 27/2026)",
+            abstract="Primary research with methods, mechanism, and delivery results.",
+            published_at=published_at,
+        )
+
+        result = dedupe_ranking_candidates([primary, issue_teaser])
+
+        assert len(result) == 1
+        assert result[0].title == primary.title
 
     def test_collapses_pubmed_openalex_duplicate_by_same_day_title_and_doi_transitively(self):
         pub_dt = datetime(2026, 5, 10, tzinfo=timezone.utc)

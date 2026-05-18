@@ -15,6 +15,7 @@ def _reset_store(monkeypatch, tmp_path):
     store_mod.SETTINGS = config_mod.SETTINGS
     store_mod._ENGINE = None
     store_mod._SessionLocal = None
+    store_mod._INITIALIZED = False
 
 
 def _row(source: str, external_id: str, title: str, abstract: str = "") -> store_mod.ItemRow:

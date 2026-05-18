@@ -27,6 +27,11 @@ _PMID_URL_RE = re.compile(r"pubmed\.ncbi\.nlm\.nih\.gov/(\d+)", re.IGNORECASE)
 _TRAILING_DOI_PUNCT = ".),;:"
 _TRACKING_PARAMS = {"fbclid", "gclid", "mc_cid", "mc_eid"}
 _RSS_TRACKING_PARAMS = {"utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content"}
+_JOURNAL_ISSUE_SUFFIX_RE = re.compile(
+    r"\s*\((?:adv\.?\s*mater\.?|small|angew\.?\s*chem\.?|chem\.?\s*sci\.?|"
+    r"jacs|acs\s*nano|nano\s*lett\.?|science|nature)[^)]*\b\d{1,3}/\d{4}\)$",
+    re.IGNORECASE,
+)
 
 
 def canonicalize_url(url: str) -> str:
@@ -67,17 +72,66 @@ def dedupe_ranking_candidates[T](items: list[T]) -> list[T]:
     Stored rows are unique only within a source. Ranking works across all sources,
     so use durable cross-source keys first (DOI/PMID/arXiv/URL), then a cautious
     same-day title fallback for feeds that do not expose shared identifiers.
+    When duplicates disagree, keep the richest/highest-quality representative
+    rather than whichever source happened to be fetched first.
     """
-    seen: set[str] = set()
+    key_to_index: dict[str, int] = {}
     out: list[T] = []
     for it in items:
         keys = _candidate_keys(it)
-        duplicate = any(k in seen for k in keys)
-        seen.update(keys)
-        if duplicate:
+        matched = [key_to_index[k] for k in keys if k in key_to_index]
+        if not matched:
+            idx = len(out)
+            out.append(it)
+            for key in keys:
+                key_to_index[key] = idx
             continue
-        out.append(it)
+        idx = matched[0]
+        current = out[idx]
+        if _candidate_representative_score(it) > _candidate_representative_score(current):
+            out[idx] = it
+        for key in keys:
+            key_to_index[key] = idx
     return out
+
+
+def _candidate_representative_score(it: Any) -> float:
+    """Prefer direct, high-quality, information-rich source rows for duplicates."""
+    try:
+        from .rank.source_quality import infer_source_quality, source_bucket
+
+        bucket = source_bucket(it)
+        quality = infer_source_quality(
+            str(getattr(it, "source", "") or ""),
+            str(getattr(it, "section", "") or ""),
+        )
+        bucket_bonus = {
+            "published_journal": 0.24,
+            "published_database": 0.14,
+            "other_research": 0.08,
+            "bio_med_preprint": 0.02,
+            "arxiv_other": 0.02,
+            "preprint_other": 0.02,
+            "arxiv_cs": 0.01,
+            "aggregator": -0.12,
+        }.get(bucket, 0.0)
+        source_score = float(quality.prestige_score) + bucket_bonus
+    except Exception:
+        source_score = 0.0
+    abstract_len = len(str(getattr(it, "abstract", "") or "").strip())
+    title_len = len(str(getattr(it, "title", "") or "").strip())
+    url = str(getattr(it, "url", "") or "").lower()
+    direct_url_bonus = 0.04 if "doi.org" in url or "pubmed" in url else 0.0
+    issue_suffix_penalty = (
+        0.02 if _JOURNAL_ISSUE_SUFFIX_RE.search(str(getattr(it, "title", "") or "")) else 0.0
+    )
+    return (
+        source_score
+        + min(0.16, abstract_len / 2400)
+        + min(0.04, title_len / 2500)
+        + direct_url_bonus
+        - issue_suffix_penalty
+    )
 
 
 def _candidate_keys(it: Any) -> list[str]:
@@ -122,6 +176,19 @@ def _extract_doi(*values: str) -> str | None:
         text = unquote(value or "").strip()
         text = re.sub(r"^https?://(?:dx\.)?doi\.org/", "", text, flags=re.IGNORECASE)
         text = re.sub(r"^doi:\s*", "", text, flags=re.IGNORECASE)
+        # Try to reconstruct DOI from publisher article URL patterns
+        # nature.com/articles/s41586-2026-01234-5 -> 10.1038/s41586-2026-01234-5
+        _nature_m = re.search(r"nature\.com/articles/([a-z0-9]+-[0-9]+-[0-9]+-[\da-z]+)", text, re.IGNORECASE)
+        if _nature_m:
+            doi = f"10.1038/{_nature_m.group(1)}".lower()
+            if doi.startswith("10.") and "/" in doi:
+                return doi
+        # science.org DOI in URL
+        _science_m = re.search(r"science\.org/doi/(10\.[0-9]{4,}/\S+)", text, re.IGNORECASE)
+        if _science_m:
+            doi = _science_m.group(1).strip().rstrip(_TRAILING_DOI_PUNCT).lower()
+            if doi.startswith("10.") and "/" in doi:
+                return doi
         match = _DOI_RE.search(text)
         doi = (match.group(0) if match else text if text.lower().startswith("10.") else "")
         doi = doi.strip().rstrip(_TRAILING_DOI_PUNCT).lower()
@@ -202,14 +269,19 @@ def _same_day_title_key(title: str, dt: datetime | None) -> str:
     """
     if dt is None:
         return ""
-    normalized = re.sub(r"[^a-z0-9]+", " ", title.lower()).strip()
+    normalized = _normalized_title_key(title)
     normalized = re.sub(r"\s+", " ", normalized)
-    if len(normalized) < 20:
+    if len(normalized) < 12:
         return ""
     import calendar
     ts = int(dt.timestamp()) if dt.tzinfo is not None else calendar.timegm(dt.timetuple())
     bucket = ts // (12 * 3600)
     return f"t12h:{bucket}:{normalized}"
+
+
+def _normalized_title_key(title: str) -> str:
+    title = _JOURNAL_ISSUE_SUFFIX_RE.sub("", title.strip())
+    return re.sub(r"[^a-z0-9]+", " ", title.lower()).strip()
 
 
 def filter_english(items: list[Item]) -> list[Item]:

@@ -113,6 +113,11 @@ class RSSSource:
         if feed.bozo and not feed.entries:
             logger.warning("RSS parse error for %s: %s", getattr(spec, "name", "?"), getattr(feed, "bozo_exception", "error"))
             return []
+        if feed.bozo:
+            logger.info("%s: bozo flag set (%s); proceeding with %d entries",
+                        getattr(spec, "name", "RSSSource"),
+                        getattr(feed, "bozo_exception", "?"),
+                        len(feed.entries))
         out: list[Item] = []
         for entry in feed.entries[:200]:
             url = canonicalize_url(entry.get("link", ""))

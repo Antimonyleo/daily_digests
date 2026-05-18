@@ -6,6 +6,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 import threading
+import time
 from urllib.parse import urlencode
 
 import pytest
@@ -147,6 +148,7 @@ def test_index_escapes_feed_html_and_rejects_unsafe_links(tmp_path, monkeypatch)
     store_mod.SETTINGS = config_mod.SETTINGS
     store_mod._ENGINE = None
     store_mod._SessionLocal = None
+    store_mod._INITIALIZED = False
     profile_path = tmp_path / "profile.yaml"
     profile_path.write_text("name: Ada\nbio: Researcher.\nkeywords: []\ndownweight: []\n")
     monkeypatch.setattr(web, "_get_profile_path", lambda: profile_path)
@@ -190,6 +192,7 @@ def test_index_renders_reader_card_hierarchy_and_feedback_controls(tmp_path, mon
     store_mod.SETTINGS = config_mod.SETTINGS
     store_mod._ENGINE = None
     store_mod._SessionLocal = None
+    store_mod._INITIALIZED = False
     profile_path = tmp_path / "profile.yaml"
     profile_path.write_text("name: Ada\nbio: Researcher.\nkeywords: []\ndownweight: []\n")
     monkeypatch.setattr(web, "_get_profile_path", lambda: profile_path)
@@ -198,25 +201,76 @@ def test_index_renders_reader_card_hierarchy_and_feedback_controls(tmp_path, mon
     store_mod.init_db()
     with store_mod.session_scope() as s:
         s.add(store_mod.DigestRow(id="2026-05-05", item_count=1))
-        s.add(
-            store_mod.ItemRow(
-                source="Nature",
-                section="research",
-                external_id="ranking-web",
-                url="https://example.com/ranking-web",
-                title="First-in-class RNA delivery study",
-                abstract="A breakthrough primary result.",
-                published_at=datetime.now(timezone.utc),
-                summary=(
-                    "Key finding: A delivery method improved tissue targeting.\n"
-                    "Why read: It may matter for RNA therapeutic design.\n"
-                    "Caveat: None obvious from the feed text."
-                ),
-                score=0.91,
-                digest_id="2026-05-05",
-                item_label="R1",
-            )
+        item = store_mod.ItemRow(
+            source="Nature",
+            section="research",
+            external_id="ranking-web",
+            url="https://example.com/ranking-web",
+            title="First-in-class RNA delivery study",
+            abstract="A breakthrough primary result.",
+            published_at=datetime.now(timezone.utc),
+            summary=(
+                "Key finding: A delivery method improved tissue targeting.\n"
+                "Why read: It may matter for RNA therapeutic design.\n"
+                "Caveat: None obvious from the feed text."
+            ),
+            score=0.91,
+            digest_id="2026-05-05",
+            item_label="R1",
         )
+        s.add(item)
+        s.flush()
+        item_id = int(item.id)
+    store_mod.write_digest_features(
+        "2026-05-05",
+        [
+            (
+                "R1",
+                item_id,
+                0.91,
+                {
+                    "score": 0.91,
+                    "tags": ["High-quality source", "Fresh signal"],
+                    "why_shown": ["Reliable source"],
+                    "content_type": "article",
+                    "source_bucket": "published_journal",
+                    "selection_reason": "protected published-journal slot",
+                    "topic": 0.82,
+                    "source": 0.95,
+                    "novelty": 0.55,
+                    "penalty": 0.0,
+                },
+            )
+        ],
+    )
+    store_mod.write_digest_audit(
+        "2026-05-05",
+        "missed_top_journals",
+        [
+            {
+                "title": "Missed journal article",
+                "source": "Science",
+                "url": "https://example.com/missed",
+                "score": 0.88,
+            }
+        ],
+    )
+    store_mod.write_digest_audit(
+        "2026-05-05",
+        "candidate_funnel",
+        [
+            {
+                "recent_items": 20,
+                "after_reviewed_filter": 18,
+                "after_recently_dismissed_filter": 17,
+                "after_quality_gate": 15,
+                "after_cross_source_dedupe": 12,
+                "quality_gate_drops": [
+                    {"reason": "thin abstract from non-protected source", "title": "Thin"}
+                ],
+            }
+        ],
+    )
 
     response = web.index(_request("GET", "/"))
     text = _text_payload(response)
@@ -224,7 +278,14 @@ def test_index_renders_reader_card_hierarchy_and_feedback_controls(tmp_path, mon
     assert response.status_code == 200
     assert "Must read first" in text
     assert "Today’s source mix" in text
+    assert "Not shown today" in text
+    assert "Missed journal article" in text
+    assert "Brew diagnostics" in text
+    assert "thin abstract from non-protected source" in text
+    assert "after dedupe" in text
+    assert "Top-journal audit" not in text
     assert "Lead story" in text
+    assert "Ranked for High-quality source, Fresh signal; selected via protected published-journal slot." in text
     assert "Why shown?" in text
     assert "editorial-signals" in text
     assert "score-bars" not in text
@@ -234,14 +295,83 @@ def test_index_renders_reader_card_hierarchy_and_feedback_controls(tmp_path, mon
     assert 'data-filter="published"' in text
     assert 'data-filter="preprints"' in text
     assert 'data-filter="ai-cs"' in text
+    assert 'data-filter-group="status"' in text
+    assert 'data-filter-group="source"' in text
+    assert 'data-filter-group="section"' in text
+    assert 'bucket === "preprint_other"' in text
     assert "summary-fields" in text
     assert "Key finding" in text
+    assert "Relevant" in text
+    assert "Seen" in text
+    assert "Not for me" in text
     assert "More like this" in text
     assert "Less like this" in text
     assert "No response saved yet." in text
     assert "Too promotional" in text
     assert "Update my ranking" in text
     assert "Learned" not in text
+
+
+def test_index_uses_confidence_not_relative_rank_for_priority_labels(tmp_path, monkeypatch):
+    from dailydigest import config as config_mod
+    from dailydigest import store as store_mod
+    from dailydigest import web
+
+    monkeypatch.setenv("DB_PATH", str(tmp_path / "digest.db"))
+    config_mod.reload_settings()
+    store_mod.SETTINGS = config_mod.SETTINGS
+    store_mod._ENGINE = None
+    store_mod._SessionLocal = None
+    store_mod._INITIALIZED = False
+    profile_path = tmp_path / "profile.yaml"
+    profile_path.write_text("name: Ada\nbio: Researcher.\nkeywords: []\ndownweight: []\n")
+    monkeypatch.setattr(web, "_get_profile_path", lambda: profile_path)
+    monkeypatch.setattr(web, "_digest_id", lambda: "2026-05-05")
+
+    store_mod.init_db()
+    with store_mod.session_scope() as s:
+        s.add(store_mod.DigestRow(id="2026-05-05", item_count=1))
+        item = store_mod.ItemRow(
+            source="OpenAlex",
+            section="research",
+            external_id="weak-relative",
+            url="https://example.com/weak-relative",
+            title="Weak relative winner",
+            abstract="Thin metadata.",
+            score=0.99,
+            digest_id="2026-05-05",
+            item_label="R1",
+        )
+        s.add(item)
+        s.flush()
+        item_id = int(item.id)
+
+    store_mod.write_digest_features(
+        "2026-05-05",
+        [
+            (
+                "R1",
+                item_id,
+                0.99,
+                {
+                    "score": 0.99,
+                    "rank_score": 0.99,
+                    "confidence_score": 0.41,
+                    "source_bucket": "aggregator",
+                    "tags": ["Aggregator source"],
+                    "why_shown": [],
+                },
+            )
+        ],
+    )
+
+    response = web.index(_request("GET", "/"))
+    text = _text_payload(response)
+
+    assert response.status_code == 200
+    assert "Quick skim" in text
+    assert "Lead story" not in text
+    assert "Must read first" not in text
 
 
 def test_load_today_uses_latest_vote_when_legacy_duplicates_exist(tmp_path, monkeypatch):
@@ -297,6 +427,7 @@ def test_load_today_uses_latest_vote_when_legacy_duplicates_exist(tmp_path, monk
     store_mod.SETTINGS = config_mod.SETTINGS
     store_mod._ENGINE = None
     store_mod._SessionLocal = None
+    store_mod._INITIALIZED = False
 
     sections, current_vote = web._load_today("2026-05-12")
 
@@ -365,6 +496,7 @@ def test_vote_api_requires_csrf_and_latest_vote_wins(tmp_path, monkeypatch):
     store_mod.SETTINGS = config_mod.SETTINGS
     store_mod._ENGINE = None
     store_mod._SessionLocal = None
+    store_mod._INITIALIZED = False
 
     store_mod.init_db()
     with store_mod.session_scope() as s:
@@ -428,6 +560,7 @@ def test_vote_reason_api_requires_csrf_and_persists_reason(tmp_path, monkeypatch
     store_mod.SETTINGS = config_mod.SETTINGS
     store_mod._ENGINE = None
     store_mod._SessionLocal = None
+    store_mod._INITIALIZED = False
 
     store_mod.init_db()
     with store_mod.session_scope() as s:
@@ -452,6 +585,7 @@ def test_vote_reason_api_requires_csrf_and_persists_reason(tmp_path, monkeypatch
     assert excinfo.value.status_code == 403
 
     headers = {"X-CSRF-Token": web._CSRF_TOKEN}
+    web.vote(_request("POST", f"/vote/{item_id}/-1", headers=headers), item_id, -1)
     response = web.vote_reason(
         _request("POST", f"/vote/{item_id}/reason/low_impact", headers=headers),
         item_id,
@@ -487,6 +621,7 @@ def test_ranking_status_api_reports_vote_counts_without_training(tmp_path, monke
     store_mod.SETTINGS = config_mod.SETTINGS
     store_mod._ENGINE = None
     store_mod._SessionLocal = None
+    store_mod._INITIALIZED = False
 
     class DummyRanker:
         def load(self):
@@ -539,6 +674,7 @@ def test_ranking_train_api_uses_monkeypatched_dataset_and_ranker(tmp_path, monke
     store_mod.SETTINGS = config_mod.SETTINGS
     store_mod._ENGINE = None
     store_mod._SessionLocal = None
+    store_mod._INITIALIZED = False
     monkeypatch.setattr(votes_mod, "MIN_VOTES_FOR_LR", 2)
 
     class DummyRanker:
@@ -601,6 +737,59 @@ def test_ranking_train_api_uses_monkeypatched_dataset_and_ranker(tmp_path, monke
     assert payload2["started"] is False
     assert payload2["running"] is True
     release_train.set()
+    for _ in range(100):
+        if not web._TRAIN_JOB["running"]:
+            break
+        time.sleep(0.01)
+    assert web._TRAIN_JOB["running"] is False
+
+
+def test_ranking_train_thread_clears_running_after_exception(tmp_path, monkeypatch):
+    from dailydigest import config as config_mod
+    from dailydigest import store as store_mod
+    from dailydigest import votes as votes_mod
+    from dailydigest import web
+
+    monkeypatch.setenv("DB_PATH", str(tmp_path / "digest.db"))
+    config_mod.reload_settings()
+    store_mod.SETTINGS = config_mod.SETTINGS
+    store_mod._ENGINE = None
+    store_mod._SessionLocal = None
+    store_mod._INITIALIZED = False
+    monkeypatch.setattr(votes_mod, "MIN_VOTES_FOR_LR", 1)
+    monkeypatch.setattr(
+        votes_mod,
+        "lr_training_status",
+        lambda: {
+            "can_train": True,
+            "remaining_votes_for_lr": 0,
+            "vote_counts": {"good": 1, "bad": 0, "neutral": 0, "signed": 1, "total": 1},
+            "min_votes_for_lr": 1,
+            "model_trained": False,
+            "training_status": "ready",
+            "ranking_status": "cosine_baseline",
+        },
+    )
+
+    def _raise_train():
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(votes_mod, "train_lr_ranker", _raise_train)
+    web._TRAIN_JOB["running"] = False
+    web._TRAIN_JOB["last_result"] = None
+
+    response = web.ranking_train(
+        _request("POST", "/ranking/train", headers={"X-CSRF-Token": web._CSRF_TOKEN})
+    )
+
+    assert response.status_code == 200
+    for _ in range(100):
+        if not web._TRAIN_JOB["running"]:
+            break
+        time.sleep(0.01)
+    assert web._TRAIN_JOB["running"] is False
+    assert web._TRAIN_JOB["last_result"]["ok"] is False
+    assert web._TRAIN_JOB["last_result"]["reason"] == "training_error"
 
 
 def test_run_start_rejects_foreign_origin_and_detects_duplicate(monkeypatch):

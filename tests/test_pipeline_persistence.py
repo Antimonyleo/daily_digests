@@ -14,8 +14,48 @@ def _reset_store(tmp_path, monkeypatch):
     store_mod.SETTINGS = config_mod.SETTINGS
     store_mod._ENGINE = None
     store_mod._SessionLocal = None
+    store_mod._INITIALIZED = False
     store_mod.init_db()
     return store_mod
+
+
+def test_quality_gate_protects_high_quality_journal_metadata_and_audits_drops():
+    from dailydigest import pipeline as pipeline_mod
+    from dailydigest import store as store_mod
+
+    protected = store_mod.ItemRow(
+        source="Nature",
+        section="research",
+        external_id="protected",
+        url="https://example.com/protected",
+        title="Short",
+        abstract="",
+    )
+    thin_low_quality = store_mod.ItemRow(
+        source="Minor Journal",
+        section="research",
+        external_id="thin",
+        url="https://example.com/thin",
+        title="Thin low-quality research metadata",
+        abstract="Too short.",
+    )
+    fillers = [
+        store_mod.ItemRow(
+            source="Nature Biotechnology",
+            section="research",
+            external_id=f"filler-{idx}",
+            url=f"https://example.com/filler-{idx}",
+            title=f"Substantive protected research item {idx}",
+            abstract="Primary research with methods, efficacy, and mechanism details.",
+        )
+        for idx in range(8)
+    ]
+
+    kept, drops = pipeline_mod._quality_gate([protected, thin_low_quality, *fillers])
+
+    assert protected in kept
+    assert thin_low_quality not in kept
+    assert any(drop["reason"] == "thin abstract from non-protected source" for drop in drops)
 
 
 def test_run_all_persists_summaries_for_web_view(monkeypatch, tmp_path):
@@ -29,6 +69,7 @@ def test_run_all_persists_summaries_for_web_view(monkeypatch, tmp_path):
     store_mod.SETTINGS = config_mod.SETTINGS
     store_mod._ENGINE = None
     store_mod._SessionLocal = None
+    store_mod._INITIALIZED = False
 
     store_mod.init_db()
     with store_mod.session_scope() as s:
@@ -59,6 +100,9 @@ def test_run_all_persists_summaries_for_web_view(monkeypatch, tmp_path):
     with store_mod.session_scope() as s:
         saved = s.get(store_mod.ItemRow, item_id)
         assert saved.summary == "Persisted summary."
+    audit = store_mod.load_digest_audit(pipeline_mod._digest_id(), "candidate_funnel")
+    assert audit
+    assert audit[0]["after_cross_source_dedupe"] == 1
 
 
 def test_non_dry_run_skips_when_digest_already_sent(monkeypatch, tmp_path):

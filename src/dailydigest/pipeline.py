@@ -19,11 +19,13 @@ from .health import IngestStats
 from .ingest import dispatch_source
 from .models import Item
 from .rank.profile import build_profile_matrix
-from .rank.ranker import pick_top_per_section, score_items, score_items_with_features
+from .rank.ranker import HYBRID_COSINE_W, HYBRID_LR_W, pick_top_per_section, score_items, score_items_with_features
 from .rank.source_quality import (
+    RANKER_VERSION,
     breakdown_payload,
     is_high_quality_journal_source,
     source_bucket,
+    should_skip_item,
 )
 from .store import (
     DigestRow,
@@ -64,7 +66,20 @@ _TITLE_BLOCKLIST = re.compile(
 )
 
 
-def _quality_gate(rows: list[ItemRow]) -> list[ItemRow]:
+def _audit_item(row: ItemRow, stage: str, reason: str) -> dict[str, Any]:
+    return {
+        "stage": stage,
+        "reason": reason,
+        "item_id": int(row.id) if isinstance(row.id, int) else None,
+        "source": row.source or "",
+        "section": row.section or "",
+        "title": row.title or "",
+        "url": row.url or "",
+        "source_bucket": source_bucket(row),
+    }
+
+
+def _quality_gate(rows: list[ItemRow]) -> tuple[list[ItemRow], list[dict[str, Any]]]:
     """Pre-filter obviously low-quality candidates before scoring.
 
     Drops items that are clearly not useful: very short titles, editorial
@@ -72,22 +87,30 @@ def _quality_gate(rows: list[ItemRow]) -> list[ItemRow]:
     Skipped when the pool is < 10 items to preserve test/backfill behaviour.
     """
     if len(rows) < 10:
-        return rows
+        return rows, []
     out: list[ItemRow] = []
+    drops: list[dict[str, Any]] = []
     for r in rows:
         title = (r.title or "").strip()
         abstract = (r.abstract or "").strip()
-        if len(title) < 15:
+        high_quality = is_high_quality_journal_source(r)
+        if len(title) < 15 and not high_quality:
+            drops.append(_audit_item(r, "quality_gate", "short title"))
             continue
         if _TITLE_BLOCKLIST.match(title):
+            drops.append(_audit_item(r, "quality_gate", "metadata or low-information title"))
             continue
-        if (r.section or "").lower() == "research" and len(abstract) < 30:
+        if should_skip_item(r):
+            drops.append(_audit_item(r, "quality_gate", "low-information commentary or cover item"))
+            continue
+        if (r.section or "").lower() == "research" and len(abstract) < 30 and not high_quality:
+            drops.append(_audit_item(r, "quality_gate", "thin abstract from non-protected source"))
             continue
         out.append(r)
     dropped = len(rows) - len(out)
     if dropped:
         logger.info("quality_gate: dropped %d low-quality candidates", dropped)
-    return out
+    return out, drops[:100]
 
 SECTION_LABEL_PREFIX: dict[str, str] = {
     "research": "R",
@@ -230,7 +253,7 @@ def _selection_reason(row: ItemRow, features: dict[str, Any]) -> str:
             return "published-paper database slot"
         if bucket == "arxiv_cs":
             return "capped arXiv CS slot"
-        if bucket in {"arxiv_other", "bio_med_preprint"}:
+        if bucket in {"arxiv_other", "bio_med_preprint", "preprint_other"}:
             return "capped preprint slot"
         if bucket == "aggregator":
             return "capped aggregator slot"
@@ -294,6 +317,8 @@ def _score_items_for_pipeline(
                 "topic_score": float(score),
                 "learned_score": 0.0,
                 "final_score": float(score),
+                "rank_score": float(score),
+                "confidence_score": float(score),
                 "reason_penalty": 0.0,
                 "source_bucket": source_bucket(row),
                 "scoring_mode": "legacy",
@@ -321,6 +346,8 @@ def _score_items_for_pipeline(
                 "topic_score": float(score),
                 "learned_score": 0.0,
                 "final_score": float(score),
+                "rank_score": float(score),
+                "confidence_score": float(score),
                 "reason_penalty": 0.0,
                 "source_bucket": source_bucket(row),
                 "scoring_mode": "legacy",
@@ -431,13 +458,26 @@ def run_all(
     else:
         gap = days_since_last_sent(exclude_digest_id=digest_id)
         days = max(2, min(gap + 1, 7)) if gap >= 0 else 2
-    recent = exclude_previously_shown(exclude_reviewed_items(recent_items(days=days)))
-    recent = _quality_gate(recent)
-    items = dedupe_ranking_candidates(recent)
+    recent_raw = recent_items(days=days)
+    after_reviewed = exclude_reviewed_items(recent_raw)
+    after_shown = exclude_previously_shown(after_reviewed)
+    items = dedupe_ranking_candidates(after_shown)          # dedupe FIRST
+    quality_rows, quality_drops = _quality_gate(items)      # then gate
+    items = quality_rows
+    funnel_audit = {
+        "ranker_version": RANKER_VERSION,
+        "window_days": days,
+        "recent_items": len(recent_raw),
+        "after_reviewed_filter": len(after_reviewed),
+        "after_recently_dismissed_filter": len(after_shown),
+        "after_cross_source_dedupe": len(quality_rows) + len(quality_drops),
+        "after_quality_gate": len(items),
+        "quality_gate_drops": quality_drops,
+    }
     logger.info(
-        "ranking %d recent items after cross-source dedupe (%d before, window=%d days)",
+        "ranking %d recent items after quality gate (%d before, window=%d days)",
         len(items),
-        len(recent),
+        len(quality_rows) + len(quality_drops),
         days,
     )
     scored, score_features = _score_items_for_pipeline(items, profile_vec, profile.downweight)
@@ -445,15 +485,63 @@ def run_all(
     # Apply negative-interest penalty when the profile has configured negative interests
     if _build_neg_centroid is not None:
         try:
-            _neg_centroid = _build_neg_centroid(profile)
-            if _neg_centroid is not None:
-                from .rank.embedding_cache import embed_item_rows as _embed_rows
-                _neg_vecs = _embed_rows([row for row, _ in scored])
-                _neg_sims = _neg_vecs @ _neg_centroid
+            import numpy as np
+            from .rank.embedding_cache import embed_item_rows as _embed_rows
+            _neg_vecs = _embed_rows([row for row, _ in scored])
+
+            # Detect scoring mode to scale penalty correctly
+            _first_mode = next(
+                (v.get("scoring_mode", "cosine") for v in score_features.values()), "cosine"
+            )
+            _neg_scale = HYBRID_LR_W if _first_mode == "hybrid_lr" else 1.0
+
+            # Try per-axis penalty (max similarity to any individual negative interest)
+            _neg_sims = None
+            try:
+                from .rank.profile import build_negative_vectors
+                _neg_axes = build_negative_vectors(profile)  # list of individual vectors
+            except ImportError:
+                _neg_axes = None
+
+            if _neg_axes is not None and len(_neg_axes) > 0:
+                _neg_mat = np.array(_neg_axes, dtype=np.float32)  # (n_neg, embed_dim)
+                # Normalize neg vectors
+                _neg_norms = np.linalg.norm(_neg_mat, axis=1, keepdims=True)
+                _neg_mat_n = _neg_mat / (_neg_norms + 1e-9)
+                _neg_vecs_n = _neg_vecs / (np.linalg.norm(_neg_vecs, axis=1, keepdims=True) + 1e-9)
+                all_neg_sims = _neg_vecs_n @ _neg_mat_n.T  # (n_items, n_neg)
+                # Use max over negative interests, threshold at 0.35
+                _neg_sims = np.maximum(0.0, all_neg_sims.max(axis=1) - 0.35)
+            elif _build_neg_centroid is not None:
+                _neg_centroid = _build_neg_centroid(profile)
+                if _neg_centroid is not None:
+                    _neg_sims = _neg_vecs @ _neg_centroid
+                else:
+                    _neg_sims = None
+            else:
+                _neg_sims = None
+
+            if _neg_sims is not None:
                 scored = [
-                    (row, score - 0.28 * max(0.0, float(_neg_sims[i])))
+                    (row, score - (0.28 * _neg_scale) * max(0.0, float(_neg_sims[i])))
                     for i, (row, score) in enumerate(scored)
                 ]
+                for i, (row, score) in enumerate(scored):
+                    penalty = (0.28 * _neg_scale) * max(0.0, float(_neg_sims[i]))
+                    key = _row_feature_key(row)
+                    if key in score_features:
+                        previous_confidence = float(
+                            score_features[key].get(
+                                "confidence_score",
+                                score_features[key].get("final_score", score + penalty),
+                            )
+                        )
+                        score_features[key]["negative_interest_penalty"] = float(penalty)
+                        score_features[key]["confidence_score"] = float(
+                            previous_confidence - penalty
+                        )
+                        score_features[key]["rank_score"] = float(score)
+                        score_features[key]["final_score"] = float(score)
                 scored.sort(key=lambda t: t[1], reverse=True)
         except Exception as _e:  # noqa: BLE001
             logger.warning("negative interest penalty failed: %s", _e)
@@ -508,6 +596,13 @@ def run_all(
                         learned_score=float(_feature(row).get("learned_score", 0.0)),
                         reason_penalty=float(_feature(row).get("reason_penalty", 0.0)),
                         final_score=float(score),
+                        rank_score=float(score),
+                        confidence_score=float(
+                            _feature(row).get("confidence_score", score)
+                        ),
+                        negative_interest_penalty=float(
+                            _feature(row).get("negative_interest_penalty", 0.0)
+                        ),
                         selection_reason=_selection_reason(row, _feature(row)),
                         scoring_mode=str(_feature(row).get("scoring_mode", "cosine")),
                     ),
@@ -516,6 +611,7 @@ def run_all(
             ],
         )
         write_digest_audit(digest_id, "missed_top_journals", top_journal_audit)
+        write_digest_audit(digest_id, "candidate_funnel", [funnel_audit])
     else:
         logger.info(
             "digest %s already has a sent row; skipping write_digest to preserve sent_at",

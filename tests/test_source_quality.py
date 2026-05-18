@@ -158,6 +158,26 @@ def test_commentary_with_new_method_signal_is_kept():
     assert should_skip_item(Row()) is False
 
 
+def test_issue_publication_metadata_is_skipped():
+    class Row:
+        source = "ACS Chemical Biology"
+        section = "research"
+        title = "Issue Publication Information"
+        abstract = "Volume 21, issue 5 publication metadata."
+
+    assert should_skip_item(Row()) is True
+
+
+def test_author_intro_metadata_is_skipped():
+    class Row:
+        source = "ACS Chemical Biology"
+        section = "research"
+        title = "Introducing Our Authors"
+        abstract = "Author profile and issue metadata."
+
+    assert should_skip_item(Row()) is True
+
+
 def test_topic_fit_can_beat_prestige_when_journal_item_is_weak_match():
     class Row:
         section = "research"

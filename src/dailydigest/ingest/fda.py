@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -14,6 +15,8 @@ from tenacity import (
 
 from ..models import Item, SourceSpec
 
+logger = logging.getLogger(__name__)
+
 
 @retry(
     stop=stop_after_attempt(3),
@@ -22,7 +25,7 @@ from ..models import Item, SourceSpec
     reraise=False,
 )
 def _get_json(url: str, params: dict[str, str]) -> dict:
-    with httpx.Client(timeout=20.0, follow_redirects=True) as client:
+    with httpx.Client(timeout=20.0, follow_redirects=True, headers={"User-Agent": "dailydigest/0.1"}) as client:
         resp = client.get(url, params=params)
         resp.raise_for_status()
         return resp.json()
@@ -58,7 +61,8 @@ class FDASource:
         out: list[Item] = []
         try:
             payload = _get_json(url, params)
-        except Exception:
+        except Exception as e:
+            logger.warning("%s fetch failed: %s: %s", getattr(spec, "name", "FDASource"), type(e).__name__, str(e)[:200])
             return out
         if not payload:
             return out
