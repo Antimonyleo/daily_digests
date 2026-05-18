@@ -39,6 +39,12 @@ def _isolate_env(tmp_path, monkeypatch):
         _store._INITIALIZED = False
     except Exception:
         pass
+    # Reset LR ranker cache so tests don't inherit a loaded model
+    try:
+        from dailydigest.rank.ranker import reset_lr_cache
+        reset_lr_cache()
+    except Exception:
+        pass
 
     yield
 
@@ -58,6 +64,12 @@ def _isolate_env(tmp_path, monkeypatch):
         _store._ENGINE = None
         _store._SessionLocal = None
         _store._INITIALIZED = False
+    except Exception:
+        pass
+    # Reset LR ranker cache so tests don't inherit a loaded model
+    try:
+        from dailydigest.rank.ranker import reset_lr_cache
+        reset_lr_cache()
     except Exception:
         pass
 

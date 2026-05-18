@@ -658,3 +658,112 @@ class TestPickTopPerSection:
 
         assert strong_preprint in [row for row, _score in result]
         assert sum(1 for row, _score in result if row.source == "bioRxiv (recent)") == 1
+
+
+# ---------------------------------------------------------------------------
+# _freshness_penalty
+# ---------------------------------------------------------------------------
+
+class TestFreshnessPenalty:
+    """Tests for _freshness_penalty across all four section curves."""
+
+    def _row(self, section: str, days_ago: float):
+        from unittest.mock import MagicMock
+        from datetime import datetime, timedelta, timezone
+        row = MagicMock()
+        row.section = section
+        row.published_at = datetime.now(timezone.utc) - timedelta(days=days_ago)
+        return row
+
+    def test_research_fresh_paper_gets_bonus(self):
+        from dailydigest.rank.ranker import _freshness_penalty
+        pen = _freshness_penalty(self._row("research", 1))
+        assert pen < 0, f"Fresh research paper should get a bonus (negative penalty), got {pen}"
+        assert pen == pytest.approx(-0.05, abs=0.01)
+
+    def test_research_old_paper_gets_penalty(self):
+        from dailydigest.rank.ranker import _freshness_penalty
+        pen = _freshness_penalty(self._row("research", 40))
+        assert pen > 0, "Old research paper should get a positive penalty"
+        assert pen <= 0.09  # capped
+
+    def test_research_no_date_returns_zero(self):
+        from unittest.mock import MagicMock
+        from dailydigest.rank.ranker import _freshness_penalty
+        row = MagicMock()
+        row.section = "research"
+        row.published_at = None
+        assert _freshness_penalty(row) == 0.0
+
+    def test_world_fresh_item_no_penalty(self):
+        from dailydigest.rank.ranker import _freshness_penalty
+        pen = _freshness_penalty(self._row("world", 0.1))
+        assert pen == pytest.approx(0.0, abs=0.02)
+
+    def test_world_stale_item_capped_at_0_20(self):
+        from dailydigest.rank.ranker import _freshness_penalty
+        pen = _freshness_penalty(self._row("world", 14))
+        assert pen == pytest.approx(0.20, abs=0.01)
+
+    def test_industry_follows_same_curve_as_world(self):
+        from dailydigest.rank.ranker import _freshness_penalty
+        pen_w = _freshness_penalty(self._row("world", 3))
+        pen_i = _freshness_penalty(self._row("industry", 3))
+        assert pen_w == pytest.approx(pen_i, abs=0.001)
+
+    def test_regulatory_ramps_slowly(self):
+        from dailydigest.rank.ranker import _freshness_penalty
+        pen_2d = _freshness_penalty(self._row("regulatory", 2))
+        pen_90d = _freshness_penalty(self._row("regulatory", 100))
+        assert 0 <= pen_2d < pen_90d
+        assert pen_90d == pytest.approx(0.10, abs=0.01)
+
+
+# ---------------------------------------------------------------------------
+# _mmr_select
+# ---------------------------------------------------------------------------
+
+class TestMMRSelect:
+    """Tests for _mmr_select greedy Maximal Marginal Relevance selection."""
+
+    def test_mmr_prefers_diverse_over_redundant(self, monkeypatch):
+        from unittest.mock import MagicMock
+        import numpy as np
+        from dailydigest.rank.ranker import _mmr_select
+
+        # Three items: A and B are near-identical, C is diverse
+        vec_a = np.array([1.0, 0.0, 0.0], dtype=np.float32)
+        vec_b = np.array([0.99, 0.14, 0.0], dtype=np.float32)  # near A
+        vec_c = np.array([0.0, 1.0, 0.0], dtype=np.float32)   # diverse
+
+        rows = [MagicMock(), MagicMock(), MagicMock()]
+        # A has highest score, C has second-highest, B (near-duplicate) is lowest
+        # This ensures C has a high enough normalized score to win MMR over B
+        candidates = [(rows[0], 0.9), (rows[1], 0.5), (rows[2], 0.8)]
+
+        # Monkeypatch embed_item_rows to return our known vectors
+        monkeypatch.setattr(
+            "dailydigest.rank.ranker.embed_item_rows",
+            lambda rs: np.stack([vec_a, vec_b, vec_c])
+        )
+
+        # Select 2 of 3 — MMR should pick A (highest score) and C (diverse), not A+B (redundant)
+        result = _mmr_select(candidates, cap=2, lambda_=0.7)
+        selected_rows = [r for r, _ in result]
+        assert rows[0] in selected_rows, "Highest-score item should always be selected first"
+        assert rows[2] in selected_rows, "Diverse item C should be preferred over near-duplicate B"
+        assert rows[1] not in selected_rows, "Near-duplicate B should be excluded"
+
+    def test_mmr_returns_all_when_fewer_than_cap(self, monkeypatch):
+        from unittest.mock import MagicMock
+        import numpy as np
+        from dailydigest.rank.ranker import _mmr_select
+
+        monkeypatch.setattr(
+            "dailydigest.rank.ranker.embed_item_rows",
+            lambda rs: np.eye(len(rs), 3, dtype=np.float32)
+        )
+        rows = [MagicMock(), MagicMock()]
+        candidates = [(rows[0], 0.9), (rows[1], 0.5)]
+        result = _mmr_select(candidates, cap=5)
+        assert len(result) == 2

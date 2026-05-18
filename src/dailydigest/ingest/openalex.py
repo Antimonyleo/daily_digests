@@ -70,9 +70,9 @@ class OpenAlexSource:
 
     def fetch(self, spec: SourceSpec) -> list[Item]:
         query = spec.query or ""
-        yesterday = (datetime.now(timezone.utc).date() - timedelta(days=1)).isoformat()
+        two_days_ago = (datetime.now(timezone.utc).date() - timedelta(days=2)).isoformat()
         base_params: dict[str, str] = {
-            "filter": f"from_publication_date:{yesterday},type:article",
+            "filter": f"from_publication_date:{two_days_ago},type:article",
             "per-page": str(self.PER_PAGE),
             "cursor": "*",
             "sort": "publication_date:desc",

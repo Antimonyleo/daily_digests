@@ -492,3 +492,56 @@ def test_legacy_duplicate_latest_neutral_is_not_signed_for_training(tmp_path, mo
     assert dataset is not None
     _x, y = dataset
     assert y.tolist() == [1.0]
+
+
+def test_vote_dataset_returns_pairwise_differences_when_both_signs_present(
+    tmp_path, monkeypatch
+):
+    """vote_dataset() should return pairwise difference vectors when both up and down votes exist."""
+    import numpy as np
+    from dailydigest import config as config_mod
+    from dailydigest import store as store_mod
+    from dailydigest import votes as votes_mod
+
+    monkeypatch.setenv("DB_PATH", str(tmp_path / "test.db"))
+    config_mod.reload_settings()
+    store_mod.SETTINGS = config_mod.SETTINGS
+    store_mod._ENGINE = None
+    store_mod._SessionLocal = None
+    store_mod._INITIALIZED = False
+
+    # Mock embed to return distinct per-item vectors
+    n_items = 6
+    fake_vecs = np.eye(n_items, 10, dtype=np.float32)
+    monkeypatch.setattr(votes_mod, "embed_item_rows", lambda rows: fake_vecs[:len(rows)])
+
+    # Insert items and votes: 3 up, 3 down
+    store_mod.init_db()
+    item_ids = []
+    with store_mod.session_scope() as s:
+        for i in range(n_items):
+            row = store_mod.ItemRow(
+                source="Test", section="research",
+                external_id=f"pairwise-{i}", url=f"https://example.com/{i}",
+                title=f"Paper {i}", abstract="A" * 50,
+            )
+            s.add(row)
+            s.flush()
+            item_ids.append(row.id)
+
+    with store_mod.session_scope() as s:
+        for i, item_id in enumerate(item_ids):
+            vote_value = 1 if i < 3 else -1
+            s.add(store_mod.VoteRow(item_id=item_id, value=vote_value))
+
+    monkeypatch.setattr(votes_mod, "MIN_VOTES_FOR_LR", 1)
+    result = votes_mod.vote_dataset()
+    assert result is not None, "vote_dataset() returned None"
+    X, y = result
+
+    # When both signs present, should return pairwise differences
+    # 3 ups × 3 downs = 9 pairs × 2 (+ and - direction) = 18 pairwise rows
+    assert X.shape[0] > n_items, f"Expected pairwise augmentation to exceed {n_items} rows, got {X.shape[0]}"
+    assert set(y.tolist()) == {1.0, -1.0}, "Should have both positive and negative labels"
+    # Pairwise diff vectors should be in [-1, 1] range (differences of [0,1] features)
+    assert X.min() >= -1.0 and X.max() <= 1.0, "Pairwise diff vectors should be in [-1, 1]"

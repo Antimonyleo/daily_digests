@@ -106,7 +106,9 @@ def load_profile(path: str | None = None) -> Profile:
 def load_sources(path: str | None = None) -> list[SourceSpec]:
     settings = get_settings()
     p = Path(path or settings.sources_path)
-    data = yaml.safe_load(p.read_text())
+    data = yaml.safe_load(p.read_text()) or {}
+    if not isinstance(data, dict):
+        raise ValueError(f"sources.yaml must be a YAML mapping, got {type(data).__name__}")
     out: list[SourceSpec] = []
     for section, entries in data.items():
         for entry in entries or []:

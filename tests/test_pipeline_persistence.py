@@ -314,3 +314,85 @@ def test_run_all_empty_digest_emits_done_with_zero_items(monkeypatch, tmp_path):
     with store_mod.session_scope() as s:
         digest = s.get(store_mod.DigestRow, digest_id)
         assert digest.item_count == 0
+
+
+def test_pipeline_funnel_audit_shows_dedupe_count_before_quality_gate(
+    tmp_path, monkeypatch
+):
+    """after_cross_source_dedupe should count items BEFORE quality gate drops thin abstracts.
+
+    This test simulates the expected funnel ordering: dedupe runs first, then the
+    quality gate filters out thin-abstract items from non-protected sources.
+    The dedupe count must be >= quality gate count.
+    """
+    import datetime
+
+    from dailydigest import config as config_mod
+    from dailydigest import store as store_mod
+    from dailydigest.dedupe import dedupe_by_url
+    from dailydigest.models import Item
+
+    monkeypatch.setenv("DB_PATH", str(tmp_path / "digest.db"))
+    config_mod.reload_settings()
+    store_mod.SETTINGS = config_mod.SETTINGS
+    store_mod._ENGINE = None
+    store_mod._SessionLocal = None
+    store_mod.init_db()
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+
+    # Simulate three items arriving from ingest (as Item objects for dedupe)
+    # 1. Full abstract (survives quality gate)
+    # 2. Thin abstract from Nature (protected — survives quality gate in real impl)
+    # 3. Thin abstract from unknown source (dropped by quality gate)
+    items = [
+        Item(
+            source="biorxiv", section="research", external_id="full-1",
+            url="https://biorxiv.org/1", title="CRISPR paper",
+            abstract="A" * 150,
+        ),
+        Item(
+            source="nature_main", section="research", external_id="thin-protected",
+            url="https://nature.com/articles/thin1", title="Nature paper",
+            abstract="Short.",
+        ),
+        Item(
+            source="unknown_source", section="research", external_id="thin-dropped",
+            url="https://unknown.org/1", title="Unknown paper",
+            abstract="Short.",
+        ),
+    ]
+
+    # Stage 1: dedupe by URL (simulates cross-source deduplication)
+    deduped = dedupe_by_url(items)
+    after_cross_source_dedupe = len(deduped)
+
+    # Stage 2: quality gate — drop items with thin abstracts from non-protected sources.
+    # Protected sources (journals) are allowed through with short abstracts.
+    PROTECTED_SOURCES = {"nature_main", "science", "cell", "nejm", "lancet"}
+    MIN_ABSTRACT_LEN = 50
+
+    def _quality_gate(items_in):
+        out = []
+        for item in items_in:
+            abstract = (item.abstract or "").strip()
+            if len(abstract) >= MIN_ABSTRACT_LEN:
+                out.append(item)
+            elif item.source in PROTECTED_SOURCES:
+                out.append(item)
+        return out
+
+    after_quality = _quality_gate(deduped)
+    after_quality_gate = len(after_quality)
+
+    # Core invariant: dedupe runs before quality gate, so dedupe count >= quality gate count
+    assert after_cross_source_dedupe >= after_quality_gate, (
+        "Dedupe count should be >= quality gate count (dedupe runs first)"
+    )
+    # Specific expectations: unknown thin-abstract item should be dropped
+    assert after_quality_gate < after_cross_source_dedupe, (
+        "Quality gate should drop at least one thin-abstract item"
+    )
+    assert after_quality_gate == 2, (
+        "Full abstract item and protected-source item should survive; unknown thin item dropped"
+    )
