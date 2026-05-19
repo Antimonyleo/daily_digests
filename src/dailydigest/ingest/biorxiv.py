@@ -99,6 +99,12 @@ class BiorxivSource:
                     total = int(msg[0].get("total", 0))
                 except (TypeError, ValueError):
                     total = 0
+                if total == 0 and len(collection) > 0:
+                    logger.warning(
+                        "biorxiv %s: API returned total=0 but page has %d items; treating as single-page response",
+                        server, len(collection)
+                    )
+                    break  # treat as single-page; data is captured, just can't paginate
                 cursor += len(collection)
                 if cursor >= total:
                     break

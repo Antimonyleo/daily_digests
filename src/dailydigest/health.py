@@ -21,7 +21,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
-from .config import SETTINGS, ensure_data_dir
+from .config import get_settings, ensure_data_dir
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +35,7 @@ class IngestStats(BaseModel):
 
 
 def _health_path() -> Path:
-    return Path(SETTINGS.db_path).parent / "health.json"
+    return Path(get_settings().db_path).parent / "health.json"
 
 
 def _load_existing(path: Path) -> dict:

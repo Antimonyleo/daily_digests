@@ -58,13 +58,15 @@ def _old_ts() -> str:
 
 class TestWeeklySummary:
     def test_no_health_file_returns_empty(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("dailydigest.health.SETTINGS", type("S", (), {"db_path": str(tmp_path / "digest.db")})())
+        fake_settings = type("S", (), {"db_path": str(tmp_path / "digest.db")})()
+        monkeypatch.setattr("dailydigest.health.get_settings", lambda: fake_settings)
         result = weekly_summary()
         assert result == []
 
     def test_aggregates_items_across_runs(self, tmp_path, monkeypatch):
         db_path = tmp_path / "digest.db"
-        monkeypatch.setattr("dailydigest.health.SETTINGS", type("S", (), {"db_path": str(db_path)})())
+        fake_settings = type("S", (), {"db_path": str(db_path)})()
+        monkeypatch.setattr("dailydigest.health.get_settings", lambda: fake_settings)
         health_file = tmp_path / "health.json"
 
         history = [
@@ -87,7 +89,8 @@ class TestWeeklySummary:
 
     def test_counts_failures(self, tmp_path, monkeypatch):
         db_path = tmp_path / "digest.db"
-        monkeypatch.setattr("dailydigest.health.SETTINGS", type("S", (), {"db_path": str(db_path)})())
+        fake_settings = type("S", (), {"db_path": str(db_path)})()
+        monkeypatch.setattr("dailydigest.health.get_settings", lambda: fake_settings)
         health_file = tmp_path / "health.json"
 
         history = [
@@ -110,7 +113,8 @@ class TestWeeklySummary:
 
     def test_entries_older_than_7_days_excluded(self, tmp_path, monkeypatch):
         db_path = tmp_path / "digest.db"
-        monkeypatch.setattr("dailydigest.health.SETTINGS", type("S", (), {"db_path": str(db_path)})())
+        fake_settings = type("S", (), {"db_path": str(db_path)})()
+        monkeypatch.setattr("dailydigest.health.get_settings", lambda: fake_settings)
         health_file = tmp_path / "health.json"
 
         history = [
@@ -132,7 +136,8 @@ class TestWeeklySummary:
 
     def test_result_sorted_alphabetically(self, tmp_path, monkeypatch):
         db_path = tmp_path / "digest.db"
-        monkeypatch.setattr("dailydigest.health.SETTINGS", type("S", (), {"db_path": str(db_path)})())
+        fake_settings = type("S", (), {"db_path": str(db_path)})()
+        monkeypatch.setattr("dailydigest.health.get_settings", lambda: fake_settings)
         health_file = tmp_path / "health.json"
 
         history = [

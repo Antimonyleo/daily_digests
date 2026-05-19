@@ -5,6 +5,7 @@ from collections.abc import Iterable
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from threading import Lock
 
 from threading import Lock
 
@@ -174,6 +175,8 @@ class RunRow(Base):
 _ENGINE = None
 _ENGINE_LOCK = Lock()
 _INITIALIZED: bool = False
+_SessionLocal = None
+_SESSION_LOCK = Lock()
 
 
 def _engine():
@@ -267,13 +270,12 @@ def _migrate_sqlite_schema(eng) -> None:
                     conn.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {column} {ddl}"))
 
 
-_SessionLocal = None
-
-
 def session_factory():
     global _SessionLocal
     if _SessionLocal is None:
-        _SessionLocal = sessionmaker(bind=_engine(), expire_on_commit=False, future=True)
+        with _SESSION_LOCK:
+            if _SessionLocal is None:
+                _SessionLocal = sessionmaker(bind=_engine(), expire_on_commit=False, future=True)
     return _SessionLocal
 
 

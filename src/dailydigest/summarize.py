@@ -311,25 +311,28 @@ def _summarize_via_cli(
                 )
                 _cli_missing_warned.add(cli_name)
             for row in batch:
-                out.setdefault(row.id, _extractive(row))
+                if row.id is not None:
+                    out.setdefault(int(row.id), _extractive(row))
         except subprocess.TimeoutExpired:
             logger.warning(
                 "%s timed out after %ds for batch %d; falling back",
                 cli_name, _CLI_TIMEOUT, i,
             )
             for row in batch:
-                out.setdefault(row.id, _extractive(row))
+                if row.id is not None:
+                    out.setdefault(int(row.id), _extractive(row))
         except (subprocess.CalledProcessError, json.JSONDecodeError, ValueError) as e:
             logger.warning(
                 "%s failed for batch %d: %s; falling back to extractive",
                 cli_name, i, e,
             )
             for row in batch:
-                out.setdefault(row.id, _extractive(row))
+                if row.id is not None:
+                    out.setdefault(int(row.id), _extractive(row))
 
     for row in items:
-        if not out.get(row.id):  # fill missing or empty-string summaries
-            out[row.id] = _extractive(row)
+        if row.id is not None and not out.get(int(row.id)):  # fill missing or empty-string summaries
+            out[int(row.id)] = _extractive(row)
     return out
 
 
@@ -345,15 +348,16 @@ def _summarize_via_api(items: list[ItemRow]) -> dict[int, str]:
                 i, type(e).__name__, str(e)[:200],
             )
             for row in batch:
-                out.setdefault(row.id, _extractive(row))
+                if row.id is not None:
+                    out.setdefault(int(row.id), _extractive(row))
     for row in items:
-        if not out.get(row.id):
-            out[row.id] = _extractive(row)
+        if row.id is not None and not out.get(int(row.id)):
+            out[int(row.id)] = _extractive(row)
     return out
 
 
 def _summarize_extractive(items: list[ItemRow]) -> dict[int, str]:
-    return {row.id: _extractive(row) for row in items}
+    return {int(row.id): _extractive(row) for row in items if row.id is not None}
 
 
 def summarize_items(items: list[ItemRow]) -> dict[int, str]:
