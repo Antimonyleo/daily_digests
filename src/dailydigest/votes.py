@@ -205,6 +205,7 @@ def _update_rocchio(item_id: int, vote_value: int) -> None:
     if vote_value not in (1, -1):
         return
     alpha, beta = 0.08, 0.04
+    decay = 0.995  # recency decay: recent votes count more (~50% after ~139 votes)
     try:
         from .store import ItemRow, session_scope
         with session_scope() as s:
@@ -233,12 +234,13 @@ def _update_rocchio(item_id: int, vote_value: int) -> None:
             stored_count = 0
 
         if vote_value == 1:
-            learned = learned + alpha * vec
+            learned = learned * decay + alpha * vec
         else:
-            learned = learned - beta * vec
+            learned = learned * decay - beta * vec
 
         path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(".npz.tmp")
+        # np.savez appends .npz to filenames lacking that extension, so use _tmp.npz
+        tmp = path.with_name(path.stem + "_tmp.npz")
         np.savez(tmp, profile=learned, vote_count=np.array([stored_count + 1], dtype=np.int32))
         tmp.replace(path)
     except Exception as exc:  # noqa: BLE001

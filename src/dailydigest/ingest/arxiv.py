@@ -75,7 +75,6 @@ class ArxivSource:
         }
         out: list[Item] = []
         try:
-            _arxiv_polite_wait()
             body = _http_get_text(self.BASE, params)
         except Exception as e:
             logger.warning("%s fetch failed: %s: %s", getattr(spec, "name", "ArxivSource"), type(e).__name__, str(e)[:200])

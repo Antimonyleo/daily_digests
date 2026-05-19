@@ -159,7 +159,9 @@ class TestWeeklySummary:
 
 def test_latest_snapshot_returns_most_recent_source_rows(tmp_path, monkeypatch):
     db_path = tmp_path / "digest.db"
-    monkeypatch.setattr("dailydigest.health.SETTINGS", type("S", (), {"db_path": str(db_path)})())
+    monkeypatch.setenv("DB_PATH", str(db_path))
+    from dailydigest import config as config_mod
+    config_mod.reload_settings()
     health_file = tmp_path / "health.json"
     latest = [
         {"source": "Nature", "items": 12, "ok": True},

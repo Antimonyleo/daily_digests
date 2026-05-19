@@ -76,23 +76,45 @@ def dedupe_ranking_candidates[T](items: list[T]) -> list[T]:
     rather than whichever source happened to be fetched first.
     """
     key_to_index: dict[str, int] = {}
+    # deleted[i] = True means out[i] was merged into another slot
+    deleted: list[bool] = []
     out: list[T] = []
+
     for it in items:
         keys = _candidate_keys(it)
-        matched = [key_to_index[k] for k in keys if k in key_to_index]
-        if not matched:
+        matched_indices: list[int] = list(dict.fromkeys(
+            key_to_index[k] for k in keys if k in key_to_index
+        ))
+        # Strip slots that were already merged away
+        matched_indices = [i for i in matched_indices if not deleted[i]]
+
+        if not matched_indices:
             idx = len(out)
             out.append(it)
+            deleted.append(False)
             for key in keys:
                 key_to_index[key] = idx
             continue
-        idx = matched[0]
+
+        # Canonical slot is the first match; merge any additional matched slots
+        idx = matched_indices[0]
+        for extra in matched_indices[1:]:
+            # Absorb extra slot into idx: keep best representative
+            if _candidate_representative_score(out[extra]) > _candidate_representative_score(out[idx]):
+                out[idx] = out[extra]
+            deleted[extra] = True
+            # Re-point all keys that referenced extra to idx
+            for k, v in key_to_index.items():
+                if v == extra:
+                    key_to_index[k] = idx
+
         current = out[idx]
         if _candidate_representative_score(it) > _candidate_representative_score(current):
             out[idx] = it
         for key in keys:
             key_to_index[key] = idx
-    return out
+
+    return [item for item, d in zip(out, deleted) if not d]
 
 
 def _candidate_representative_score(it: Any) -> float:

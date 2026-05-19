@@ -515,14 +515,10 @@ def run_all(
                     pass
                 # Use max over negative interests, threshold at 0.35
                 _neg_sims = np.maximum(0.0, all_neg_sims.max(axis=1) - 0.35)
-            elif _build_neg_centroid is not None:
+            else:
                 _neg_centroid = _build_neg_centroid(profile)
                 if _neg_centroid is not None:
                     _neg_sims = np.maximum(0.0, _neg_vecs @ _neg_centroid - 0.35)
-                else:
-                    _neg_sims = None
-            else:
-                _neg_sims = None
 
             if _neg_sims is not None:
                 # Capture penalties BEFORE creating the new scored list
@@ -580,7 +576,7 @@ def run_all(
     sections: dict[str, list[tuple[ItemRow, float, str]]] = {k: [] for k in SECTION_ORDER}
     for row, score, _label in labeled:
         if row.section in sections:
-            sections[row.section].append((row, score, summaries.get(row.id, "")))
+            sections[row.section].append((row, score, summaries.get(int(row.id), "")))
 
     # Dry-runs should refresh the local preview even if today's email was
     # already sent. write_digest preserves sent_at for existing rows.

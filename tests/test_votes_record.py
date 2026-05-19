@@ -87,6 +87,33 @@ def test_neutral_vote_is_persisted_for_visible_feedback(tmp_path, monkeypatch):
     assert votes_mod.get_vote_value(item_id) == 0
 
 
+def test_rocchio_update_applies_recency_decay(tmp_path, monkeypatch):
+    """_update_rocchio with decay=0.995 should decay prior profile before adding."""
+    from pathlib import Path
+    from dailydigest.rank import embedding_cache as cache_mod
+
+    store_mod = _reset_store_for_tmp_db(monkeypatch, tmp_path)
+    from dailydigest import votes as votes_mod
+
+    stub_vec = np.array([[1.0, 0.0, 0.0]], dtype=np.float32)
+    monkeypatch.setattr(cache_mod, "embed_item_rows", lambda rows: stub_vec)
+
+    profile_path = Path(str(tmp_path / "learned_profile.npz"))
+    monkeypatch.setattr(votes_mod, "_learned_profile_path", lambda: profile_path)
+
+    item_id = _insert_item(store_mod)
+
+    prior_profile = np.array([0.5, 0.2, 0.1], dtype=np.float32)
+    np.savez(profile_path, profile=prior_profile, vote_count=np.array([5], dtype=np.int32))
+
+    votes_mod._update_rocchio(item_id, 1)
+
+    data = np.load(profile_path)
+    learned = data["profile"]
+    expected = 0.995 * prior_profile + 0.08 * stub_vec[0]
+    np.testing.assert_allclose(learned, expected, rtol=1e-5, atol=1e-6)
+
+
 def test_vote_reason_is_persisted_once_per_item(tmp_path, monkeypatch):
     store_mod = _reset_store_for_tmp_db(monkeypatch, tmp_path)
     from dailydigest import votes as votes_mod

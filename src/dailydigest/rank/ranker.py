@@ -260,10 +260,17 @@ def _vote_count() -> int:
 def _multi_cosine(vecs: np.ndarray, profile_mat: np.ndarray, k: int | None = None) -> np.ndarray:
     """Score each item by 0.7*max_similarity + 0.3*top3_mean.
 
-    Rewards items that strongly match at least one profile facet (specialist match)
-    rather than items that weakly match many facets (generalist match).
+    profile_mat rows are weighted (weight × unit_vec), so raw dot products can
+    exceed 1.0.  We divide by the maximum row norm so output stays in [-1, 1] —
+    a perfect match to the highest-weight row gives exactly 1.0 instead of
+    ``max_weight``.  Rewards specialist match over generalist match.
     """
     sims = vecs @ profile_mat.T.astype(np.float32)
+    # Normalize so the maximum achievable score is 1.0
+    row_norms = np.linalg.norm(profile_mat, axis=1)
+    max_norm = float(row_norms.max()) if len(row_norms) > 0 else 1.0
+    if max_norm > 1.0:
+        sims = sims / max_norm
     n = sims.shape[1]
     if n <= 1:
         return sims.max(axis=1).astype(np.float32)
@@ -400,6 +407,9 @@ def _freshness_penalty(row: Any) -> float:
             return -0.05  # freshness bonus
         return min(0.08, max(0.0, (age_days - 2.0) / 28.0) * 0.08)
     elif section in ("world", "industry"):
+        # Breaking-news bonus for items published < 6 hours ago
+        if age_hours < 6.0:
+            return -0.04
         # News decays fast — HN-style gravity
         return min(0.20, ((age_hours / 72.0) ** 1.5) * 0.20)
     elif section == "regulatory":

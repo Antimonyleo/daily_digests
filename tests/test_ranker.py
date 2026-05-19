@@ -661,6 +661,46 @@ class TestPickTopPerSection:
 
 
 # ---------------------------------------------------------------------------
+# _multi_cosine (profile score normalization)
+# ---------------------------------------------------------------------------
+
+class TestMultiCosine:
+    def test_single_row_weighted_profile_score_at_most_one(self):
+        """Normalized score should not exceed 1.0 even for weight=1.5 rows."""
+        from dailydigest.rank.ranker import _multi_cosine
+        vec = np.ones((1, 3), dtype=np.float32) / np.sqrt(3)
+        # weight=1.5 × unit_vec: without normalization dot product = 1.5
+        profile_row = np.ones((1, 3), dtype=np.float32) * 1.5 / np.sqrt(3)
+        scores = _multi_cosine(vec, profile_row)
+        assert float(scores[0]) <= 1.0 + 1e-5, f"Score {scores[0]} should be <= 1.0"
+        assert float(scores[0]) == pytest.approx(1.0, abs=1e-4)
+
+    def test_unit_profile_unchanged(self):
+        """When profile row norms <= 1.0, scores are unaffected."""
+        from dailydigest.rank.ranker import _multi_cosine
+        vec = np.array([[1.0, 0.0, 0.0]], dtype=np.float32)
+        profile = np.array([[1.0, 0.0, 0.0]], dtype=np.float32)  # norm=1
+        scores = _multi_cosine(vec, profile)
+        assert float(scores[0]) == pytest.approx(1.0, abs=1e-5)
+
+    def test_multi_row_uses_top1_top3_blend(self):
+        """With 4 unit-norm profile rows, result is 0.7*max + 0.3*top3-mean."""
+        from dailydigest.rank.ranker import _multi_cosine
+        vecs = np.array([[1.0, 0.0, 0.0]], dtype=np.float32)
+        profile = np.array([
+            [1.0, 0.0, 0.0],
+            [0.5, np.sqrt(1 - 0.25), 0.0],
+            [0.3, np.sqrt(1 - 0.09), 0.0],
+            [0.1, np.sqrt(1 - 0.01), 0.0],
+        ], dtype=np.float32)
+        scores = _multi_cosine(vecs, profile)
+        top1 = 1.0
+        top3_mean = np.mean([1.0, 0.5, 0.3])
+        expected = 0.7 * top1 + 0.3 * top3_mean
+        assert float(scores[0]) == pytest.approx(expected, abs=1e-4)
+
+
+# ---------------------------------------------------------------------------
 # _freshness_penalty
 # ---------------------------------------------------------------------------
 
@@ -695,10 +735,17 @@ class TestFreshnessPenalty:
         row.published_at = None
         assert _freshness_penalty(row) == 0.0
 
-    def test_world_fresh_item_no_penalty(self):
+    def test_world_breaking_news_gets_bonus(self):
         from dailydigest.rank.ranker import _freshness_penalty
-        pen = _freshness_penalty(self._row("world", 0.1))
-        assert pen == pytest.approx(0.0, abs=0.02)
+        pen = _freshness_penalty(self._row("world", 0.1))  # ~2.4 hours ago
+        assert pen == pytest.approx(-0.04, abs=1e-6), (
+            f"World items <6h old should get -0.04 bonus, got {pen}"
+        )
+
+    def test_world_fresh_item_between_6h_and_3d_no_negative(self):
+        from dailydigest.rank.ranker import _freshness_penalty
+        pen = _freshness_penalty(self._row("world", 0.5))  # 12 hours ago
+        assert pen >= 0, f"World item > 6h should not have a bonus, got {pen}"
 
     def test_world_stale_item_capped_at_0_20(self):
         from dailydigest.rank.ranker import _freshness_penalty
