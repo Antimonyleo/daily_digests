@@ -5,14 +5,34 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 from dailydigest import config as config_mod
+from dailydigest import store as store_mod
 from dailydigest.rank import enrich as enrich_mod
 from dailydigest.rank.enrich import (
     citation_score,
     derive_doi,
     enrich_scored,
+    load_cached_enrichment,
+    save_enrichment,
     venue_quality_score,
 )
 from dailydigest.store import ItemRow
+
+
+def _insert_item_with_url(ext_id: str, url: str) -> int:
+    store_mod.init_db()
+    with store_mod.session_scope() as s:
+        row = store_mod.ItemRow(
+            source="OpenAlex (biotech)",
+            section="research",
+            external_id=ext_id,
+            url=url,
+            title="title",
+            abstract="abstract",
+            published_at=datetime.now(timezone.utc),
+        )
+        s.add(row)
+        s.flush()
+        return int(row.id)
 
 
 def _item(title: str, url: str, published_at=None) -> ItemRow:
@@ -159,3 +179,55 @@ def test_enrich_no_dois_is_noop():
     )
     assert out == scored
     assert called["n"] == 0  # never hit the network when no DOIs present
+
+
+def test_save_and_load_enrichment_roundtrip():
+    iid = _insert_item_with_url("p2", "https://doi.org/10.1000/x")
+    save_enrichment({iid: {"cited_by_count": 5, "venue_impact": 3.0, "venue": "J Test"}})
+    loaded = load_cached_enrichment([iid])
+    assert loaded[iid]["cited_by_count"] == 5
+    assert loaded[iid]["venue"] == "J Test"
+    assert loaded[iid]["venue_impact"] == 3.0
+
+
+def test_enrichment_is_cached_and_not_refetched():
+    now = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    url = "https://doi.org/10.1000/cached"
+    iid = _insert_item_with_url("p1", url)
+
+    def _cand():
+        return ItemRow(
+            id=iid,
+            source="OpenAlex (biotech)",
+            section="research",
+            external_id="p1",
+            url=url,
+            title="title",
+            abstract="abstract",
+            published_at=now,
+        )
+
+    calls = {"n": 0}
+
+    def fetch_once(dois, email):
+        calls["n"] += 1
+        return {"10.1000/cached": {"cited_by_count": 30, "venue_impact": 20.0}}
+
+    enrich_scored(
+        [(_cand(), 0.5)],
+        settings=_settings(citation_enrichment=True),
+        fetcher=fetch_once,
+        now=now,
+    )
+    assert calls["n"] == 1  # fetched once and persisted
+
+    def fetch_forbidden(dois, email):
+        raise AssertionError("cache hit expected; should not re-fetch")
+
+    out = enrich_scored(
+        [(_cand(), 0.5)],
+        settings=_settings(citation_enrichment=True),
+        fetcher=fetch_forbidden,
+        now=now,
+    )
+    assert out[0][1] != 0.5  # boost applied from cache, no network call

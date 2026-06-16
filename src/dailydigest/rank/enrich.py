@@ -17,7 +17,7 @@ from __future__ import annotations
 import logging
 import math
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from ..store import ItemRow
 
@@ -168,6 +168,65 @@ def fetch_openalex(dois: list[str], email: str = "") -> dict[str, dict]:
     return out
 
 
+# Persisted enrichment older than this is considered stale and re-fetched.
+_ENRICHMENT_TTL_DAYS = 14
+
+
+def load_cached_enrichment(
+    item_ids: list[int], max_age_days: int = _ENRICHMENT_TTL_DAYS
+) -> dict[int, dict]:
+    """Return ``{item_id: {cited_by_count, venue_impact, venue}}`` for fresh rows."""
+    if not item_ids:
+        return {}
+    from sqlalchemy import select
+
+    from ..store import ItemEnrichmentRow, init_db, session_scope
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
+    init_db()
+    out: dict[int, dict] = {}
+    with session_scope() as s:
+        rows = (
+            s.execute(
+                select(ItemEnrichmentRow).where(ItemEnrichmentRow.item_id.in_(item_ids))
+            )
+            .scalars()
+            .all()
+        )
+        for r in rows:
+            fetched_at = r.fetched_at
+            if fetched_at is not None:
+                ref = fetched_at if fetched_at.tzinfo else fetched_at.replace(tzinfo=timezone.utc)
+                if ref < cutoff:
+                    continue  # stale
+            out[int(r.item_id)] = {
+                "cited_by_count": r.cited_by_count,
+                "venue_impact": r.venue_impact,
+                "venue": r.venue,
+            }
+    return out
+
+
+def save_enrichment(entries: dict[int, dict]) -> None:
+    """Upsert enrichment rows keyed by item id."""
+    if not entries:
+        return
+    from ..store import ItemEnrichmentRow, init_db, session_scope
+
+    init_db()
+    now = datetime.now(timezone.utc)
+    with session_scope() as s:
+        for item_id, entry in entries.items():
+            row = s.get(ItemEnrichmentRow, int(item_id))
+            if row is None:
+                row = ItemEnrichmentRow(item_id=int(item_id))
+                s.add(row)
+            row.cited_by_count = entry.get("cited_by_count")
+            row.venue_impact = entry.get("venue_impact")
+            row.venue = entry.get("venue")
+            row.fetched_at = now
+
+
 def enrich_scored(
     scored: list[tuple[ItemRow, float]],
     *,
@@ -191,32 +250,60 @@ def enrich_scored(
     if not getattr(settings, "citation_enrichment", False):
         return scored
 
-    doi_by_key: dict[int, str] = {}
-    dois: list[str] = []
+    doi_by_idx: dict[int, str] = {}
+    iid_by_idx: dict[int, int] = {}
     for idx, (row, _score) in enumerate(scored):
         doi = derive_doi(row)
         if doi:
-            doi_by_key[idx] = doi
-            if doi not in dois:
-                dois.append(doi)
-    if not dois:
+            doi_by_idx[idx] = doi
+        iid = getattr(row, "id", None)
+        if isinstance(iid, int):
+            iid_by_idx[idx] = iid
+    if not doi_by_idx:
         return scored
 
-    fetch = fetcher or fetch_openalex
-    try:
-        raw = fetch(dois, getattr(settings, "citation_polite_email", "") or "")
-    except Exception as e:  # noqa: BLE001
-        logger.warning("citation enrichment failed (%s); skipping", e)
+    # Reuse persisted enrichment so we don't re-hit OpenAlex for known papers and
+    # still have data on a day the fetch fails.
+    cached = load_cached_enrichment(list(set(iid_by_idx.values())))
+    needed = {
+        doi_by_idx[idx]
+        for idx in doi_by_idx
+        if iid_by_idx.get(idx) not in cached  # uncached (or item has no id)
+    }
+    fetched: dict[str, dict] = {}
+    if needed:
+        fetch = fetcher or fetch_openalex
+        try:
+            raw = fetch(sorted(needed), getattr(settings, "citation_polite_email", "") or "")
+            fetched = {doi: _normalize_entry(value) for doi, value in raw.items()}
+        except Exception as e:  # noqa: BLE001
+            logger.warning("citation enrichment fetch failed (%s); using cache only", e)
+        if fetched:
+            to_save = {
+                iid_by_idx[idx]: fetched[doi_by_idx[idx]]
+                for idx in doi_by_idx
+                if idx in iid_by_idx and doi_by_idx[idx] in fetched
+            }
+            if to_save:
+                try:
+                    save_enrichment(to_save)
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("could not persist enrichment: %s", e)
+
+    if not cached and not fetched:
         return scored
-    if not raw:
-        return scored
-    data = {doi: _normalize_entry(value) for doi, value in raw.items()}
+
+    def _entry_for(idx: int) -> dict | None:
+        iid = iid_by_idx.get(idx)
+        if iid is not None and iid in cached:
+            return cached[iid]
+        doi = doi_by_idx.get(idx)
+        return fetched.get(doi) if doi else None
 
     venue_w = float(getattr(settings, "venue_quality_weight", 0.18))
     boosted: list[tuple[ItemRow, float]] = []
     for idx, (row, score) in enumerate(scored):
-        doi = doi_by_key.get(idx)
-        entry = data.get(doi) if doi else None
+        entry = _entry_for(idx)
         if entry:
             score = float(score)
             cs = citation_score(

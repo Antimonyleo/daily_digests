@@ -104,6 +104,24 @@ class ItemEmbeddingRow(Base):
     __table_args__ = (UniqueConstraint("item_id", "model", name="uq_item_embedding_item_model"),)
 
 
+class ItemEnrichmentRow(Base):
+    """Cached OpenAlex enrichment (citations + venue impact) per item."""
+
+    __tablename__ = "item_enrichment"
+
+    item_id = Column(
+        Integer,
+        ForeignKey("items.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    cited_by_count = Column(Integer)
+    venue_impact = Column(Float)
+    venue = Column(String)
+    fetched_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+    item = relationship("ItemRow")
+
+
 class DigestRow(Base):
     __tablename__ = "digests"
 
