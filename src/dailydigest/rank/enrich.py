@@ -32,6 +32,10 @@ _VELOCITY_SCALE = 15.0
 CITATION_BOOST = 0.12
 # Venue 2yr_mean_citedness (impact-factor-like) that maps to a ~1.0 venue score.
 _VENUE_SCALE = 8.0
+# Venue-quality score below this marks the item's venue as low-impact, which
+# routes it into the low_impact_journal bucket (frequency-capped). 0.4 ~
+# 2yr_mean_citedness of ~1.4 — roughly a low-impact-factor journal.
+_LOW_VENUE_QUALITY = 0.4
 _OPENALEX_URL = "https://api.openalex.org/works"
 _OPENALEX_SOURCES_URL = "https://api.openalex.org/sources"
 
@@ -223,6 +227,14 @@ def enrich_scored(
             if vq is not None:
                 # Center at 0.5: high-impact venues gain, low-impact venues lose.
                 score += venue_w * (vq - 0.5)
+                # Flag genuinely low-impact venues so the selection-stage
+                # frequency cap treats them as low_impact_journal even though
+                # their configured source (e.g. OpenAlex) hides the real venue.
+                if vq < _LOW_VENUE_QUALITY:
+                    try:
+                        row.venue_low_impact = True
+                    except Exception:  # noqa: BLE001
+                        pass
         boosted.append((row, score))
     boosted.sort(key=lambda t: t[1], reverse=True)
     return boosted

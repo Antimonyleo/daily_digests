@@ -37,6 +37,16 @@ def test_top_journal_is_not_low_impact():
     assert is_low_impact_research(row) is False
 
 
+def test_venue_low_impact_flag_overrides_aggregator_bucket():
+    # An OpenAlex item would normally bucket as "aggregator"; the enrichment flag
+    # reroutes it to low_impact_journal so the frequency cap applies.
+    row = _row("A targeted therapeutics study", "OpenAlex (biotech)")
+    assert source_bucket(row) == "aggregator"
+    row.venue_low_impact = True
+    assert source_bucket(row) == "low_impact_journal"
+    assert is_low_impact_research(row) is True
+
+
 def test_low_impact_penalized_vs_top_at_equal_relevance():
     minor = _row("RNA delivery mechanism", "Journal of Minor Results")
     nature = _row("RNA delivery mechanism", "Nature")

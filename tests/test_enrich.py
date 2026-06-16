@@ -119,6 +119,33 @@ def test_venue_impact_penalizes_low_impact_journal():
     assert scores["HI"] > 0.60 > scores["LO"]  # high venue boosted, low penalized
 
 
+def test_low_venue_impact_flags_item_for_cap():
+    now = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    pub = now - timedelta(days=30)
+    weak = _item("WEAK", "https://doi.org/10.1000/weak", published_at=pub)
+    weak.source = "OpenAlex (biotech)"
+    strong = _item("STRONG", "https://doi.org/10.1000/strong", published_at=pub)
+    strong.source = "OpenAlex (biotech)"
+    scored = [(weak, 0.6), (strong, 0.6)]
+
+    def fake_fetch(dois, email):
+        return {
+            "10.1000/weak": {"cited_by_count": 0, "venue_impact": 0.4},
+            "10.1000/strong": {"cited_by_count": 0, "venue_impact": 25.0},
+        }
+
+    enrich_scored(
+        scored, settings=_settings(citation_enrichment=True), fetcher=fake_fetch, now=now
+    )
+    # The low-impact-venue aggregator item is flagged; the high-impact one is not.
+    from dailydigest.rank.source_quality import source_bucket
+
+    assert getattr(weak, "venue_low_impact", False) is True
+    assert getattr(strong, "venue_low_impact", False) is False
+    assert source_bucket(weak) == "low_impact_journal"
+    assert source_bucket(strong) == "aggregator"
+
+
 def test_enrich_no_dois_is_noop():
     scored = [(_item("A", "https://example.com/no-doi"), 0.5)]
     called = {"n": 0}

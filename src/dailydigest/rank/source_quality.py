@@ -372,7 +372,19 @@ def novelty_score(row: Any) -> float:
 
     high_hits = sum(1 for term in HIGH_NOVELTY_TERMS if term in text_lc)
     moderate_hits = sum(1 for term in MODERATE_NOVELTY_TERMS if term in text_lc)
-    score = min(0.75, high_hits * 0.24) + min(0.35, moderate_hits * 0.08)
+
+    high_contrib = min(0.75, high_hits * 0.24)
+    # Hype words ("breakthrough", "landmark", "practice-changing") overlap with
+    # promotional language and are easily gamed. Only let them count fully when
+    # the text also carries structured substance — a method/result signal or
+    # numbers. Substance-free hype is halved so marketing copy cannot masquerade
+    # as a high-novelty result.
+    has_substance = any(term in text_lc for term in METHOD_OR_RESULT_TERMS) or any(
+        ch.isdigit() for ch in text_lc
+    )
+    if high_hits > 0 and not has_substance:
+        high_contrib *= 0.5
+    score = high_contrib + min(0.35, moderate_hits * 0.08)
 
     # Reviews can be valuable, but they are usually less urgent than primary
     # results unless they include clearly novel or clinical terms.
@@ -421,6 +433,12 @@ def source_bucket(row: Any) -> str:
     section = _row_section(row).lower()
     if section != "research":
         return section or "other"
+    # Live venue-impact enrichment (when enabled) can flag an item whose actual
+    # publication venue is low impact — this is the only way to catch low-impact
+    # papers arriving through aggregators (OpenAlex/PubMed) whose source name
+    # hides the real journal. Honor it so the low-impact frequency cap applies.
+    if getattr(row, "venue_low_impact", False) is True:
+        return "low_impact_journal"
     if is_arxiv_cs_source(source_lc):
         return "arxiv_cs"
     if "arxiv" in source_lc:
