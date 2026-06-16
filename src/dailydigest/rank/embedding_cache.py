@@ -14,7 +14,7 @@ import numpy as np
 from sqlalchemy import select
 
 from ..store import ItemEmbeddingRow, ItemRow, init_db, session_scope
-from .embed import _MODEL_NAME, embed_texts
+from .embed import active_model_name, embed_texts
 
 
 def item_text(row: ItemRow) -> str:
@@ -58,12 +58,13 @@ def embed_item_rows(rows: list[ItemRow]) -> np.ndarray:
     vectors: list[np.ndarray | None] = [None] * len(rows)
     missing_indexes: list[int] = []
 
+    model_name = active_model_name()
     init_db()
     with session_scope() as s:
         cached_rows = s.execute(
             select(ItemEmbeddingRow).where(
                 ItemEmbeddingRow.item_id.in_([item_id for item_id in ids if item_id is not None]),
-                ItemEmbeddingRow.model == _MODEL_NAME,
+                ItemEmbeddingRow.model == model_name,
             )
         ).scalars().all()
         by_item_id = {int(row.item_id): row for row in cached_rows}
@@ -87,7 +88,7 @@ def embed_item_rows(rows: list[ItemRow]) -> np.ndarray:
                 if cached is None:
                     cached = ItemEmbeddingRow(
                         item_id=item_id,
-                        model=_MODEL_NAME,
+                        model=model_name,
                         text_hash=hashes[idx],
                         dim=int(vec.shape[0]),
                         vector=_serialize(vec),
