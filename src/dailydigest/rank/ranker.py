@@ -925,3 +925,46 @@ def _pick_research_balanced(
 
 def _available(scored: list[tuple[ItemRow, float]], predicate) -> int:
     return sum(1 for row, _score in scored if predicate(row))
+
+
+def apply_exploration(
+    picked: list[tuple[ItemRow, float]],
+    candidates: list[tuple[ItemRow, float]],
+    uncertainty: Mapping[int, float],
+    *,
+    slots: int,
+    eligible,
+) -> list[tuple[ItemRow, float]]:
+    """Swap the lowest-scored picked research items for high-uncertainty ones.
+
+    Active learning: surfacing the items the learned ranker is least sure about
+    (uncertainty near 1.0) yields the most informative votes. Only research items
+    are touched, and only ``eligible`` (high-quality) unselected candidates are
+    eligible — exploration never introduces low-impact or preprint work.
+    """
+    if slots <= 0:
+        return picked
+
+    picked_keys = {_row_feature_key(row) for row, _ in picked}
+    pool = [
+        (row, score)
+        for row, score in candidates
+        if (row.section or "") == "research"
+        and _row_feature_key(row) not in picked_keys
+        and eligible(row)
+        and _row_feature_key(row) in uncertainty
+    ]
+    if not pool:
+        return picked
+    # Most-uncertain first.
+    pool.sort(key=lambda t: uncertainty[_row_feature_key(t[0])], reverse=True)
+
+    # Lowest-scored research picks are the replacement candidates.
+    research_idx = [i for i, (row, _) in enumerate(picked) if (row.section or "") == "research"]
+    research_idx.sort(key=lambda i: picked[i][1])  # ascending score
+
+    out = list(picked)
+    n = min(slots, len(pool), len(research_idx))
+    for j in range(n):
+        out[research_idx[j]] = pool[j]
+    return out

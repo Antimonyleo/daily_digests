@@ -621,6 +621,32 @@ def run_all(
     # a single-domain profile (e.g. biotech-heavy) starves industry/regulatory/world.
     # `pick_top_per_section` already caps per-section, so summary cost is bounded.
     picked = pick_top_per_section(scored, _section_caps())
+
+    # Active-learning exploration: swap a few low-scored picks for high-quality
+    # items the learned ranker is most uncertain about. Only when enabled and the
+    # LR is actually driving scores (uncertainty is meaningful).
+    _explore = int(getattr(get_settings(), "exploration_slots", 0) or 0)
+    if _explore > 0:
+        try:
+            from .rank.ranker import apply_exploration
+            from .rank.source_quality import is_high_quality_journal_source
+
+            uncertainty = {
+                key: 1.0 - 2.0 * abs(float(feat.get("learned_score", 0.0)) - 0.5)
+                for key, feat in score_features.items()
+                if str(feat.get("scoring_mode", "")) == "hybrid_lr"
+            }
+            if uncertainty:
+                picked = apply_exploration(
+                    picked,
+                    scored,
+                    uncertainty,
+                    slots=_explore,
+                    eligible=is_high_quality_journal_source,
+                )
+        except Exception as _e:  # noqa: BLE001
+            logger.warning("exploration slot failed: %s", _e)
+
     top_journal_audit = _build_top_journal_audit(scored, picked, score_features)
     labeled = _assign_labels(picked)
     _emit(

@@ -74,6 +74,11 @@ class Settings(BaseSettings):
     # penalize low-impact ones) applied when citation_enrichment is enabled.
     venue_quality_weight: float = Field(default=0.18, ge=0.0, le=1.0)
 
+    # Active learning: reserve up to N research slots for the most LR-uncertain
+    # HIGH-QUALITY items, to gather informative feedback. Off by default; only
+    # high-quality venues are eligible, so exploration never shows low-impact work.
+    exploration_slots: int = Field(default=0, ge=0, le=3)
+
     # Score-fusion strategy for blending the quality-adjusted topic score with
     # the learned LR probability: "rrf" (reciprocal rank fusion, robust) or
     # "minmax" (legacy per-batch min-max blend).
