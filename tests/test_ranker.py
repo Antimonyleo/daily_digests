@@ -179,7 +179,9 @@ class TestApplyQualityAdjustments:
         )
         relevant.source = "Minor Journal"
 
-        adjusted = _apply_qa([nature, relevant], [0.55, 0.70])
+        # Relevance stays primary, but the gap must be large to overcome venue
+        # quality now that quality is weighted more heavily.
+        adjusted = _apply_qa([nature, relevant], [0.50, 0.85])
 
         assert adjusted[1] > adjusted[0]
 
@@ -394,8 +396,9 @@ class TestLRRankerPersistence:
 
         config_mod.reload_settings()
         feature_schema_version, feature_dim = _current_lr_schema()
-        # Current engineered feature vectors from votes.py (10 features).
-        X = np.asarray(
+        # Current engineered feature vectors from votes.py. Built to the live
+        # schema width so adding a feature does not require editing literals.
+        base = np.asarray(
             [
                 [0.9, 0.8, 0.0, 0.0, 0.9, 1.0, 0.0, 0.0, 0.0, 0.0],
                 [0.8, 0.7, 0.1, 0.0, 0.8, 1.0, 0.0, 0.0, 0.0, 0.0],
@@ -404,6 +407,12 @@ class TestLRRankerPersistence:
             ],
             dtype=np.float32,
         )
+        extra = feature_dim - base.shape[1]
+        X = base if extra <= 0 else np.hstack([base, np.zeros((4, extra), np.float32)])
+        # vary the new column so both classes are separable on it too
+        if extra > 0:
+            X[0, -1] = 1.0
+            X[1, -1] = 1.0
         assert X.shape[1] == feature_dim
         y = np.asarray([1, 1, -1, -1], dtype=np.float32)
 

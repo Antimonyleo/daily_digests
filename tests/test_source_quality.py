@@ -178,7 +178,9 @@ def test_author_intro_metadata_is_skipped():
     assert should_skip_item(Row()) is True
 
 
-def test_topic_fit_can_beat_prestige_when_journal_item_is_weak_match():
+def test_topic_fit_beats_prestige_only_when_relevance_gap_is_large():
+    # Relevance stays the primary gate: a clearly stronger topic match in a minor
+    # venue still beats a weak match in a top venue when the gap is large.
     class Row:
         section = "research"
         abstract = "Primary research with efficacy data."
@@ -190,7 +192,26 @@ def test_topic_fit_can_beat_prestige_when_journal_item_is_weak_match():
     weak_nature = Row("Nature", "Broad cell biology observation")
     strong_minor = Row("Minor Journal", "RNA delivery mechanism for targeted therapeutics")
 
-    assert quality_adjusted_score(strong_minor, 0.70) > quality_adjusted_score(weak_nature, 0.55)
+    assert quality_adjusted_score(strong_minor, 0.82) > quality_adjusted_score(weak_nature, 0.50)
+
+
+def test_high_quality_venue_wins_at_similar_relevance():
+    # Policy: high quality AND relevant is rewarded. At comparable relevance the
+    # top-venue paper should clearly outrank a low-impact-venue paper.
+    class Row:
+        section = "research"
+        abstract = "Primary research with efficacy data."
+
+        def __init__(self, source: str, title: str) -> None:
+            self.source = source
+            self.title = title
+
+    nature = Row("Nature", "RNA delivery mechanism for targeted therapeutics")
+    minor = Row("Minor Journal", "RNA delivery mechanism for targeted therapeutics")
+
+    assert quality_adjusted_score(nature, 0.70) > quality_adjusted_score(minor, 0.70)
+    # The gap should be substantial, not a hair-thin tie-breaker.
+    assert quality_adjusted_score(nature, 0.70) - quality_adjusted_score(minor, 0.70) > 0.15
 
 
 def test_score_breakdown_exposes_user_friendly_reason_tags():

@@ -67,9 +67,9 @@ def test_lr_feature_schema_constants_match_feature_matrix(monkeypatch):
 
     features = votes_mod._build_item_features(rows, np.ones((1, 2), dtype=np.float32))
 
-    assert votes_mod.LR_FEATURE_DIM == 10
+    assert votes_mod.LR_FEATURE_DIM == 11
     assert votes_mod.LR_FEATURE_DIM == len(votes_mod.LR_FEATURE_NAMES)
-    assert votes_mod.LR_FEATURE_NAMES[-1] == "cosine_x_freshness"
+    assert votes_mod.LR_FEATURE_NAMES[-1] == "author_match"
     assert {"published_journal", "published_database", "other_research"} <= set(
         votes_mod.LR_SOURCE_BUCKET_SCORES
     )

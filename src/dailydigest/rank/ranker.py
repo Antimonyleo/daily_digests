@@ -23,6 +23,7 @@ from .source_quality import (
     RANKER_VERSION,
     is_arxiv_cs_source,
     is_high_quality_journal_source,
+    is_low_impact_research,
     is_preprint_source,
     is_published_journal_source,
     quality_adjusted_score,
@@ -35,8 +36,51 @@ logger = logging.getLogger(__name__)
 DOWNWEIGHT_PENALTY = 0.20
 HYBRID_COSINE_W = 0.5
 HYBRID_LR_W = 0.5
+# Reciprocal Rank Fusion constant. Larger = flatter weighting of rank position.
+RRF_K = 60
 
 ScoreFeatureMap = dict[int, dict[str, Any]]
+
+
+def _minmax(x: np.ndarray) -> np.ndarray:
+    lo, hi = float(x.min()), float(x.max())
+    if hi > lo:
+        return (x - lo) / (hi - lo + 1e-6)
+    return np.full_like(x, 0.5)
+
+
+def _rank_desc(values: np.ndarray) -> np.ndarray:
+    """Return 0-based ranks (0 = highest value), ties broken by original order."""
+    order = np.argsort(-values, kind="stable")
+    ranks = np.empty(len(values), dtype=np.int64)
+    ranks[order] = np.arange(len(values))
+    return ranks
+
+
+def _fuse_scores(qa: np.ndarray, lr_prob: np.ndarray, mode: str | None = None) -> np.ndarray:
+    """Combine quality-adjusted topic scores with LR probability into a rank.
+
+    ``rrf`` (default) fuses the two *rankings* via Reciprocal Rank Fusion, which
+    is insensitive to score scale/outliers, then min-maxes the fused result back
+    to [0, 1] so downstream magnitude thresholds (e.g. exceptional-preprint
+    cutoff) keep working. ``minmax`` is the legacy per-batch normalized blend.
+    """
+    qa = np.asarray(qa, dtype=np.float32)
+    lr_prob = np.asarray(lr_prob, dtype=np.float32)
+    if mode is None:
+        try:
+            from ..config import get_settings
+            mode = (get_settings().rank_fusion or "rrf").lower()
+        except Exception:  # noqa: BLE001
+            mode = "rrf"
+    if mode == "minmax":
+        return (HYBRID_COSINE_W * _minmax(qa) + HYBRID_LR_W * _minmax(lr_prob)).astype(
+            np.float32
+        )
+    r_qa = _rank_desc(qa)
+    r_lr = _rank_desc(lr_prob)
+    fused = 1.0 / (RRF_K + r_qa + 1) + 1.0 / (RRF_K + r_lr + 1)
+    return _minmax(fused.astype(np.float32)).astype(np.float32)
 
 
 def _lr_weights_path() -> Path:
@@ -558,13 +602,8 @@ def score_items_lr(
         hybrid_scores=cosine,
         scoring_mode="hybrid_lr",
     )
-    # Blend quality-adjusted score with LR probability for final ranking
-    qa = np.array(final, dtype=np.float32)
-    qa_lo, qa_hi = float(qa.min()), float(qa.max())
-    qa_norm = (qa - qa_lo) / (qa_hi - qa_lo + 1e-6) if qa_hi > qa_lo else np.full_like(qa, 0.5)
-    lr_lo, lr_hi = float(lr_prob.min()), float(lr_prob.max())
-    lr_norm = (lr_prob - lr_lo) / (lr_hi - lr_lo + 1e-6) if lr_hi > lr_lo else np.full_like(lr_prob, 0.5)
-    blended_rank = (HYBRID_COSINE_W * qa_norm + HYBRID_LR_W * lr_norm).tolist()
+    # Fuse quality-adjusted score with LR probability for final ranking
+    blended_rank = _fuse_scores(np.array(final, dtype=np.float32), lr_prob).tolist()
     scored = list(zip(items, blended_rank, strict=True))
     scored.sort(key=lambda t: t[1], reverse=True)
     return scored
@@ -624,13 +663,8 @@ def score_items_with_features(
         hybrid_scores=cosine,
         scoring_mode="hybrid_lr",
     )
-    # Blend quality-adjusted score with LR probability for final ranking
-    qa = np.array(final, dtype=np.float32)
-    qa_lo, qa_hi = float(qa.min()), float(qa.max())
-    qa_norm = (qa - qa_lo) / (qa_hi - qa_lo + 1e-6) if qa_hi > qa_lo else np.full_like(qa, 0.5)
-    lr_lo, lr_hi = float(lr_prob.min()), float(lr_prob.max())
-    lr_norm = (lr_prob - lr_lo) / (lr_hi - lr_lo + 1e-6) if lr_hi > lr_lo else np.full_like(lr_prob, 0.5)
-    blended_rank = (HYBRID_COSINE_W * qa_norm + HYBRID_LR_W * lr_norm).tolist()
+    # Fuse quality-adjusted score with LR probability for final ranking
+    blended_rank = _fuse_scores(np.array(final, dtype=np.float32), lr_prob).tolist()
     # Update features to record the hybrid blend
     for i, (row, _) in enumerate(zip(items, blended_rank)):
         key = _row_feature_key(row)
@@ -744,16 +778,40 @@ def _pick_research_balanced(
     min_high_quality = min(math.ceil(cap * 0.20), _available(scored, is_high_quality_journal_source))
     min_published = min(math.ceil(cap * 0.30), _available(scored, is_published_journal_source))
 
+    # Low-impact venues should appear only rarely and only when strongly on-topic.
+    try:
+        from ..config import get_settings
+
+        _s = get_settings()
+        max_low_impact = int(cap * float(_s.max_low_impact_research_frac))
+        low_impact_floor = float(_s.low_impact_relevance_floor)
+    except Exception:  # noqa: BLE001
+        max_low_impact = cap // 6
+        low_impact_floor = 0.58
+
     selected: list[tuple[ItemRow, float]] = []
     selected_ids: set[int] = set()
     bucket_counts: dict[str, int] = {}
     source_counts: dict[str, int] = {}
 
-    def add(row: ItemRow, score: float, *, enforce_source_cap: bool = True) -> bool:
+    def add(
+        row: ItemRow,
+        score: float,
+        *,
+        enforce_source_cap: bool = True,
+        allow_low_impact_override: bool = False,
+    ) -> bool:
         row_id = getattr(row, "id", None)
         key = int(row_id) if isinstance(row_id, int) else id(row)
         if key in selected_ids or len(selected) >= cap:
             return False
+        if not allow_low_impact_override and is_low_impact_research(row):
+            # Frequency cap + relevance floor: low-impact work is gated unless we
+            # are in the last-resort fill (override) to avoid a short section.
+            if float(score) < low_impact_floor:
+                return False
+            if bucket_counts.get("low_impact_journal", 0) >= max_low_impact:
+                return False
         source = str(getattr(row, "source", "") or "").strip().lower()
         if (
             enforce_source_cap
@@ -845,6 +903,14 @@ def _pick_research_balanced(
                 if len(selected) >= cap:
                     break
                 add(row, score)
+
+    # Last resort: rather than ship a short section, allow low-impact items past
+    # their frequency cap / relevance floor.
+    if len(selected) < cap:
+        for row, score in scored:
+            if len(selected) >= cap:
+                break
+            add(row, score, allow_low_impact_override=True)
 
     # Apply MMR diversity re-ranking over the selected pool
     if len(selected) > 1:

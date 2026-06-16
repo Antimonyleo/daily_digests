@@ -461,7 +461,15 @@ def run_all(
     recent_raw = recent_items(days=days)
     after_reviewed = exclude_reviewed_items(recent_raw)
     after_shown = exclude_previously_shown(after_reviewed)
-    items = dedupe_ranking_candidates(after_shown)          # dedupe FIRST
+    deduped_candidates = dedupe_ranking_candidates(after_shown)   # within-set dedupe FIRST
+    # Cross-day content dedupe: drop items re-surfaced from a recent digest.
+    try:
+        from .rank.near_dup import exclude_recent_near_duplicates
+
+        items, near_dup_drops = exclude_recent_near_duplicates(deduped_candidates)
+    except Exception as _e:  # noqa: BLE001
+        logger.warning("cross-day near-dup suppression failed: %s", _e)
+        items, near_dup_drops = deduped_candidates, []
     quality_rows, quality_drops = _quality_gate(items)      # then gate
     items = quality_rows
     funnel_audit = {
@@ -470,7 +478,9 @@ def run_all(
         "recent_items": len(recent_raw),
         "after_reviewed_filter": len(after_reviewed),
         "after_recently_dismissed_filter": len(after_shown),
-        "after_cross_source_dedupe": len(quality_rows) + len(quality_drops),
+        "after_cross_source_dedupe": len(deduped_candidates),
+        "after_cross_day_near_dup": len(deduped_candidates) - len(near_dup_drops),
+        "cross_day_near_dup_drops": near_dup_drops[:100],
         "after_quality_gate": len(items),
         "quality_gate_drops": quality_drops,
     }
@@ -547,6 +557,49 @@ def run_all(
                 scored.sort(key=lambda t: t[1], reverse=True)
         except Exception as _e:  # noqa: BLE001
             logger.warning("negative interest penalty failed: %s", _e)
+
+    # Author/lab match boost: items whose byline matches the profile watchlist
+    # are pushed up. Applied in both the cosine and hybrid paths so it works
+    # before any votes exist; the learner additionally sees author_match.
+    try:
+        from .rank.authors import author_match_score, load_watchlist
+
+        _watchlist = load_watchlist(profile)
+        if _watchlist:
+            _author_boost = 0.12
+            _reboosted: list[tuple[ItemRow, float]] = []
+            for row, score in scored:
+                m = author_match_score(getattr(row, "authors", "") or "", _watchlist)
+                if m > 0:
+                    score = float(score) + _author_boost * m
+                    key = _row_feature_key(row)
+                    if key in score_features:
+                        score_features[key]["author_match"] = round(float(m), 4)
+                        score_features[key]["author_boost"] = round(_author_boost * m, 4)
+                        score_features[key]["final_score"] = round(float(score), 4)
+                _reboosted.append((row, score))
+            scored = _reboosted
+            scored.sort(key=lambda t: t[1], reverse=True)
+    except Exception as _e:  # noqa: BLE001
+        logger.warning("author match boost failed: %s", _e)
+
+    # Optional live citation-velocity boost via OpenAlex (no-op unless enabled).
+    try:
+        from .rank.enrich import enrich_scored
+
+        scored = enrich_scored(scored)
+    except Exception as _e:  # noqa: BLE001
+        logger.warning("citation enrichment failed: %s", _e)
+
+    # Optional cross-encoder rerank of the top candidates (no-op unless enabled
+    # and the model is available). Reorders within the head band only.
+    try:
+        from .rank.rerank import rerank_scored
+
+        scored = rerank_scored(profile, scored)
+    except Exception as _e:  # noqa: BLE001
+        logger.warning("cross-encoder rerank failed: %s", _e)
+
     # Note: do NOT pre-truncate `scored` to a global top-K before per-section picking;
     # a single-domain profile (e.g. biotech-heavy) starves industry/regulatory/world.
     # `pick_top_per_section` already caps per-section, so summary cost is bounded.

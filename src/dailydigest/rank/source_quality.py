@@ -439,7 +439,16 @@ def source_bucket(row: Any) -> str:
     # that aren't matched by the explicit string checks above.
     if quality.quality_tier in {"repository", "preprint"}:
         return "preprint_other"
+    # Unknown / low-prestige peer-reviewed venues. These are the low-impact
+    # journals that should appear only rarely even when topically relevant.
+    if quality.prestige_score < LOW_RESEARCH_PRESTIGE:
+        return "low_impact_journal"
     return "other_research"
+
+
+def is_low_impact_research(row: Any) -> bool:
+    """Return True for low-impact / unknown peer-reviewed research venues."""
+    return source_bucket(row) == "low_impact_journal"
 
 
 def is_preprint_source(row: Any) -> bool:
@@ -721,8 +730,26 @@ def breakdown_payload(
     }
 
 
+def _research_quality_weight() -> float:
+    """Return the configured venue-quality weight (1.0 = legacy tie-breaker)."""
+    try:
+        from ..config import get_settings
+
+        return float(get_settings().research_quality_weight)
+    except Exception:  # noqa: BLE001
+        return 1.4
+
+
 def quality_adjusted_score(row: Any, base_score: float) -> float:
-    """Blend topic fit with stable quality, novelty, and promo signals."""
+    """Blend topic fit with stable quality, novelty, and promo signals.
+
+    Quality weighting (``research_quality_weight``, ``Q``) controls how much
+    venue reputation matters. High-quality *and* relevant work is rewarded via a
+    quality×relevance interaction term, while low-impact venues take a penalty
+    that — unlike the legacy version — does not fully fade at high relevance, so
+    a low-impact paper does not rank alongside strong-venue work merely for being
+    on-topic. Truly exceptional results (high relevance + novelty) are exempt.
+    """
     section = _row_section(row).lower()
     source_quality = infer_source_quality(_row_source(row), section)
     novelty = novelty_score(row)
@@ -730,17 +757,21 @@ def quality_adjusted_score(row: Any, base_score: float) -> float:
     base = float(base_score)
 
     if section == "research":
-        # Prestige is a tie-breaker, not the main ranking signal. A Nature or
-        # Science item should not outrank a substantially better topic match
-        # just because of venue.
-        source_bonus = 0.18 * max(source_quality.prestige_score - LOW_RESEARCH_PRESTIGE, 0.0)
-        score = base + source_bonus + (0.08 * novelty) - (0.35 * promo)
+        Q = _research_quality_weight()
+        prestige_excess = max(source_quality.prestige_score - LOW_RESEARCH_PRESTIGE, 0.0)
+        source_bonus = 0.18 * Q * prestige_excess
+        # Reward items that are BOTH high quality and relevant (joint signal).
+        quality_relevance = 0.15 * Q * prestige_excess * max(0.0, min(1.0, base))
+        score = base + source_bonus + quality_relevance + (0.08 * novelty) - (0.35 * promo)
         low_prestige = source_quality.prestige_score < LOW_RESEARCH_PRESTIGE
-        exceptional = base >= 0.78 and novelty >= 0.50
+        exceptional = base >= 0.80 and novelty >= 0.50
         if low_prestige and not exceptional:
-            # Smooth ramp: full 0.18 penalty at base≤0.50, fades to zero at base=0.78.
-            smooth = max(0.0, min(1.0, (0.78 - base) / 0.28))
-            score -= 0.18 * smooth
+            # Relevance-scaled component fades as the paper gets more on-topic,
+            # but a residual persists so a low-impact venue stays below comparable
+            # strong-venue work even at high relevance.
+            smooth = max(0.0, min(1.0, (0.82 - base) / 0.32))
+            residual = 0.05
+            score -= Q * 0.16 * smooth + residual
         # Preprints (bioRxiv, ChemRxiv, SSRN, …) have not been peer-reviewed.
         # Apply a mild penalty so a peer-reviewed paper with similar topic fit
         # is preferred. Fades to zero at high base scores so a highly relevant

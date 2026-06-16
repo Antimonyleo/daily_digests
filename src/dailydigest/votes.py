@@ -53,7 +53,7 @@ _SOURCE_GENERALIZATION_CAP = 0.12
 _BUCKET_GENERALIZATION_CAP = 0.06
 _CONTENT_GENERALIZATION_CAP = 0.045
 
-LR_FEATURE_SCHEMA_VERSION = "lr_ranker_engineered_features_v3"
+LR_FEATURE_SCHEMA_VERSION = "lr_ranker_engineered_features_v4"
 LR_FEATURE_NAMES = (
     "cosine_similarity",
     "novelty_score",
@@ -65,6 +65,7 @@ LR_FEATURE_NAMES = (
     "cosine_x_bucket_score",
     "cosine_x_prestige",
     "cosine_x_freshness",
+    "author_match",
 )
 LR_FEATURE_DIM = len(LR_FEATURE_NAMES)
 LR_DEFAULT_SOURCE_BUCKET_SCORE = 0.6
@@ -73,6 +74,7 @@ LR_SOURCE_BUCKET_SCORES = {
     "published_database": 0.8,
     "other_research": 0.65,
     "aggregator": 0.5,
+    "low_impact_journal": 0.4,
     "bio_med_preprint": 0.4,
     "arxiv_other": 0.35,
     "preprint_other": 0.3,
@@ -124,6 +126,7 @@ def _build_item_features(rows: list, profile_mat: np.ndarray) -> np.ndarray:
     8. cosine × prestige       (interaction: high-cosine prestigious papers preferred)
     9. cosine × freshness      (interaction: high-cosine fresh papers preferred;
                                 freshness = 1.0 - age_norm)
+    10. author_match           (1.0 if byline matches the profile author watchlist)
     """
     from .rank.embedding_cache import embed_item_rows
     from .rank.source_quality import (
@@ -134,6 +137,15 @@ def _build_item_features(rows: list, profile_mat: np.ndarray) -> np.ndarray:
         source_bucket,
     )
     from datetime import datetime, timezone
+
+    try:
+        from .config import load_profile
+        from .rank.authors import author_match_score, load_watchlist
+
+        _watchlist = load_watchlist(load_profile())
+    except Exception:  # noqa: BLE001
+        _watchlist = []
+        author_match_score = None  # type: ignore[assignment]
 
     vecs = embed_item_rows(rows)
     if profile_mat.ndim == 1:
@@ -173,6 +185,13 @@ def _build_item_features(rows: list, profile_mat: np.ndarray) -> np.ndarray:
         bucket = source_bucket(row)
         bucket_score = LR_SOURCE_BUCKET_SCORES.get(bucket, LR_DEFAULT_SOURCE_BUCKET_SCORE)
 
+        if _watchlist and author_match_score is not None:
+            author_match = author_match_score(
+                str(getattr(row, "authors", "") or ""), _watchlist
+            )
+        else:
+            author_match = 0.0
+
         cos_val = float(cos[i])
         features.append([
             cos_val,                                    # 0. cosine
@@ -185,6 +204,7 @@ def _build_item_features(rows: list, profile_mat: np.ndarray) -> np.ndarray:
             cos_val * bucket_score,                     # 7. cosine × bucket_score
             cos_val * prestige,                         # 8. cosine × prestige
             cos_val * (1.0 - age_norm),                 # 9. cosine × freshness
+            float(author_match),                        # 10. author_match
         ])
     if not features:
         return np.zeros((0, LR_FEATURE_DIM), dtype=np.float32)
@@ -881,6 +901,28 @@ def _upsert_vote(s, item_id: int, value: int) -> None:
     existing.created_at = now
 
 
+def _sample_training_pairs(
+    up_indices: list[int],
+    down_indices: list[int],
+    max_pairs: int = 300,
+) -> list[tuple[int, int]]:
+    """Return up to ``max_pairs`` (up, down) index pairs sampled uniformly.
+
+    Sampling across ALL combinations avoids the fixed-order bias of the previous
+    implementation, which paired the first few up-voted items with every
+    down-voted item until the cap was hit and silently dropped the rest — so
+    later-voted positives never influenced training.
+    """
+    import itertools
+
+    all_pairs = list(itertools.product(up_indices, down_indices))
+    if len(all_pairs) <= max_pairs:
+        return all_pairs
+    rng = np.random.default_rng(0)  # fixed seed → reproducible training
+    chosen = rng.choice(len(all_pairs), size=max_pairs, replace=False)
+    return [all_pairs[i] for i in chosen]
+
+
 def vote_dataset() -> tuple[np.ndarray, np.ndarray] | None:
     """Build (X, y) for LR training using engineered features.
 
@@ -943,24 +985,16 @@ def vote_dataset() -> tuple[np.ndarray, np.ndarray] | None:
     up_indices = [i for i, label in enumerate(ys) if label == 1]
     down_indices = [i for i, label in enumerate(ys) if label == -1]
     if up_indices and down_indices:
+        all_pairs = _sample_training_pairs(up_indices, down_indices)
         pairs_X: list[np.ndarray] = []
         pairs_y: list[float] = []
-        # Cap at 300 pairs to avoid memory explosion with many votes
-        max_pairs = 300
-        pair_count = 0
-        for ui in up_indices:
-            for di in down_indices:
-                if pair_count >= max_pairs:
-                    break
-                diff = X[ui] - X[di]
-                pairs_X.append(diff)
-                pairs_y.append(1.0)
-                # Add reverse for class balance
-                pairs_X.append(-diff)
-                pairs_y.append(-1.0)
-                pair_count += 1
-            if pair_count >= max_pairs:
-                break
+        for ui, di in all_pairs:
+            diff = X[ui] - X[di]
+            pairs_X.append(diff)
+            pairs_y.append(1.0)
+            # Add reverse for class balance
+            pairs_X.append(-diff)
+            pairs_y.append(-1.0)
         if pairs_X:
             all_X = np.array(pairs_X, dtype=np.float32)
             all_y = np.array(pairs_y, dtype=np.float32)
