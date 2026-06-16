@@ -152,6 +152,42 @@ def prune() -> None:
     typer.echo(f"pruned {n} items")
 
 
+@app.command("eval")
+def eval_ranking(
+    k: int = typer.Option(10, "--k", help="Cutoff for nDCG@k / precision@k."),
+    json_out: bool = typer.Option(False, "--json", help="Emit the full report as JSON."),
+) -> None:
+    """Score past digests against your votes (nDCG@k, P@k, MAP, pairwise acc).
+
+    Replays the persisted ranking of each historical digest against the thumbs
+    you later cast. Use it to A/B ranker changes: run digests under config A,
+    then config B, and compare. Higher is better for all metrics.
+    """
+    from .rank.evaluate import evaluate_history
+
+    report = evaluate_history(k=k)
+    if json_out:
+        import json
+
+        typer.echo(json.dumps(report.as_dict(), indent=2))
+        return
+
+    def _fmt(v: float | None) -> str:
+        return f"{v:.4f}" if v is not None else "n/a"
+
+    typer.echo(
+        f"digests scored: {report.n_digests_scored}/{report.n_digests_total} "
+        f"(votes used: {report.n_votes})"
+    )
+    if report.n_digests_scored == 0:
+        typer.echo("No voted digests yet — vote on a few items, then re-run.")
+        return
+    typer.echo(f"nDCG@{k}:           {_fmt(report.ndcg_at_k)}")
+    typer.echo(f"precision@{k}:      {_fmt(report.precision_at_k)}")
+    typer.echo(f"MAP:               {_fmt(report.map_score)}")
+    typer.echo(f"pairwise accuracy: {_fmt(report.pairwise_accuracy)}")
+
+
 @app.command("ingest-replies")
 def ingest_replies() -> None:
     """Poll IMAP for digest replies and record votes from their bodies."""
