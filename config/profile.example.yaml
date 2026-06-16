@@ -27,6 +27,24 @@ keywords:
   - AI in biology
   - machine learning for drug discovery
 
+# Authors / labs / institutions to follow. Items whose byline matches any entry
+# are boosted in ranking and exposed as a learnable feature. Prefer full names;
+# a bare surname matches broadly.
+authors_of_interest:
+  - Jennifer Doudna
+  - Feng Zhang
+  - David Liu
+  - Broad Institute
+
+# Representative papers — your own, or exemplars of the work you care about.
+# Each entry (a title, or title + abstract) is embedded as a high-weight anchor,
+# giving a far stronger interest vector than the keyword list alone.
+seed_works:
+  - >-
+    Programmable editing of a target base in genomic DNA without
+    double-stranded DNA cleavage: base editing expands the genome editing
+    toolbox for therapeutic correction of point mutations.
+
 # Optional: fine-tune broad facets without duplicating keywords.
 # 1.0 is neutral, <1.0 reduces this facet's contribution, >1.0 strengthens it.
 # NOTE: values < 1.0 reduce the weight but do NOT suppress — use negative_interests

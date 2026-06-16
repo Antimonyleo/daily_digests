@@ -36,6 +36,57 @@ class Settings(BaseSettings):
 
     db_path: str = "data/digest.db"
 
+    # --- Embedding / ranking model configuration -------------------------- #
+    # Swap in a stronger scientific encoder (e.g. "allenai/specter2_base",
+    # "ncbi/MedCPT-Query-Encoder", "BAAI/bge-large-en-v1.5") without code
+    # changes. The item embedding cache keys on the model name, so changing
+    # this transparently re-embeds. Device defaults to CPU (the intended
+    # local / CI mode); set "cuda" only on a supported GPU.
+    embed_model: str = "BAAI/bge-small-en-v1.5"
+    embed_device: str = "cpu"
+    embed_query_prefix: str = "Represent this sentence for searching relevant passages: "
+    embed_doc_prefix: str = ""
+
+    # Optional cross-encoder reranker applied to the top candidates before
+    # section caps. Off by default; enabling requires the model to be available
+    # locally (graceful no-op otherwise).
+    rerank_enabled: bool = False
+    rerank_model: str = "BAAI/bge-reranker-v2-m3"
+    rerank_top_n: int = Field(default=60, ge=1, le=500)
+    rerank_weight: float = Field(default=1.0, ge=0.0, le=1.0)
+
+    # --- Quality weighting --------------------------------------------------- #
+    # How strongly venue quality influences research ranking. 1.0 = legacy
+    # (prestige is a mild tie-breaker). Higher values reward high-quality AND
+    # relevant work more and suppress low-impact venues harder.
+    research_quality_weight: float = Field(default=1.4, ge=0.0, le=5.0)
+    # A low-impact-venue research item must clear this base topic relevance to be
+    # eligible for the digest at all — so the few that appear are strongly on-topic.
+    low_impact_relevance_floor: float = Field(default=0.58, ge=0.0, le=1.0)
+    # Max fraction of the research section that may be filled by low-impact-venue
+    # items, so they cannot appear frequently even when many are related.
+    max_low_impact_research_frac: float = Field(default=0.15, ge=0.0, le=1.0)
+    # Magnitude of the OpenAlex venue-impact adjustment (boost high-impact venues,
+    # penalize low-impact ones) applied when citation_enrichment is enabled.
+    venue_quality_weight: float = Field(default=0.18, ge=0.0, le=1.0)
+
+    # Score-fusion strategy for blending the quality-adjusted topic score with
+    # the learned LR probability: "rrf" (reciprocal rank fusion, robust) or
+    # "minmax" (legacy per-batch min-max blend).
+    rank_fusion: str = "rrf"
+
+    # Live citation/impact enrichment via OpenAlex (network at runtime). Off by
+    # default to keep the daily run local and reproducible.
+    citation_enrichment: bool = False
+    citation_polite_email: str = ""
+
+    # Cross-day near-duplicate suppression: drop a candidate whose embedding is
+    # within `threshold` cosine of an item shown in a sent digest over the last
+    # `days` days — catches the same paper/story re-syndicated via another source.
+    cross_day_dedupe: bool = True
+    cross_day_dedupe_days: int = Field(default=7, ge=1, le=60)
+    cross_day_dedupe_threshold: float = Field(default=0.93, ge=0.5, le=1.0)
+
     top_research: int = Field(default=12, ge=0, le=100)
     top_industry: int = Field(default=6, ge=0, le=100)
     top_regulatory: int = Field(default=3, ge=0, le=100)
