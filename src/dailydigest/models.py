@@ -53,6 +53,13 @@ class Profile(BaseModel):
     # Backward-compatible alias used in older docs/conversations.
     facet_weights: dict[str, float] = Field(default_factory=dict)
     downweight: list[str] = Field(default_factory=list)
+    # Authors / labs / institutions to follow. Items whose author byline matches
+    # any entry are boosted in ranking and exposed as a learnable feature.
+    authors_of_interest: list[str] = Field(default_factory=list)
+    # Representative texts (your own paper titles+abstracts, or exemplar papers)
+    # used as high-weight positive anchors for the interest vector — a far
+    # stronger query than a keyword bag.
+    seed_works: list[str] = Field(default_factory=list)
     # Interests to suppress: embedded as negative query vectors during ranking.
     # Items semantically similar to these topics will be penalized.
     # Example: {"cryptocurrency": 1.0, "sports": 1.0}

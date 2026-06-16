@@ -64,6 +64,16 @@ def _profile_parts_with_weights(profile: Profile) -> tuple[list[str], list[float
             continue
         parts.append(text)
         weights.append(_clip_weight(weight))
+
+    # Seed works (the user's own / exemplar papers) are the strongest interest
+    # signal: real title+abstract text rather than isolated keywords. Embed each
+    # as a high-weight anchor row so top-k cosine matches the user's actual line
+    # of work, not just topical vocabulary.
+    for work in getattr(profile, "seed_works", None) or []:
+        text = str(work).strip()
+        if len(text) > 10:
+            parts.append(text)
+            weights.append(2.0)
     return parts, weights
 
 
