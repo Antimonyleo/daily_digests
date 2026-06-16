@@ -188,6 +188,28 @@ def eval_ranking(
     typer.echo(f"pairwise accuracy: {_fmt(report.pairwise_accuracy)}")
 
 
+@app.command()
+def calibrate() -> None:
+    """Fit the score→probability calibrator from your vote history.
+
+    Maps ranking scores to P(relevant) so the relevance floor self-tunes to your
+    feedback. Needs a modest number of votes spanning both thumbs.
+    """
+    from .rank.calibrate import MIN_VOTES_FOR_CALIBRATION, fit_calibrator
+
+    params = fit_calibrator()
+    if params is None:
+        typer.echo(
+            f"Not enough feedback to calibrate yet "
+            f"(need ~{MIN_VOTES_FOR_CALIBRATION} votes of both signs)."
+        )
+        return
+    typer.echo(
+        f"Calibrated on {params['n']} votes: P(relevant)=sigmoid("
+        f"{params['a']:.3f}*score + {params['b']:.3f})."
+    )
+
+
 @app.command("ingest-replies")
 def ingest_replies() -> None:
     """Poll IMAP for digest replies and record votes from their bodies."""

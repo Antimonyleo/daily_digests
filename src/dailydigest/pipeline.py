@@ -434,6 +434,23 @@ def run_all(
     except Exception as _e:  # noqa: BLE001
         logger.warning("auto-retrain check failed: %s", _e)
 
+    # Refit the score→probability calibrator when stale (> 7 days) so the
+    # adaptive relevance floor tracks recent feedback.
+    try:
+        from pathlib import Path as _Path
+
+        from .rank.calibrate import fit_calibrator as _fit_calib
+
+        _calib_path = _Path(get_settings().db_path).parent / "calibrator.json"
+        _calib_stale = (
+            not _calib_path.exists()
+            or (time.time() - _calib_path.stat().st_mtime) / 86400 > 7
+        )
+        if _calib_stale and _fit_calib() is not None:
+            logger.info("auto-fit score calibrator")
+    except Exception as _e:  # noqa: BLE001
+        logger.warning("calibrator auto-fit check failed: %s", _e)
+
     profile = load_profile()
 
     # Use Rocchio-blended profile when available; fall back to static profile matrix.

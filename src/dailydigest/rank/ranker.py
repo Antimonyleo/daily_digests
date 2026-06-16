@@ -785,6 +785,10 @@ def _pick_research_balanced(
         _s = get_settings()
         max_low_impact = int(cap * float(_s.max_low_impact_research_frac))
         low_impact_floor = float(_s.low_impact_relevance_floor)
+        if getattr(_s, "adaptive_relevance_floor", False):
+            from .calibrate import adaptive_relevance_floor as _adaptive_floor
+
+            low_impact_floor = _adaptive_floor(low_impact_floor)
     except Exception:  # noqa: BLE001
         max_low_impact = cap // 6
         low_impact_floor = 0.58
