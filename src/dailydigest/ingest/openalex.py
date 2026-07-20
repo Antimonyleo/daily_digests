@@ -15,6 +15,7 @@ from tenacity import (
 
 from ..dedupe import _canonical_doi
 from ..models import Item, SourceSpec
+from ._terms import profile_search_terms, watched_author_names
 
 logger = logging.getLogger(__name__)
 
@@ -67,12 +68,65 @@ class OpenAlexSource:
     BASE = "https://api.openalex.org/works"
     PER_PAGE = 25
     MAX_ITEMS = 100
+    # Profile-driven mode: one search per keyword, bounded so ~a dozen keyword
+    # queries don't balloon the ingest / embedding cost.
+    PROFILE_MAX_TERMS = 12
+    PROFILE_PER_TERM = 20
+    PROFILE_MAX_ITEMS = 180
 
-    def fetch(self, spec: SourceSpec) -> list[Item]:
-        query = spec.query or ""
-        two_days_ago = (datetime.now(timezone.utc).date() - timedelta(days=2)).isoformat()
+    def _headers(self, spec: SourceSpec) -> dict[str, str]:
+        ua = "dailydigest/0.1"
+        if spec.polite_email:
+            ua = f"dailydigest/0.1 (mailto:{spec.polite_email})"
+        return {"User-Agent": ua}
+
+    def fetch(self, spec: SourceSpec, days: int = 2) -> list[Item]:
+        headers = self._headers(spec)
+        if spec.profile_driven:
+            terms = profile_search_terms(self.PROFILE_MAX_TERMS)
+            if not terms:
+                terms = [spec.query] if spec.query else []
+            out: list[Item] = []
+            seen: set[str] = set()
+            for term in terms:
+                if len(out) >= self.PROFILE_MAX_ITEMS:
+                    break
+                for item in self._fetch_works(
+                    spec, days, headers, cap=self.PROFILE_PER_TERM, query=term,
+                    upgrade_venue=True,
+                ):
+                    if item.external_id not in seen:
+                        seen.add(item.external_id)
+                        out.append(item)
+            logger.debug("%s: profile-driven fetched %d items over %d terms", spec.name, len(out), len(terms))
+            return out
+        return self._fetch_works(spec, days, headers, cap=self.MAX_ITEMS, query=spec.query or "")
+
+    def _fetch_works(
+        self,
+        spec: SourceSpec,
+        days: int,
+        headers: dict[str, str],
+        *,
+        cap: int,
+        query: str = "",
+        extra_filter: str = "",
+        use_venue_source: bool = False,
+        upgrade_venue: bool = False,
+    ) -> list[Item]:
+        # Lazy import: pulling ``rank.source_quality`` at module top would trigger
+        # ``rank/__init__`` → sentence-transformers on the ingest hot path.
+        if upgrade_venue:
+            from ..rank.source_quality import recognized_research_venue
+        else:
+            recognized_research_venue = None  # type: ignore[assignment]
+
+        window_start = (datetime.now(timezone.utc).date() - timedelta(days=max(1, days))).isoformat()
+        filter_str = f"from_publication_date:{window_start},type:article"
+        if extra_filter:
+            filter_str = f"{filter_str},{extra_filter}"
         base_params: dict[str, str] = {
-            "filter": f"from_publication_date:{two_days_ago},type:article",
+            "filter": filter_str,
             "per-page": str(self.PER_PAGE),
             "cursor": "*",
             "sort": "publication_date:desc",
@@ -80,16 +134,11 @@ class OpenAlexSource:
         if query:
             base_params["search"] = query
 
-        ua = "dailydigest/0.1"
-        if spec.polite_email:
-            ua = f"dailydigest/0.1 (mailto:{spec.polite_email})"
-        headers = {"User-Agent": ua}
-
         out: list[Item] = []
         params = dict(base_params)
         pages = 0
         prev_cursor = None
-        while len(out) < self.MAX_ITEMS and pages < 15:
+        while len(out) < cap and pages < 15:
             try:
                 payload = _get_json(self.BASE, params, headers)
             except Exception as e:
@@ -103,7 +152,7 @@ class OpenAlexSource:
                 break
 
             for work in results:
-                if len(out) >= self.MAX_ITEMS:
+                if len(out) >= cap:
                     break
                 title = (work.get("title") or work.get("display_name") or "").strip()
                 if not title:
@@ -132,9 +181,20 @@ class OpenAlexSource:
                 raw_doi = work.get("doi") or ""
                 bare_doi = _canonical_doi(raw_doi)
                 ext = bare_doi or work.get("id") or hashlib.sha1(url.encode("utf-8")).hexdigest()[:16]
+                # Real publication venue, used to attribute the item to its actual
+                # journal (so it earns venue prestige) rather than to the generic
+                # aggregator feed name.
+                venue = ((work.get("primary_location") or {}).get("source") or {}).get("display_name") or ""
+                item_source = spec.name
+                if use_venue_source and venue:
+                    item_source = venue
+                elif upgrade_venue and venue and recognized_research_venue is not None:
+                    recognized = recognized_research_venue(venue)
+                    if recognized:
+                        item_source = recognized
                 out.append(
                     Item(
-                        source=spec.name,
+                        source=item_source,
                         section=spec.section,
                         external_id=str(ext),
                         url=url,
@@ -155,3 +215,84 @@ class OpenAlexSource:
             params["cursor"] = next_cursor
 
         return out
+
+
+class OpenAlexVenuesSource:
+    """Fetch recent articles directly from specific high-value journals by venue id.
+
+    A retrieval channel for flagship journals whose native RSS is bot-blocked
+    (e.g. ACS Nano, Nano Letters, JACS, Chemistry of Materials behind Cloudflare).
+    Queries OpenAlex filtered to the configured ``venue_ids`` and tags each item
+    with its real journal name (``use_venue_source``) so it earns the correct
+    venue prestige. The topic-relevance gate downstream keeps only on-field work,
+    so this does not flood the digest with a journal's full daily output.
+    """
+
+    MAX_ITEMS = 120
+
+    def fetch(self, spec: SourceSpec, days: int = 2) -> list[Item]:
+        venue_ids = [v for v in (spec.venue_ids or []) if v]
+        if not venue_ids:
+            logger.debug("%s: no venue_ids configured", spec.name)
+            return []
+        works = OpenAlexSource()
+        headers = works._headers(spec)
+        extra_filter = "primary_location.source.id:" + "|".join(venue_ids)
+        return works._fetch_works(
+            spec,
+            days,
+            headers,
+            cap=self.MAX_ITEMS,
+            extra_filter=extra_filter,
+            use_venue_source=True,
+        )
+
+
+class OpenAlexAuthorsSource:
+    """Fetch recent works BY the profile's watched authors, across any venue.
+
+    ``authors_of_interest`` is otherwise only a ranking boost applied to items
+    that already arrived via some feed; this makes it a *retrieval* channel, so a
+    watched lab's new paper surfaces even from a journal not in the feed list.
+    Author names are resolved to OpenAlex author ids (top match), then their
+    works in the window are fetched in a single filtered query.
+    """
+
+    AUTHORS_URL = "https://api.openalex.org/authors"
+    MAX_AUTHORS = 10
+    MAX_ITEMS = 60
+
+    def fetch(self, spec: SourceSpec, days: int = 2) -> list[Item]:
+        names = watched_author_names(self.MAX_AUTHORS)
+        if not names:
+            return []
+        works = OpenAlexSource()
+        headers = works._headers(spec)
+        author_ids: list[str] = []
+        for name in names:
+            aid = self._resolve_author_id(name, headers)
+            if aid:
+                author_ids.append(aid)
+        if not author_ids:
+            logger.debug("%s: no watched-author ids resolved", spec.name)
+            return []
+        extra_filter = "author.id:" + "|".join(author_ids)
+        return works._fetch_works(
+            spec, days, headers, cap=self.MAX_ITEMS, extra_filter=extra_filter
+        )
+
+    def _resolve_author_id(self, name: str, headers: dict[str, str]) -> str | None:
+        try:
+            payload = _get_json(
+                self.AUTHORS_URL, {"search": name, "per-page": "1"}, headers
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("author resolve failed for %r: %s", name, e)
+            return None
+        results = (payload or {}).get("results") or []
+        if not results:
+            return None
+        raw_id = str(results[0].get("id") or "")
+        # id is a URL like https://openalex.org/A5023888391 → keep the bare id.
+        return raw_id.rstrip("/").rsplit("/", 1)[-1] or None
+

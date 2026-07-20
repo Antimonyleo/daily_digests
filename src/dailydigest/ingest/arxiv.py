@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import math
 import re
 import time
 from datetime import datetime, timezone
@@ -65,13 +66,18 @@ class ArxivSource:
     BASE = "https://export.arxiv.org/api/query"
     MAX_RESULTS = 50
 
-    def fetch(self, spec: SourceSpec) -> list[Item]:
+    def fetch(self, spec: SourceSpec, days: int = 2) -> list[Item]:
         category = spec.category or "q-bio.QM"
+        # arXiv has no server-side date filter here; it returns the newest N by
+        # submittedDate. To cover a longer gap, request proportionally more so
+        # older-but-still-in-window papers are retrieved (the ranking recency
+        # window then trims by published date). Bounded to keep the fetch sane.
+        max_results = min(self.MAX_RESULTS * max(1, math.ceil(max(1, days) / 2)), 400)
         params = {
             "search_query": f"cat:{category}",
             "sortBy": "submittedDate",
             "sortOrder": "descending",
-            "max_results": str(self.MAX_RESULTS),
+            "max_results": str(max_results),
         }
         out: list[Item] = []
         try:

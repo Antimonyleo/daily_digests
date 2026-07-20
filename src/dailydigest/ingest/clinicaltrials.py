@@ -56,9 +56,9 @@ class ClinicalTrialsSource:
     PAGE_SIZE = 50
     MAX_ITEMS = 100
 
-    def fetch(self, spec: SourceSpec) -> list[Item]:
+    def fetch(self, spec: SourceSpec, days: int = 2) -> list[Item]:
         today = datetime.now(timezone.utc).date()
-        from_d = (today - timedelta(days=2)).isoformat()
+        from_d = (today - timedelta(days=max(1, days))).isoformat()
         to_d = today.isoformat()
         params: dict[str, str] = {
             "filter.advanced": f"AREA[LastUpdatePostDate]RANGE[{from_d},{to_d}]",

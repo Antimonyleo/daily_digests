@@ -6,7 +6,15 @@ from ..models import Item, SourceSpec
 
 
 class Source(Protocol):
-    def fetch(self, spec: SourceSpec) -> list[Item]: ...
+    def fetch(self, spec: SourceSpec, days: int = 2) -> list[Item]:
+        """Fetch items for ``spec``.
+
+        ``days`` is the look-back window in days for date-capable APIs (bioRxiv,
+        arXiv, OpenAlex, PubMed, FDA, ClinicalTrials); it widens after a usage
+        gap so a backlog is covered. RSS feeds ignore it (they return whatever
+        the feed currently exposes).
+        """
+        ...
 
 
 def dispatch_source(spec: SourceSpec) -> Source:
@@ -27,6 +35,14 @@ def dispatch_source(spec: SourceSpec) -> Source:
         from .openalex import OpenAlexSource
 
         return OpenAlexSource()
+    if spec.kind == "openalex_authors":
+        from .openalex import OpenAlexAuthorsSource
+
+        return OpenAlexAuthorsSource()
+    if spec.kind == "openalex_venues":
+        from .openalex import OpenAlexVenuesSource
+
+        return OpenAlexVenuesSource()
     if spec.kind == "pubmed":
         from .pubmed import PubMedSource
 

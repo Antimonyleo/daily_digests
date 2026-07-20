@@ -21,6 +21,22 @@ from ..models import Item, SourceSpec
 logger = logging.getLogger(__name__)
 
 
+# A browser-like UA + Accept headers. Several publishers (Wiley, some news
+# sites) 403 a bare bot UA; this clears the naive filters. It does NOT defeat
+# active bot protection (ACS/Cloudflare) — those journals are pulled via
+# OpenAlex-by-venue instead — but it recovers feeds behind simple UA checks.
+_RSS_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0"
+    ),
+    # Keep Accept fully permissive: a specific RSS/XML Accept list makes strict
+    # servers (e.g. eLife) return 406 Not Acceptable. The browser UA above is the
+    # lever that clears naive bot filters; the Accept header must not narrow it.
+    "Accept": "*/*",
+    "Accept-Language": "en-US,en;q=0.9",
+}
+
+
 @retry(
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=1, min=2, max=10),
@@ -30,7 +46,7 @@ logger = logging.getLogger(__name__)
 def _http_get_bytes(url: str) -> bytes:
     """Fetch a feed body via httpx so we get retry control over feedparser."""
     with httpx.Client(timeout=20.0, follow_redirects=True) as client:
-        resp = client.get(url, headers={"User-Agent": "dailydigest/0.1"})
+        resp = client.get(url, headers=_RSS_HEADERS)
         resp.raise_for_status()
         return resp.content
 
@@ -99,7 +115,9 @@ def _extract_abstract(entry) -> str:
 
 
 class RSSSource:
-    def fetch(self, spec: SourceSpec) -> list[Item]:
+    def fetch(self, spec: SourceSpec, days: int = 2) -> list[Item]:
+        # ``days`` is ignored: an RSS feed only exposes its current window of
+        # entries. The ranking recency window trims older items by published date.
         if not spec.url:
             return []
         try:

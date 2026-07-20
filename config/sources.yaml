@@ -79,17 +79,45 @@ research:
   - name: arXiv cs.LG
     kind: arxiv
     category: cs.LG
-  - name: OpenAlex (biotech)
+  # Note: soft-matter / materials / optics preprints are covered via profile-
+  # driven OpenAlex below (which indexes arXiv by keyword), avoiding extra direct
+  # arXiv category feeds — arXiv rate-limits rapid sequential requests.
+  # Profile-driven OpenAlex: actively searches ALL venues (incl. ChemRxiv, and
+  # journals not in the RSS list) for the user's own keywords — the main recall
+  # lever. Falls back to `query` only if the profile has no keywords.
+  - name: OpenAlex (your topics)
     kind: openalex
+    profile_driven: true
     quality_tier: aggregator
     prestige_score: 0.34
-    query: biotechnology OR therapeutic OR clinical trial OR drug discovery
+    query: biotechnology OR therapeutic OR drug discovery
     polite_email: noreply@example.com
-  - name: PubMed (clinical/biotech)
+  # Recent works BY the profile's watched authors/labs, from any venue.
+  - name: OpenAlex (your authors)
+    kind: openalex_authors
+    quality_tier: aggregator
+    prestige_score: 0.34
+    polite_email: noreply@example.com
+  - name: PubMed (your topics)
     kind: pubmed
-    # Simplified: the prior topic AND-clause filtered everything out (0 hits in 2-day window).
-    # This broader query reliably returns 20+ items in the 2-day reldate window.
+    profile_driven: true
+    # profile keywords are OR'd over title/abstract; `query` is an extra fallback.
     query: clinical trial[pt]
+  # ACS flagship journals: their native RSS is Cloudflare-blocked (403 from
+  # datacenter IPs), so pull them via OpenAlex by venue id instead. Each item is
+  # tagged with its real journal name (strong-tier prestige); the topic gate then
+  # keeps only on-field work. Venue ids resolved from api.openalex.org/sources.
+  - name: ACS journals (via OpenAlex)
+    kind: openalex_venues
+    polite_email: noreply@example.com
+    venue_ids:
+      - S145476921   # ACS Nano
+      - S143846845   # Nano Letters
+      - S111155417   # Journal of the American Chemical Society (JACS)
+      - S66104727    # Chemistry of Materials
+      - S2765035057  # ACS Central Science
+      - S4210207119  # JACS Au
+      - S164001016   # ACS Applied Materials & Interfaces
 
   # --- Nature family (high-impact) ---
   - name: Nature Nanotechnology
@@ -260,6 +288,7 @@ industry:
     url: https://endpts.com/feed/
     quality_tier: trusted-news
     promo_risk: 0.05
+    paywalled: true
   - name: FierceBiotech
     kind: rss
     url: https://www.fiercebiotech.com/rss/xml
@@ -270,6 +299,7 @@ industry:
     url: https://www.statnews.com/feed/
     quality_tier: trusted-news
     promo_risk: 0.02
+    paywalled: true
   - name: BioPharma Dive
     kind: rss
     url: https://www.biopharmadive.com/feeds/news/
@@ -313,8 +343,34 @@ world:
     kind: rss
     url: https://www.technologyreview.com/feed/
     quality_tier: trusted-news
+    paywalled: true
   - name: Hacker News (front)
     kind: rss
     url: https://hnrss.org/frontpage
     quality_tier: news
     promo_risk: 0.15
+
+# AI tools, tricks, prompt-engineering and best-practice content. Exempt from the
+# biotech topic floor (see pipeline._dynamic_section_caps) so it always appears.
+ai:
+  - name: Simon Willison
+    kind: rss
+    url: https://simonwillison.net/atom/everything/
+    quality_tier: trusted-news
+  - name: Hugging Face Blog
+    kind: rss
+    url: https://huggingface.co/blog/feed.xml
+    quality_tier: trusted-news
+  - name: The Gradient
+    kind: rss
+    url: https://thegradient.pub/rss/
+    quality_tier: trusted-news
+  - name: Import AI (Jack Clark)
+    kind: rss
+    url: https://jack-clark.net/feed/
+    quality_tier: trusted-news
+  - name: Latent Space
+    kind: rss
+    url: https://www.latent.space/feed
+    quality_tier: news
+    promo_risk: 0.1

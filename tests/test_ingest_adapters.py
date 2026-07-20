@@ -185,6 +185,82 @@ def test_openalex_skips_work_with_no_url_at_all(monkeypatch):
     assert len(items) == 0
 
 
+def test_openalex_venues_tags_items_with_real_journal(monkeypatch):
+    """openalex_venues attributes each item to its real journal (venue) name so it
+    earns venue prestige, and filters by the configured venue ids."""
+    from dailydigest.ingest.openalex import OpenAlexVenuesSource
+
+    work = {
+        "id": "https://openalex.org/W1",
+        "title": "A DNA origami nanodevice",
+        "doi": "https://doi.org/10.1021/acsnano.6b00001",
+        "primary_location": {"source": {"display_name": "ACS Nano"}},
+        "abstract_inverted_index": None,
+        "authorships": [],
+        "publication_date": "2026-07-06",
+    }
+    captured = {}
+
+    def fake_get_json(url, params, headers):
+        captured["filter"] = params.get("filter", "")
+        return {"results": [work], "meta": {"next_cursor": None}}
+
+    monkeypatch.setattr("dailydigest.ingest.openalex._get_json", fake_get_json)
+
+    spec = _spec(
+        name="ACS journals (via OpenAlex)",
+        kind="openalex_venues",
+        venue_ids=["S145476921", "S143846845"],
+    )
+    items = OpenAlexVenuesSource().fetch(spec, days=2)
+
+    assert len(items) == 1
+    # Item is attributed to its real journal, NOT the aggregator feed name.
+    assert items[0].source == "ACS Nano"
+    # The venue filter was applied.
+    assert "primary_location.source.id:S145476921|S143846845" in captured["filter"]
+
+
+def test_openalex_profile_driven_upgrades_recognized_venue(monkeypatch):
+    """A profile-driven OpenAlex hit from a flagship venue is re-attributed to that
+    venue; an unknown venue keeps the aggregator source name."""
+    from dailydigest.ingest.openalex import OpenAlexSource
+
+    flagship = {
+        "id": "https://openalex.org/W2",
+        "title": "Self-assembled photonic crystal",
+        "doi": "https://doi.org/10.1021/jacs.6b00002",
+        "primary_location": {"source": {"display_name": "Journal of the American Chemical Society"}},
+        "abstract_inverted_index": None,
+        "authorships": [],
+        "publication_date": "2026-07-06",
+    }
+    obscure = {
+        "id": "https://openalex.org/W3",
+        "title": "Something niche",
+        "doi": "https://doi.org/10.9999/obscure.1",
+        "primary_location": {"source": {"display_name": "Journal of Obscure Results"}},
+        "abstract_inverted_index": None,
+        "authorships": [],
+        "publication_date": "2026-07-06",
+    }
+    monkeypatch.setattr(
+        "dailydigest.ingest.openalex._get_json",
+        lambda url, params, headers: {"results": [flagship, obscure], "meta": {"next_cursor": None}},
+    )
+    items = OpenAlexSource()._fetch_works(
+        _spec(name="OpenAlex (your topics)", kind="openalex"),
+        2,
+        {"User-Agent": "t"},
+        cap=10,
+        query="photonic crystals",
+        upgrade_venue=True,
+    )
+    by_title = {i.title: i.source for i in items}
+    assert by_title["Self-assembled photonic crystal"] == "Journal of the American Chemical Society"
+    assert by_title["Something niche"] == "OpenAlex (your topics)"
+
+
 # ---------------------------------------------------------------------------
 # FDA — most-recent submission by date
 # ---------------------------------------------------------------------------

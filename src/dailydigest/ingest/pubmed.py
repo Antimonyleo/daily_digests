@@ -45,10 +45,20 @@ class PubMedSource:
     RETMAX = 200
     MAX_ITEMS = 100
 
-    def fetch(self, spec: SourceSpec) -> list[Item]:
+    def fetch(self, spec: SourceSpec, days: int = 2) -> list[Item]:
         query = spec.query or ""
+        if spec.profile_driven:
+            from ._terms import profile_search_terms
+
+            terms = profile_search_terms(12)
+            if terms:
+                # OR the profile keywords over title/abstract so PubMed actively
+                # searches for the user's topics across all indexed journals.
+                clauses = " OR ".join(f'"{t}"[tiab]' for t in terms)
+                query = f"({clauses})" if not query else f"({clauses}) OR ({query})"
         if not query:
             return []
+        self._reldate = max(1, days)
         out: list[Item] = []
         try:
             with httpx.Client(timeout=20.0, headers=self.HEADERS) as client:
@@ -87,7 +97,7 @@ class PubMedSource:
             "term": query,
             "retmode": "json",
             "datetype": "pdat",
-            "reldate": "2",
+            "reldate": str(getattr(self, "_reldate", 2)),
             "retmax": str(self.RETMAX),
             "sort": "date",
         }

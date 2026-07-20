@@ -45,13 +45,13 @@ class FDASource:
     MAX_ITEMS = 100
     LIMIT = 50
 
-    def fetch(self, spec: SourceSpec) -> list[Item]:
+    def fetch(self, spec: SourceSpec, days: int = 2) -> list[Item]:
         endpoint = (spec.endpoint or "drug/drugsfda.json").lstrip("/")
         today = datetime.now(timezone.utc).date()
-        two_days_ago = today - timedelta(days=2)
+        window_start = today - timedelta(days=max(1, days))
         date_query = (
             f"submissions.submission_status_date:"
-            f"[{two_days_ago.strftime('%Y%m%d')} TO {today.strftime('%Y%m%d')}]"
+            f"[{window_start.strftime('%Y%m%d')} TO {today.strftime('%Y%m%d')}]"
         )
         search = self._search_query(date_query, spec.query)
 

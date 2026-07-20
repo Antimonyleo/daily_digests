@@ -38,10 +38,10 @@ class BiorxivSource:
 
     BASE = "https://api.biorxiv.org/details"
 
-    def fetch(self, spec: SourceSpec) -> list[Item]:
+    def fetch(self, spec: SourceSpec, days: int = 2) -> list[Item]:
         server = (spec.server or "biorxiv").lower()
         today = datetime.now(timezone.utc).date()
-        frm = (today - timedelta(days=2)).isoformat()
+        frm = (today - timedelta(days=max(1, days))).isoformat()
         to = today.isoformat()
         out: list[Item] = []
         cursor = 0
