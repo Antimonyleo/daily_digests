@@ -65,10 +65,16 @@ def _get_model(name: str, device: str):
             return None
 
 
+def _row_key(row: ItemRow) -> int:
+    """Match ranker._row_feature_key so CE scores align with score_features."""
+    rid = getattr(row, "id", None)
+    return int(rid) if isinstance(rid, int) else id(row)
+
+
 def _normalize(x: np.ndarray) -> np.ndarray:
     lo, hi = float(x.min()), float(x.max())
     if hi > lo:
-        return (x - lo) / (hi - lo + 1e-6)
+        return (x - lo) / (hi - lo)
     return np.full_like(x, 0.5)
 
 
@@ -81,11 +87,17 @@ def rerank_scored(
     scored: list[tuple[ItemRow, float]],
     *,
     settings: object | None = None,
+    feature_sink: dict[int, float] | None = None,
 ) -> list[tuple[ItemRow, float]]:
     """Rerank the top candidates with a cross-encoder when enabled.
 
     Returns ``scored`` unchanged when disabled, when no model is available, or on
     any prediction error.
+
+    When ``feature_sink`` is provided, the per-item cross-encoder relevance
+    (squashed to [0, 1]) is written into it keyed by the item's feature key, so
+    the caller can fold cross-encoder relevance into the research topic gate
+    rather than only reordering the head.
     """
     if not scored:
         return scored
@@ -122,6 +134,9 @@ def rerank_scored(
 
     # Cross-encoders often emit logits; squash to [0,1] when out of range.
     ce = _sigmoid(raw) if (raw.min() < 0.0 or raw.max() > 1.0) else raw
+    if feature_sink is not None:
+        for i, (row, _) in enumerate(head):
+            feature_sink[_row_key(row)] = float(ce[i])
     orig = np.asarray([s for _, s in head], dtype=np.float32)
     blended = weight * ce + (1.0 - weight) * _normalize(orig)
 

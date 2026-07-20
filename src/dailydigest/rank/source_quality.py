@@ -27,6 +27,12 @@ class SourceQuality:
     quality_tier: str
     impact_floor: float | None = None
     promo_risk: float = 0.0
+    paywalled: bool = False
+
+
+# Ranking penalty applied to paywalled industry/world items so they must clear a
+# higher relevance bar to appear (most can't be read without a subscription).
+PAYWALL_PENALTY = 0.15
 
 
 @dataclass(frozen=True)
@@ -83,6 +89,15 @@ HIGH_TIER_PATTERNS = (
     "molecular cell",
     "pnas",
     "nucleic acids research",
+    # Flagship physical-science journals whose real impact rivals the Nature
+    # sub-journals above (ACS Nano & JACS 2yr-mean-citedness ≈ 15.6, matching
+    # Nature; Nano Letters ≈ 8.4). Previously mis-tiered as merely "strong",
+    # which — under score compression at the top of the research section — left
+    # them just outside the cut every day despite being core venues for the
+    # reader's nanoscience / self-assembly / materials field.
+    "acs nano",
+    "nano letters",
+    "journal of the american chemical society",
 )
 
 STRONG_TIER_PATTERNS = (
@@ -96,9 +111,7 @@ STRONG_TIER_PATTERNS = (
     "cell genomics",
     "med (cell press)",
     "chem (cell press)",
-    "jacs",
-    "acs nano",
-    "nano letters",
+    "jacs",  # bare token keeps JACS Au (2yr ≈ 7.1) at strong; JACS itself is high-tier
     "acs catalysis",
     "acs central science",
     "acs chemical biology",
@@ -148,6 +161,17 @@ HIGH_NOVELTY_TERMS = (
     "resolved structure",
     "de novo",
     "single-cell atlas",
+    # Domain-neutral advance markers so a physical-science / biomolecular-design
+    # result (self-assembly, photonics, protein design) gets fair novelty credit
+    # instead of the previous clinical-only vocabulary, which starved this
+    # reader's field of novelty and skewed the bonus toward the very clinical
+    # content they set as negative interests.
+    "first demonstration",
+    "record efficiency",
+    "unprecedented",
+    "orders of magnitude",
+    "first realization",
+    "long-sought",
 )
 
 MODERATE_NOVELTY_TERMS = (
@@ -253,6 +277,63 @@ SKIP_PATTERNS = (
     re.compile(r"\bcover\s+(picture|image|profile|feature|art|story)\b", re.IGNORECASE),
 )
 
+# Front-matter / non-primary-research content that high-impact journal RSS feeds
+# (Nature, Nature Biotechnology, Science, …) publish alongside real papers. These
+# ride the journal's prestige into the research section despite not being primary
+# research. Matched on the TITLE (structural markers), so genuine papers whose
+# abstract merely mentions e.g. "correction" are unaffected.
+NON_RESEARCH_TITLE_PATTERNS = (
+    re.compile(r"^\s*(author\s+)?correction(\s+to)?\b[:.]?", re.IGNORECASE),
+    re.compile(r"^\s*publisher\s+correction\b", re.IGNORECASE),
+    re.compile(r"^\s*erratum\b", re.IGNORECASE),
+    re.compile(r"^\s*retraction(\s+note)?\b", re.IGNORECASE),
+    re.compile(r"^\s*addendum\b", re.IGNORECASE),
+    re.compile(r"^\s*editorial\b[:.]?", re.IGNORECASE),
+    re.compile(r"\bnews\s*(&|and)\s*views\b", re.IGNORECASE),
+    re.compile(r"\bresearch\s+highlights?\b", re.IGNORECASE),
+    re.compile(r"\bnews\s+(feature|in\s+brief|round[\s-]?up)\b", re.IGNORECASE),
+    re.compile(r"\bnews\s+from\s+around\s+the\s+world\b", re.IGNORECASE),
+    re.compile(r"^\s*in\s+this\s+issue\b", re.IGNORECASE),
+    re.compile(r"^\s*(this\s+(week|month)\s+in|the\s+week\s+in)\b", re.IGNORECASE),
+    re.compile(r"^\s*(technology\s+feature|toolbox|outlook|the\s+last\s+word)\b", re.IGNORECASE),
+    re.compile(r"\bpodcast\b", re.IGNORECASE),
+    # Career-advice columns (Nature/Science Careers) — first-person Q&A and
+    # "how to ... your career/research" advice. High-precision: these phrasings
+    # never occur in a primary-research title.
+    re.compile(r"\bhow\s+do\s+i\b", re.IGNORECASE),
+    re.compile(r"\bfuture[\s-]?proof\b", re.IGNORECASE),
+    re.compile(r"\bjob\s+interviews?\b", re.IGNORECASE),
+    re.compile(r"\bmentorship\b", re.IGNORECASE),
+    re.compile(r"\brecipe\s+for\s+success\b", re.IGNORECASE),
+    re.compile(r"\bwork[\s–-]life\b", re.IGNORECASE),
+    re.compile(r"\ba\s+day\s+in\s+the\s+life\b", re.IGNORECASE),
+    re.compile(
+        r"\bhow\s+to\s+(write|get|land|choose|ace|survive|balance|manage|make|build|network|negotiate)\b.*"
+        r"\b(job|career|cv|r[eé]sum[eé]|manuscript|paper|research|lab|grant|postdoc|ph\.?d|supervisor|mentor)\b",
+        re.IGNORECASE,
+    ),
+    # News-desk items that ride a research journal's feed (politics/legal, not
+    # science). Research-section only, so these markers won't hit real papers.
+    re.compile(r"\b(criminal|smuggling|fraud)\s+charges\b", re.IGNORECASE),
+    re.compile(r"\b(political|public)\s+(uproar|outcry|backlash)\b", re.IGNORECASE),
+    re.compile(r"\bindicted\b", re.IGNORECASE),
+)
+
+
+def is_non_research_content(row: Any) -> bool:
+    """Return True for research-feed items that are not primary research.
+
+    News, News & Views, research highlights, editorials, corrections, retractions,
+    and news round-ups are dropped from the research section (they can still reach
+    the news sections). Only applies to the research section.
+    """
+    if _row_section(row).lower() != "research":
+        return False
+    title = _safe_str(getattr(row, "title", "")).strip()
+    if not title:
+        return False
+    return any(p.search(title) for p in NON_RESEARCH_TITLE_PATTERNS)
+
 
 def _safe_str(value: Any) -> str:
     return value if isinstance(value, str) else ""
@@ -337,9 +418,30 @@ def infer_source_quality(source: str, section: str) -> SourceQuality:
                     else inferred.promo_risk
                 )
             ),
+            paywalled=bool(getattr(configured, "paywalled", False)),
         )
 
     return _infer_source_quality_by_name(source_lc, section_lc)
+
+
+def recognized_research_venue(venue_name: str | None) -> str | None:
+    """Return ``venue_name`` when it names a known top/high/strong research venue.
+
+    Used to *upgrade* aggregator-sourced items (OpenAlex/PubMed) to their real
+    journal identity so an ACS Nano or Nature paper arriving via a topic search is
+    scored as the prestigious venue it is, not as a generic aggregator hit. Returns
+    None for unknown/low-impact venues so their aggregator attribution is kept.
+    """
+    if not venue_name:
+        return None
+    v = venue_name.lower().strip()
+    if not v:
+        return None
+    if v in TOP_TIER_NAMES:
+        return venue_name
+    if any(p in v for p in HIGH_TIER_PATTERNS) or any(p in v for p in STRONG_TIER_PATTERNS):
+        return venue_name
+    return None
 
 
 def _infer_source_quality_by_name(source_lc: str, section_lc: str) -> SourceQuality:
@@ -511,6 +613,10 @@ def should_skip_item(row: Any) -> bool:
             return True
         if any(pattern.search(text) for pattern in SKIP_PATTERNS):
             return True
+        # News / News & Views / highlights / corrections / editorials that ride a
+        # journal's prestige into the research section but are not primary research.
+        if is_non_research_content(row):
+            return True
         text_lc = text.lower()
         is_commentary = any(term in text_lc for term in COMMENTARY_TERMS)
         has_new_information = (
@@ -653,7 +759,7 @@ def score_breakdown(
         novelty=_clip(novelty),
         learned=learned,
         penalty=penalty,
-        final=float(final),
+        final=_clip(float(final)),
         tags=tags,
         promo_penalty=_clip(promo),
         access_penalty=_clip(access),
@@ -758,6 +864,40 @@ def _research_quality_weight() -> float:
         return 1.4
 
 
+def _venue_relevance_credit_coeff() -> float:
+    try:
+        from ..config import get_settings
+
+        return float(get_settings().venue_relevance_credit)
+    except Exception:  # noqa: BLE001
+        return 0.10
+
+
+def venue_relevance_credit(row: Any) -> float:
+    """Topic-relevance credit granted to a high-quality research venue at the gate.
+
+    A prestigious journal in the reader's field is a strong quality prior, so it
+    should clear the ``min_topic_relevance`` floor at a slightly lower raw cosine
+    than an anonymous preprint/aggregator hit. Returns ``coeff * prestige_excess``
+    for research items (0 for news/preprints/aggregators, whose prestige_excess is
+    small or zero), where ``prestige_excess = prestige - LOW_RESEARCH_PRESTIGE``.
+
+    The credit is intentionally small so it only rescues *borderline* top-venue
+    work (cosine just under the floor); a genuinely off-topic prestigious paper
+    still fails the gate.
+    """
+    if _row_section(row).lower() != "research":
+        return 0.0
+    quality = infer_source_quality(_row_source(row), "research")
+    # Preprints/aggregators do not get venue relevance credit even if their
+    # nominal prestige sits above the low-impact line — the credit is a
+    # peer-reviewed-venue signal.
+    if quality.quality_tier not in {"top", "high", "strong"}:
+        return 0.0
+    prestige_excess = max(quality.prestige_score - LOW_RESEARCH_PRESTIGE, 0.0)
+    return _venue_relevance_credit_coeff() * prestige_excess
+
+
 def quality_adjusted_score(row: Any, base_score: float) -> float:
     """Blend topic fit with stable quality, novelty, and promo signals.
 
@@ -767,6 +907,10 @@ def quality_adjusted_score(row: Any, base_score: float) -> float:
     that — unlike the legacy version — does not fully fade at high relevance, so
     a low-impact paper does not rank alongside strong-venue work merely for being
     on-topic. Truly exceptional results (high relevance + novelty) are exempt.
+
+    The returned score is clipped to [0, 1] so the absolute thresholds that gate
+    selection downstream (``adaptive_size_bar``, ``low_impact_relevance_floor``,
+    the exceptional-preprint cutoff) operate on a stable, bounded scale.
     """
     section = _row_section(row).lower()
     source_quality = infer_source_quality(_row_source(row), section)
@@ -779,16 +923,21 @@ def quality_adjusted_score(row: Any, base_score: float) -> float:
         prestige_excess = max(source_quality.prestige_score - LOW_RESEARCH_PRESTIGE, 0.0)
         source_bonus = 0.18 * Q * prestige_excess
         # Reward items that are BOTH high quality and relevant (joint signal).
-        quality_relevance = 0.15 * Q * prestige_excess * max(0.0, min(1.0, base))
+        # Weighted at 0.18 (was 0.15) so a high-impact venue that is also strongly
+        # on-topic pulls clearly ahead of an equally-relevant weaker venue — the
+        # reader's explicit priority ("high-quality AND relevant weighted higher").
+        quality_relevance = 0.18 * Q * prestige_excess * max(0.0, min(1.0, base))
         score = base + source_bonus + quality_relevance + (0.08 * novelty) - (0.35 * promo)
         low_prestige = source_quality.prestige_score < LOW_RESEARCH_PRESTIGE
         exceptional = base >= 0.80 and novelty >= 0.50
         if low_prestige and not exceptional:
-            # Relevance-scaled component fades as the paper gets more on-topic,
-            # but a residual persists so a low-impact venue stays below comparable
-            # strong-venue work even at high relevance.
+            # Relevance-scaled component fades as the paper gets more on-topic, but
+            # a larger persistent residual (0.10, was 0.05) keeps a low-impact venue
+            # meaningfully below comparable strong-venue work even when it is highly
+            # on-topic — so "low-impact even if quite related" stays infrequent and
+            # low in the ordering, not shoulder-to-shoulder with flagship papers.
             smooth = max(0.0, min(1.0, (0.82 - base) / 0.32))
-            residual = 0.05
+            residual = 0.10
             score -= Q * 0.16 * smooth + residual
         # Preprints (bioRxiv, ChemRxiv, SSRN, …) have not been peer-reviewed.
         # Apply a mild penalty so a peer-reviewed paper with similar topic fit
@@ -806,7 +955,7 @@ def quality_adjusted_score(row: Any, base_score: float) -> float:
         ctype = content_type(row)
         if ctype in {"editorial", "commentary"} and not exceptional:
             score -= 0.10
-        return score
+        return _clip(score)
 
     if section in {"industry", "world"}:
         score = base + (0.06 * source_quality.prestige_score) + (0.14 * novelty) - (0.45 * promo)
@@ -815,12 +964,22 @@ def quality_adjusted_score(row: Any, base_score: float) -> float:
         if quality_tier_val in ("self-published", "low") and base < 0.72:
             smooth = max(0.0, min(1.0, (0.72 - base) / 0.24))
             score -= 0.12 * smooth
-        return score
+        # Opinion / editorial / commentary pieces ("Opinion:", "Perspective")
+        # carry little hard news — push them below straight reporting.
+        if content_type(row) in {"editorial", "commentary"}:
+            score -= 0.12
+        # Paywalled sources must be more relevant to earn a slot.
+        if source_quality.paywalled:
+            score -= PAYWALL_PENALTY
+        return _clip(score)
 
     if section == "regulatory":
         # FDA/EMA items often contain "today announced", "approved", "pleased to
         # announce" — all promo-flagged but editorially legitimate. Use a light
         # 0.15× penalty rather than the full 0.45× applied to industry.
-        return base + (0.06 * source_quality.prestige_score) + (0.10 * novelty) - (0.15 * promo)
+        score = base + (0.06 * source_quality.prestige_score) + (0.10 * novelty) - (0.15 * promo)
+        if source_quality.paywalled:
+            score -= PAYWALL_PENALTY
+        return _clip(score)
 
-    return base + (0.06 * source_quality.prestige_score) + (0.10 * novelty) - (0.15 * promo)
+    return _clip(base + (0.06 * source_quality.prestige_score) + (0.10 * novelty) - (0.15 * promo))

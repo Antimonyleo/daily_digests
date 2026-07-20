@@ -39,6 +39,34 @@ _LOW_VENUE_QUALITY = 0.4
 _OPENALEX_URL = "https://api.openalex.org/works"
 _OPENALEX_SOURCES_URL = "https://api.openalex.org/sources"
 
+# Reject an OpenAlex response larger than this — a hostile/buggy endpoint could
+# otherwise stream a multi-GB body that `resp.json()` buffers entirely, OOMing
+# the run. 16 MiB is generous for a 50-record page.
+_MAX_RESPONSE_BYTES = 16 * 1024 * 1024
+# Defensive ceilings on untrusted upstream values.
+_MAX_RESULTS_PER_PAGE = 200
+_MAX_VENUE_MEAN_CITEDNESS = 1000.0
+
+
+def _redact(text: str) -> str:
+    """Strip a ``mailto=<email>`` query param so the polite-pool email (PII)
+    never lands in logs (which may be public CI output)."""
+    return re.sub(r"(mailto=)[^&\s]+", r"\1[redacted]", text)
+
+
+def _get_json_bounded(client, url: str, params: dict) -> dict:
+    """GET + JSON-parse with a hard response-size ceiling (CWE-400)."""
+    import json
+
+    with client.stream("GET", url, params=params) as resp:
+        resp.raise_for_status()
+        buf = bytearray()
+        for chunk in resp.iter_bytes():
+            buf += chunk
+            if len(buf) > _MAX_RESPONSE_BYTES:
+                raise ValueError("OpenAlex response exceeds size cap")
+        return json.loads(buf) if buf else {}
+
 
 def derive_doi(row: object) -> str | None:
     """Best-effort DOI extraction from an item's url / external_id."""
@@ -115,13 +143,11 @@ def fetch_openalex(dois: list[str], email: str = "") -> dict[str, dict]:
             if email:
                 params["mailto"] = email
             try:
-                resp = client.get(_OPENALEX_URL, params=params)
-                resp.raise_for_status()
-                data = resp.json()
+                data = _get_json_bounded(client, _OPENALEX_URL, params)
             except Exception as e:  # noqa: BLE001
-                logger.warning("OpenAlex works fetch failed: %s", e)
+                logger.warning("OpenAlex works fetch failed: %s", _redact(str(e)))
                 continue
-            for work in data.get("results", []) or []:
+            for work in (data.get("results") or [])[:_MAX_RESULTS_PER_PAGE]:
                 doi = (work.get("doi") or "").lower().replace("https://doi.org/", "")
                 if not doi:
                     continue
@@ -149,17 +175,18 @@ def fetch_openalex(dois: list[str], email: str = "") -> dict[str, dict]:
             if email:
                 params["mailto"] = email
             try:
-                resp = client.get(_OPENALEX_SOURCES_URL, params=params)
-                resp.raise_for_status()
-                data = resp.json()
+                data = _get_json_bounded(client, _OPENALEX_SOURCES_URL, params)
             except Exception as e:  # noqa: BLE001
-                logger.warning("OpenAlex sources fetch failed: %s", e)
+                logger.warning("OpenAlex sources fetch failed: %s", _redact(str(e)))
                 continue
-            for src in data.get("results", []) or []:
+            for src in (data.get("results") or [])[:_MAX_RESULTS_PER_PAGE]:
                 sid = src.get("id")
                 mc = (src.get("summary_stats") or {}).get("2yr_mean_citedness")
-                if sid and isinstance(mc, (int, float)):
-                    impact_by_source[sid] = float(mc)
+                # Clamp the untrusted upstream value: reject non-finite and bound
+                # the magnitude so a hostile/erroneous feed can't drive the
+                # venue-impact gate to extremes (CWE-345).
+                if sid and isinstance(mc, (int, float)) and math.isfinite(mc):
+                    impact_by_source[sid] = min(max(float(mc), 0.0), _MAX_VENUE_MEAN_CITEDNESS)
 
     for doi, entry in out.items():
         sid = entry.get("venue_source_id")
@@ -318,10 +345,11 @@ def enrich_scored(
                 # frequency cap treats them as low_impact_journal even though
                 # their configured source (e.g. OpenAlex) hides the real venue.
                 if vq < _LOW_VENUE_QUALITY:
-                    try:
-                        row.venue_low_impact = True
-                    except Exception:  # noqa: BLE001
-                        pass
+                    # Transient (non-persisted) marker read by source_bucket's
+                    # low-impact frequency cap. Setting a non-column attribute on
+                    # a mapped instance is safe; no swallowing so a real failure
+                    # (which would silently disable low-impact gating) surfaces.
+                    row.venue_low_impact = True
         boosted.append((row, score))
     boosted.sort(key=lambda t: t[1], reverse=True)
     return boosted

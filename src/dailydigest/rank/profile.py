@@ -14,6 +14,13 @@ logger = logging.getLogger(__name__)
 
 _SENT_RE = re.compile(r"(?<=[.!?;])\s+|\n+")
 
+# Down-weight applied to context ("keep-me-informed") interest facets relative to
+# core research keywords (weight 1.0). At 0.45 a context-only cosine match of
+# ~0.9 becomes ~0.40 — below the research relevance floor — so peripheral topics
+# no longer take research slots, while still contributing weakly and driving
+# retrieval + the news sections.
+CONTEXT_FACET_WEIGHT = 0.45
+
 
 def _merged_interest_weights(profile: Profile) -> dict[str, float]:
     weights: dict[str, float] = {}
@@ -57,6 +64,19 @@ def _profile_parts_with_weights(profile: Profile) -> tuple[list[str], list[float
             continue
         parts.append(text)
         weights.append(interest_lc.get(text.lower(), 1.0))
+        seen.add(text.lower())
+
+    # Context ("keep-me-informed") interests are embedded as LOW-weight facets so
+    # they contribute to relevance only weakly. _multi_cosine applies the row
+    # weight (clamped to <=1) post-cosine, so a match on a context-only term can't
+    # win the top-1/max the way a core-keyword match can. They still drive
+    # retrieval (see profile_search_terms) and the news/industry sections.
+    for keyword in getattr(profile, "context_keywords", None) or []:
+        text = keyword.strip() if keyword else ""
+        if not text or text.lower() in seen:
+            continue
+        parts.append(text)
+        weights.append(interest_lc.get(text.lower(), CONTEXT_FACET_WEIGHT))
         seen.add(text.lower())
 
     for text, weight in interest_weights.items():
@@ -231,13 +251,13 @@ def build_profile_matrix_with_rocchio(profile: "Profile", vote_count: int = 0) -
         learned_path = Path(get_settings().db_path).parent / "learned_profile.npz"
         if not learned_path.exists():
             return static_mat
-        data = np.load(learned_path)
+        data = np.load(learned_path, allow_pickle=False)
         learned = data["profile"].astype(np.float32)
         norm = np.linalg.norm(learned)
         if norm < 1e-6:
             return static_mat
         learned_normalized = learned / norm
-        # gamma ramps from 0 → 0.25 as votes go from 0 → ~17, capped at 0.25
+        # gamma ramps linearly from 0 to its 0.25 cap as votes go 0 → 15 (0.25*60)
         gamma = min(0.25, vote_count / 60.0)
         if gamma < 0.02:
             return static_mat

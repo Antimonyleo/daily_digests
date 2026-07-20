@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
+import pytest
+
 from dailydigest.rank.ranker import pick_top_per_section
 from dailydigest.rank.source_quality import (
     is_low_impact_research,
@@ -51,6 +53,41 @@ def test_low_impact_penalized_vs_top_at_equal_relevance():
     minor = _row("RNA delivery mechanism", "Journal of Minor Results")
     nature = _row("RNA delivery mechanism", "Nature")
     assert quality_adjusted_score(minor, 0.70) < quality_adjusted_score(nature, 0.70)
+
+
+def test_paywalled_source_is_penalized_in_industry():
+    from types import SimpleNamespace
+
+    from dailydigest.rank.source_quality import PAYWALL_PENALTY, quality_adjusted_score
+
+    # Two industry items, identical text/relevance; one from a paywalled venue.
+    free = SimpleNamespace(
+        title="FDA clears new biotech therapy", abstract="clinical trial results",
+        section="industry", source="FierceBiotech", id=1,
+    )
+    paywalled = SimpleNamespace(
+        title="FDA clears new biotech therapy", abstract="clinical trial results",
+        section="industry", source="Endpoints News", id=2,
+    )
+    free_s = quality_adjusted_score(free, 0.60)
+    pay_s = quality_adjusted_score(paywalled, 0.60)
+    assert pay_s < free_s
+    assert free_s - pay_s == pytest.approx(PAYWALL_PENALTY)
+
+
+def test_quality_adjusted_score_stays_in_unit_interval():
+    # The selection thresholds (adaptive_size_bar, low_impact_relevance_floor,
+    # the exceptional-preprint cutoff) all assume a [0,1] scale, so the
+    # quality-adjusted score must never escape it — even at extreme inputs.
+    sources = ["Nature", "Journal of Minor Results", "bioRxiv", "OpenAlex (biotech)", "BBC World"]
+    sections = ["research", "industry", "world", "regulatory"]
+    bases = [-0.5, 0.0, 0.5, 1.0, 1.5]  # incl. out-of-range inputs
+    for section in sections:
+        for source in sources:
+            for base in bases:
+                row = _row("CRISPR efficacy results with method and data", source, section)
+                s = quality_adjusted_score(row, base)
+                assert 0.0 <= s <= 1.0, f"{section}/{source}/base={base} -> {s}"
 
 
 # --- frequency cap + relevance floor in selection ----------------------------

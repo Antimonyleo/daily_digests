@@ -45,7 +45,10 @@ ScoreFeatureMap = dict[int, dict[str, Any]]
 def _minmax(x: np.ndarray) -> np.ndarray:
     lo, hi = float(x.min()), float(x.max())
     if hi > lo:
-        return (x - lo) / (hi - lo + 1e-6)
+        # No epsilon in the denominator: the branch guarantees hi > lo, and a
+        # trailing 1e-6 would stop the max element from ever reaching 1.0, subtly
+        # shifting how many items clear absolute gates like adaptive_size_bar.
+        return (x - lo) / (hi - lo)
     return np.full_like(x, 0.5)
 
 
@@ -151,7 +154,9 @@ class LRRanker:
             )
 
         C = 0.5 if len(X) < 50 else 1.0
-        clf = LogisticRegression(C=C, max_iter=1000, class_weight="balanced")
+        clf = LogisticRegression(
+            C=C, max_iter=1000, class_weight="balanced", random_state=0
+        )
         model = clf
         model.fit(X, y)
         self._sk_model = model
@@ -182,7 +187,7 @@ class LRRanker:
             return False
         try:
             feature_schema_version, feature_dim = _current_feature_schema()
-            with np.load(path) as data:
+            with np.load(path, allow_pickle=False) as data:
                 coef = data["coef"].astype(np.float32, copy=False)
                 intercept = float(data["intercept"][0])
                 classes = (
@@ -302,19 +307,36 @@ def _vote_count() -> int:
 
 
 def _multi_cosine(vecs: np.ndarray, profile_mat: np.ndarray, k: int | None = None) -> np.ndarray:
-    """Score each item by 0.7*max_similarity + 0.3*top3_mean.
+    """Score each item by 0.7*max_similarity + 0.3*top3_mean over profile facets.
 
-    profile_mat rows are weighted (weight × unit_vec), so raw dot products can
-    exceed 1.0.  We divide by the maximum row norm so output stays in [-1, 1] —
-    a perfect match to the highest-weight row gives exactly 1.0 instead of
-    ``max_weight``.  Rewards specialist match over generalist match.
+    Each profile row is L2-normalized to a unit vector first, so every facet
+    yields a *true* cosine in [-1, 1] regardless of its construction weight, and
+    the best-matching facet (top1) rewards a specialist match over a generalist.
+
+    Why unit-normalize rather than divide by the max row norm (the old approach):
+    rows are built as ``weight × unit_vec``, and dividing every similarity by the
+    single largest row norm scales down *all the other* facets. A single
+    high-weight row — e.g. the Rocchio learned vector, whose weight grows to ~8.7
+    as votes accumulate — would then collapse the whole score range (observed:
+    a 0.47–0.71 spread crushed to 0.08–0.12), swamping topic separation under the
+    venue-prestige bonus. Unit-normalizing makes each facet's weight irrelevant to
+    the cosine magnitude, keeping a stable scale that downstream absolute
+    thresholds (relevance floor, adaptive size bar) depend on.
     """
-    sims = vecs @ profile_mat.T.astype(np.float32)
-    # Normalize so the maximum achievable score is 1.0
-    row_norms = np.linalg.norm(profile_mat, axis=1)
-    max_norm = float(row_norms.max()) if len(row_norms) > 0 else 1.0
-    if max_norm > 1.0:
-        sims = sims / max_norm
+    row_norms = np.linalg.norm(profile_mat, axis=1, keepdims=True)
+    unit = profile_mat / np.clip(row_norms, 1e-9, None)
+    sims = (vecs @ unit.T.astype(np.float32)).astype(np.float32)
+    # Bounded per-facet importance applied POST-cosine. Row construction weight
+    # (row_norm) is clamped to <=1.0 and used as a multiplier so a *context* facet
+    # (a peripheral "keep-me-informed" keyword, built at weight < 1) cannot let an
+    # item win on the top-1/max purely by matching that one peripheral term —
+    # while core facets (weight >= 1) keep full cosine. Clamping at 1.0 (never
+    # boosting above the true cosine) preserves the absolute score scale the
+    # relevance floor depends on; a high-weight row (bio, seed, Rocchio) therefore
+    # behaves exactly as before (unit cosine), so this is inert for profiles with
+    # no context facets.
+    facet_w = np.clip(row_norms.reshape(1, -1), 0.0, 1.0).astype(np.float32)
+    sims = sims * facet_w
     n = sims.shape[1]
     if n <= 1:
         return sims.max(axis=1).astype(np.float32)
@@ -689,16 +711,59 @@ def score_items(
     return score_items_lr(items, profile_vec, downweight_terms, reason_penalty_map)
 
 
+def _pick_news_balanced(
+    section_scored: list[tuple[ItemRow, float]],
+    cap: int,
+) -> list[tuple[ItemRow, float]]:
+    """Fill a news section by score but cap any single source's share.
+
+    A prolific feed (e.g. STAT) would otherwise take most of the section with
+    near-duplicate items. Limit each source to ~1/3 of the cap (>=2) on a first
+    pass, then relax to fill any remaining slots so the section is never short.
+    """
+    if cap <= 0 or not section_scored:
+        return []
+    ranked = sorted(section_scored, key=lambda t: t[1], reverse=True)
+    max_per_source = max(2, math.ceil(cap / 3))
+    counts: dict[str, int] = {}
+    picked: list[tuple[ItemRow, float]] = []
+    picked_ids: set[int] = set()
+
+    def _key(row: ItemRow) -> str:
+        return str(getattr(row, "source", "") or "").strip().lower()
+
+    for row, score in ranked:
+        if len(picked) >= cap:
+            break
+        src = _key(row)
+        if counts.get(src, 0) >= max_per_source:
+            continue
+        picked.append((row, score))
+        picked_ids.add(id(row))
+        counts[src] = counts.get(src, 0) + 1
+    # Relax the per-source cap to backfill if diversity left the section short.
+    if len(picked) < cap:
+        for row, score in ranked:
+            if len(picked) >= cap:
+                break
+            if id(row) not in picked_ids:
+                picked.append((row, score))
+    return picked
+
+
 def pick_top_per_section(
     scored: list[tuple[ItemRow, float]],
     caps: dict[str, int],
+    catch_up: bool = False,
 ) -> list[tuple[ItemRow, float]]:
     """Take up to caps[section] while protecting research source diversity.
 
     Research needs editorial balance, not just the top cosine/LR scores. arXiv
     CS and other preprints are allowed through when they are strong matches, but
     they cannot consume most of the research section when high-quality journal
-    articles are available.
+    articles are available. ``catch_up`` relaxes that balance so a post-gap
+    backlog (which the date-backfilling preprint/aggregator sources dominate)
+    can fill the expanded section.
     """
     out: list[tuple[ItemRow, float]] = []
     for section, cap in caps.items():
@@ -706,9 +771,9 @@ def pick_top_per_section(
             continue
         section_scored = [(row, score) for row, score in scored if (row.section or "") == section]
         if section == "research":
-            out.extend(_pick_research_balanced(section_scored, cap))
+            out.extend(_pick_research_balanced(section_scored, cap, catch_up=catch_up))
         else:
-            out.extend(section_scored[:cap])
+            out.extend(_pick_news_balanced(section_scored, cap))
     out.sort(key=lambda t: t[1], reverse=True)
     return out
 
@@ -767,14 +832,26 @@ def _mmr_select(
 def _pick_research_balanced(
     scored: list[tuple[ItemRow, float]],
     cap: int,
+    catch_up: bool = False,
 ) -> list[tuple[ItemRow, float]]:
     if not scored or cap <= 0:
         return []
 
-    max_arxiv_cs = max(1, min(3, math.ceil(cap * 0.10)))
-    max_preprints = max(max_arxiv_cs, math.ceil(cap * 0.20))
-    max_aggregators = max(1, math.ceil(cap * 0.10))
-    max_per_source = max(2, math.ceil(cap * 0.20)) if cap >= 5 else None
+    if catch_up:
+        # After a usage gap the backlog is dominated by the sources that CAN
+        # backfill by date (bioRxiv, arXiv, OpenAlex) — RSS journals only expose
+        # their current window. Relax the source-diversity caps so on-topic
+        # backlog papers actually fill the (expanded) section; relevance beats
+        # editorial balance when catching up.
+        max_arxiv_cs = math.ceil(cap * 0.35)
+        max_preprints = math.ceil(cap * 0.75)
+        max_aggregators = math.ceil(cap * 0.60)
+        max_per_source = max(3, math.ceil(cap * 0.60))
+    else:
+        max_arxiv_cs = max(1, min(3, math.ceil(cap * 0.10)))
+        max_preprints = max(max_arxiv_cs, math.ceil(cap * 0.20))
+        max_aggregators = max(1, math.ceil(cap * 0.10))
+        max_per_source = max(2, math.ceil(cap * 0.20)) if cap >= 5 else None
     min_high_quality = min(math.ceil(cap * 0.20), _available(scored, is_high_quality_journal_source))
     min_published = min(math.ceil(cap * 0.30), _available(scored, is_published_journal_source))
 

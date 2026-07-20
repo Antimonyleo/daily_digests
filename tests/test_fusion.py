@@ -36,8 +36,9 @@ def test_rrf_is_robust_to_score_outliers():
     # it cannot take the top — item 0 (strongest LR) ties it and wins on order.
     assert np.argmax(rrf) == 0
     # Under min-max the outlier crushes every other qa value to ~0 and drags
-    # item 3 to the top despite the weakest LR — demonstrating the instability.
-    assert np.argmax(minmax) == 3
+    # item 3 into the top tier despite the weakest LR — demonstrating the
+    # instability. (It ties item 0 at the max; RRF keeps it from doing even that.)
+    assert minmax[3] == minmax.max()
 
 
 def test_minmax_mode_matches_legacy_blend():

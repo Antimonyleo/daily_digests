@@ -245,3 +245,138 @@ def test_score_breakdown_exposes_structured_ranking_features():
     assert "high_quality_source" in breakdown.quality_tags
     assert breakdown.freshness_tags
     assert "Downweighted for promotional language" in breakdown.why_shown
+
+
+def test_recognized_research_venue_matches_flagship_journals():
+    from dailydigest.rank.source_quality import recognized_research_venue
+
+    # Flagship venues that arrive via aggregators should be recognized so they can
+    # be re-attributed to their real (prestigious) identity.
+    assert recognized_research_venue("ACS Nano") == "ACS Nano"
+    assert recognized_research_venue("Nano Letters") == "Nano Letters"
+    assert (
+        recognized_research_venue("Journal of the American Chemical Society")
+        == "Journal of the American Chemical Society"
+    )
+    assert recognized_research_venue("Nature Materials") == "Nature Materials"
+    # Unknown / low-impact venues keep their aggregator attribution (None).
+    assert recognized_research_venue("ACS Omega") is None
+    assert recognized_research_venue("Frontiers in Pharmacology") is None
+    assert recognized_research_venue("") is None
+    assert recognized_research_venue(None) is None
+
+
+def test_venue_relevance_credit_only_rewards_peer_reviewed_prestige():
+    from dailydigest.rank.source_quality import venue_relevance_credit
+
+    class Row:
+        def __init__(self, source: str, section: str = "research") -> None:
+            self.source = source
+            self.section = section
+            self.title = ""
+            self.abstract = ""
+
+    # High/strong-tier journals get a positive gate credit...
+    assert venue_relevance_credit(Row("Nature Materials")) > 0.0
+    assert venue_relevance_credit(Row("ACS Nano")) > 0.0
+    # ...while preprints, aggregators, and unknown venues get none.
+    assert venue_relevance_credit(Row("bioRxiv (recent)")) == 0.0
+    assert venue_relevance_credit(Row("OpenAlex (your topics)")) == 0.0
+    assert venue_relevance_credit(Row("Some Unknown Journal")) == 0.0
+    # News items never get research venue credit.
+    assert venue_relevance_credit(Row("Nature", section="industry")) == 0.0
+    # Top-tier credit >= high-tier credit >= strong-tier credit (prestige order).
+    top = venue_relevance_credit(Row("Nature"))
+    strong = venue_relevance_credit(Row("Chemistry of Materials"))  # genuinely strong-tier
+    assert top >= strong > 0.0
+
+
+def test_flagship_acs_journals_are_high_tier():
+    """ACS Nano / JACS / Nano Letters rival Nature sub-journals by impact and must
+    sit in the high tier so they aren't buried by score compression at the top."""
+    for name in ("ACS Nano", "Nano Letters", "Journal of the American Chemical Society"):
+        q = infer_source_quality(name, "research")
+        assert q.quality_tier == "high", f"{name} should be high tier, got {q.quality_tier}"
+        assert q.prestige_score >= 0.90
+    # Lower-impact ACS venues stay at strong (not over-promoted).
+    assert infer_source_quality("Chemistry of Materials", "research").quality_tier == "strong"
+    assert infer_source_quality("JACS Au", "research").quality_tier == "strong"
+
+
+def test_non_research_frontmatter_is_skipped_from_research():
+    from dailydigest.rank.source_quality import is_non_research_content
+
+    class Row:
+        section = "research"
+        abstract = "Some blurb text."
+        def __init__(self, title): self.title = title
+
+    # Front-matter / non-primary content rides journal prestige — must be skipped.
+    for t in [
+        "Biotech news from around the world",
+        "News & Views: Form follows function",
+        "Author Correction: A de novo designed protein",
+        "Publisher Correction: Nanostructure assembly",
+        "Retraction Note: Prior claims",
+        "Research Highlights",
+        "Editorial: The road ahead",
+        "In this issue",
+    ]:
+        assert is_non_research_content(Row(t)) is True, t
+        assert should_skip_item(Row(t)) is True, t
+
+    # Genuine research whose title merely contains a trigger word is NOT skipped.
+    assert is_non_research_content(Row("A correction-free error model for DNA origami")) is False
+    assert is_non_research_content(Row("De novo design of ligand binding proteins")) is False
+
+    # Career-advice / news-desk content that Nature/Science RSS mixes into the
+    # research feed and rides journal prestige — must be skipped.
+    for t in [
+        "My job interviews for industry positions are going nowhere. How do I stand out?",
+        "The science of foresight: how to future-proof your research",
+        "How to write a paper that lands a faculty job",
+        "Smuggling charges against NIH virologists trigger political uproar",
+        "Prominent researcher indicted on fraud charges",
+        "Mathematics and mentorship make a recipe for success",
+        "Balancing work-life demands as a new PI",
+    ]:
+        assert is_non_research_content(Row(t)) is True, t
+
+    # Real papers whose titles merely start with "How" or contain "charge" are kept.
+    assert is_non_research_content(Row("How the ribosome selects tRNA during elongation")) is False
+    assert is_non_research_content(Row("Charge transport in a DNA-templated nanowire")) is False
+
+
+def test_non_research_filter_only_applies_to_research_section():
+    from dailydigest.rank.source_quality import is_non_research_content
+
+    class Row:
+        section = "industry"
+        abstract = ""
+        def __init__(self, title): self.title = title
+
+    # News is expected in the industry section; the filter must not touch it there.
+    assert is_non_research_content(Row("Biotech news from around the world")) is False
+
+
+def test_multi_cosine_downweights_low_weight_context_facets():
+    """A context facet (row built at weight < 1) must not let an item win the
+    top-1 the way a core facet (weight 1) does."""
+    import numpy as np
+    from dailydigest.rank.ranker import _multi_cosine
+
+    # Two orthogonal unit directions: e0 = core interest, e1 = context interest.
+    core = np.zeros(384, dtype=np.float32); core[0] = 1.0
+    context = np.zeros(384, dtype=np.float32); context[1] = 1.0
+    # Profile matrix: core at weight 1.0, context at weight 0.45.
+    profile = np.vstack([core * 1.0, context * 0.45]).astype(np.float32)
+
+    item_core = core.reshape(1, -1)      # perfectly matches core
+    item_context = context.reshape(1, -1)  # perfectly matches context only
+
+    s_core = float(_multi_cosine(item_core, profile)[0])
+    s_context = float(_multi_cosine(item_context, profile)[0])
+    # Same raw cosine (1.0) to their respective facet, but the context-only match
+    # scores strictly lower because its facet weight is clamped-down (0.45).
+    assert s_core > s_context
+    assert s_context < 0.68  # below a typical relevance floor

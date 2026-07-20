@@ -33,7 +33,15 @@ def _serialize(vec: np.ndarray) -> bytes:
     return np.asarray(vec, dtype=np.float32).tobytes()
 
 
-def _deserialize(raw: bytes, dim: int) -> np.ndarray:
+def _deserialize(raw: bytes, dim: int) -> np.ndarray | None:
+    """Decode a cached float32 vector, returning None on any integrity problem.
+
+    A truncated/corrupt blob (interrupted write, disk-full) or an out-of-range
+    ``dim`` would otherwise make ``np.frombuffer(count=dim)`` raise and abort the
+    whole ranking run; instead we validate and let the caller re-embed.
+    """
+    if dim <= 0 or dim > 8192 or len(raw) != dim * 4:
+        return None
     return np.frombuffer(raw, dtype=np.float32, count=dim).copy()
 
 
@@ -72,8 +80,13 @@ def embed_item_rows(rows: list[ItemRow]) -> np.ndarray:
         for idx, item_id in enumerate(ids):
             assert item_id is not None
             cached = by_item_id.get(item_id)
-            if cached is not None and cached.text_hash == hashes[idx]:
-                vectors[idx] = _deserialize(cached.vector, int(cached.dim))
+            vec = (
+                _deserialize(cached.vector, int(cached.dim))
+                if cached is not None and cached.text_hash == hashes[idx]
+                else None
+            )
+            if vec is not None:
+                vectors[idx] = vec
             else:
                 missing_indexes.append(idx)
 

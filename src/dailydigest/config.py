@@ -51,9 +51,25 @@ class Settings(BaseSettings):
     # section caps. Off by default; enabling requires the model to be available
     # locally (graceful no-op otherwise).
     rerank_enabled: bool = False
-    rerank_model: str = "BAAI/bge-reranker-v2-m3"
-    rerank_top_n: int = Field(default=60, ge=1, le=500)
+    # Light, CI-friendly cross-encoder (~90MB) rather than the 2GB bge-reranker;
+    # good relevance separation on (profile, abstract) pairs at a fraction of the
+    # download/compute cost, fitting the ≤$5 local/CI budget. Swap to a heavier
+    # science-tuned reranker via env if a GPU is available.
+    rerank_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+    # Rerank a deep head so the borderline research band (cosine ~0.6–0.7, where
+    # the reader's materials/self-assembly field sits) is cross-encoded, not just
+    # the already-safe top. ~200 (profile, abstract) pairs is ~2–3s on CPU.
+    rerank_top_n: int = Field(default=200, ge=1, le=500)
     rerank_weight: float = Field(default=1.0, ge=0.0, le=1.0)
+    # When the cross-encoder is enabled, fold its relevance into the research topic
+    # GATE (not just head ordering). Each research item's CE score is normalized
+    # against the pool as tanh((ce − median)/std) ∈ (−1,1) and the gate's effective
+    # relevance gains ``cross_encoder_gate_coeff * rel`` ∈ [−coeff, +coeff]: a
+    # RESCUE for work the cross-encoder ranks above the pack (the bi-encoder cosine
+    # under-scores the reader's core field) and a DEMOTION for surface-similar
+    # "unrelated" papers whose cosine clears the floor. Inert on a uniform pool
+    # (rel→0) and when the reranker is unavailable. 0 = reorder head only.
+    cross_encoder_gate_coeff: float = Field(default=0.22, ge=0.0, le=1.0)
 
     # --- Quality weighting --------------------------------------------------- #
     # How strongly venue quality influences research ranking. 1.0 = legacy
@@ -70,6 +86,17 @@ class Settings(BaseSettings):
     # Max fraction of the research section that may be filled by low-impact-venue
     # items, so they cannot appear frequently even when many are related.
     max_low_impact_research_frac: float = Field(default=0.15, ge=0.0, le=1.0)
+    # Negative-interest penalty (see profile.negative_interests). An item is
+    # penalized by ``negative_interest_weight * max(0, sim_to_nearest_negative −
+    # negative_interest_threshold)``. CRITICAL: bge-small similarities to verbose
+    # negative phrases sit in the SAME ~0.55–0.68 band as genuine topic relevance,
+    # so a low threshold (the old hardcoded 0.35) taxes the ENTIRE pool and
+    # silently raises the effective floor — collapsing the research section and
+    # penalizing the reader's own field. Keep the threshold at the upper tail of
+    # that band so the penalty is surgical: it hits only items genuinely close to
+    # an explicit negative topic (oncology, GWAS, …), not everything biomedical.
+    negative_interest_threshold: float = Field(default=0.65, ge=0.0, le=1.0)
+    negative_interest_weight: float = Field(default=0.50, ge=0.0, le=2.0)
     # Magnitude of the OpenAlex venue-impact adjustment (boost high-impact venues,
     # penalize low-impact ones) applied when citation_enrichment is enabled.
     venue_quality_weight: float = Field(default=0.18, ge=0.0, le=1.0)
@@ -96,13 +123,62 @@ class Settings(BaseSettings):
     cross_day_dedupe_days: int = Field(default=7, ge=1, le=60)
     cross_day_dedupe_threshold: float = Field(default=0.93, ge=0.5, le=1.0)
 
+    # Per-section size. When adaptive_section_sizes is on, top_* is the CEILING
+    # and min_* is the floor; the actual count for a section flexes between them
+    # with the day's supply of on-topic items (see min_topic_relevance).
+    # When adaptive sizing is off, top_* is a fixed cap (legacy behavior).
     top_research: int = Field(default=12, ge=0, le=100)
     top_industry: int = Field(default=6, ge=0, le=100)
+    top_ai: int = Field(default=4, ge=0, le=100)
     top_regulatory: int = Field(default=3, ge=0, le=100)
     top_world: int = Field(default=3, ge=0, le=100)
-    retention_days: int = Field(default=30, ge=1, le=3650)
 
-    candidates_for_summary: int = Field(default=60, ge=1, description="top-K after Stage A ranking")
+    # Adaptive section sizing: size each section to the number of items that
+    # clear `min_topic_relevance` (the absolute topic-cosine floor below),
+    # clamped to [min_*, top_*]. A day rich in on-topic items shows more; a quiet
+    # day fewer.
+    adaptive_section_sizes: bool = True
+    min_research: int = Field(default=5, ge=0, le=100)
+    min_industry: int = Field(default=3, ge=0, le=100)
+    min_ai: int = Field(default=2, ge=0, le=100)
+    min_regulatory: int = Field(default=2, ge=0, le=100)
+    min_world: int = Field(default=2, ge=0, le=100)
+    # Minimum topic relevance (true profile cosine, 0..1) an item must clear to
+    # earn a slot. A section shows as many items as clear this bar, clamped to
+    # [min_*, top_*] — so off-topic-but-prestigious items are excluded outright
+    # rather than filling the section. Raise it to show fewer, stricter items;
+    # lower it to be more inclusive. (Stable now that profile cosine is a true
+    # unit cosine; ~0.5–0.6 is weak/off-topic, ~0.65+ is a solid match.)
+    min_topic_relevance: float = Field(default=0.65, ge=0.0, le=1.0)
+    # Venue-aware relaxation of the topic floor. A top/high/strong-tier journal in
+    # the reader's field is itself a strong quality prior, so it should clear the
+    # relevance gate at a slightly lower raw topic cosine than an anonymous
+    # preprint or aggregator hit. The effective topic score used at the gate is
+    # ``topic + venue_relevance_credit * prestige_excess`` (research only), where
+    # prestige_excess = prestige - 0.50. At 0.10, a high-tier venue (prestige
+    # 0.90, excess 0.40) gets +0.04; a top-tier venue (0.99) gets ~+0.049.
+    # Because the credit is small, an OFF-topic prestigious paper (low cosine)
+    # still fails the gate — it only rescues genuinely borderline top-venue work
+    # that bge-small's compressed cosine scores just under the floor. Set to 0 to
+    # restore the pure venue-blind floor.
+    venue_relevance_credit: float = Field(default=0.10, ge=0.0, le=0.5)
+    # Quality floor (final confidence, 0..1) for the news sections (industry,
+    # world). Opinion columns, paywalled "STAT+:" teasers and weak items fall
+    # below it and are dropped, so a section shrinks to its genuinely useful
+    # items rather than padding to the cap with filler. Regulatory (FDA/EMA) is
+    # exempt — those are wanted regardless. Raise for stricter news curation.
+    min_news_quality: float = Field(default=0.45, ge=0.0, le=1.0)
+
+    # Catch-up after a usage gap. When the last digest was N days ago, both the
+    # ingest fetch window and the ranking window widen to cover the gap (capped at
+    # max_backfill_days), and the research ceiling scales up so a backlog of
+    # relevant papers can surface instead of only the last day or two.
+    max_backfill_days: int = Field(default=21, ge=1, le=90)
+    # Research ceiling on a full catch-up run (grows from top_research toward this
+    # as the gap widens). Set equal to top_research to disable catch-up growth.
+    max_research_backlog: int = Field(default=40, ge=0, le=200)
+
+    retention_days: int = Field(default=30, ge=1, le=3650)
 
     imap_host: str = ""
     imap_port: int = 993

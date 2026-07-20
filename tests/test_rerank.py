@@ -77,3 +77,28 @@ def test_unavailable_model_is_noop(monkeypatch):
         Profile(bio="x", keywords=["y"]), scored, settings=_settings(rerank_enabled=True)
     )
     assert out == scored
+
+
+def test_feature_sink_records_ce_scores(monkeypatch):
+    class _FakeCE:
+        def predict(self, pairs):
+            # logits: last pair most relevant → sigmoided into [0,1]
+            return np.array([-4.0, 0.0, 4.0], dtype=np.float32)
+
+    monkeypatch.setattr(rerank_mod, "_get_model", lambda name, device: _FakeCE())
+    scored = _scored()  # A, B, C
+    sink: dict[int, float] = {}
+    rerank_mod.rerank_scored(
+        Profile(bio="bio text here", keywords=["topic"]),
+        scored,
+        settings=_settings(rerank_enabled=True, rerank_top_n=60),
+        feature_sink=sink,
+    )
+    # One CE score per head item, keyed by the item feature key, squashed to [0,1].
+    assert len(sink) == 3
+    keys = {rerank_mod._row_key(row) for row, _ in scored}
+    assert set(sink) == keys
+    assert all(0.0 <= v <= 1.0 for v in sink.values())
+    # Monotonic with the logits: C (logit +4) > B (0) > A (−4).
+    ce = {row.title: sink[rerank_mod._row_key(row)] for row, _ in scored}
+    assert ce["C"] > ce["B"] > ce["A"]

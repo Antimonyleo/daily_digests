@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import logging
+import math
 import re
+import statistics
 import time
 from collections.abc import Callable
 from datetime import datetime, timezone
@@ -19,18 +21,25 @@ from .health import IngestStats
 from .ingest import dispatch_source
 from .models import Item
 from .rank.profile import build_profile_matrix
-from .rank.ranker import pick_top_per_section, score_items, score_items_with_features
+from .rank.ranker import (
+    ScoreFeatureMap,
+    _row_feature_key,
+    pick_top_per_section,
+    score_items,
+    score_items_with_features,
+)
 from .rank.source_quality import (
     RANKER_VERSION,
     breakdown_payload,
     is_high_quality_journal_source,
     source_bucket,
+    venue_relevance_credit,
     should_skip_item,
 )
 from .store import (
     DigestRow,
     ItemRow,
-    days_since_last_sent,
+    days_since_last_digest,
     exclude_previously_shown,
     exclude_reviewed_items,
     init_db,
@@ -43,7 +52,7 @@ from .store import (
     write_digest_features,
     write_summaries,
 )
-from .summarize import summarize_items
+from .summarize import summarize_items, synthesize_catch_up
 
 try:
     from .rank.profile import build_profile_matrix_with_rocchio as _build_profile_with_rocchio
@@ -115,6 +124,7 @@ def _quality_gate(rows: list[ItemRow]) -> tuple[list[ItemRow], list[dict[str, An
 SECTION_LABEL_PREFIX: dict[str, str] = {
     "research": "R",
     "industry": "I",
+    "ai": "A",
     "regulatory": "G",
     "world": "W",
 }
@@ -135,8 +145,15 @@ def _emit(cb: ProgressCallback | None, stage: str, payload: dict[str, Any]) -> N
         logger.warning("progress_callback failed at stage=%s: %s", stage, e)
 
 
-def ingest_all(progress_callback: ProgressCallback | None = None) -> int:
-    """Fetch all sources, dedupe + langdetect filter, upsert. Returns rows inserted."""
+def ingest_all(
+    progress_callback: ProgressCallback | None = None,
+    days: int = 2,
+) -> int:
+    """Fetch all sources, dedupe + langdetect filter, upsert. Returns rows inserted.
+
+    ``days`` is the look-back window passed to date-capable adapters so a usage
+    gap can be backfilled (bounded by each API and the ranking recency window).
+    """
     init_db()
     specs = load_sources()
     _emit(progress_callback, "ingest_start", {"sources": len(specs)})
@@ -146,7 +163,7 @@ def ingest_all(progress_callback: ProgressCallback | None = None) -> int:
         t0 = time.monotonic()
         try:
             src = dispatch_source(spec)
-            fetched = src.fetch(spec)
+            fetched = src.fetch(spec, days=days)
             duration_ms = int((time.monotonic() - t0) * 1000)
             logger.info("ingest %s: %d items (%dms)", spec.name, len(fetched), duration_ms)
             all_items.extend(fetched)
@@ -201,14 +218,236 @@ def ingest_all(progress_callback: ProgressCallback | None = None) -> int:
     return upsert_items(en_only)
 
 
-def _section_caps() -> dict[str, int]:
+def _catch_up_window(digest_id: str, backfill_days: int | None) -> int:
+    """Look-back window (days) for ingest + ranking, widened after a usage gap.
+
+    An explicit ``backfill_days`` wins. Otherwise the gap since the last digest
+    of any kind (brewed or sent — so local/dry-run use counts too) sets the
+    window to gap+1, floored at 2 and capped at ``max_backfill_days``. So after
+    a week away the digest reaches back a week instead of only yesterday.
+    """
+    if backfill_days and backfill_days > 0:
+        return backfill_days
+    s = get_settings()
+    cap = int(getattr(s, "max_backfill_days", 21))
+    gap = days_since_last_digest(exclude_digest_id=digest_id)
+    if gap < 0:
+        return 2
+    return max(2, min(gap + 1, cap))
+
+
+def _research_ceiling_for_window(window_days: int) -> int:
+    """Scale the research ceiling up on a catch-up run.
+
+    After a gap, journals have accumulated a backlog of relevant papers, so the
+    ceiling grows from ``top_research`` toward ``max_research_backlog`` roughly in
+    proportion to the days being covered. Normal daily runs (window <= 2) are
+    unchanged. News sections are NOT scaled — stale week-old news isn't wanted.
+    """
+    s = get_settings()
+    base = int(s.top_research)
+    ceiling = int(getattr(s, "max_research_backlog", base))
+    if window_days <= 2 or ceiling <= base:
+        return base
+    grown = base + base * (window_days - 2) // 2  # +~half the daily rate per extra day
+    return max(base, min(grown, ceiling))
+
+
+def _section_caps(research_ceiling: int | None = None) -> dict[str, int]:
     s = get_settings()
     return {
-        "research": s.top_research,
+        "research": s.top_research if research_ceiling is None else research_ceiling,
         "industry": s.top_industry,
+        "ai": s.top_ai,
         "regulatory": s.top_regulatory,
         "world": s.top_world,
     }
+
+
+def _annotate_cross_encoder_relevance(
+    scored: list[tuple[ItemRow, float]],
+    features: ScoreFeatureMap,
+    ce_sink: dict[int, float],
+) -> None:
+    """Fold per-item cross-encoder scores into a scale-free relevance signal.
+
+    ms-marco CE scores are tiny in absolute terms (sigmoids near 0) and only
+    their *relative* order within the pool is meaningful, so we normalize each
+    research item's CE against the research pool as ``tanh((ce - median) / std)``
+    ∈ (-1, 1) and store it as ``cross_encoder_rel``. This is:
+      * scale-free — independent of the reranker model's absolute output range;
+      * symmetric — a paper the cross-encoder ranks well above the pack is later
+        RESCUED at the gate (the bi-encoder cosine under-scores the reader's
+        materials / self-assembly field), one it ranks well below is DEMOTED
+        (surface-similar "unrelated" work), fixing both directions of error;
+      * inert on a uniform pool — when every item is equally relevant the spread
+        collapses and ``rel`` → 0, so a genuinely all-relevant day is untouched.
+    The raw CE score is also recorded for display/debug.
+    """
+    for key, ce in ce_sink.items():
+        if key in features:
+            features[key]["cross_encoder_score"] = round(float(ce), 5)
+    research = [
+        (_row_feature_key(row), ce_sink[_row_feature_key(row)])
+        for row, _ in scored
+        if (row.section or "") == "research" and _row_feature_key(row) in ce_sink
+    ]
+    if len(research) < 5:
+        return
+    vals = [v for _, v in research]
+    med = statistics.median(vals)
+    sd = statistics.pstdev(vals)
+    scale = sd if sd > 1e-9 else 1.0
+    for key, ce in research:
+        if key in features:
+            features[key]["cross_encoder_rel"] = round(math.tanh((float(ce) - med) / scale), 4)
+
+
+def _ce_gate_adjustment(feat: dict, coeff: float) -> float:
+    """Symmetric cross-encoder relevance adjustment for the research gate.
+
+    Returns ``coeff * cross_encoder_rel`` ∈ ``[-coeff, +coeff]`` — a rescue when
+    the cross-encoder ranks the item above the pool median, a demotion when
+    below. 0 when no CE relevance is present (offline / reranker unavailable /
+    item outside the reranked head), so the gate is then pure cosine.
+    """
+    if coeff <= 0.0:
+        return 0.0
+    rel = feat.get("cross_encoder_rel")
+    if rel is None:
+        return 0.0
+    return coeff * float(rel)
+
+
+def _ce_gate_coeff() -> float:
+    try:
+        return float(getattr(get_settings(), "cross_encoder_gate_coeff", 0.0) or 0.0)
+    except Exception:  # noqa: BLE001
+        return 0.0
+
+
+def _dynamic_section_caps(
+    scored: list[tuple[ItemRow, float]],
+    features: ScoreFeatureMap,
+    research_ceiling: int | None = None,
+) -> dict[str, int]:
+    """Size each section to the day's supply of genuinely on-topic items.
+
+    The cap for a section is the count of its candidates whose *topic relevance*
+    (true profile cosine) clears ``min_topic_relevance``, clamped to [min_*,
+    top_*]. This gates on relevance directly: off-topic-but-prestigious items
+    (a high-impact paper outside the user's field) score low on topic cosine and
+    are excluded outright rather than filling the section. A day with many
+    on-topic items shows more; a quiet day shows fewer — never below the floor
+    (digest is never empty) nor above the ceiling (cost/reading load bounded).
+
+    Topic cosine is a stable absolute scale (a true unit cosine), so the bar is a
+    fixed threshold rather than a per-run relative one. Falls back to the fused
+    rank score only when a per-item topic snapshot is missing, and to fixed
+    ``top_*`` caps when adaptive sizing is disabled.
+    """
+    s = get_settings()
+    maxima = _section_caps(research_ceiling=research_ceiling)
+    if not getattr(s, "adaptive_section_sizes", False):
+        return maxima
+
+    minima = {
+        "research": int(getattr(s, "min_research", 0)),
+        "industry": int(getattr(s, "min_industry", 0)),
+        "ai": int(getattr(s, "min_ai", 0)),
+        "regulatory": int(getattr(s, "min_regulatory", 0)),
+        "world": int(getattr(s, "min_world", 0)),
+    }
+    topic_floor = float(getattr(s, "min_topic_relevance", 0.65))
+    news_floor = float(getattr(s, "min_news_quality", 0.45))
+
+    # Count the items that clear each section's floor (research on topic cosine,
+    # news on final confidence). Regulatory has no floor — it keeps its fixed cap.
+    ce_coeff = _ce_gate_coeff()
+    counts: dict[str, int] = {k: 0 for k in maxima}
+    for row, fused in scored:
+        section = row.section or ""
+        feat = features.get(_row_feature_key(row), {})
+        if section == "research":
+            v = feat.get("topic_score", feat.get("confidence_score", fused))
+            neg = float(feat.get("negative_interest_penalty", 0.0) or 0.0)
+            ce_adj = _ce_gate_adjustment(feat, ce_coeff)
+            if (
+                v is not None
+                and float(v) + venue_relevance_credit(row) - neg + ce_adj >= topic_floor
+            ):
+                counts[section] += 1
+        elif section in ("industry", "world"):
+            v = feat.get("confidence_score", fused)
+            if v is not None and float(v) >= news_floor:
+                counts[section] += 1
+
+    caps: dict[str, int] = {}
+    for section, mx in maxima.items():
+        # Regulatory and AI are exempt from the profile-relevance floors — FDA
+        # actions and AI-tooling content are wanted whether or not they match the
+        # biotech profile cosine — so they keep their fixed caps.
+        if section in ("regulatory", "ai"):
+            caps[section] = mx
+        else:
+            floor = min(minima.get(section, 0), mx)
+            caps[section] = max(floor, min(mx, counts.get(section, 0)))
+    return caps
+
+
+def _filter_off_topic(
+    scored: list[tuple[ItemRow, float]],
+    features: ScoreFeatureMap,
+) -> list[tuple[ItemRow, float]]:
+    """Hard-drop items that fall below their section's relevance/quality floor.
+
+    Research is gated on topic relevance (``min_topic_relevance``, a true profile
+    cosine — its abstracts cluster high). Industry/world are gated on final
+    confidence (``min_news_quality``) instead, since news cosine is inherently
+    lower; this is where opinion columns, paywalled "STAT+:" teasers and weak
+    filler get removed so a section shrinks to what's worth reading rather than
+    padding to the cap. Regulatory (FDA/EMA) is exempt — those are wanted
+    regardless of how they score.
+
+    The size cap alone only bounds the *count*; selection still fills slots by
+    score, so without this gate an off-topic-but-high-prestige item could grab a
+    slot it never earned. No-op when adaptive sizing is off or the relevant
+    snapshot is missing (so a scoring fallback never silently empties a section).
+    """
+    s = get_settings()
+    if not getattr(s, "adaptive_section_sizes", False):
+        return scored
+    topic_floor = float(getattr(s, "min_topic_relevance", 0.65))
+    news_floor = float(getattr(s, "min_news_quality", 0.45))
+    ce_coeff = _ce_gate_coeff()
+    out: list[tuple[ItemRow, float]] = []
+    for row, score in scored:
+        section = row.section or ""
+        feat = features.get(_row_feature_key(row), {})
+        if section == "research":
+            t = feat.get("topic_score")
+            neg = float(feat.get("negative_interest_penalty", 0.0) or 0.0)
+            # Effective relevance = topic + venue credit − negative-interest penalty
+            # + cross-encoder correction. The venue credit rescues borderline top-
+            # venue work; the negative penalty excludes off-field items; the cross-
+            # encoder term (∈ [−coeff, +coeff]) both RESCUES genuinely on-field work
+            # the bi-encoder cosine under-scores (the reader's materials/self-assembly
+            # papers cluster at cosine ~0.65) and DEMOTES surface-similar "unrelated"
+            # papers whose cosine clears the floor but whose joint (profile, paper)
+            # relevance does not. Folding all of it into the GATE lets the section be
+            # both precise and complete rather than padding to the cap.
+            ce_adj = _ce_gate_adjustment(feat, ce_coeff)
+            if (
+                t is not None
+                and float(t) + venue_relevance_credit(row) - neg + ce_adj < topic_floor
+            ):
+                continue
+        elif section in ("industry", "world"):
+            c = feat.get("confidence_score")
+            if c is not None and float(c) < news_floor:
+                continue
+        out.append((row, score))
+    return out
 
 
 def _assign_labels(
@@ -400,7 +639,13 @@ def run_all(
                 )
                 return digest_id
 
-    inserted = ingest_all(progress_callback=progress_callback)
+    # Widen the look-back once, after any usage gap, and use it for BOTH the
+    # ingest fetch window (so the backlog is actually retrieved) and the ranking
+    # recency window below.
+    window_days = _catch_up_window(digest_id, backfill_days)
+    if window_days > 2:
+        logger.info("catch-up: widening window to %d days after usage gap", window_days)
+    inserted = ingest_all(progress_callback=progress_callback, days=window_days)
     logger.info("upserted %d new items", inserted)
 
     # Auto-retrain LR when model is stale (> 7 days old) and enough votes exist
@@ -470,14 +715,10 @@ def run_all(
         profile_vec = build_profile_matrix(profile)
     logger.info("ranker: profile_rows=%d votes=%d", len(profile_vec), _vote_count_now)
 
-    if backfill_days and backfill_days > 0:
-        days = backfill_days
-    else:
-        gap = days_since_last_sent(exclude_digest_id=digest_id)
-        days = max(2, min(gap + 1, 7)) if gap >= 0 else 2
+    days = window_days
     recent_raw = recent_items(days=days)
     after_reviewed = exclude_reviewed_items(recent_raw)
-    after_shown = exclude_previously_shown(after_reviewed)
+    after_shown = exclude_previously_shown(after_reviewed, exclude_digest_id=digest_id)
     deduped_candidates = dedupe_ranking_candidates(after_shown)   # within-set dedupe FIRST
     # Cross-day content dedupe: drop items re-surfaced from a recent digest.
     try:
@@ -494,7 +735,7 @@ def run_all(
         "window_days": days,
         "recent_items": len(recent_raw),
         "after_reviewed_filter": len(after_reviewed),
-        "after_recently_dismissed_filter": len(after_shown),
+        "after_previously_shown_filter": len(after_shown),
         "after_cross_source_dedupe": len(deduped_candidates),
         "after_cross_day_near_dup": len(deduped_candidates) - len(near_dup_drops),
         "cross_day_near_dup_drops": near_dup_drops[:100],
@@ -517,6 +758,11 @@ def run_all(
             _neg_vecs = _embed_rows([row for row, _ in scored])
 
             _neg_scale = 1.0
+            _neg_settings = get_settings()
+            # Surgical threshold: only similarities in the upper tail (genuinely
+            # near an explicit negative topic) are penalized, not the whole pool.
+            _neg_thr = float(getattr(_neg_settings, "negative_interest_threshold", 0.65))
+            _neg_w = float(getattr(_neg_settings, "negative_interest_weight", 0.50))
 
             # Try per-axis penalty (max similarity to any individual negative interest)
             _neg_sims = None
@@ -540,12 +786,13 @@ def run_all(
                         all_neg_sims = all_neg_sims * _neg_weights  # broadcast: scale each axis
                 except Exception:  # noqa: BLE001
                     pass
-                # Use max over negative interests, threshold at 0.35
-                _neg_sims = np.maximum(0.0, all_neg_sims.max(axis=1) - 0.35)
+                # Max over negative interests, thresholded at the (configurable)
+                # upper-tail cut so only strong negative matches are penalized.
+                _neg_sims = np.maximum(0.0, all_neg_sims.max(axis=1) - _neg_thr)
             else:
                 _neg_centroid = _build_neg_centroid(profile)
                 if _neg_centroid is not None:
-                    _neg_sims = np.maximum(0.0, _neg_vecs @ _neg_centroid - 0.35)
+                    _neg_sims = np.maximum(0.0, _neg_vecs @ _neg_centroid - _neg_thr)
 
             if _neg_sims is not None:
                 # Capture penalties BEFORE creating the new scored list
@@ -553,7 +800,7 @@ def run_all(
                 for i, (row, score) in enumerate(scored):
                     if i < len(_neg_sims):
                         raw_sim = float(_neg_sims[i])
-                        penalty = (0.28 * _neg_scale) * max(0.0, raw_sim)
+                        penalty = (_neg_w * _neg_scale) * max(0.0, raw_sim)
                     else:
                         penalty = 0.0
                     _penalty_list.append(penalty)
@@ -613,14 +860,27 @@ def run_all(
     try:
         from .rank.rerank import rerank_scored
 
-        scored = rerank_scored(profile, scored)
+        _ce_sink: dict[int, float] = {}
+        scored = rerank_scored(profile, scored, feature_sink=_ce_sink)
+        # Fold CE scores into a scale-free relevance signal the research topic gate
+        # uses to rescue/demote borderline items (see _filter_off_topic /
+        # _dynamic_section_caps).
+        _annotate_cross_encoder_relevance(scored, score_features, _ce_sink)
     except Exception as _e:  # noqa: BLE001
         logger.warning("cross-encoder rerank failed: %s", _e)
 
     # Note: do NOT pre-truncate `scored` to a global top-K before per-section picking;
     # a single-domain profile (e.g. biotech-heavy) starves industry/regulatory/world.
     # `pick_top_per_section` already caps per-section, so summary cost is bounded.
-    picked = pick_top_per_section(scored, _section_caps())
+    # Hard-gate off-topic research/industry first so prestige can't fill a slot an
+    # item's topic relevance never earned, then size + pick from what remains.
+    pickable = _filter_off_topic(scored, score_features)
+    research_ceiling = _research_ceiling_for_window(window_days)
+    picked = pick_top_per_section(
+        pickable,
+        _dynamic_section_caps(pickable, score_features, research_ceiling),
+        catch_up=window_days > 2,
+    )
 
     # Active-learning exploration: swap a few low-scored picks for high-quality
     # items the learned ranker is most uncertain about. Only when enabled and the
@@ -661,13 +921,25 @@ def run_all(
         "summarize_start",
         {"items": len(selected_rows), "backend": get_settings().llm_backend},
     )
-    summaries = {
-        item_id: summary
-        for item_id, summary in summarize_items(selected_rows).items()
-        if item_id in {int(row.id) for row in selected_rows}
+    # Summary cache: only (re)summarize items that don't already have one, so a
+    # re-brew or a catch-up run doesn't re-spend the LLM budget on items already
+    # summarized. Existing summaries are reused for rendering.
+    selected_ids = {int(row.id) for row in selected_rows}
+    existing_summaries = {
+        int(row.id): (row.summary or "").strip() for row in selected_rows
     }
-    write_summaries(summaries)
-    _emit(progress_callback, "summarize_done", {"items": len(summaries)})
+    to_summarize = [row for row in selected_rows if not existing_summaries.get(int(row.id))]
+    new_summaries = {
+        item_id: summary
+        for item_id, summary in summarize_items(to_summarize, profile=profile).items()
+        if item_id in selected_ids
+    }
+    summaries = {
+        rid: (new_summaries.get(rid) or existing_summaries.get(rid) or "")
+        for rid in selected_ids
+    }
+    write_summaries({rid: s for rid, s in new_summaries.items() if s})
+    _emit(progress_callback, "summarize_done", {"items": len(new_summaries)})
 
     sections: dict[str, list[tuple[ItemRow, float, str]]] = {k: [] for k in SECTION_ORDER}
     for row, score, _label in labeled:
@@ -710,6 +982,17 @@ def run_all(
         )
         write_digest_audit(digest_id, "missed_top_journals", top_journal_audit)
         write_digest_audit(digest_id, "candidate_funnel", [funnel_audit])
+        # Catch-up briefing: only on gap runs, grouping the backlog into themes.
+        if window_days > 2:
+            try:
+                _synth = synthesize_catch_up(selected_rows, window_days, profile=profile)
+                if _synth:
+                    write_digest_audit(
+                        digest_id, "catch_up_synthesis",
+                        [{"days": window_days, "text": _synth}],
+                    )
+            except Exception as _e:  # noqa: BLE001
+                logger.warning("catch-up synthesis write failed: %s", _e)
     else:
         logger.info(
             "digest %s already has a sent row; skipping write_digest to preserve sent_at",

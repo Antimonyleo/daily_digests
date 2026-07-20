@@ -82,7 +82,11 @@ def fit_calibrator() -> dict | None:
     }
     path = _calibrator_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(params))
+    # Atomic write: a crash mid-write must not leave a truncated calibrator that
+    # load_calibrator would then parse into garbage.
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(params))
+    tmp.replace(path)
     logger.info("calibrator: fit on %d votes (a=%.3f b=%.3f)", params["n"], params["a"], params["b"])
     return params
 
