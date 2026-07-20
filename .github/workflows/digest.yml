@@ -32,6 +32,13 @@ jobs:
           path: data/
         continue-on-error: true
 
+      - name: Cache HuggingFace models (embeddings + reranker)
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          # Bump the suffix when changing embed_model / rerank_model.
+          key: hf-bge-small-msmarco-minilm-v1
+
       - name: Install dependencies
         run: uv sync
 
@@ -39,6 +46,13 @@ jobs:
         env:
           LLM_BACKEND: extractive
           PROFILE_PATH: config/profile.yaml
+          # Two-stage relevance + per-journal quality prior (see .env for the
+          # local deployment). Both degrade to no-ops if the model / OpenAlex are
+          # unavailable, so the run never breaks.
+          RERANK_ENABLED: 'true'
+          RERANK_MODEL: cross-encoder/ms-marco-MiniLM-L-6-v2
+          CROSS_ENCODER_GATE_COEFF: '0.25'
+          CITATION_ENRICHMENT: 'true'
         run: uv run dd run-all --dry-run
 
       - name: Upload digest-db artifact

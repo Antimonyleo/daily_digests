@@ -118,7 +118,7 @@ uv run dd run-all                 # Full pipeline + email send
 uv run dd run-all --dry-run       # Render HTML to data/, no email
 uv run dd run-all --backfill 7    # Widen recency window
 uv run dd vote "+R3 R7 -I5"       # Record label-based feedback
-uv run dd vote --train            # Train learned ranker, needs >=20 Relevant/Not-for-me votes
+uv run dd vote --train            # Train learned ranker, needs >=30 Relevant/Not-for-me votes
 uv run dd prune                   # Delete old items
 ```
 

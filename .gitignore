@@ -18,3 +18,7 @@ build/
 *.npy
 .coverage
 htmlcov/
+
+# Review / tooling artifacts (not part of the project)
+.full-review/
+.playwright-mcp/
