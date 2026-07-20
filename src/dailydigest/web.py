@@ -260,7 +260,9 @@ def _prepare_candidate_funnel(raw: list[dict]) -> dict:
     return funnel
 
 
-_SUMMARY_FIELD_RE = re.compile(r"(?m)^(Key finding|Why read|Caveat):\s*(.*)$")
+# Match the field labels anywhere (not only at line start) so a summary whose
+# fields are space-separated on one line still splits into three rows.
+_SUMMARY_FIELD_RE = re.compile(r"(Key finding|Why read|Caveat)\s*:\s*")
 
 
 def _summary_fields(summary: str) -> dict[str, str]:
@@ -273,7 +275,7 @@ def _summary_fields(summary: str) -> dict[str, str]:
     out: dict[str, str] = {}
     for idx, match in enumerate(matches):
         label = match.group(1)
-        start = match.start(2)
+        start = match.end()
         end = matches[idx + 1].start() if idx + 1 < len(matches) else len(summary)
         value = summary[start:end].strip()
         if value:
@@ -295,15 +297,17 @@ def _load_today(digest_id: str) -> tuple[list[dict], dict[int, int]]:
 
         item_ids = [r.id for r in rows]
         vote_rows = s.execute(
-            select(VoteRow.item_id, VoteRow.value)
+            select(VoteRow.item_id, VoteRow.value, VoteRow.grade)
             .where(VoteRow.item_id.in_(item_ids))
             .order_by(VoteRow.item_id, VoteRow.created_at.desc(), VoteRow.id.desc())
         ).all()
         current_vote: dict[int, int] = {}
-        for item_id, value in vote_rows:
+        current_grade: dict[int, int] = {}
+        for item_id, value, grade in vote_rows:
             iid = int(item_id)
             if iid not in current_vote:
                 current_vote[iid] = int(value)
+                current_grade[iid] = int(grade) if grade is not None else votes_mod.value_to_grade(int(value))
         # Load all vote reasons in one read instead of N+1 reads
         _all_reasons = votes_mod._load_vote_reasons()
         current_reasons = {
@@ -346,6 +350,7 @@ def _load_today(digest_id: str) -> tuple[list[dict], dict[int, int]]:
                     "ranking": ranking,
                     "ranking_sentence": _ranking_sentence(ranking),
                     "current_vote": current_vote.get(int(row.id)),
+                    "current_grade": current_grade.get(int(row.id)),
                     "current_reasons": current_reasons.get(int(row.id), []),
                 }
             )
@@ -638,6 +643,9 @@ def index(request: Request) -> Response:
         if brewed
         else {}
     )
+    _synth_rows = load_digest_audit(digest_id, "catch_up_synthesis") if brewed else []
+    catch_up_synthesis = (_synth_rows[0].get("text") or "") if _synth_rows else ""
+    catch_up_days = (_synth_rows[0].get("days") or 0) if _synth_rows else 0
     for audit in top_journal_audit:
         audit["url"] = safe_url(str(audit.get("url") or ""))
     response = templates.TemplateResponse(
@@ -650,6 +658,8 @@ def index(request: Request) -> Response:
             "overview": overview,
             "top_journal_audit": top_journal_audit,
             "candidate_funnel": candidate_funnel,
+            "catch_up_synthesis": catch_up_synthesis,
+            "catch_up_days": catch_up_days,
             "current_vote_per_item": current_vote,
             "ranking_status": votes_mod.lr_training_status(),
             "empty": len(sections) == 0,
@@ -661,12 +671,20 @@ def index(request: Request) -> Response:
     return response
 
 
-@app.post("/vote/{item_id}/{value}")
-def vote(request: Request, item_id: int, value: int) -> JSONResponse:
+@app.post("/vote/{item_id}/{grade}")
+def vote(request: Request, item_id: int, grade: int) -> JSONResponse:
     _require_csrf(request)
-    if value not in (-1, 0, 1):
-        raise HTTPException(status_code=400, detail="value must be -1, 0, or 1")
-    ok = votes_mod.record_vote_by_id(item_id, value)
+    # 4-level preference grades (must-read 100, relevant 70, hmmm 40, not-for-me
+    # 10). Legacy -1/0/1 signs are still accepted for older clients.
+    if grade in (100, 70, 40, 10):
+        value = votes_mod.grade_to_value(grade)
+        eff_grade: int | None = grade
+    elif grade in (-1, 0, 1):
+        value = grade
+        eff_grade = votes_mod.value_to_grade(grade)
+    else:
+        raise HTTPException(status_code=400, detail="grade must be one of 100, 70, 40, 10")
+    ok = votes_mod.record_vote_by_id(item_id, value, eff_grade)
     if not ok:
         raise HTTPException(status_code=404, detail=f"item {item_id} not found")
     return JSONResponse(
@@ -674,6 +692,7 @@ def vote(request: Request, item_id: int, value: int) -> JSONResponse:
             "ok": True,
             "item_id": item_id,
             "new_value": value,
+            "new_grade": eff_grade,
             "ranking_status": votes_mod.lr_training_status(),
         }
     )

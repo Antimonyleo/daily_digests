@@ -132,3 +132,18 @@ def test_prune_removes_cached_embeddings_for_deleted_items(monkeypatch, tmp_path
         cached = s.execute(select(store_mod.ItemEmbeddingRow)).scalars().all()
         assert len(cached) == 1
         assert cached[0].item.title == "Fresh"
+
+
+def test_deserialize_rejects_corrupt_or_truncated_blob():
+    from dailydigest.rank.embedding_cache import _deserialize, _serialize
+
+    vec = np.array([0.1, 0.2, 0.3], dtype=np.float32)
+    raw = _serialize(vec)
+    # Round-trips cleanly at the correct dim.
+    assert np.allclose(_deserialize(raw, 3), vec)
+    # Truncated blob (len != dim*4) -> None (treated as cache miss, re-embed).
+    assert _deserialize(raw[:-2], 3) is None
+    # Wrong/garbage dim -> None instead of raising mid-run.
+    assert _deserialize(raw, 4) is None
+    assert _deserialize(raw, 0) is None
+    assert _deserialize(raw, 99999) is None

@@ -106,12 +106,33 @@ def test_rocchio_update_applies_recency_decay(tmp_path, monkeypatch):
     prior_profile = np.array([0.5, 0.2, 0.1], dtype=np.float32)
     np.savez(profile_path, profile=prior_profile, vote_count=np.array([5], dtype=np.int32))
 
-    votes_mod._update_rocchio(item_id, 1)
+    # "Must read" (grade 100 -> weight 1.0) applies the full alpha pull.
+    votes_mod._update_rocchio(item_id, 1, grade=100)
 
     data = np.load(profile_path)
     learned = data["profile"]
-    expected = 0.995 * prior_profile + 0.08 * stub_vec[0]
+    expected = 0.995 * prior_profile + 0.08 * 1.0 * stub_vec[0]
     np.testing.assert_allclose(learned, expected, rtol=1e-5, atol=1e-6)
+
+
+def test_rocchio_pull_scales_with_grade(tmp_path, monkeypatch):
+    """A weaker preference ('Relevant', grade 70) pulls less than 'Must read'."""
+    from pathlib import Path
+    from dailydigest.rank import embedding_cache as cache_mod
+
+    store_mod = _reset_store_for_tmp_db(monkeypatch, tmp_path)
+    from dailydigest import votes as votes_mod
+
+    stub_vec = np.array([[1.0, 0.0, 0.0]], dtype=np.float32)
+    monkeypatch.setattr(cache_mod, "embed_item_rows", lambda rows: stub_vec)
+    profile_path = Path(str(tmp_path / "learned_profile.npz"))
+    monkeypatch.setattr(votes_mod, "_learned_profile_path", lambda: profile_path)
+    item_id = _insert_item(store_mod)
+
+    # grade 70 -> weight (70-50)/50 = 0.4 -> 0.4 * alpha pull (from zero prior).
+    votes_mod._update_rocchio(item_id, 1, grade=70)
+    learned = np.load(profile_path)["profile"]
+    np.testing.assert_allclose(learned, 0.08 * 0.4 * stub_vec[0], rtol=1e-5, atol=1e-6)
 
 
 def test_vote_reason_is_persisted_once_per_item(tmp_path, monkeypatch):

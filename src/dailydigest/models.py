@@ -5,7 +5,7 @@ from datetime import datetime
 from pydantic import BaseModel, Field, field_validator
 
 
-_VALID_SECTIONS = {"research", "industry", "regulatory", "world"}
+_VALID_SECTIONS = {"research", "industry", "ai", "regulatory", "world"}
 
 
 class Item(BaseModel):
@@ -46,6 +46,12 @@ class Profile(BaseModel):
     name: str = ""
     bio: str
     keywords: list[str] = Field(default_factory=list)
+    # "Keep-me-informed" interests that are context, not core research: they drive
+    # retrieval and the news/industry sections, but are DOWN-WEIGHTED for the
+    # research-relevance gate so a paper matching only a peripheral term (e.g. a
+    # single-cell cancer-transcriptomics paper matching "single-cell RNA
+    # sequencing") does not take a research slot from the reader's actual field.
+    context_keywords: list[str] = Field(default_factory=list)
     # Optional per-interest weights. Keys are embedded as additional profile
     # facets, so broad interests can be strengthened or softened without
     # duplicating keywords. Values below 1.0 downweight; above 1.0 upweight.
@@ -76,7 +82,7 @@ class SourceSpec(BaseModel):
     @field_validator("section")
     @classmethod
     def _validate_section(cls, v: str) -> str:
-        _VALID = {"research", "industry", "regulatory", "world"}
+        _VALID = {"research", "industry", "ai", "regulatory", "world"}
         if v not in _VALID:
             import logging
             logging.getLogger(__name__).warning(
@@ -89,9 +95,23 @@ class SourceSpec(BaseModel):
     prestige_score: float | None = Field(default=None, ge=0.0, le=1.0)
     impact_floor: float | None = Field(default=None, ge=0.0)
     promo_risk: float | None = Field(default=None, ge=0.0, le=1.0)
+    # Mark a source whose articles sit behind a paywall / subscription. Such
+    # items take a ranking penalty so they must be more relevant to earn a slot —
+    # most can't be read without a subscription.
+    paywalled: bool = False
+    # Drive this source's query from the user's profile keywords instead of a
+    # static ``query``. For OpenAlex/PubMed this turns the source into an active
+    # topic search across all venues (not just the curated feed list).
+    profile_driven: bool = False
     # Phase 3 optional fields used by additional ingest adapters.
     category: str | None = None
     query: str | None = None
     condition: str | None = None
     endpoint: str | None = None
     polite_email: str | None = None
+    # OpenAlex source (venue) ids for the ``openalex_venues`` kind — a retrieval
+    # channel that pulls recent articles directly from specific high-value
+    # journals (e.g. ACS Nano, JACS) whose native RSS is Cloudflare-blocked.
+    # Each fetched item is tagged with its real journal name so it earns the
+    # correct venue prestige rather than aggregator tier.
+    venue_ids: list[str] = Field(default_factory=list)

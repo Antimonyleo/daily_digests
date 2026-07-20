@@ -15,11 +15,12 @@ _ALLOWED_LINK_SCHEMES = {"http", "https"}
 SECTION_META: dict[str, dict[str, str]] = {
     "research": {"title": "Research", "emoji": "🧬"},
     "industry": {"title": "Industry", "emoji": "💊"},
+    "ai": {"title": "AI Tools & Tricks", "emoji": "🤖"},
     "regulatory": {"title": "Regulatory", "emoji": "📋"},
     "world": {"title": "World", "emoji": "🌍"},
 }
 
-SECTION_ORDER = ["research", "industry", "regulatory", "world"]
+SECTION_ORDER = ["research", "industry", "ai", "regulatory", "world"]
 
 
 def _env() -> Environment:

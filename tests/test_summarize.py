@@ -40,10 +40,10 @@ def test_prompt_requests_substance_and_why_read_context():
     _sys, user = _build_prompt([_row("Title", "Abstract")])
     sys_prompt, _user_prompt = _build_prompt([_row("Title", "Abstract")])
 
-    assert "Do not paraphrase the title" in sys_prompt
-    assert "Why read" in sys_prompt
+    assert "do not paraphrase the title" in sys_prompt
+    assert "Why read" in sys_prompt and "BRIDGE" in sys_prompt
     assert "Key finding" in sys_prompt
-    assert "Caveat" in sys_prompt
+    assert "Caveat" in sys_prompt and "limitation" in sys_prompt
     assert '"title": "Title"' in user
     assert '"source": "Nature"' in user
 

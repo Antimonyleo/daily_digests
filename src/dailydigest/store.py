@@ -66,7 +66,11 @@ class VoteRow(Base):
 
     id = Column(Integer, primary_key=True)
     item_id = Column(Integer, ForeignKey("items.id", ondelete="CASCADE"), nullable=False, index=True)
-    value = Column(Integer, nullable=False)  # +1 / 0 / -1
+    value = Column(Integer, nullable=False)  # sign of the preference: +1 / 0 / -1
+    # Preference strength as a percentage (0-100) from the 4-level feedback:
+    # must-read 100, relevant 70, hmmm 40, not-for-me 10. Nullable for legacy rows
+    # (mapped from `value` when absent). `value` stays the coarse sign for the LR.
+    grade = Column(Integer, nullable=True)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     item = relationship("ItemRow")
@@ -268,6 +272,7 @@ def _migrate_sqlite_schema(eng) -> None:
         },
         "votes": {
             "created_at": "DATETIME",
+            "grade": "INTEGER",
         },
     }
 
@@ -405,40 +410,43 @@ def _latest_vote_values(item_ids: list[int]) -> dict[int, int]:
     return latest
 
 
-def exclude_previously_shown(rows: list[ItemRow], days_lookback: int = 7) -> list[ItemRow]:
-    """Drop only explicitly dismissed rows shown in recent sent digests.
+def exclude_previously_shown(
+    rows: list[ItemRow],
+    days_lookback: int = 30,
+    exclude_digest_id: str | None = None,
+) -> list[ItemRow]:
+    """Drop any row that already appeared in an earlier digest.
 
-    A missing vote is ambiguous: the user may simply not have had time to read.
-    Treat only Neutral/Bad as a hide signal. Good items are preserved for
-    training and possible backfill resurfacing.
+    A daily digest should feel fresh: once an item has been surfaced to the
+    reader in a prior brew, it should not resurface — regardless of whether the
+    reader voted on it. The previous "only hide explicitly-dismissed items shown
+    in *sent* digests" rule failed for local usage, where brews are previewed in
+    the web UI and never marked ``sent_at``; nothing was ever suppressed, so
+    yesterday's items reappeared today.
+
+    We now suppress on membership in ANY digest within ``days_lookback`` (matching
+    the 30-day item retention), excluding ``exclude_digest_id`` so re-brewing the
+    *current* day does not hide the items it is about to (re)assign.
     """
     ids = [int(r.id) for r in rows if r.id is not None]
     if not ids:
         return rows
     cutoff = datetime.now(timezone.utc) - timedelta(days=days_lookback)
     with session_scope() as s:
-        shown_ids = {
-            int(item_id)
-            for item_id in s.execute(
-                select(DigestItemRow.item_id)
-                .join(DigestRow, DigestRow.id == DigestItemRow.digest_id)
-                .where(
-                    DigestRow.sent_at.isnot(None),
-                    DigestRow.sent_at >= cutoff,
-                    DigestItemRow.item_id.in_(ids),
-                )
-            ).scalars()
-        }
-    latest_votes = _latest_vote_values(list(shown_ids))
-    dismissed_ids = {
-        item_id
-        for item_id, value in latest_votes.items()
-        if value != 1
-    }
-    hidden = dismissed_ids
-    if not hidden:
+        stmt = (
+            select(DigestItemRow.item_id)
+            .join(DigestRow, DigestRow.id == DigestItemRow.digest_id)
+            .where(
+                DigestRow.created_at >= cutoff,
+                DigestItemRow.item_id.in_(ids),
+            )
+        )
+        if exclude_digest_id is not None:
+            stmt = stmt.where(DigestItemRow.digest_id != exclude_digest_id)
+        shown_ids = {int(item_id) for item_id in s.execute(stmt).scalars()}
+    if not shown_ids:
         return rows
-    return [r for r in rows if r.id is None or int(r.id) not in hidden]
+    return [r for r in rows if r.id is None or int(r.id) not in shown_ids]
 
 
 def prune(days: int) -> int:
@@ -666,6 +674,27 @@ def days_since_last_sent(exclude_digest_id: str | None = None) -> int:
     if last_sent.tzinfo is None:
         last_sent = last_sent.replace(tzinfo=timezone.utc)
     return max(0, (datetime.now(timezone.utc) - last_sent).days)
+
+
+def days_since_last_digest(exclude_digest_id: str | None = None) -> int:
+    """Return calendar days since the most-recent digest of *any* kind.
+
+    Unlike :func:`days_since_last_sent`, this counts brewed/rendered digests
+    too (``sent_at`` may be null for local or dry-run use), so the catch-up
+    window works whether the digest is emailed by the cron or previewed locally.
+    Returns -1 when no prior digest exists (first ever run).
+    """
+    init_db()
+    with session_scope() as s:
+        q = select(func.max(DigestRow.created_at))
+        if exclude_digest_id:
+            q = q.where(DigestRow.id != exclude_digest_id)
+        last = s.execute(q).scalar_one_or_none()
+    if last is None:
+        return -1
+    if last.tzinfo is None:
+        last = last.replace(tzinfo=timezone.utc)
+    return max(0, (datetime.now(timezone.utc) - last).days)
 
 
 def db_path_exists() -> bool:

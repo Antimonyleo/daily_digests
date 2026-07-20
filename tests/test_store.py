@@ -147,6 +147,9 @@ def test_review_filters_use_latest_legacy_vote_rows(monkeypatch, tmp_path):
              '2026-05-12 00:00:00', '', NULL, NULL, NULL),
             (3, 'Legacy', 'research', 'shown-unvoted', 'https://example.com/unvoted',
              'Shown but unvoted', 'Abstract', '', '2026-05-12 00:00:00',
+             '2026-05-12 00:00:00', '', NULL, NULL, NULL),
+            (4, 'Legacy', 'research', 'never-shown', 'https://example.com/never',
+             'Never shown', 'Abstract', '', '2026-05-12 00:00:00',
              '2026-05-12 00:00:00', '', NULL, NULL, NULL);
         INSERT INTO votes (id, item_id, value, created_at)
         VALUES
@@ -154,8 +157,8 @@ def test_review_filters_use_latest_legacy_vote_rows(monkeypatch, tmp_path):
             (2, 1, 1, '2026-05-12 11:00:00'),
             (3, 2, 1, '2026-05-12 10:00:00'),
             (4, 2, 0, '2026-05-12 11:00:00');
-        INSERT INTO digests (id, item_count, sent_at)
-        VALUES ('2026-05-12', 3, '2026-05-12 12:00:00');
+        INSERT INTO digests (id, created_at, item_count, sent_at)
+        VALUES ('2026-05-12', '2026-05-12 12:00:00', 3, '2026-05-12 12:00:00');
         INSERT INTO digest_items (digest_id, item_id, item_label, score, created_at)
         VALUES
             ('2026-05-12', 1, 'R1', 0.9, '2026-05-12 12:00:00'),
@@ -184,11 +187,12 @@ def test_review_filters_use_latest_legacy_vote_rows(monkeypatch, tmp_path):
     reviewed_filtered = store_mod.exclude_reviewed_items(rows)
     shown_filtered = store_mod.exclude_previously_shown(rows, days_lookback=365)
 
+    # exclude_reviewed_items is vote-based: latest vote +1 or unvoted are kept.
     assert {row.external_id for row in reviewed_filtered} == {
         "old-bad-latest-good",
         "shown-unvoted",
+        "never-shown",
     }
-    assert {row.external_id for row in shown_filtered} == {
-        "old-bad-latest-good",
-        "shown-unvoted",
-    }
+    # exclude_previously_shown is membership-based: any item that appeared in a
+    # prior digest is dropped regardless of vote; only never-shown survives.
+    assert {row.external_id for row in shown_filtered} == {"never-shown"}

@@ -32,6 +32,23 @@
     display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px;
     margin: 0 0 16px;
   }
+  .stat-strip {
+    display: flex; flex-wrap: wrap; gap: 6px 20px; align-items: baseline;
+    margin: 0 0 18px; padding: 11px 16px; background: #fff;
+    border: 1px solid var(--border); border-radius: 8px;
+    color: var(--muted); font-size: 13px;
+  }
+  .stat-strip span { white-space: nowrap; }
+  .stat-strip strong { color: var(--text); font-size: 16px; font-weight: 820; margin-right: 4px; }
+  .stat-strip .strip-warn strong { color: var(--down); }
+  .catch-up {
+    background: var(--accent-soft); border: 1px solid #cfe6d8; border-radius: 8px;
+    padding: 14px 16px; margin: 0 0 18px;
+  }
+  .catch-up .panel-title { color: var(--accent-strong); }
+  .catch-up-body { white-space: pre-wrap; color: #274b39; font-size: 13.5px; line-height: 1.55; }
+  .under-the-hood { margin-top: 18px; display: grid; gap: 12px; }
+  .under-the-hood .source-mix, .under-the-hood .audit-panel { margin-bottom: 0; }
   .stat-tile {
     background: #fff; border: 1px solid var(--border); border-radius: 8px;
     padding: 12px; box-shadow: 0 1px 2px rgba(0,0,0,0.04);
@@ -147,8 +164,8 @@
     background: #eef1ed; border-radius: 999px; padding: 4px 9px;
   }
   .item {
-    display: grid; grid-template-columns: minmax(0, 1fr) 214px; gap: 18px;
-    padding: 16px 22px; border-top: 1px solid #eef1ed;
+    display: grid; grid-template-columns: minmax(0, 1fr) 140px; gap: 24px;
+    padding: 22px 24px; border-top: 1px solid #eef1ed;
   }
   .item[data-priority="spotlight"] { border-left: 4px solid var(--gold); }
   .item[data-priority="read"] { border-left: 4px solid var(--accent); }
@@ -176,7 +193,7 @@
   }
   .item a.title-link:hover { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
 	  .item .meta { font-size: 12px; color: var(--muted); margin: 6px 0 0; overflow-wrap: anywhere; }
-	  .item .summary { font-size: 14px; line-height: 1.55; margin: 9px 0 0; color: #334238; overflow-wrap: anywhere; }
+	  .item .summary { font-size: 14px; line-height: 1.62; margin: 10px 0 0; color: #334238; overflow-wrap: anywhere; }
   .summary-fields {
     display: grid; gap: 7px; margin: 10px 0 0; padding: 10px;
     border: 1px solid #e4ebe5; border-radius: 8px; background: #fbfcf9;
@@ -218,7 +235,7 @@
     font-size: 11px; color: var(--muted); font-weight: 800; text-transform: uppercase;
     letter-spacing: 0.08em; margin-bottom: 8px;
   }
-  .vote-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+  .vote-row { display: grid; grid-template-columns: 1fr; gap: 0; }
   .reason-prompt { margin-top: 9px; color: var(--muted); font-size: 11px; font-weight: 760; }
   .reason-chip-row { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
   .reason-chip {
@@ -229,16 +246,22 @@
   .reason-chip.active { color: var(--accent-strong); border-color: #9fc2ae; background: var(--accent-soft); }
   .reason-chip:disabled { opacity: 0.65; cursor: progress; }
   .vote-btn {
-    min-height: 48px; padding: 7px 6px; border: 1px solid var(--border); border-radius: 7px;
-    cursor: pointer; color: var(--text); background: #fafbf9; font-size: 12px; font-weight: 750;
+    min-height: 33px; padding: 6px 10px; border: 1px solid var(--border);
+    border-top-width: 0; cursor: pointer; color: var(--muted);
+    background: #fafbf9; font-size: 12px; font-weight: 750; text-align: center;
   }
-  .vote-label { display: block; font-weight: 820; line-height: 1.1; }
-  .vote-help { display: block; margin-top: 3px; color: var(--muted); font-size: 10px; font-weight: 650; line-height: 1.15; }
-  .vote-btn.active .vote-help { color: inherit; }
-  .vote-btn:hover { background: #f0f5f1; border-color: #bfd0c5; }
+  .vote-btn:first-child { border-top-width: 1px; border-radius: 7px 7px 0 0; }
+  .vote-btn:last-child { border-radius: 0 0 7px 7px; }
+  .vote-label { display: block; font-weight: 780; line-height: 1.1; }
+  .vote-help { display: none; }
+  .vote-btn:hover { background: #f0f5f1; border-color: #bfd0c5; color: var(--text); }
+  .vote-btn.active { border-top-width: 1px; position: relative; z-index: 1; }
+  .vote-btn.active.must { background: var(--gold-soft); border-color: var(--gold); color: #7a4b00; }
   .vote-btn.active.good { background: #e4f4eb; border-color: var(--up); color: var(--up); }
   .vote-btn.active.neutral { background: #eef1ed; border-color: var(--neutral); color: var(--neutral); }
   .vote-btn.active.bad { background: #fdecea; border-color: var(--down); color: var(--down); }
+  .vote-pct { display: block; margin-top: 1px; color: var(--muted); font-size: 10px; font-weight: 650; }
+  .vote-btn.active .vote-pct { color: inherit; }
   .vote-btn:disabled { opacity: 0.65; cursor: progress; }
   .item.flash { background: var(--flash); transition: background 0.4s; }
   .no-filter-results {
@@ -295,24 +318,19 @@
   </form>
   {% endif %}
 
-  <section class="insight-grid" aria-label="Digest summary">
-    <div class="stat-tile">
-      <div class="stat-label">Scanned</div>
-      <div class="stat-value">{{ overview.scanned or 0 }}</div>
-    </div>
-    <div class="stat-tile">
-      <div class="stat-label">Selected</div>
-      <div class="stat-value">{{ overview.selected }}</div>
-    </div>
-    <div class="stat-tile">
-      <div class="stat-label">Sources</div>
-      <div class="stat-value">{{ overview.sources or 0 }}</div>
-    </div>
-    <div class="stat-tile">
-      <div class="stat-label">Source issues</div>
-      <div class="stat-value">{{ overview.failures or 0 }}</div>
-    </div>
+  <div class="stat-strip" aria-label="Digest summary">
+    <span><strong>{{ overview.selected }}</strong> selected</span>
+    <span><strong>{{ overview.scanned or 0 }}</strong> scanned</span>
+    <span><strong>{{ overview.sources or 0 }}</strong> sources</span>
+    <span class="{% if overview.failures %}strip-warn{% endif %}"><strong>{{ overview.failures or 0 }}</strong> source issues</span>
+  </div>
+
+  {% if catch_up_synthesis %}
+  <section class="catch-up" aria-label="Catch-up briefing">
+    <h2 class="panel-title">Since your last digest{% if catch_up_days %} (~{{ catch_up_days }} days){% endif %} — what you missed</h2>
+    <div class="catch-up-body">{{ catch_up_synthesis }}</div>
   </section>
+  {% endif %}
 
   {% if overview.must_read %}
   <section class="must-read">
@@ -326,59 +344,6 @@
       {% endfor %}
     </div>
   </section>
-  {% endif %}
-
-  {% if overview.source_mix %}
-  <section class="source-mix">
-    <h2 class="panel-title">Today’s source mix</h2>
-    {% for source, count in overview.source_mix %}
-    <div class="mix-row">
-      <span>{{ source }}</span>
-      <div class="mix-track"><div class="mix-fill" style="width: {{ (count * 100 / overview.selected) | round(0, 'floor') if overview.selected else 0 }}%;"></div></div>
-      <span>{{ count }}</span>
-    </div>
-    {% endfor %}
-  </section>
-  {% endif %}
-
-  {% if top_journal_audit %}
-  <details class="audit-panel diagnostic-drawer">
-    <summary>Not shown today</summary>
-    <div class="audit-body">
-      <p class="audit-summary">{{ overview.top_journals_shown }} published-journal picks shown. {{ top_journal_audit|length }} high-quality candidates were considered but did not make today’s shown list.</p>
-      <ul class="audit-list">
-        {% for audit in top_journal_audit[:5] %}
-        <li>
-          <a href="{{ audit.url | default('#') }}" target="_blank" rel="noopener">{{ audit.title }}</a>
-          <span class="audit-score">{{ audit.source }} · {{ audit.score }}</span>
-        </li>
-        {% endfor %}
-      </ul>
-    </div>
-  </details>
-  {% endif %}
-
-  {% if candidate_funnel %}
-  <details class="audit-panel diagnostic-drawer">
-    <summary>Brew diagnostics</summary>
-    <div class="audit-body">
-      <p class="audit-summary">Candidate flow from recent source items through reviewed-item filtering, quality gates, and cross-source dedupe.</p>
-      <div class="audit-metrics">
-        <span class="audit-metric"><strong>{{ candidate_funnel.recent_items | default(0) }}</strong> recent</span>
-        <span class="audit-metric"><strong>{{ candidate_funnel.after_reviewed_filter | default(0) }}</strong> after reviewed filter</span>
-        <span class="audit-metric"><strong>{{ candidate_funnel.after_recently_dismissed_filter | default(0) }}</strong> after dismissed filter</span>
-        <span class="audit-metric"><strong>{{ candidate_funnel.after_quality_gate | default(0) }}</strong> after quality gate</span>
-        <span class="audit-metric"><strong>{{ candidate_funnel.after_cross_source_dedupe | default(0) }}</strong> after dedupe</span>
-      </div>
-      {% if candidate_funnel.quality_drop_reason_counts %}
-      <ul class="audit-list">
-        {% for row in candidate_funnel.quality_drop_reason_counts %}
-        <li><span>{{ row.reason }}</span><span class="audit-score">{{ row.count }}</span></li>
-        {% endfor %}
-      </ul>
-      {% endif %}
-    </div>
-  </details>
   {% endif %}
 
   <main class="digest-card">
@@ -457,12 +422,11 @@
       {% set priority_score = item.confidence_score | default(item.score_raw) %}
       {% set priority = 'spotlight' if priority_score >= 0.85 else ('read' if priority_score >= 0.65 else 'skim') %}
       {% set priority_label = 'Lead story' if priority == 'spotlight' else ('Worth reading' if priority == 'read' else 'Quick skim') %}
-      <div class="item" data-item-id="{{ item.id }}" data-section="{{ section.key }}" data-priority="{{ priority }}" data-source-bucket="{{ item.ranking.source_bucket }}" data-reviewed="{{ 'true' if item.current_vote is not none else 'false' }}" data-current-vote="{{ item.current_vote if item.current_vote is not none else '' }}">
+      <div class="item" data-item-id="{{ item.id }}" data-section="{{ section.key }}" data-priority="{{ priority }}" data-source-bucket="{{ item.ranking.source_bucket }}" data-reviewed="{{ 'true' if item.current_grade is not none else 'false' }}" data-current-grade="{{ item.current_grade if item.current_grade is not none else '' }}">
         <div class="item-main">
           <div class="item-head">
             <span class="label-pill">{{ item.label }}</span>
             <span class="priority-pill {{ priority }}">{{ priority_label }}</span>
-            <span class="lane-pill">{{ section.title }}</span>
           </div>
           <div>
             <a class="title-link" href="{{ item.url }}" target="_blank" rel="noopener">{{ item.title }}</a>
@@ -471,13 +435,6 @@
             {{ item.source }}{% if item.published %} &middot; {{ item.published }}{% endif %}
           </div>
           <div class="ranking-sentence">{{ item.ranking_sentence }}</div>
-          {% if item.ranking.tags %}
-          <div class="reason-row">
-            {% for tag in item.ranking.tags %}
-            <span class="reason-badge">{{ tag }}</span>
-            {% endfor %}
-          </div>
-          {% endif %}
           <details class="why-shown">
             <summary>Why shown?</summary>
             <div class="why-body">
@@ -531,12 +488,14 @@
           {% elif item.summary %}
           <div class="summary">{{ item.summary }}</div>
           {% endif %}
-          <div class="save-state{% if item.current_vote is not none %} saved{% endif %}" aria-live="polite">
-            {% if item.current_vote == 1 %}
+          <div class="save-state{% if item.current_grade is not none %} saved{% endif %}" aria-live="polite">
+            {% if item.current_grade == 100 %}
+            Must read saved.
+            {% elif item.current_grade == 70 %}
             Relevant saved.
-            {% elif item.current_vote == 0 %}
-            Seen saved.
-            {% elif item.current_vote == -1 %}
+            {% elif item.current_grade == 40 %}
+            Hmmm saved.
+            {% elif item.current_grade == 10 %}
             Not for me saved.
             {% else %}
             No response saved yet.
@@ -546,20 +505,25 @@
         <div class="vote-panel">
           <div class="vote-title">Your read</div>
           <div class="vote-row" role="group" aria-label="Evaluate {{ item.label }}">
-            <button class="vote-btn good{% if item.current_vote == 1 %} active{% endif %}"
-                    data-value="1" type="button" aria-pressed="{{ 'true' if item.current_vote == 1 else 'false' }}">
-              <span class="vote-label">Relevant</span><span class="vote-help">More like this</span>
+            <button class="vote-btn must{% if item.current_grade == 100 %} active{% endif %}"
+                    data-grade="100" type="button" aria-pressed="{{ 'true' if item.current_grade == 100 else 'false' }}">
+              <span class="vote-label">Must read</span><span class="vote-pct">100%</span>
             </button>
-            <button class="vote-btn neutral{% if item.current_vote == 0 %} active{% endif %}"
-                    data-value="0" type="button" aria-pressed="{{ 'true' if item.current_vote == 0 else 'false' }}">
-              <span class="vote-label">Seen</span><span class="vote-help">Reviewed</span>
+            <button class="vote-btn good{% if item.current_grade == 70 %} active{% endif %}"
+                    data-grade="70" type="button" aria-pressed="{{ 'true' if item.current_grade == 70 else 'false' }}">
+              <span class="vote-label">Relevant</span><span class="vote-pct">70%</span>
             </button>
-            <button class="vote-btn bad{% if item.current_vote == -1 %} active{% endif %}"
-                    data-value="-1" type="button" aria-pressed="{{ 'true' if item.current_vote == -1 else 'false' }}">
-              <span class="vote-label">Not for me</span><span class="vote-help">Less like this</span>
+            <button class="vote-btn neutral{% if item.current_grade == 40 %} active{% endif %}"
+                    data-grade="40" type="button" aria-pressed="{{ 'true' if item.current_grade == 40 else 'false' }}">
+              <span class="vote-label">Hmmm</span><span class="vote-pct">40%</span>
+            </button>
+            <button class="vote-btn bad{% if item.current_grade == 10 %} active{% endif %}"
+                    data-grade="10" type="button" aria-pressed="{{ 'true' if item.current_grade == 10 else 'false' }}">
+              <span class="vote-label">Not for me</span><span class="vote-pct">10%</span>
             </button>
           </div>
-          <div class="reason-prompt">Reason</div>
+          <div class="reason-block"{% if not (item.current_grade in [40, 10]) %} hidden{% endif %}>
+          <div class="reason-prompt">Why? (optional)</div>
           <div class="reason-chip-row" role="group" aria-label="Feedback reason for {{ item.label }}">
             <button class="reason-chip{% if 'off_topic' in item.current_reasons %} active{% endif %}" data-reason="off_topic" type="button" aria-pressed="{{ 'true' if 'off_topic' in item.current_reasons else 'false' }}">Off topic</button>
             <button class="reason-chip{% if 'low_impact' in item.current_reasons %} active{% endif %}" data-reason="low_impact" type="button" aria-pressed="{{ 'true' if 'low_impact' in item.current_reasons else 'false' }}">Low impact</button>
@@ -567,6 +531,7 @@
             <button class="reason-chip{% if 'access_friction' in item.current_reasons %} active{% endif %}" data-reason="access_friction" type="button" aria-pressed="{{ 'true' if 'access_friction' in item.current_reasons else 'false' }}">Hard to access</button>
             <button class="reason-chip{% if 'duplicate' in item.current_reasons %} active{% endif %}" data-reason="duplicate" type="button" aria-pressed="{{ 'true' if 'duplicate' in item.current_reasons else 'false' }}">Duplicate</button>
             <button class="reason-chip{% if 'not_urgent' in item.current_reasons %} active{% endif %}" data-reason="not_urgent" type="button" aria-pressed="{{ 'true' if 'not_urgent' in item.current_reasons else 'false' }}">Not urgent</button>
+          </div>
           </div>
         </div>
       </div>
@@ -580,39 +545,100 @@
       Local UI &middot; votes write to <code>data/digest.db</code>.
     </div>
   </main>
+
+  {% if overview.source_mix or top_journal_audit or candidate_funnel %}
+  <section class="under-the-hood" aria-label="Today’s mix and diagnostics">
+    {% if overview.source_mix %}
+    <div class="source-mix">
+      <h2 class="panel-title">Today’s source mix</h2>
+      {% for source, count in overview.source_mix %}
+      <div class="mix-row">
+        <span>{{ source }}</span>
+        <div class="mix-track"><div class="mix-fill" style="width: {{ (count * 100 / overview.selected) | round(0, 'floor') if overview.selected else 0 }}%;"></div></div>
+        <span>{{ count }}</span>
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+
+    {% if top_journal_audit %}
+    <details class="audit-panel diagnostic-drawer">
+      <summary>Not shown today</summary>
+      <div class="audit-body">
+        <p class="audit-summary">{{ overview.top_journals_shown }} published-journal picks shown. {{ top_journal_audit|length }} high-quality candidates were considered but did not make today’s shown list.</p>
+        <ul class="audit-list">
+          {% for audit in top_journal_audit[:5] %}
+          <li>
+            <a href="{{ audit.url | default('#') }}" target="_blank" rel="noopener">{{ audit.title }}</a>
+            <span class="audit-score">{{ audit.source }} · {{ audit.score }}</span>
+          </li>
+          {% endfor %}
+        </ul>
+      </div>
+    </details>
+    {% endif %}
+
+    {% if candidate_funnel %}
+    <details class="audit-panel diagnostic-drawer">
+      <summary>Brew diagnostics</summary>
+      <div class="audit-body">
+        <p class="audit-summary">Candidate flow from recent source items through reviewed-item filtering, quality gates, and cross-source dedupe.</p>
+        <div class="audit-metrics">
+          <span class="audit-metric"><strong>{{ candidate_funnel.recent_items | default(0) }}</strong> recent</span>
+          <span class="audit-metric"><strong>{{ candidate_funnel.after_reviewed_filter | default(0) }}</strong> after reviewed filter</span>
+          <span class="audit-metric"><strong>{{ candidate_funnel.after_previously_shown_filter | default(candidate_funnel.after_recently_dismissed_filter) | default(0) }}</strong> after previously-shown filter</span>
+          <span class="audit-metric"><strong>{{ candidate_funnel.after_quality_gate | default(0) }}</strong> after quality gate</span>
+          <span class="audit-metric"><strong>{{ candidate_funnel.after_cross_source_dedupe | default(0) }}</strong> after dedupe</span>
+        </div>
+        {% if candidate_funnel.quality_drop_reason_counts %}
+        <ul class="audit-list">
+          {% for row in candidate_funnel.quality_drop_reason_counts %}
+          <li><span>{{ row.reason }}</span><span class="audit-score">{{ row.count }}</span></li>
+          {% endfor %}
+        </ul>
+        {% endif %}
+      </div>
+    </details>
+    {% endif %}
+  </section>
+  {% endif %}
+
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
 {% endblock %}
 {% block scripts %}
 <script>
 (function () {
-	  const VALUE_CLASS = { "1": "good", "0": "neutral", "-1": "bad" };
-	  const VALUE_LABEL = { "1": "Relevant", "0": "Seen", "-1": "Not for me" };
+	  const GRADE_CLASS = { "100": "must", "70": "good", "40": "neutral", "10": "bad" };
+	  const GRADE_LABEL = { "100": "Must read", "70": "Relevant", "40": "Hmmm", "10": "Not for me" };
+	  const NEGATIVE_GRADES = new Set(["40", "10"]);
 	  const CSRF_TOKEN = {{ csrf_token|tojson }};
   const toastEl = document.getElementById("toast");
   const trainBtn = document.getElementById("train-ranker-btn");
   let toastTimer = null;
 
-  function setActive(itemEl, value) {
-    itemEl.dataset.currentVote = String(value);
+  function setActive(itemEl, grade) {
+    itemEl.dataset.currentGrade = String(grade);
     itemEl.querySelectorAll(".vote-btn").forEach((b) => {
-      const v = b.dataset.value;
-      b.classList.toggle("active", v === String(value));
-      b.setAttribute("aria-pressed", v === String(value) ? "true" : "false");
-      ["good", "neutral", "bad"].forEach((c) => b.classList.remove(c));
-      b.classList.add(VALUE_CLASS[v]);
+      const g = b.dataset.grade;
+      b.classList.toggle("active", g === String(grade));
+      b.setAttribute("aria-pressed", g === String(grade) ? "true" : "false");
+      ["must", "good", "neutral", "bad"].forEach((c) => b.classList.remove(c));
+      b.classList.add(GRADE_CLASS[g]);
     });
-    if (String(value) === "1") {
+    if (!NEGATIVE_GRADES.has(String(grade))) {
       itemEl.querySelectorAll(".reason-chip.active").forEach((chip) => {
         chip.classList.remove("active");
         chip.setAttribute("aria-pressed", "false");
       });
     }
+    const reasonBlock = itemEl.querySelector(".reason-block");
+    if (reasonBlock) reasonBlock.hidden = !NEGATIVE_GRADES.has(String(grade));
     syncReasonChips(itemEl);
     itemEl.dataset.reviewed = "true";
   }
 
   function reasonFeedbackEnabled(itemEl) {
-    return itemEl.dataset.currentVote === "0" || itemEl.dataset.currentVote === "-1";
+    return NEGATIVE_GRADES.has(itemEl.dataset.currentGrade);
   }
 
   function syncReasonChips(itemEl) {
@@ -777,22 +803,22 @@
     itemEl.querySelectorAll(".vote-btn").forEach((btn) => {
       btn.addEventListener("click", async () => {
         const id = itemEl.dataset.itemId;
-        const value = btn.dataset.value;
+        const grade = btn.dataset.grade;
         setSaving(itemEl, true);
         setStatus(itemEl, "Saving response...", "");
         try {
-	          const r = await fetch(`/vote/${id}/${value}`, {
+	          const r = await fetch(`/vote/${id}/${grade}`, {
 	            method: "POST",
 	            headers: { "X-CSRF-Token": CSRF_TOKEN },
 	          });
           if (!r.ok) throw new Error("HTTP " + r.status);
           const payload = await r.json();
-          setActive(itemEl, value);
+          setActive(itemEl, grade);
           applyReaderFilters();
           updateRankingStatus(payload.ranking_status);
           const stamp = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-          setStatus(itemEl, `${VALUE_LABEL[value]} saved at ${stamp}`, "saved");
-          showToast(`${VALUE_LABEL[value]} response saved`);
+          setStatus(itemEl, `${GRADE_LABEL[grade]} saved at ${stamp}`, "saved");
+          showToast(`${GRADE_LABEL[grade]} response saved`);
         } catch (e) {
           setStatus(itemEl, "Response was not saved. Try again.", "error");
           flash(itemEl);

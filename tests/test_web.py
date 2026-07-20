@@ -262,7 +262,7 @@ def test_index_renders_reader_card_hierarchy_and_feedback_controls(tmp_path, mon
             {
                 "recent_items": 20,
                 "after_reviewed_filter": 18,
-                "after_recently_dismissed_filter": 17,
+                "after_previously_shown_filter": 17,
                 "after_quality_gate": 15,
                 "after_cross_source_dedupe": 12,
                 "quality_gate_drops": [
@@ -301,11 +301,12 @@ def test_index_renders_reader_card_hierarchy_and_feedback_controls(tmp_path, mon
     assert 'bucket === "preprint_other"' in text
     assert "summary-fields" in text
     assert "Key finding" in text
+    # 4-level graded feedback
+    assert "Must read" in text
     assert "Relevant" in text
-    assert "Seen" in text
+    assert "Hmmm" in text
     assert "Not for me" in text
-    assert "More like this" in text
-    assert "Less like this" in text
+    assert 'data-grade="100"' in text and 'data-grade="10"' in text
     assert "No response saved yet." in text
     assert "Too promotional" in text
     assert "Update my ranking" in text

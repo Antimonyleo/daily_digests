@@ -151,7 +151,6 @@ def _build_item_features(rows: list, profile_mat: np.ndarray) -> np.ndarray:
     if profile_mat.ndim == 1:
         cos = (vecs @ profile_mat.astype(np.float32, copy=False)).astype(np.float32)
     else:
-        import math as _math
         sims = vecs @ profile_mat.T.astype(np.float32)
         n = sims.shape[1]
         if n <= 1:
@@ -216,14 +215,42 @@ def _learned_profile_path() -> Path:
     return Path(get_settings().db_path).parent / "learned_profile.npz"
 
 
-def _update_rocchio(item_id: int, vote_value: int) -> None:
+# --- 4-level graded feedback ----------------------------------------------- #
+# The UI collects a preference on four levels; each maps to a percentage grade.
+# `value` (the coarse sign) drives the LR; `grade` drives the strength of the
+# Rocchio profile pull, so "Must read" moves the profile ~2.5x harder than a
+# plain "Relevant", and "Not for me" harder than "Hmmm".
+VOTE_LEVELS: dict[str, int] = {"must_read": 100, "relevant": 70, "hmmm": 40, "not_for_me": 10}
+VOTE_GRADE_NEUTRAL = 50
+
+
+def grade_to_value(grade: int) -> int:
+    """Coarse sign of a preference grade (>= neutral is positive)."""
+    return 1 if int(grade) >= VOTE_GRADE_NEUTRAL else -1
+
+
+def value_to_grade(value: int) -> int:
+    """Map a legacy (gradeless) vote sign to a representative grade."""
+    return {1: 70, 0: 40, -1: 10}.get(int(value), 40)
+
+
+def grade_to_weight(grade: int) -> float:
+    """Preference strength in [-1, 1], centered at the neutral grade."""
+    return max(-1.0, min(1.0, (int(grade) - VOTE_GRADE_NEUTRAL) / 50.0))
+
+
+def _update_rocchio(item_id: int, vote_value: int, grade: int | None = None) -> None:
     """Update the Rocchio-style learned profile vector after each vote.
 
-    Uses alpha=0.08 for upvotes and beta=0.04 for downvotes to accumulate
-    a learned direction in embedding space. Called outside DB session.
+    Base rates alpha=0.08 (up) / beta=0.04 (down) are scaled by the preference
+    strength derived from ``grade`` (falling back to the vote sign), so a stronger
+    preference pulls the learned profile harder. Called outside DB session.
     """
     if vote_value not in (1, -1):
         return
+    if grade is None:
+        grade = value_to_grade(vote_value)
+    weight = grade_to_weight(grade)
     alpha, beta = 0.08, 0.04
     decay = 0.995  # recency decay: recent votes count more (~50% after ~139 votes)
     try:
@@ -243,7 +270,7 @@ def _update_rocchio(item_id: int, vote_value: int) -> None:
         path = _learned_profile_path()
         if path.exists():
             try:
-                data = np.load(path)
+                data = np.load(path, allow_pickle=False)
                 learned = data["profile"].astype(np.float32)
                 stored_count = int(data["vote_count"][0])
             except Exception:
@@ -253,10 +280,10 @@ def _update_rocchio(item_id: int, vote_value: int) -> None:
             learned = np.zeros(vec.shape, dtype=np.float32)
             stored_count = 0
 
-        if vote_value == 1:
-            learned = learned * decay + alpha * vec
+        if weight >= 0:
+            learned = learned * decay + alpha * weight * vec
         else:
-            learned = learned * decay - beta * vec
+            learned = learned * decay + beta * weight * vec  # weight < 0 → subtracts
 
         path.parent.mkdir(parents=True, exist_ok=True)
         # np.savez appends .npz to filenames lacking that extension, so use _tmp.npz
@@ -267,7 +294,11 @@ def _update_rocchio(item_id: int, vote_value: int) -> None:
         logger.warning("Rocchio update failed: %s", exc)
 
 
-MIN_VOTES_FOR_LR = 10
+# Minimum signed (+1/-1) votes before the learned LR ranker replaces the cosine
+# baseline. 30 matches the documented design (CLAUDE.md, README) and is the
+# defensible floor for an 11-feature model — below it the LR over-parameterizes.
+# Single source of truth: reference this constant in docs/code, do not hardcode.
+MIN_VOTES_FOR_LR = 30
 _VOTE_REASONS_LOCK = Lock()
 
 
@@ -419,14 +450,12 @@ def record_votes(line: str, digest_id: str | None = None) -> dict[str, int]:
     return counts
 
 
-def record_vote_by_id(item_id: int, value: int) -> bool:
+def record_vote_by_id(item_id: int, value: int, grade: int | None = None) -> bool:
     """Persist a single vote keyed directly by item id (label-less path).
 
-    Used by the local web UI where each item already has its DB id and we
-    don't need to resolve a label like ``R3``. ``value`` semantics:
-
-    - ``+1`` / ``-1``: upsert the vote via :func:`_upsert_vote` (logs flips).
-    - ``0``: neutral — persist a reviewed-but-neutral signal for UI feedback.
+    Used by the local web UI where each item already has its DB id. ``value`` is
+    the coarse sign (+1 / 0 / -1); ``grade`` is the optional 4-level preference
+    percentage (100 / 70 / 40 / 10) that scales the learned-profile pull.
 
     Returns True on success, False if ``item_id`` does not exist.
     """
@@ -439,10 +468,10 @@ def record_vote_by_id(item_id: int, value: int) -> bool:
         if s.get(ItemRow, item_id) is None:
             return False
 
-        _upsert_vote(s, item_id, value)
+        _upsert_vote(s, item_id, value, grade)
 
     if value in (1, -1):
-        _update_rocchio(item_id, value)
+        _update_rocchio(item_id, value, grade)
     if value == 1:
         _clear_vote_reasons(item_id)
     return True
@@ -749,7 +778,12 @@ def vote_counts() -> dict[str, int]:
 
 
 def signed_vote_count() -> int:
-    """Count distinct items with a signed (+1/-1) latest vote."""
+    """Count distinct items whose *latest* vote is signed (+1/-1).
+
+    Uses ``_latest_vote_values`` (not a COUNT aggregate) because legacy duplicate
+    rows can exist and "latest vote wins" — an item whose newest vote is neutral
+    must not be counted even if an older signed row remains.
+    """
     init_db()
     try:
         return sum(1 for value in _latest_vote_values().values() if value in (-1, 1))
@@ -866,7 +900,7 @@ def train_lr_ranker() -> dict[str, object]:
     }
 
 
-def _upsert_vote(s, item_id: int, value: int) -> None:
+def _upsert_vote(s, item_id: int, value: int, grade: int | None = None) -> None:
     """Insert or update the single vote row for ``item_id``.
 
     Enforces "latest vote wins" semantics paired with the UNIQUE
@@ -888,7 +922,7 @@ def _upsert_vote(s, item_id: int, value: int) -> None:
         s.delete(duplicate)
     now = datetime.now(timezone.utc)
     if existing is None:
-        s.add(VoteRow(item_id=item_id, value=value, created_at=now))
+        s.add(VoteRow(item_id=item_id, value=value, grade=grade, created_at=now))
         return
     if existing.value != value:
         logger.info(
@@ -898,6 +932,7 @@ def _upsert_vote(s, item_id: int, value: int) -> None:
             value,
         )
     existing.value = value
+    existing.grade = grade
     existing.created_at = now
 
 
@@ -915,12 +950,17 @@ def _sample_training_pairs(
     """
     import itertools
 
-    all_pairs = list(itertools.product(up_indices, down_indices))
-    if len(all_pairs) <= max_pairs:
-        return all_pairs
+    n_up = len(up_indices)
+    n_down = len(down_indices)
+    total = n_up * n_down
+    if total <= max_pairs:
+        return list(itertools.product(up_indices, down_indices))
+    # Sample flat pair indices directly instead of materializing the full
+    # Cartesian product (which is O(n_up * n_down) memory — e.g. 250k tuples at
+    # 1000 balanced votes just to keep 300).
     rng = np.random.default_rng(0)  # fixed seed → reproducible training
-    chosen = rng.choice(len(all_pairs), size=max_pairs, replace=False)
-    return [all_pairs[i] for i in chosen]
+    chosen = rng.choice(total, size=max_pairs, replace=False)
+    return [(up_indices[int(i) // n_down], down_indices[int(i) % n_down]) for i in chosen]
 
 
 def vote_dataset() -> tuple[np.ndarray, np.ndarray] | None:
@@ -971,8 +1011,12 @@ def vote_dataset() -> tuple[np.ndarray, np.ndarray] | None:
             from .rank.profile import build_profile_matrix
             profile_mat = build_profile_matrix(profile)
     except Exception as e:  # noqa: BLE001
-        logger.warning("vote_dataset: could not load profile: %s", e)
-        profile_mat = np.zeros((1, 384), dtype=np.float32)
+        # Do NOT fall back to a zero profile: that silently zeroes the cosine and
+        # the cosine-interaction features, training (and then serving) a corrupt
+        # model that still reports model_trained=True. Abort instead so the caller
+        # reports a training error and keeps the previous good weights.
+        logger.error("vote_dataset: profile load failed; aborting training: %s", e)
+        return None
 
     X = _build_item_features(rows, profile_mat)
     y = np.asarray(ys, dtype=np.float32)

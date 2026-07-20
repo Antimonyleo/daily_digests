@@ -86,13 +86,13 @@ def test_run_all_persists_summaries_for_web_view(monkeypatch, tmp_path):
         s.flush()
         item_id = int(row.id)
 
-    monkeypatch.setattr(pipeline_mod, "ingest_all", lambda progress_callback=None: 0)
+    monkeypatch.setattr(pipeline_mod, "ingest_all", lambda progress_callback=None, days=2: 0)
     monkeypatch.setattr(pipeline_mod, "load_profile", lambda: SimpleNamespace(bio="", keywords=[], downweight=[]))
     monkeypatch.setattr(pipeline_mod, "build_profile_matrix", lambda _profile: __import__("numpy").zeros((1, 3)))
     monkeypatch.setattr(pipeline_mod, "recent_items", lambda days=2: [store_mod.session_factory()().get(store_mod.ItemRow, item_id)])
     monkeypatch.setattr(pipeline_mod, "score_items", lambda items, _pv, _downweight, reason_penalty_map=None: [(items[0], 0.9)])
-    monkeypatch.setattr(pipeline_mod, "pick_top_per_section", lambda scored, _caps: scored)
-    monkeypatch.setattr(pipeline_mod, "summarize_items", lambda rows: {rows[0].id: "Persisted summary."})
+    monkeypatch.setattr(pipeline_mod, "pick_top_per_section", lambda scored, _caps, catch_up=False: scored)
+    monkeypatch.setattr(pipeline_mod, "summarize_items", lambda rows, profile=None: {rows[0].id: "Persisted summary."})
     monkeypatch.setattr(pipeline_mod, "send_digest", lambda html, subject, dry_run=False: True)
 
     pipeline_mod.run_all(dry_run=True)
@@ -119,7 +119,7 @@ def test_non_dry_run_skips_when_digest_already_sent(monkeypatch, tmp_path):
     monkeypatch.setattr(
         pipeline_mod,
         "ingest_all",
-        lambda progress_callback=None: (_ for _ in ()).throw(AssertionError("ingest called")),
+        lambda progress_callback=None, days=2: (_ for _ in ()).throw(AssertionError("ingest called")),
     )
     monkeypatch.setattr(
         pipeline_mod,
@@ -167,13 +167,13 @@ def test_dry_run_after_sent_digest_refreshes_preview_and_preserves_sent_at(monke
             return [row]
 
     monkeypatch.setattr(pipeline_mod, "_digest_id", lambda: digest_id)
-    monkeypatch.setattr(pipeline_mod, "ingest_all", lambda progress_callback=None: 0)
+    monkeypatch.setattr(pipeline_mod, "ingest_all", lambda progress_callback=None, days=2: 0)
     monkeypatch.setattr(pipeline_mod, "load_profile", lambda: SimpleNamespace(bio="", keywords=[], downweight=[]))
     monkeypatch.setattr(pipeline_mod, "build_profile_matrix", lambda _profile: __import__("numpy").zeros((1, 3)))
     monkeypatch.setattr(pipeline_mod, "recent_items", recent_items)
     monkeypatch.setattr(pipeline_mod, "score_items", lambda items, _pv, _downweight, reason_penalty_map=None: [(items[0], 0.9)])
-    monkeypatch.setattr(pipeline_mod, "pick_top_per_section", lambda scored, _caps: scored)
-    monkeypatch.setattr(pipeline_mod, "summarize_items", lambda rows: {rows[0].id: "New summary."})
+    monkeypatch.setattr(pipeline_mod, "pick_top_per_section", lambda scored, _caps, catch_up=False: scored)
+    monkeypatch.setattr(pipeline_mod, "summarize_items", lambda rows, profile=None: {rows[0].id: "New summary."})
     monkeypatch.setattr(pipeline_mod, "send_digest", lambda html, subject, dry_run=False: False)
 
     pipeline_mod.run_all(dry_run=True)
@@ -215,13 +215,13 @@ def test_run_all_does_not_mark_sent_when_send_digest_returns_false(monkeypatch, 
             return [row]
 
     monkeypatch.setattr(pipeline_mod, "_digest_id", lambda: digest_id)
-    monkeypatch.setattr(pipeline_mod, "ingest_all", lambda progress_callback=None: 0)
+    monkeypatch.setattr(pipeline_mod, "ingest_all", lambda progress_callback=None, days=2: 0)
     monkeypatch.setattr(pipeline_mod, "load_profile", lambda: SimpleNamespace(bio="", keywords=[], downweight=[]))
     monkeypatch.setattr(pipeline_mod, "build_profile_matrix", lambda _profile: __import__("numpy").zeros((1, 3)))
     monkeypatch.setattr(pipeline_mod, "recent_items", recent_items)
     monkeypatch.setattr(pipeline_mod, "score_items", lambda items, _pv, _downweight, reason_penalty_map=None: [(items[0], 0.9)])
-    monkeypatch.setattr(pipeline_mod, "pick_top_per_section", lambda scored, _caps: scored)
-    monkeypatch.setattr(pipeline_mod, "summarize_items", lambda rows: {rows[0].id: "Summary."})
+    monkeypatch.setattr(pipeline_mod, "pick_top_per_section", lambda scored, _caps, catch_up=False: scored)
+    monkeypatch.setattr(pipeline_mod, "summarize_items", lambda rows, profile=None: {rows[0].id: "Summary."})
     monkeypatch.setattr(pipeline_mod, "send_digest", lambda html, subject, dry_run=False: False)
 
     pipeline_mod.run_all(dry_run=False)
@@ -238,10 +238,10 @@ def test_run_all_auto_backfill_when_days_missed(monkeypatch, tmp_path):
 
     store_mod = _reset_store(tmp_path, monkeypatch)
     today_id = "2026-05-15"
-    old_sent_at = datetime(2026, 5, 10, tzinfo=timezone.utc)  # 5 days ago
+    old_at = datetime.now(timezone.utc) - timedelta(days=5)  # last digest 5 days ago
 
     with store_mod.session_scope() as s:
-        s.add(store_mod.DigestRow(id="2026-05-10", item_count=3, sent_at=old_sent_at))
+        s.add(store_mod.DigestRow(id="2026-05-10", item_count=3, created_at=old_at, sent_at=old_at))
 
     captured_days: list[int] = []
 
@@ -250,13 +250,13 @@ def test_run_all_auto_backfill_when_days_missed(monkeypatch, tmp_path):
         return []
 
     monkeypatch.setattr(pipeline_mod, "_digest_id", lambda: today_id)
-    monkeypatch.setattr(pipeline_mod, "ingest_all", lambda progress_callback=None: 0)
+    monkeypatch.setattr(pipeline_mod, "ingest_all", lambda progress_callback=None, days=2: 0)
     monkeypatch.setattr(pipeline_mod, "load_profile", lambda: SimpleNamespace(bio="", keywords=[], downweight=[]))
     monkeypatch.setattr(pipeline_mod, "build_profile_matrix", lambda _profile: __import__("numpy").zeros((1, 3)))
     monkeypatch.setattr(pipeline_mod, "recent_items", fake_recent_items)
     monkeypatch.setattr(pipeline_mod, "score_items", lambda items, _pv, _downweight, reason_penalty_map=None: [])
-    monkeypatch.setattr(pipeline_mod, "pick_top_per_section", lambda scored, _caps: [])
-    monkeypatch.setattr(pipeline_mod, "summarize_items", lambda rows: {})
+    monkeypatch.setattr(pipeline_mod, "pick_top_per_section", lambda scored, _caps, catch_up=False: [])
+    monkeypatch.setattr(pipeline_mod, "summarize_items", lambda rows, profile=None: {})
     monkeypatch.setattr(pipeline_mod, "send_digest", lambda html, subject, dry_run=False: False)
 
     pipeline_mod.run_all(dry_run=True)
@@ -277,13 +277,13 @@ def test_run_all_explicit_backfill_days_overrides_auto(monkeypatch, tmp_path):
         return []
 
     monkeypatch.setattr(pipeline_mod, "_digest_id", lambda: "2026-05-15")
-    monkeypatch.setattr(pipeline_mod, "ingest_all", lambda progress_callback=None: 0)
+    monkeypatch.setattr(pipeline_mod, "ingest_all", lambda progress_callback=None, days=2: 0)
     monkeypatch.setattr(pipeline_mod, "load_profile", lambda: SimpleNamespace(bio="", keywords=[], downweight=[]))
     monkeypatch.setattr(pipeline_mod, "build_profile_matrix", lambda _profile: __import__("numpy").zeros((1, 3)))
     monkeypatch.setattr(pipeline_mod, "recent_items", fake_recent_items)
     monkeypatch.setattr(pipeline_mod, "score_items", lambda items, _pv, _downweight, reason_penalty_map=None: [])
-    monkeypatch.setattr(pipeline_mod, "pick_top_per_section", lambda scored, _caps: [])
-    monkeypatch.setattr(pipeline_mod, "summarize_items", lambda rows: {})
+    monkeypatch.setattr(pipeline_mod, "pick_top_per_section", lambda scored, _caps, catch_up=False: [])
+    monkeypatch.setattr(pipeline_mod, "summarize_items", lambda rows, profile=None: {})
     monkeypatch.setattr(pipeline_mod, "send_digest", lambda html, subject, dry_run=False: False)
 
     pipeline_mod.run_all(dry_run=True, backfill_days=7)
@@ -299,13 +299,13 @@ def test_run_all_empty_digest_emits_done_with_zero_items(monkeypatch, tmp_path):
     events = []
 
     monkeypatch.setattr(pipeline_mod, "_digest_id", lambda: digest_id)
-    monkeypatch.setattr(pipeline_mod, "ingest_all", lambda progress_callback=None: 0)
+    monkeypatch.setattr(pipeline_mod, "ingest_all", lambda progress_callback=None, days=2: 0)
     monkeypatch.setattr(pipeline_mod, "load_profile", lambda: SimpleNamespace(bio="", keywords=[], downweight=[]))
     monkeypatch.setattr(pipeline_mod, "build_profile_matrix", lambda _profile: __import__("numpy").zeros((1, 3)))
     monkeypatch.setattr(pipeline_mod, "recent_items", lambda days=2: [])
     monkeypatch.setattr(pipeline_mod, "score_items", lambda items, _pv, _downweight, reason_penalty_map=None: [])
-    monkeypatch.setattr(pipeline_mod, "pick_top_per_section", lambda scored, _caps: [])
-    monkeypatch.setattr(pipeline_mod, "summarize_items", lambda rows: {})
+    monkeypatch.setattr(pipeline_mod, "pick_top_per_section", lambda scored, _caps, catch_up=False: [])
+    monkeypatch.setattr(pipeline_mod, "summarize_items", lambda rows, profile=None: {})
     monkeypatch.setattr(pipeline_mod, "send_digest", lambda html, subject, dry_run=False: False)
 
     pipeline_mod.run_all(dry_run=True, progress_callback=lambda stage, payload: events.append((stage, payload)))
