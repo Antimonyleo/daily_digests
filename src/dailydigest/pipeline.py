@@ -759,10 +759,23 @@ def run_all(
 
             _neg_scale = 1.0
             _neg_settings = get_settings()
-            # Surgical threshold: only similarities in the upper tail (genuinely
-            # near an explicit negative topic) are penalized, not the whole pool.
-            _neg_thr = float(getattr(_neg_settings, "negative_interest_threshold", 0.65))
-            _neg_w = float(getattr(_neg_settings, "negative_interest_weight", 0.50))
+            # DISCRIMINATIVE penalty: penalize by how much an item is CLOSER to a
+            # negative topic than to the reader's own profile (neg − topic). An
+            # absolute similarity threshold cannot work here — bge-small scores
+            # both the reader's field and off-field biomedical content ~0.6 against
+            # the negative phrases, so any cut taxes everything or nothing. The
+            # relative signal separates them cleanly (clinical/epi/GWAS are
+            # neg-dominant; materials/design are profile-dominant).
+            _neg_margin = float(getattr(_neg_settings, "negative_interest_margin", 0.0))
+            _neg_w = float(getattr(_neg_settings, "negative_interest_weight", 0.80))
+            # Per-item topic relevance (true profile cosine) captured at scoring.
+            _neg_topic = np.array(
+                [
+                    float(score_features.get(_row_feature_key(row), {}).get("topic_score", 0.0) or 0.0)
+                    for row, _ in scored
+                ],
+                dtype=np.float32,
+            )
 
             # Try per-axis penalty (max similarity to any individual negative interest)
             _neg_sims = None
@@ -786,13 +799,16 @@ def run_all(
                         all_neg_sims = all_neg_sims * _neg_weights  # broadcast: scale each axis
                 except Exception:  # noqa: BLE001
                     pass
-                # Max over negative interests, thresholded at the (configurable)
-                # upper-tail cut so only strong negative matches are penalized.
-                _neg_sims = np.maximum(0.0, all_neg_sims.max(axis=1) - _neg_thr)
+                # Penalize by (nearest-negative similarity − topic relevance),
+                # so only items closer to a negative topic than to the profile pay.
+                _neg_sims = np.maximum(0.0, all_neg_sims.max(axis=1) - _neg_topic - _neg_margin)
             else:
                 _neg_centroid = _build_neg_centroid(profile)
                 if _neg_centroid is not None:
-                    _neg_sims = np.maximum(0.0, _neg_vecs @ _neg_centroid - _neg_thr)
+                    _neg_vecs_n = _neg_vecs / (np.linalg.norm(_neg_vecs, axis=1, keepdims=True) + 1e-9)
+                    _neg_sims = np.maximum(
+                        0.0, (_neg_vecs_n @ _neg_centroid) - _neg_topic - _neg_margin
+                    )
 
             if _neg_sims is not None:
                 # Capture penalties BEFORE creating the new scored list

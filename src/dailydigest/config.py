@@ -86,17 +86,21 @@ class Settings(BaseSettings):
     # Max fraction of the research section that may be filled by low-impact-venue
     # items, so they cannot appear frequently even when many are related.
     max_low_impact_research_frac: float = Field(default=0.15, ge=0.0, le=1.0)
-    # Negative-interest penalty (see profile.negative_interests). An item is
-    # penalized by ``negative_interest_weight * max(0, sim_to_nearest_negative −
-    # negative_interest_threshold)``. CRITICAL: bge-small similarities to verbose
-    # negative phrases sit in the SAME ~0.55–0.68 band as genuine topic relevance,
-    # so a low threshold (the old hardcoded 0.35) taxes the ENTIRE pool and
-    # silently raises the effective floor — collapsing the research section and
-    # penalizing the reader's own field. Keep the threshold at the upper tail of
-    # that band so the penalty is surgical: it hits only items genuinely close to
-    # an explicit negative topic (oncology, GWAS, …), not everything biomedical.
-    negative_interest_threshold: float = Field(default=0.65, ge=0.0, le=1.0)
-    negative_interest_weight: float = Field(default=0.50, ge=0.0, le=2.0)
+    # Negative-interest penalty (see profile.negative_interests). DISCRIMINATIVE
+    # (relative) formulation: penalize by ``negative_interest_weight *
+    # max(0, sim_to_nearest_negative − topic_relevance − negative_interest_margin)``
+    # — i.e. only when an item is CLOSER to an explicit negative topic than to the
+    # reader's own profile. CRITICAL: bge-small similarities to the verbose
+    # negative phrases sit in the SAME ~0.55–0.68 band as genuine topic relevance
+    # AND do not separate the reader's field from off-field biomedical content on
+    # their own (both are ~0.6), so any ABSOLUTE threshold either taxes the whole
+    # pool (low cut → collapses the section, penalizes the reader's own field) or
+    # does nothing (high cut). The relative (neg − topic) signal cleanly separates
+    # them: clinical/epidemiology/GWAS items are neg-dominant, materials/design
+    # items are profile-dominant. margin ≥ 0 requires the negative to win by that
+    # much before any penalty applies.
+    negative_interest_margin: float = Field(default=0.0, ge=-0.5, le=0.5)
+    negative_interest_weight: float = Field(default=0.80, ge=0.0, le=2.0)
     # Magnitude of the OpenAlex venue-impact adjustment (boost high-impact venues,
     # penalize low-impact ones) applied when citation_enrichment is enabled.
     venue_quality_weight: float = Field(default=0.18, ge=0.0, le=1.0)

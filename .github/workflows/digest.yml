@@ -46,12 +46,10 @@ jobs:
         env:
           LLM_BACKEND: extractive
           PROFILE_PATH: config/profile.yaml
-          # Two-stage relevance + per-journal quality prior (see .env for the
-          # local deployment). Both degrade to no-ops if the model / OpenAlex are
-          # unavailable, so the run never breaks.
-          RERANK_ENABLED: 'true'
-          RERANK_MODEL: cross-encoder/ms-marco-MiniLM-L-6-v2
-          CROSS_ENCODER_GATE_COEFF: '0.25'
+          # Per-journal quality prior (venue impact). The cross-encoder rerank is
+          # DISABLED — the light ms-marco model degraded relevance on real data
+          # (see .env). Enrichment degrades to a no-op if OpenAlex is unavailable.
+          RERANK_ENABLED: 'false'
           CITATION_ENRICHMENT: 'true'
         run: uv run dd run-all --dry-run
 
