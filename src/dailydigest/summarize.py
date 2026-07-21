@@ -16,7 +16,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
+import signal
 import subprocess
 
 import httpx
@@ -66,6 +68,7 @@ _SENT_SPLIT = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9])")
 _BATCH_SIZE = 6
 _TIMEOUT = 60.0
 _CLI_TIMEOUT = 120  # seconds per batch for subprocess backends
+_CLI_TOTAL_BUDGET = 300  # seconds total across all batches before extractive-only
 _TOKEN_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]+")
 _INFORMATIVE_TERMS = (
     "method",
@@ -315,25 +318,68 @@ def _call_llm(batch: list[ItemRow]) -> dict[int, str]:
 
 
 def _call_cli(batch: list[ItemRow], cli_cmd: list[str]) -> dict[int, str]:
-    """Run a CLI subprocess with the prompt fed via stdin, parse JSON stdout."""
+    """Run a CLI subprocess with the prompt fed via stdin, parse JSON stdout.
+
+    The CLI (e.g. ``claude``, ``codex``) is a Node process that spawns its own
+    child processes (MCP servers, tool workers). ``subprocess.run(timeout=...)``
+    only kills the direct child on timeout; the surviving grandchildren keep the
+    stdout pipe open, so ``run``'s cleanup ``communicate()`` then blocks FOREVER
+    on that pipe — the digest hangs indefinitely at summarization. To prevent
+    that, start the CLI in its own process group and, on timeout, SIGKILL the
+    whole group so every descendant dies and the pipe closes. Raising
+    ``TimeoutExpired`` lets the caller fall back to extractive for the batch.
+    """
     prompt = _build_cli_prompt(batch)
-    completed = subprocess.run(  # noqa: S603 - cli_cmd is hard-coded, no shell
+    # start_new_session=True -> the child is a process-group leader, so we can
+    # kill the entire tree (child + grandchildren) in one signal.
+    proc = subprocess.Popen(  # noqa: S603 - cli_cmd is hard-coded, no shell
         cli_cmd,
-        input=prompt,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
-        capture_output=True,
-        timeout=_CLI_TIMEOUT,
-        check=False,
+        start_new_session=True,
     )
-    if completed.returncode != 0:
+    try:
+        stdout, stderr = proc.communicate(prompt, timeout=_CLI_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        _kill_process_group(proc)
+        raise
+    except BaseException:
+        # Ctrl-C / any error: never leave an orphaned CLI + its children behind.
+        _kill_process_group(proc)
+        raise
+    if proc.returncode != 0:
         raise subprocess.CalledProcessError(
-            completed.returncode,
-            cli_cmd,
-            output=completed.stdout,
-            stderr=completed.stderr,
+            proc.returncode, cli_cmd, output=stdout, stderr=stderr
         )
-    raw = _extract_json_object(completed.stdout or "")
+    raw = _extract_json_object(stdout or "")
     return _filter_to_batch_ids(_parse_id_summary_map(raw), batch)
+
+
+def _kill_process_group(proc: subprocess.Popen) -> None:
+    """SIGKILL the child's whole process group, then reap it (best-effort).
+
+    Killing the group (not just ``proc``) closes the stdout pipe that
+    grandchildren would otherwise keep open — the cause of the indefinite hang.
+    """
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        try:
+            proc.kill()
+        except ProcessLookupError:
+            pass
+    try:
+        proc.wait(timeout=5)
+    except (subprocess.TimeoutExpired, Exception):  # noqa: BLE001
+        pass
+    for stream in (proc.stdin, proc.stdout, proc.stderr):
+        try:
+            if stream is not None:
+                stream.close()
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def _summarize_via_cli(
@@ -346,8 +392,27 @@ def _summarize_via_cli(
     """
     out: dict[int, str] = {}
     cli_name = cli_cmd[0]
+    import time as _time
+    _start = _time.monotonic()
+    _budget_hit = False
     for i in range(0, len(items), _BATCH_SIZE):
         batch = items[i : i + _BATCH_SIZE]
+        # Overall wall-clock guard: if summarization has already spent the total
+        # budget (e.g. the CLI is timing out on every batch), stop calling it and
+        # extractively summarize the remainder so a brew is never dominated by a
+        # misbehaving summarizer.
+        if _budget_hit or _time.monotonic() - _start > _CLI_TOTAL_BUDGET:
+            if not _budget_hit:
+                logger.warning(
+                    "%s exceeded total summarize budget (%ds); using extractive "
+                    "for remaining items",
+                    cli_name, _CLI_TOTAL_BUDGET,
+                )
+                _budget_hit = True
+            for row in batch:
+                if row.id is not None:
+                    out.setdefault(int(row.id), _extractive(row))
+            continue
         try:
             out.update(_call_cli(batch, cli_cmd))
         except FileNotFoundError:
@@ -429,7 +494,19 @@ def summarize_items(items: list[ItemRow], profile: object | None = None) -> dict
     if backend == "extractive":
         return _summarize_extractive(items)
     if backend == "claude_code":
-        cmd: list[str] = ["claude", "--print"]
+        # --strict-mcp-config + empty --mcp-config: start the CLI with NO MCP
+        # servers. The user's global ~/.claude config can register MCP servers
+        # (playwright, codex, …) that the CLI boots on startup; from a headless
+        # server brew those spawn node children, take a long time, and — via the
+        # grandchild-pipe hang — could stall summarization. Summarization needs no
+        # tools, so loading none makes it fast and reliable.
+        cmd: list[str] = [
+            "claude",
+            "--print",
+            "--strict-mcp-config",
+            "--mcp-config",
+            '{"mcpServers":{}}',
+        ]
         if s.llm_cli_model:
             cmd += ["--model", s.llm_cli_model]
         return _summarize_via_cli(items, cmd)
