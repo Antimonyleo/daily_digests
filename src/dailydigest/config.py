@@ -47,30 +47,6 @@ class Settings(BaseSettings):
     embed_query_prefix: str = "Represent this sentence for searching relevant passages: "
     embed_doc_prefix: str = ""
 
-    # Optional cross-encoder reranker applied to the top candidates before
-    # section caps. Off by default; enabling requires the model to be available
-    # locally (graceful no-op otherwise).
-    rerank_enabled: bool = False
-    # Light, CI-friendly cross-encoder (~90MB) rather than the 2GB bge-reranker;
-    # good relevance separation on (profile, abstract) pairs at a fraction of the
-    # download/compute cost, fitting the ≤$5 local/CI budget. Swap to a heavier
-    # science-tuned reranker via env if a GPU is available.
-    rerank_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
-    # Rerank a deep head so the borderline research band (cosine ~0.6–0.7, where
-    # the reader's materials/self-assembly field sits) is cross-encoded, not just
-    # the already-safe top. ~200 (profile, abstract) pairs is ~2–3s on CPU.
-    rerank_top_n: int = Field(default=200, ge=1, le=500)
-    rerank_weight: float = Field(default=1.0, ge=0.0, le=1.0)
-    # When the cross-encoder is enabled, fold its relevance into the research topic
-    # GATE (not just head ordering). Each research item's CE score is normalized
-    # against the pool as tanh((ce − median)/std) ∈ (−1,1) and the gate's effective
-    # relevance gains ``cross_encoder_gate_coeff * rel`` ∈ [−coeff, +coeff]: a
-    # RESCUE for work the cross-encoder ranks above the pack (the bi-encoder cosine
-    # under-scores the reader's core field) and a DEMOTION for surface-similar
-    # "unrelated" papers whose cosine clears the floor. Inert on a uniform pool
-    # (rel→0) and when the reranker is unavailable. 0 = reorder head only.
-    cross_encoder_gate_coeff: float = Field(default=0.22, ge=0.0, le=1.0)
-
     # --- Quality weighting --------------------------------------------------- #
     # How strongly venue quality influences research ranking. 1.0 = legacy
     # (prestige is a mild tie-breaker). Higher values reward high-quality AND
@@ -109,11 +85,6 @@ class Settings(BaseSettings):
     # HIGH-QUALITY items, to gather informative feedback. Off by default; only
     # high-quality venues are eligible, so exploration never shows low-impact work.
     exploration_slots: int = Field(default=0, ge=0, le=3)
-
-    # Score-fusion strategy for blending the quality-adjusted topic score with
-    # the learned LR probability: "rrf" (reciprocal rank fusion, robust) or
-    # "minmax" (legacy per-batch min-max blend).
-    rank_fusion: str = "rrf"
 
     # Live citation/impact enrichment via OpenAlex (network at runtime). Off by
     # default to keep the daily run local and reproducible.
@@ -188,7 +159,6 @@ class Settings(BaseSettings):
     imap_port: int = 993
     imap_user: str = ""
     imap_password: str = ""
-    imap_mailbox: str = "INBOX"
 
     @field_validator("user_tz")
     @classmethod

@@ -34,8 +34,6 @@ from .source_quality import (
 logger = logging.getLogger(__name__)
 
 DOWNWEIGHT_PENALTY = 0.20
-HYBRID_COSINE_W = 0.5
-HYBRID_LR_W = 0.5
 # Reciprocal Rank Fusion constant. Larger = flatter weighting of rank position.
 RRF_K = 60
 
@@ -60,28 +58,17 @@ def _rank_desc(values: np.ndarray) -> np.ndarray:
     return ranks
 
 
-def _fuse_scores(qa: np.ndarray, lr_prob: np.ndarray, mode: str | None = None) -> np.ndarray:
-    """Combine quality-adjusted topic scores with LR probability into a rank.
+def _fuse_scores(qa: np.ndarray, lr_score: np.ndarray) -> np.ndarray:
+    """Fuse the quality-adjusted topic ranking with the LR ranking via RRF.
 
-    ``rrf`` (default) fuses the two *rankings* via Reciprocal Rank Fusion, which
-    is insensitive to score scale/outliers, then min-maxes the fused result back
-    to [0, 1] so downstream magnitude thresholds (e.g. exceptional-preprint
-    cutoff) keep working. ``minmax`` is the legacy per-batch normalized blend.
+    Reciprocal Rank Fusion combines the two *rankings* (not their raw values), so
+    it is insensitive to score scale/outliers — which matters because the LR
+    margin and the topic score live on different scales. The fused result is
+    min-maxed back to [0, 1] so downstream magnitude thresholds (e.g. the
+    exceptional-preprint cutoff) keep working.
     """
-    qa = np.asarray(qa, dtype=np.float32)
-    lr_prob = np.asarray(lr_prob, dtype=np.float32)
-    if mode is None:
-        try:
-            from ..config import get_settings
-            mode = (get_settings().rank_fusion or "rrf").lower()
-        except Exception:  # noqa: BLE001
-            mode = "rrf"
-    if mode == "minmax":
-        return (HYBRID_COSINE_W * _minmax(qa) + HYBRID_LR_W * _minmax(lr_prob)).astype(
-            np.float32
-        )
-    r_qa = _rank_desc(qa)
-    r_lr = _rank_desc(lr_prob)
+    r_qa = _rank_desc(np.asarray(qa, dtype=np.float32))
+    r_lr = _rank_desc(np.asarray(lr_score, dtype=np.float32))
     fused = 1.0 / (RRF_K + r_qa + 1) + 1.0 / (RRF_K + r_lr + 1)
     return _minmax(fused.astype(np.float32)).astype(np.float32)
 

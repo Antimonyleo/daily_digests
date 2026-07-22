@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import logging
-import math
 import re
-import statistics
 import time
 from collections.abc import Callable
 from datetime import datetime, timezone
@@ -264,68 +262,6 @@ def _section_caps(research_ceiling: int | None = None) -> dict[str, int]:
     }
 
 
-def _annotate_cross_encoder_relevance(
-    scored: list[tuple[ItemRow, float]],
-    features: ScoreFeatureMap,
-    ce_sink: dict[int, float],
-) -> None:
-    """Fold per-item cross-encoder scores into a scale-free relevance signal.
-
-    ms-marco CE scores are tiny in absolute terms (sigmoids near 0) and only
-    their *relative* order within the pool is meaningful, so we normalize each
-    research item's CE against the research pool as ``tanh((ce - median) / std)``
-    ∈ (-1, 1) and store it as ``cross_encoder_rel``. This is:
-      * scale-free — independent of the reranker model's absolute output range;
-      * symmetric — a paper the cross-encoder ranks well above the pack is later
-        RESCUED at the gate (the bi-encoder cosine under-scores the reader's
-        materials / self-assembly field), one it ranks well below is DEMOTED
-        (surface-similar "unrelated" work), fixing both directions of error;
-      * inert on a uniform pool — when every item is equally relevant the spread
-        collapses and ``rel`` → 0, so a genuinely all-relevant day is untouched.
-    The raw CE score is also recorded for display/debug.
-    """
-    for key, ce in ce_sink.items():
-        if key in features:
-            features[key]["cross_encoder_score"] = round(float(ce), 5)
-    research = [
-        (_row_feature_key(row), ce_sink[_row_feature_key(row)])
-        for row, _ in scored
-        if (row.section or "") == "research" and _row_feature_key(row) in ce_sink
-    ]
-    if len(research) < 5:
-        return
-    vals = [v for _, v in research]
-    med = statistics.median(vals)
-    sd = statistics.pstdev(vals)
-    scale = sd if sd > 1e-9 else 1.0
-    for key, ce in research:
-        if key in features:
-            features[key]["cross_encoder_rel"] = round(math.tanh((float(ce) - med) / scale), 4)
-
-
-def _ce_gate_adjustment(feat: dict, coeff: float) -> float:
-    """Symmetric cross-encoder relevance adjustment for the research gate.
-
-    Returns ``coeff * cross_encoder_rel`` ∈ ``[-coeff, +coeff]`` — a rescue when
-    the cross-encoder ranks the item above the pool median, a demotion when
-    below. 0 when no CE relevance is present (offline / reranker unavailable /
-    item outside the reranked head), so the gate is then pure cosine.
-    """
-    if coeff <= 0.0:
-        return 0.0
-    rel = feat.get("cross_encoder_rel")
-    if rel is None:
-        return 0.0
-    return coeff * float(rel)
-
-
-def _ce_gate_coeff() -> float:
-    try:
-        return float(getattr(get_settings(), "cross_encoder_gate_coeff", 0.0) or 0.0)
-    except Exception:  # noqa: BLE001
-        return 0.0
-
-
 def _dynamic_section_caps(
     scored: list[tuple[ItemRow, float]],
     features: ScoreFeatureMap,
@@ -363,7 +299,6 @@ def _dynamic_section_caps(
 
     # Count the items that clear each section's floor (research on topic cosine,
     # news on final confidence). Regulatory has no floor — it keeps its fixed cap.
-    ce_coeff = _ce_gate_coeff()
     counts: dict[str, int] = {k: 0 for k in maxima}
     for row, fused in scored:
         section = row.section or ""
@@ -371,10 +306,9 @@ def _dynamic_section_caps(
         if section == "research":
             v = feat.get("topic_score", feat.get("confidence_score", fused))
             neg = float(feat.get("negative_interest_penalty", 0.0) or 0.0)
-            ce_adj = _ce_gate_adjustment(feat, ce_coeff)
             if (
                 v is not None
-                and float(v) + venue_relevance_credit(row) - neg + ce_adj >= topic_floor
+                and float(v) + venue_relevance_credit(row) - neg >= topic_floor
             ):
                 counts[section] += 1
         elif section in ("industry", "world"):
@@ -419,7 +353,6 @@ def _filter_off_topic(
         return scored
     topic_floor = float(getattr(s, "min_topic_relevance", 0.65))
     news_floor = float(getattr(s, "min_news_quality", 0.45))
-    ce_coeff = _ce_gate_coeff()
     out: list[tuple[ItemRow, float]] = []
     for row, score in scored:
         section = row.section or ""
@@ -427,19 +360,12 @@ def _filter_off_topic(
         if section == "research":
             t = feat.get("topic_score")
             neg = float(feat.get("negative_interest_penalty", 0.0) or 0.0)
-            # Effective relevance = topic + venue credit − negative-interest penalty
-            # + cross-encoder correction. The venue credit rescues borderline top-
-            # venue work; the negative penalty excludes off-field items; the cross-
-            # encoder term (∈ [−coeff, +coeff]) both RESCUES genuinely on-field work
-            # the bi-encoder cosine under-scores (the reader's materials/self-assembly
-            # papers cluster at cosine ~0.65) and DEMOTES surface-similar "unrelated"
-            # papers whose cosine clears the floor but whose joint (profile, paper)
-            # relevance does not. Folding all of it into the GATE lets the section be
-            # both precise and complete rather than padding to the cap.
-            ce_adj = _ce_gate_adjustment(feat, ce_coeff)
+            # Effective relevance = topic cosine + venue credit − negative-interest
+            # penalty. The venue credit rescues borderline top-venue work; the
+            # negative penalty excludes off-field items whose cosine clears the floor.
             if (
                 t is not None
-                and float(t) + venue_relevance_credit(row) - neg + ce_adj < topic_floor
+                and float(t) + venue_relevance_credit(row) - neg < topic_floor
             ):
                 continue
         elif section in ("industry", "world"):
@@ -870,20 +796,6 @@ def run_all(
         scored = enrich_scored(scored)
     except Exception as _e:  # noqa: BLE001
         logger.warning("citation enrichment failed: %s", _e)
-
-    # Optional cross-encoder rerank of the top candidates (no-op unless enabled
-    # and the model is available). Reorders within the head band only.
-    try:
-        from .rank.rerank import rerank_scored
-
-        _ce_sink: dict[int, float] = {}
-        scored = rerank_scored(profile, scored, feature_sink=_ce_sink)
-        # Fold CE scores into a scale-free relevance signal the research topic gate
-        # uses to rescue/demote borderline items (see _filter_off_topic /
-        # _dynamic_section_caps).
-        _annotate_cross_encoder_relevance(scored, score_features, _ce_sink)
-    except Exception as _e:  # noqa: BLE001
-        logger.warning("cross-encoder rerank failed: %s", _e)
 
     # Note: do NOT pre-truncate `scored` to a global top-K before per-section picking;
     # a single-domain profile (e.g. biotech-heavy) starves industry/regulatory/world.

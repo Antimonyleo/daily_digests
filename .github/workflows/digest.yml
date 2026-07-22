@@ -32,12 +32,12 @@ jobs:
           path: data/
         continue-on-error: true
 
-      - name: Cache HuggingFace models (embeddings + reranker)
+      - name: Cache HuggingFace models (embeddings)
         uses: actions/cache@v4
         with:
           path: ~/.cache/huggingface
-          # Bump the suffix when changing embed_model / rerank_model.
-          key: hf-bge-small-msmarco-minilm-v1
+          # Bump the suffix when changing embed_model.
+          key: hf-bge-small-v1
 
       - name: Install dependencies
         run: uv sync
@@ -46,10 +46,8 @@ jobs:
         env:
           LLM_BACKEND: extractive
           PROFILE_PATH: config/profile.yaml
-          # Per-journal quality prior (venue impact). The cross-encoder rerank is
-          # DISABLED — the light ms-marco model degraded relevance on real data
-          # (see .env). Enrichment degrades to a no-op if OpenAlex is unavailable.
-          RERANK_ENABLED: 'false'
+          # Per-journal quality prior (venue impact). Degrades to a no-op if
+          # OpenAlex is unavailable.
           CITATION_ENRICHMENT: 'true'
         run: uv run dd run-all --dry-run
 
