@@ -67,11 +67,16 @@ def test_lr_feature_schema_constants_match_feature_matrix(monkeypatch):
 
     features = votes_mod._build_item_features(rows, np.ones((1, 2), dtype=np.float32))
 
-    assert votes_mod.LR_FEATURE_DIM == 11
+    # De-confounded v5 schema: source-quality / prestige / bucket features and the
+    # cosine×prestige, cosine×bucket interactions were removed (double-counted the
+    # deterministic quality layer and injected collinear sign-flipped coefficients).
+    assert votes_mod.LR_FEATURE_DIM == 6
     assert votes_mod.LR_FEATURE_DIM == len(votes_mod.LR_FEATURE_NAMES)
+    assert votes_mod.LR_FEATURE_NAMES[0] == "cosine_similarity"
     assert votes_mod.LR_FEATURE_NAMES[-1] == "author_match"
-    assert {"published_journal", "published_database", "other_research"} <= set(
-        votes_mod.LR_SOURCE_BUCKET_SCORES
+    assert not any(
+        n in votes_mod.LR_FEATURE_NAMES
+        for n in ("prestige_score", "source_bucket_score", "cosine_x_prestige")
     )
     assert features.shape == (2, votes_mod.LR_FEATURE_DIM)
 

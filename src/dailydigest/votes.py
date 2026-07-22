@@ -53,33 +53,26 @@ _SOURCE_GENERALIZATION_CAP = 0.12
 _BUCKET_GENERALIZATION_CAP = 0.06
 _CONTENT_GENERALIZATION_CAP = 0.045
 
-LR_FEATURE_SCHEMA_VERSION = "lr_ranker_engineered_features_v4"
+LR_FEATURE_SCHEMA_VERSION = "lr_ranker_deconfounded_std_v5"
+# De-confounded feature set (v5). The previous v4 set included the raw source
+# quality family (prestige, source_bucket) and three cosine×X interaction terms.
+# Those (a) DOUBLE-COUNT venue quality, which is already applied deterministically
+# in the quality-adjustment + OpenAlex-enrichment layer, and (b) are strongly
+# collinear with `cosine_similarity`. On a skewed, self-selected vote history that
+# produced blown-up, sign-flipped coefficients (source_bucket ≈ −3.8 "journals
+# bad", age ≈ +1.1 "older better") that saturated the sigmoid and injected an
+# essentially random off-field ordering into the RRF fusion. v5 keeps only signals
+# the profile-cosine and quality layer do NOT already encode, and the model is
+# trained on STANDARDIZED features (see LRRanker.fit) so L2 stays even and bounded.
 LR_FEATURE_NAMES = (
     "cosine_similarity",
     "novelty_score",
     "promotional_score",
     "access_friction_score",
-    "prestige_score",
-    "age_norm",
-    "source_bucket_score",
-    "cosine_x_bucket_score",
-    "cosine_x_prestige",
     "cosine_x_freshness",
     "author_match",
 )
 LR_FEATURE_DIM = len(LR_FEATURE_NAMES)
-LR_DEFAULT_SOURCE_BUCKET_SCORE = 0.6
-LR_SOURCE_BUCKET_SCORES = {
-    "published_journal": 1.0,
-    "published_database": 0.8,
-    "other_research": 0.65,
-    "aggregator": 0.5,
-    "low_impact_journal": 0.4,
-    "bio_med_preprint": 0.4,
-    "arxiv_other": 0.35,
-    "preprint_other": 0.3,
-    "arxiv_cs": 0.25,
-}
 
 
 def _as_utc(value: object) -> datetime | None:
@@ -110,31 +103,27 @@ def _add_capped_signal(target: dict[str, float], key: str, delta: float, cap: fl
 
 
 def _build_item_features(rows: list, profile_mat: np.ndarray) -> np.ndarray:
-    """Build the current engineered features per item for LR training/inference.
+    """Build the de-confounded engineered features per item for LR train/inference.
 
     Feature vector (``LR_FEATURE_SCHEMA_VERSION`` / ``LR_FEATURE_DIM`` dims):
     0. cosine similarity to profile (top-k-mean or max)
     1. novelty score
     2. promotional score
     3. access friction score
-    4. prestige score
-    5. age_norm (days since published, normalized: 0=today, 1=14+ days; 0.5 if unknown)
-    6. source_bucket_score (numerical: published_journal=1.0, published_database=0.8,
-                             aggregator=0.5, bio_med_preprint=0.4, arxiv_other=0.35,
-                             preprint_other=0.3, arxiv_cs=0.25, default=0.6)
-    7. cosine × bucket_score  (interaction: high-cosine journal papers preferred)
-    8. cosine × prestige       (interaction: high-cosine prestigious papers preferred)
-    9. cosine × freshness      (interaction: high-cosine fresh papers preferred;
-                                freshness = 1.0 - age_norm)
-    10. author_match           (1.0 if byline matches the profile author watchlist)
+    4. cosine × freshness (high-cosine fresh papers preferred; freshness = 1 - age_norm)
+    5. author_match       (1.0 if byline matches the profile author watchlist)
+
+    Deliberately EXCLUDES prestige / source_bucket / cosine×prestige / cosine×bucket:
+    venue quality is applied deterministically downstream (quality-adjustment +
+    OpenAlex citation enrichment), and duplicating it here both double-counts and
+    injects collinear, sign-flipped coefficients under a skewed vote history. See
+    ``LR_FEATURE_NAMES`` for the full rationale.
     """
     from .rank.embedding_cache import embed_item_rows
     from .rank.source_quality import (
         novelty_score as _nov,
         promotional_score as _promo,
         access_friction_score as _friction,
-        infer_source_quality,
-        source_bucket,
     )
     from datetime import datetime, timezone
 
@@ -164,14 +153,6 @@ def _build_item_features(rows: list, profile_mat: np.ndarray) -> np.ndarray:
     now = datetime.now(timezone.utc)
     features = []
     for i, row in enumerate(rows):
-        src = str(getattr(row, "source", "") or "")
-        sec = str(getattr(row, "section", "") or "")
-        try:
-            sq = infer_source_quality(src, sec)
-            prestige = float(sq.prestige_score)
-        except Exception:
-            prestige = 0.5
-
         # Age normalization (0=today, 1=14+ days old, 0.5=unknown)
         published = getattr(row, "published_at", None)
         if isinstance(published, datetime):
@@ -180,9 +161,6 @@ def _build_item_features(rows: list, profile_mat: np.ndarray) -> np.ndarray:
             age_norm = min(1.0, age_days / 14.0)
         else:
             age_norm = 0.5
-
-        bucket = source_bucket(row)
-        bucket_score = LR_SOURCE_BUCKET_SCORES.get(bucket, LR_DEFAULT_SOURCE_BUCKET_SCORE)
 
         if _watchlist and author_match_score is not None:
             author_match = author_match_score(
@@ -197,13 +175,8 @@ def _build_item_features(rows: list, profile_mat: np.ndarray) -> np.ndarray:
             float(_nov(row)),                           # 1. novelty
             float(_promo(row)),                         # 2. promotional
             float(_friction(row)),                      # 3. access friction
-            prestige,                                   # 4. prestige
-            age_norm,                                   # 5. age_norm
-            bucket_score,                               # 6. bucket_score
-            cos_val * bucket_score,                     # 7. cosine × bucket_score
-            cos_val * prestige,                         # 8. cosine × prestige
-            cos_val * (1.0 - age_norm),                 # 9. cosine × freshness
-            float(author_match),                        # 10. author_match
+            cos_val * (1.0 - age_norm),                 # 4. cosine × freshness
+            float(author_match),                        # 5. author_match
         ])
     if not features:
         return np.zeros((0, LR_FEATURE_DIM), dtype=np.float32)

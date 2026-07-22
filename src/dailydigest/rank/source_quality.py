@@ -921,13 +921,22 @@ def quality_adjusted_score(row: Any, base_score: float) -> float:
     if section == "research":
         Q = _research_quality_weight()
         prestige_excess = max(source_quality.prestige_score - LOW_RESEARCH_PRESTIGE, 0.0)
-        source_bonus = 0.18 * Q * prestige_excess
-        # Reward items that are BOTH high quality and relevant (joint signal).
-        # Weighted at 0.18 (was 0.15) so a high-impact venue that is also strongly
-        # on-topic pulls clearly ahead of an equally-relevant weaker venue — the
-        # reader's explicit priority ("high-quality AND relevant weighted higher").
-        quality_relevance = 0.18 * Q * prestige_excess * max(0.0, min(1.0, base))
-        score = base + source_bonus + quality_relevance + (0.08 * novelty) - (0.35 * promo)
+        # Venue quality is applied ONLY as a RELEVANCE-GATED interaction: a
+        # high-impact venue amplifies work that is already on-topic, but grants
+        # little/no lift to an off-topic prestigious paper — so quality reorders
+        # among comparably-relevant items yet can never let an off-niche journal
+        # outrank a more on-topic one. This encodes the reader's rule "high-quality
+        # AND relevant ranks higher; quality never substitutes for relevance."
+        #
+        # The prior formula added a relevance-INDEPENDENT source_bonus
+        # (0.18·Q·prestige_excess, up to ~+0.13 unconditionally), which lifted
+        # off-niche Nature/Angew papers (base≈0.69) above the reader's on-field
+        # preprints (base≈0.78) — a direct topic inversion. The gate ramps from 0 at
+        # the retrieval floor (~0.68) to full by ~0.80, exactly across the band where
+        # research items cluster, so it discriminates where it matters.
+        rel_gate = max(0.0, min(1.0, (float(base) - 0.68) / 0.12))
+        quality_relevance = 0.36 * Q * prestige_excess * rel_gate
+        score = base + quality_relevance + (0.08 * novelty) - (0.35 * promo)
         low_prestige = source_quality.prestige_score < LOW_RESEARCH_PRESTIGE
         exceptional = base >= 0.80 and novelty >= 0.50
         if low_prestige and not exceptional:

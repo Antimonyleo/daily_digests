@@ -130,6 +130,12 @@ class LRRanker:
     def __init__(self) -> None:
         self.coef_: np.ndarray | None = None
         self.intercept_: float | None = None
+        # Per-feature standardization (z-score) fitted on the training set and
+        # reapplied at inference, so every engineered feature enters the model on
+        # a common scale — L2 regularization stays even and no single raw-unit
+        # feature can dominate / blow up its coefficient.
+        self.mean_: np.ndarray | None = None
+        self.scale_: np.ndarray | None = None
         self._classes: np.ndarray | None = None
         self._sk_model = None  # cached fitted sklearn model (when available)
 
@@ -153,16 +159,30 @@ class LRRanker:
                 f"got {actual_dim}"
             )
 
-        C = 0.5 if len(X) < 50 else 1.0
+        # Standardize features (z-score) before fitting. Guard near-constant
+        # columns (std≈0) with scale=1 to avoid amplifying inference noise.
+        mean = X.mean(axis=0)
+        scale = X.std(axis=0)
+        scale = np.where(scale < 1e-6, 1.0, scale).astype(np.float32)
+        mean = mean.astype(np.float32)
+        Xs = (X - mean) / scale
+
+        # Stronger L2 than before (C=0.3, was 0.5–1.0). With the de-confounded,
+        # standardized feature set this keeps coefficients bounded (~1.5) and
+        # prevents the sigmoid saturation / sign-flips seen with the old v4 set.
+        C = 0.3
         clf = LogisticRegression(
-            C=C, max_iter=1000, class_weight="balanced", random_state=0
+            C=C, max_iter=2000, class_weight="balanced", random_state=0
         )
-        model = clf
-        model.fit(X, y)
-        self._sk_model = model
-        self._classes = model.classes_.astype(np.int32)
-        self.coef_ = model.coef_.astype(np.float32, copy=False)
-        self.intercept_ = float(model.intercept_[0])
+        clf.fit(Xs, y)
+        # Serve exclusively through the manual standardized path so train==serve
+        # regardless of whether we scored in-process or from reloaded weights.
+        self._sk_model = None
+        self._classes = clf.classes_.astype(np.int32)
+        self.coef_ = clf.coef_.astype(np.float32, copy=False)
+        self.intercept_ = float(clf.intercept_[0])
+        self.mean_ = mean
+        self.scale_ = scale
 
         target = _lr_weights_path()
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -172,6 +192,8 @@ class LRRanker:
                 f,
                 coef=self.coef_,
                 intercept=np.asarray([self.intercept_], dtype=np.float32),
+                feature_mean=self.mean_,
+                feature_scale=self.scale_,
                 classes=self._classes,
                 feature_dim=np.asarray([feature_dim], dtype=np.int32),
                 feature_schema_version=np.asarray([feature_schema_version]),
@@ -227,8 +249,19 @@ class LRRanker:
                     )
                     return False
 
+                if "feature_mean" not in data.files or "feature_scale" not in data.files:
+                    logger.warning(
+                        "LRRanker: stale weights missing standardization params; "
+                        "will retrain"
+                    )
+                    return False
+                mean = data["feature_mean"].astype(np.float32, copy=False)
+                scale = data["feature_scale"].astype(np.float32, copy=False)
+
             self.coef_ = coef
             self.intercept_ = intercept
+            self.mean_ = mean
+            self.scale_ = scale
             self._classes = classes
             self._sk_model = None
             return True
@@ -238,21 +271,32 @@ class LRRanker:
 
     # ---- inference ----------------------------------------------------------
 
-    def score(self, embeddings: np.ndarray) -> np.ndarray:
-        if self._sk_model is not None:
-            probs = self._sk_model.predict_proba(embeddings)
-            classes = self._sk_model.classes_
-            pos_indices = np.where(classes == 1)[0]
-            pos_idx = int(pos_indices[0]) if len(pos_indices) > 0 else 1
-            return probs[:, pos_idx].astype(np.float32, copy=False)
+    def decision_function(self, embeddings: np.ndarray) -> np.ndarray:
+        """Raw standardized margin (logit z) for the positive class.
 
+        Use this — NOT :meth:`score` — for *ranking*. The retrieved pool is
+        pre-filtered to be relevant, so the sigmoid saturates: hundreds of items
+        map to prob==1.0 (float precision) and become tied, destroying the LR's
+        discrimination exactly at the top of the list. The logit is monotone with
+        the probability but keeps every item distinct, so RRF can rank on it.
+        """
         if self.coef_ is None or self.intercept_ is None:
             raise RuntimeError("LRRanker is not fitted; call fit() or load() first")
+        # Standardize with the persisted train-set mean/scale. sklearn's binary LR
+        # stores coef/intercept oriented for class_[1] (the positive class). Using
+        # the standardized manual path for BOTH freshly-fit and reloaded models
+        # guarantees train==serve.
+        x = embeddings.astype(np.float32, copy=False)
+        if self.mean_ is not None and self.scale_ is not None:
+            x = (x - self.mean_) / self.scale_
+        return (x @ self.coef_.reshape(-1) + np.float32(self.intercept_)).astype(
+            np.float32, copy=False
+        )
 
-        # Manual sigmoid using the persisted weights. sklearn's binary LR
-        # stores coef/intercept oriented for class_[1] (the positive class).
-        z = embeddings.astype(np.float32, copy=False) @ self.coef_.reshape(-1)
-        z = z + np.float32(self.intercept_)
+    def score(self, embeddings: np.ndarray) -> np.ndarray:
+        """Positive-class probability (sigmoid of the margin). For DISPLAY/thresholds;
+        rank with :meth:`decision_function` instead (see its docstring)."""
+        z = self.decision_function(embeddings)
         prob_pos = 1.0 / (1.0 + np.exp(-z))
         return prob_pos.astype(np.float32, copy=False)
 
@@ -604,6 +648,7 @@ def score_items_lr(
             profile_vec if profile_vec.ndim == 2 else profile_vec.reshape(1, -1),
         )
         lr_prob = lr.score(features)
+        lr_margin = lr.decision_function(features)
     except Exception as e:  # noqa: BLE001
         logger.warning("LRRanker.score failed (%s); falling back to cosine", e)
         scored, _features = _cosine_score_items_with_features(
@@ -624,8 +669,9 @@ def score_items_lr(
         hybrid_scores=cosine,
         scoring_mode="hybrid_lr",
     )
-    # Fuse quality-adjusted score with LR probability for final ranking
-    blended_rank = _fuse_scores(np.array(final, dtype=np.float32), lr_prob).tolist()
+    # Fuse quality-adjusted score with the LR MARGIN (not the saturated probability)
+    # for final ranking — see LRRanker.decision_function.
+    blended_rank = _fuse_scores(np.array(final, dtype=np.float32), lr_margin).tolist()
     scored = list(zip(items, blended_rank, strict=True))
     scored.sort(key=lambda t: t[1], reverse=True)
     return scored
@@ -666,6 +712,7 @@ def score_items_with_features(
             profile_vec if profile_vec.ndim == 2 else profile_vec.reshape(1, -1),
         )
         lr_prob = lr.score(features_matrix)
+        lr_margin = lr.decision_function(features_matrix)
     except Exception as e:  # noqa: BLE001
         logger.warning("LRRanker.score failed (%s); falling back to cosine", e)
         return _cosine_score_items_with_features(
@@ -685,8 +732,9 @@ def score_items_with_features(
         hybrid_scores=cosine,
         scoring_mode="hybrid_lr",
     )
-    # Fuse quality-adjusted score with LR probability for final ranking
-    blended_rank = _fuse_scores(np.array(final, dtype=np.float32), lr_prob).tolist()
+    # Fuse quality-adjusted score with the LR MARGIN (not the saturated probability)
+    # for final ranking — see LRRanker.decision_function.
+    blended_rank = _fuse_scores(np.array(final, dtype=np.float32), lr_margin).tolist()
     # Update features to record the hybrid blend
     for i, (row, _) in enumerate(zip(items, blended_rank)):
         key = _row_feature_key(row)

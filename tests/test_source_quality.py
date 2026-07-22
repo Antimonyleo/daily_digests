@@ -195,6 +195,47 @@ def test_topic_fit_beats_prestige_only_when_relevance_gap_is_large():
     assert quality_adjusted_score(strong_minor, 0.82) > quality_adjusted_score(weak_nature, 0.50)
 
 
+def test_venue_bonus_is_relevance_gated_not_unconditional():
+    # Regression: a relevance-INDEPENDENT venue bonus used to lift an off-niche
+    # high-impact paper (low base) above a strongly on-topic item, inverting the
+    # topic order. The venue reward must now be gated by relevance so a prestigious
+    # but off-topic paper cannot outrank a more on-topic one.
+    class Row:
+        section = "research"
+        abstract = "Primary research with efficacy data."
+
+        def __init__(self, source: str, title: str) -> None:
+            self.source = source
+            self.title = title
+
+    offtopic_nature = Row("Nature", "Broad tissue gene expression atlas")
+    ontopic_preprint = Row("bioRxiv", "De novo protein design method for binders")
+
+    assert quality_adjusted_score(ontopic_preprint, 0.78) > quality_adjusted_score(
+        offtopic_nature, 0.69
+    )
+
+
+def test_venue_bonus_scales_with_relevance():
+    # The prestige reward must be much larger for an on-topic paper than for the
+    # same venue at a near-floor relevance — quality amplifies relevance, never
+    # substitutes for it.
+    class Row:
+        section = "research"
+        abstract = "Primary research with efficacy data."
+
+        def __init__(self, source: str, title: str) -> None:
+            self.source = source
+            self.title = title
+
+    nature = Row("Nature", "RNA delivery mechanism for targeted therapeutics")
+    low_delta = quality_adjusted_score(nature, 0.66) - 0.66
+    high_delta = quality_adjusted_score(nature, 0.82) - 0.82
+    assert high_delta > low_delta + 0.05
+    # Near the retrieval floor the venue lift is negligible.
+    assert low_delta < 0.05
+
+
 def test_high_quality_venue_wins_at_similar_relevance():
     # Policy: high quality AND relevant is rewarded. At comparable relevance the
     # top-venue paper should clearly outrank a low-impact-venue paper.

@@ -396,25 +396,14 @@ class TestLRRankerPersistence:
 
         config_mod.reload_settings()
         feature_schema_version, feature_dim = _current_lr_schema()
-        # Current engineered feature vectors from votes.py. Built to the live
-        # schema width so adding a feature does not require editing literals.
-        base = np.asarray(
-            [
-                [0.9, 0.8, 0.0, 0.0, 0.9, 1.0, 0.0, 0.0, 0.0, 0.0],
-                [0.8, 0.7, 0.1, 0.0, 0.8, 1.0, 0.0, 0.0, 0.0, 0.0],
-                [0.2, 0.1, 0.8, 0.5, 0.3, 0.0, 1.0, 0.0, 0.0, 0.0],
-                [0.1, 0.0, 0.9, 0.6, 0.2, 0.0, 1.0, 0.0, 0.0, 0.0],
-            ],
-            dtype=np.float32,
-        )
-        extra = feature_dim - base.shape[1]
-        X = base if extra <= 0 else np.hstack([base, np.zeros((4, extra), np.float32)])
-        # vary the new column so both classes are separable on it too
-        if extra > 0:
-            X[0, -1] = 1.0
-            X[1, -1] = 1.0
+        # Schema-width-agnostic separable dataset: column 0 (cosine) separates the
+        # two classes, other columns carry mild noise so standardization has a
+        # non-degenerate scale on every feature.
+        rng = np.random.default_rng(0)
+        X = rng.uniform(0.0, 0.2, size=(8, feature_dim)).astype(np.float32)
+        y = np.asarray([1, 1, 1, 1, -1, -1, -1, -1], dtype=np.float32)
+        X[y > 0, 0] += 0.7  # high cosine -> positive class
         assert X.shape[1] == feature_dim
-        y = np.asarray([1, 1, -1, -1], dtype=np.float32)
 
         ranker = LRRanker()
         ranker.fit(X, y)
@@ -423,10 +412,33 @@ class TestLRRankerPersistence:
         with np.load(_lr_weights_path()) as data:
             assert str(data["feature_schema_version"][0]) == feature_schema_version
             assert int(data["feature_dim"][0]) == feature_dim
+            # Standardization params must be persisted so serve == train.
+            assert data["feature_mean"].shape == (feature_dim,)
+            assert data["feature_scale"].shape == (feature_dim,)
         loaded = LRRanker()
         assert loaded.load() is True
-        scores = loaded.score(X)
-        assert scores.shape == (4,)
+        # Reloaded scores must match the freshly-fit model exactly.
+        np.testing.assert_allclose(loaded.score(X), ranker.score(X), rtol=1e-5, atol=1e-6)
+        assert loaded.score(X).shape == (8,)
+
+    def test_decision_function_breaks_ties_the_saturated_probability_hides(self):
+        # The retrieved pool is pre-filtered to be relevant, so predict_proba
+        # saturates: many items map to prob==1.0 (float precision) and tie.
+        # decision_function (the logit) must stay strictly monotone with the
+        # margin so RRF can still rank them. Regression for the fusion using the
+        # LR margin, not the probability.
+        ranker = LRRanker()
+        ranker.coef_ = np.array([[4.0, 0.5]], dtype=np.float32)
+        ranker.intercept_ = 10.0  # push everything deep into saturation
+        ranker.mean_ = np.zeros(2, dtype=np.float32)
+        ranker.scale_ = np.ones(2, dtype=np.float32)
+        X = np.array([[1.0, 0.0], [1.1, 0.0], [1.2, 0.0], [1.3, 0.0]], dtype=np.float32)
+        probs = ranker.score(X)
+        margins = ranker.decision_function(X)
+        # Probabilities collapse to a near-constant (saturated) block...
+        assert np.ptp(probs) < 1e-3
+        # ...but the margin strictly increases, preserving the ranking.
+        assert np.all(np.diff(margins) > 0)
 
     def test_legacy_nine_dim_weights_without_schema_are_rejected(self, tmp_path, monkeypatch):
         monkeypatch.setenv("DB_PATH", str(tmp_path / "digest.db"))
@@ -478,6 +490,8 @@ class TestLRRankerPersistence:
             path,
             coef=coef,
             intercept=np.asarray([0.0], dtype=np.float32),
+            feature_mean=np.zeros(feature_dim, dtype=np.float32),
+            feature_scale=np.ones(feature_dim, dtype=np.float32),
             classes=np.asarray([-1, 1], dtype=np.int32),
             feature_dim=np.asarray([feature_dim], dtype=np.int32),
             feature_schema_version=np.asarray([feature_schema_version]),
@@ -504,6 +518,8 @@ class TestLRRankerPersistence:
             path,
             coef=coef,
             intercept=np.asarray([0.0], dtype=np.float32),
+            feature_mean=np.zeros(feature_dim, dtype=np.float32),
+            feature_scale=np.ones(feature_dim, dtype=np.float32),
             classes=np.asarray([-1, 1], dtype=np.int32),
             feature_dim=np.asarray([feature_dim], dtype=np.int32),
             feature_schema_version=np.asarray([feature_schema_version]),
