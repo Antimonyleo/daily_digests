@@ -58,17 +58,41 @@ Already have `uv`? Just run `./scripts/start.sh`. Run headless with
 For an arbitrary HuggingFace encoder (SPECTER2, MedCPT, bge-large), add the extra:
 `uv sync --extra hf` (this one pulls in PyTorch).
 
-## First-Run Tutorial
+## Usage Tutorial
 
-1. Start the app with `./scripts/start.sh`.
-2. Fill out Settings with your bio and interest keywords.
-3. Choose `Extractive` for the easiest first run. It needs no login or API key.
-4. Click `Brew my morning cup of tea`.
-5. Read the `Must read first` cards, then scan each section.
-6. Mark entries Relevant, Seen, or Not for me. Add a reason chip after Seen or Not for me when something is off.
-7. When enough Relevant/Not-for-me feedback is collected, click `Update my ranking`.
+### First run
 
-Relevant and Not-for-me responses teach future ranking updates. Seen only marks an item reviewed unless you add a reason chip.
+1. Start the app (`./scripts/start.sh`, double-click `DailyDigest.command`, or `docker compose up`).
+2. On the setup screen, fill in your **bio** and **interest keywords** — these define what gets retrieved and ranked. Be specific (e.g. "protein design", "lipid nanoparticle delivery") rather than broad ("biology").
+3. Choose the **`Extractive`** summarizer for the easiest first run — no login or API key, fully offline. You can switch to an LLM backend later (see *Summarizer Backends*).
+4. Click **`Brew my morning cup of tea`**. The first brew downloads the small embedding model (~130 MB) and takes a couple of minutes; later brews are faster (embeddings are cached).
+5. Read the **`Must read first`** cards, then scan each section (Research / Industry / Regulatory / World).
+
+### The daily loop (this is what makes it good)
+
+6. As you read, give feedback on each item. The four levels carry different strength:
+
+   | Button | Meaning | Effect |
+   |---|---|---|
+   | **Must read** | strongly wanted | strongest positive pull |
+   | **Relevant** | wanted | positive |
+   | **Hmmm** | mild / unsure | weak negative |
+   | **Not for me** | unwanted | strong negative |
+
+   Add a **reason chip** (`Low impact`, `Promo`, `Access`, `Duplicate`) after a negative to say *why* — the reason generalizes softly to similar future items.
+
+7. Feedback is applied on your **next brew** automatically — the learned ranker retrains whenever there are new votes (you can also force it with `Update my ranking` or `uv run dd vote --train`).
+
+**How feedback shapes future digests:** the ranker learns *which papers you actually like* from your votes, not just topic keywords. If you keep marking a broadly on-topic subtopic *Not for me* (say, LNP-delivery papers) while liking another (say, protein redesign), it learns to **suppress the first and surface the second** — even though both match your profile. This kicks in after ~30 signed votes; before that it ranks on topic + quality alone. The more you vote, the sharper it gets.
+
+### Everyday commands
+
+```bash
+uv run dd run-all --dry-run   # brew a digest to an HTML file (no email)
+uv run dd run-all             # brew + send email (needs RESEND_API_KEY, DIGEST_TO)
+uv run dd vote --train        # retrain the learned ranker from your votes
+uv run dd eval                # measure ranking quality against your vote history
+```
 
 ## Ranking Quality
 

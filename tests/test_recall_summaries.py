@@ -61,8 +61,10 @@ def test_profile_search_terms_from_profile(monkeypatch):
     # load_profile is imported inside the function; patch config instead
     import dailydigest.config as cfg
     monkeypatch.setattr(cfg, "load_profile", lambda *a, **k: _profile())
+    # All core keywords are always returned even when max_terms is smaller — the
+    # cap only bounds the context tail, so no core interest is silently dropped.
     terms = _terms.profile_search_terms(2)
-    assert terms == ["DNA nanotechnology", "protein design"]
+    assert terms == ["DNA nanotechnology", "protein design", "mRNA therapeutics"]
     assert _terms.watched_author_names(5) == ["Jane Roe"]
 
 

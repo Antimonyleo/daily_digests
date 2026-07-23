@@ -813,57 +813,6 @@ def pick_top_per_section(
     return out
 
 
-def _mmr_select(
-    candidates: list[tuple[ItemRow, float]],
-    cap: int,
-    lambda_: float = 0.7,
-) -> list[tuple[ItemRow, float]]:
-    """Greedy Maximal Marginal Relevance selection for diversity within section.
-
-    Selects `cap` items from candidates, balancing relevance (score) and
-    diversity (low similarity to already-selected items). lambda_=0.7 means
-    70% weight on relevance, 30% on diversity.
-    """
-    if len(candidates) <= cap:
-        return list(candidates)
-
-    try:
-        vecs = embed_item_rows([row for row, _ in candidates])
-        norms = np.linalg.norm(vecs, axis=1, keepdims=True)
-        emb = vecs / (norms + 1e-9)
-    except Exception:
-        return candidates[:cap]
-
-    scores = np.array([s for _, s in candidates], dtype=np.float32)
-    # Normalize scores to [0,1]
-    lo, hi = scores.min(), scores.max()
-    if hi > lo:
-        scores_norm = (scores - lo) / (hi - lo)
-    else:
-        scores_norm = np.ones_like(scores) * 0.5
-
-    selected: list[int] = []
-    remaining = list(range(len(candidates)))
-
-    while len(selected) < cap and remaining:
-        if not selected:
-            best = max(remaining, key=lambda i: scores_norm[i])
-        else:
-            sel_emb = emb[selected]
-            best_score = -np.inf
-            best = remaining[0]
-            for idx in remaining:
-                max_sim = float((emb[idx] @ sel_emb.T).max())
-                mmr = lambda_ * float(scores_norm[idx]) - (1.0 - lambda_) * max_sim
-                if mmr > best_score:
-                    best_score = mmr
-                    best = idx
-        selected.append(best)
-        remaining.remove(best)
-
-    return [candidates[i] for i in selected]
-
-
 def _pick_research_balanced(
     scored: list[tuple[ItemRow, float]],
     cap: int,
@@ -1027,10 +976,6 @@ def _pick_research_balanced(
             if len(selected) >= cap:
                 break
             add(row, score, allow_low_impact_override=True)
-
-    # Apply MMR diversity re-ranking over the selected pool
-    if len(selected) > 1:
-        selected = _mmr_select(selected, cap=len(selected), lambda_=0.7)
 
     return selected
 

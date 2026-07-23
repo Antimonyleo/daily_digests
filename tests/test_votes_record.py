@@ -64,16 +64,24 @@ def test_lr_feature_schema_constants_match_feature_matrix(monkeypatch):
         "embed_item_rows",
         lambda items: np.ones((len(items), 2), dtype=np.float32),
     )
+    # Isolate from the real votes DB: no exemplars -> affinity features are 0.
+    monkeypatch.setattr(
+        votes_mod,
+        "_load_vote_exemplars",
+        lambda: (
+            (np.zeros(0, dtype=np.int64), np.zeros((0, 2), np.float32), np.zeros(0, np.float32)),
+            (np.zeros(0, dtype=np.int64), np.zeros((0, 2), np.float32), np.zeros(0, np.float32)),
+        ),
+    )
 
     features = votes_mod._build_item_features(rows, np.ones((1, 2), dtype=np.float32))
 
-    # De-confounded v5 schema: source-quality / prestige / bucket features and the
-    # cosine×prestige, cosine×bucket interactions were removed (double-counted the
-    # deterministic quality layer and injected collinear sign-flipped coefficients).
-    assert votes_mod.LR_FEATURE_DIM == 6
+    # v6 preference schema: de-confounded aggregate features PLUS memory-based
+    # pos/neg exemplar affinity (learns "less LNP delivery, more protein redesign").
+    assert votes_mod.LR_FEATURE_DIM == 8
     assert votes_mod.LR_FEATURE_DIM == len(votes_mod.LR_FEATURE_NAMES)
     assert votes_mod.LR_FEATURE_NAMES[0] == "cosine_similarity"
-    assert votes_mod.LR_FEATURE_NAMES[-1] == "author_match"
+    assert votes_mod.LR_FEATURE_NAMES[-2:] == ("pos_affinity", "neg_affinity")
     assert not any(
         n in votes_mod.LR_FEATURE_NAMES
         for n in ("prestige_score", "source_bucket_score", "cosine_x_prestige")

@@ -574,9 +574,12 @@ def run_all(
     inserted = ingest_all(progress_callback=progress_callback, days=window_days)
     logger.info("upserted %d new items", inserted)
 
-    # Auto-retrain LR when model is stale (> 7 days old) and enough votes exist
+    # Auto-retrain LR when there are new/changed votes since the model was trained
+    # (feedback must apply promptly, not after a 7-day timer), with a 7-day fallback
+    # so recency-decayed features refresh even on a quiet week.
     try:
         from .votes import MIN_VOTES_FOR_LR as _min_lr
+        from .votes import latest_vote_timestamp as _latest_vote_ts
         from .votes import signed_vote_count as _svc
 
         _current_votes = _svc()
@@ -586,8 +589,11 @@ def run_all(
             _lr_path = _Path(get_settings().db_path).parent / "lr_ranker.npz"
             _needs_retrain = not _lr_path.exists()
             if not _needs_retrain and _lr_path.exists():
-                _lr_age_days = (time.time() - _lr_path.stat().st_mtime) / 86400
-                _needs_retrain = _lr_age_days > 7
+                _lr_mtime = _lr_path.stat().st_mtime
+                _vote_ts = _latest_vote_ts()
+                _new_feedback = _vote_ts is not None and _vote_ts > _lr_mtime
+                _lr_age_days = (time.time() - _lr_mtime) / 86400
+                _needs_retrain = _new_feedback or _lr_age_days > 7
             if _needs_retrain:
                 from .votes import train_lr_ranker as _train_lr
 

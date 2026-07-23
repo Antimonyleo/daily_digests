@@ -13,8 +13,14 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-def profile_search_terms(max_terms: int = 12) -> list[str]:
-    """Return up to ``max_terms`` distinct keyword phrases from the profile."""
+def profile_search_terms(max_terms: int = 32) -> list[str]:
+    """Return distinct keyword phrases from the profile to drive active retrieval.
+
+    ALL core keywords are always included (they define the user's field — dropping
+    any silently blinds retrieval to that interest; previously a 12-term cap hid
+    the 13th+ core interests). Context ("keep-me-informed") terms then fill up to
+    ``max_terms``. The cap only bounds the context tail and total API volume.
+    """
     try:
         from ..config import load_profile
 
@@ -24,18 +30,16 @@ def profile_search_terms(max_terms: int = 12) -> list[str]:
         return []
     seen: set[str] = set()
     out: list[str] = []
-    # Core keywords first, then context ("keep-me-informed") terms: context terms
-    # are down-weighted for *research relevance* but must still drive retrieval so
-    # the industry/regulatory sections keep getting clinical/FDA/etc. items.
     core = list(getattr(prof, "keywords", []) or [])
     context = list(getattr(prof, "context_keywords", []) or [])
-    for kw in core + context:
+    for i, kw in enumerate(core + context):
         term = str(kw).strip()
         low = term.lower()
         if term and low not in seen:
             seen.add(low)
             out.append(term)
-        if len(out) >= max_terms:
+        # Never truncate a core keyword; only cap once we are into the context tail.
+        if len(out) >= max_terms and i >= len(core):
             break
     return out
 

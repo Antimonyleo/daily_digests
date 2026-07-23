@@ -75,7 +75,13 @@ def test_evaluate_history_scores_persisted_digest():
     c = _insert_item("C")
     d = _insert_item("D")
 
-    # Persisted ranking order by descending final_score: A > B > C > D
+    # Persisted ranking order by descending final_score: A > B > C > D.
+    # Production writes BOTH the displayed slate (digest_items) and the feature
+    # rows; the evaluator scores the displayed slate, so write it too.
+    store_mod.write_digest(
+        "2026-01-01",
+        [("R1", a, 0.9), ("R2", b, 0.8), ("R3", c, 0.7), ("R4", d, 0.6)],
+    )
     store_mod.write_digest_features(
         "2026-01-01",
         [
@@ -104,6 +110,7 @@ def test_evaluate_history_scores_persisted_digest():
 
 def test_evaluate_history_skips_unvoted_digests():
     a = _insert_item("A")
+    store_mod.write_digest("2026-01-02", [("R1", a, 0.9)])
     store_mod.write_digest_features("2026-01-02", [("R1", a, 0.9, {})])
 
     report = evaluate_history(k=10)

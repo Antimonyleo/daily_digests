@@ -145,27 +145,32 @@ def _pairwise_accuracy(ranked: list[tuple[int, int]]) -> float | None:
 def _load_digest_orderings() -> dict[str, list[tuple[int, float]]]:
     """Return ``{digest_id: [(item_id, score), ...]}`` ordered by score desc.
 
-    Prefers the richer feature table (persisted ``final_score``) and falls back
-    to the digest_items table.
+    Membership is the DISPLAYED slate (``digest_items``), which a same-day rebrew
+    replaces atomically. The feature table (``digest_item_features``) is only used
+    to enrich the score for those displayed items — it must NOT drive membership,
+    because its rows are upserted per ``(digest_id, item_id)`` and never deleted on
+    rebrew, so it accumulates the UNION of every candidate ever featured under a
+    digest_id (observed: 73 feature rows for a 31-item digest). Scoring that union
+    silently evaluates papers the user never saw and inflates the metrics.
     """
     orderings: dict[str, list[tuple[int, float]]] = {}
     init_db()
     with session_scope() as s:
-        rows = s.query(DigestItemFeatureRow).all()
-        for r in rows:
+        # Enrichment scores from the feature table, keyed by (digest_id, item_id).
+        feat_score: dict[tuple[str, int], float] = {}
+        for r in s.query(DigestItemFeatureRow).all():
+            if r.item_id is not None and r.final_score is not None:
+                feat_score[(r.digest_id, int(r.item_id))] = float(r.final_score)
+        # Membership + fallback score from the displayed slate.
+        for r in s.query(DigestItemRow).all():
             if r.item_id is None:
                 continue
-            score = r.final_score if r.final_score is not None else 0.0
-            orderings.setdefault(r.digest_id, []).append((int(r.item_id), float(score)))
-        if not orderings:
-            drows = s.query(DigestItemRow).all()
-            for r in drows:
-                if r.item_id is None:
-                    continue
-                score = r.score if r.score is not None else 0.0
-                orderings.setdefault(r.digest_id, []).append(
-                    (int(r.item_id), float(score))
-                )
+            item_id = int(r.item_id)
+            score = feat_score.get(
+                (r.digest_id, item_id),
+                float(r.score) if r.score is not None else 0.0,
+            )
+            orderings.setdefault(r.digest_id, []).append((item_id, score))
     for digest_id in orderings:
         orderings[digest_id].sort(key=lambda t: t[1], reverse=True)
     return orderings

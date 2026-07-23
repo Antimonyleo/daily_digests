@@ -1,8 +1,14 @@
 # DailyDigest — Project Status
 
-**Last updated:** 2026-05-15
-**State:** v1.10-dev — public-release hardening for ranking quality, diagnostics, vote consistency, and reader-facing feedback.
-**End-to-end verified:** `NO_BROWSER=1 ./scripts/start.sh` syncs deps and boots FastAPI at `http://127.0.0.1:8765`. `GET /` returns 200 with confidence-aware must-read cards, source-mix bars, diagnostic drawers, per-item ranking explanations, and the updated personalization copy. **77 sources** (65 research incl. Nature/Science/Cell families, ACS/RSC/Wiley flagships, NAR). `177` pytest tests pass locally.
+**Last updated:** 2026-07-23
+**State:** v1.11-dev — ranking correctness + personalization pass. Fixed the offline
+evaluator (was scoring accumulated feature rows, not the displayed slate), unified
+the topic/LR cosine, added a memory-based preference model (pos/neg exemplar
+affinity) so feedback can suppress an on-profile-but-unwanted subtopic, made
+feedback apply on the next brew (retrain on new votes, not a 7-day timer), removed
+a no-op MMR call, and widened active retrieval to all core interests. Install is now
+lightweight: default embedder is fastembed/ONNX (no PyTorch, ~400 MB).
+**End-to-end verified:** `NO_BROWSER=1 ./scripts/start.sh` syncs deps and boots FastAPI at `http://127.0.0.1:8765`. Held-out preference validation: the learned ranker beats topic-cosine alone (0.79 vs 0.74 pairwise) — no longer net-harmful. `307` pytest tests pass locally.
 
 ---
 

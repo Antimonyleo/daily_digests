@@ -18,7 +18,7 @@ from threading import Lock
 from typing import Iterable
 
 import numpy as np
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from .rank.embedding_cache import embed_item_rows
 from .rank.ranker import LRRanker, reset_lr_cache
@@ -53,7 +53,7 @@ _SOURCE_GENERALIZATION_CAP = 0.12
 _BUCKET_GENERALIZATION_CAP = 0.06
 _CONTENT_GENERALIZATION_CAP = 0.045
 
-LR_FEATURE_SCHEMA_VERSION = "lr_ranker_deconfounded_std_v5"
+LR_FEATURE_SCHEMA_VERSION = "lr_ranker_preference_affinity_v6"
 # De-confounded feature set (v5). The previous v4 set included the raw source
 # quality family (prestige, source_bucket) and three cosine×X interaction terms.
 # Those (a) DOUBLE-COUNT venue quality, which is already applied deterministically
@@ -71,6 +71,8 @@ LR_FEATURE_NAMES = (
     "access_friction_score",
     "cosine_x_freshness",
     "author_match",
+    "pos_affinity",
+    "neg_affinity",
 )
 LR_FEATURE_DIM = len(LR_FEATURE_NAMES)
 
@@ -102,16 +104,98 @@ def _add_capped_signal(target: dict[str, float], key: str, delta: float, cap: fl
     target[key] = max(0.0, min(cap, target.get(key, 0.0) + delta))
 
 
+def _load_vote_exemplars() -> tuple[tuple, tuple]:
+    """Return ``(pos, neg)`` exemplar sets from signed votes, each ``(ids, unit_vecs,
+    weights)``.
+
+    These are the papers the user liked / disliked, used to compute per-item
+    "looks-like-what-I-liked" and "looks-like-what-I-disliked" affinity features —
+    the memory-based preference signal the aggregate features cannot express. The
+    weight preserves grade intensity (``|grade-50|/50``): a "Must read" (100) or
+    "Not for me" (10) counts harder than a lukewarm "Relevant" (70) / "Hmmm" (40),
+    so the model learns strong preferences more sharply. Uses the latest vote per
+    item, so changing a vote replaces its exemplar (idempotent).
+    """
+    from .rank.embedding_cache import embed_item_rows
+    from .store import ItemRow as _ItemRow
+
+    init_db()
+    with session_scope() as s:
+        raw = s.execute(
+            select(VoteRow.item_id, VoteRow.value, VoteRow.grade, _ItemRow)
+            .join(_ItemRow, VoteRow.item_id == _ItemRow.id)
+            .order_by(VoteRow.item_id, VoteRow.created_at.desc(), VoteRow.id.desc())
+        ).all()
+        seen: set[int] = set()
+        pos: list[tuple[int, object, float]] = []
+        neg: list[tuple[int, object, float]] = []
+        for item_id, value, grade, row in raw:
+            iid = int(item_id)
+            if iid in seen:
+                continue
+            seen.add(iid)
+            v = int(value)
+            if v not in (-1, 1):
+                continue
+            s.expunge(row)
+            g = int(grade) if grade is not None else value_to_grade(v)
+            w = max(0.05, abs(g - VOTE_GRADE_NEUTRAL) / 50.0)
+            (pos if v > 0 else neg).append((iid, row, w))
+
+    def _pack(items: list[tuple[int, object, float]]):
+        if not items:
+            return (np.zeros(0, dtype=np.int64), np.zeros((0, 1), np.float32), np.zeros(0, np.float32))
+        ids = np.array([iid for iid, _, _ in items], dtype=np.int64)
+        vecs = embed_item_rows([r for _, r, _ in items]).astype(np.float32)
+        vecs = vecs / (np.linalg.norm(vecs, axis=1, keepdims=True) + 1e-9)
+        ws = np.array([w for _, _, w in items], dtype=np.float32)
+        return ids, vecs, ws
+
+    return _pack(pos), _pack(neg)
+
+
+def _affinity(cand_unit: np.ndarray, cand_ids, exemplars, k: int = 5) -> np.ndarray:
+    """Grade-weighted top-k mean cosine of each candidate to an exemplar set.
+
+    Excludes an exemplar with the same item_id as the candidate (leave-one-out, so
+    a voted item does not match itself during training). Returns zeros if the
+    exemplar set is empty.
+    """
+    ex_ids, ex_vecs, ex_w = exemplars
+    n = cand_unit.shape[0]
+    if ex_vecs.shape[0] == 0 or n == 0:
+        return np.zeros(n, dtype=np.float32)
+    sims = cand_unit @ ex_vecs.T  # [n_cand, n_ex]
+    out = np.zeros(n, dtype=np.float32)
+    for i in range(n):
+        row = sims[i] * ex_w
+        if cand_ids is not None and cand_ids[i] is not None:
+            row = row[ex_ids != cand_ids[i]]
+        if row.size == 0:
+            continue
+        kk = min(k, row.size)
+        out[i] = float(np.sort(row)[-kk:].mean())
+    return out
+
+
 def _build_item_features(rows: list, profile_mat: np.ndarray) -> np.ndarray:
     """Build the de-confounded engineered features per item for LR train/inference.
 
     Feature vector (``LR_FEATURE_SCHEMA_VERSION`` / ``LR_FEATURE_DIM`` dims):
-    0. cosine similarity to profile (top-k-mean or max)
+    0. cosine similarity to profile (bounded top-k-mean; same `_multi_cosine` the ranker uses)
     1. novelty score
     2. promotional score
     3. access friction score
     4. cosine × freshness (high-cosine fresh papers preferred; freshness = 1 - age_norm)
     5. author_match       (1.0 if byline matches the profile author watchlist)
+    6. pos_affinity       (grade-weighted top-k cosine to UP-voted exemplars)
+    7. neg_affinity       (grade-weighted top-k cosine to DOWN-voted exemplars)
+
+    pos/neg affinity are the memory-based preference signal: the LR learns a
+    positive weight on "looks like papers I liked" and a NEGATIVE weight on "looks
+    like papers I disliked", so it can suppress an on-profile topic the user keeps
+    rejecting (e.g. LNP delivery) while surfacing what they want (e.g. protein
+    redesign) — which the aggregate topic features alone cannot express.
 
     Deliberately EXCLUDES prestige / source_bucket / cosine×prestige / cosine×bucket:
     venue quality is applied deterministically downstream (quality-adjustment +
@@ -136,19 +220,27 @@ def _build_item_features(rows: list, profile_mat: np.ndarray) -> np.ndarray:
         _watchlist = []
         author_match_score = None  # type: ignore[assignment]
 
+    # Use the SAME cosine the ranker/gate uses (`_multi_cosine`), which unit-
+    # normalizes each profile row and clamps facet weight to <=1.0 — so the LR's
+    # `cosine_similarity` feature is a true cosine in [-1, 1], consistent with the
+    # topic score. The previous raw `vecs @ profile_mat.T` left rows weighted
+    # (Rocchio row norm ~6), so this feature exceeded 1.0 and was dominated by the
+    # single Rocchio facet — inconsistent with ranking and a driver of saturation.
+    from .rank.ranker import _multi_cosine  # local import avoids an import cycle
+
     vecs = embed_item_rows(rows)
-    if profile_mat.ndim == 1:
-        cos = (vecs @ profile_mat.astype(np.float32, copy=False)).astype(np.float32)
+    if vecs.size == 0:
+        cos = np.zeros(len(rows), dtype=np.float32)
+        cand_unit = np.zeros((len(rows), 1), dtype=np.float32)
     else:
-        sims = vecs @ profile_mat.T.astype(np.float32)
-        n = sims.shape[1]
-        if n <= 1:
-            cos = sims.max(axis=1).astype(np.float32)
-        else:
-            top1 = sims.max(axis=1)
-            k3 = min(3, n)
-            top3 = np.sort(sims, axis=1)[:, -k3:].mean(axis=1)
-            cos = (0.7 * top1 + 0.3 * top3).astype(np.float32)
+        cos = _multi_cosine(vecs, profile_mat if profile_mat.ndim == 2 else profile_mat.reshape(1, -1))
+        cand_unit = (vecs / (np.linalg.norm(vecs, axis=1, keepdims=True) + 1e-9)).astype(np.float32)
+
+    # Memory-based preference affinity to liked / disliked exemplars (P2/P3).
+    cand_ids = [int(rid) if isinstance((rid := getattr(r, "id", None)), int) else None for r in rows]
+    pos_ex, neg_ex = _load_vote_exemplars()
+    pos_aff = _affinity(cand_unit, cand_ids, pos_ex)
+    neg_aff = _affinity(cand_unit, cand_ids, neg_ex)
 
     now = datetime.now(timezone.utc)
     features = []
@@ -177,6 +269,8 @@ def _build_item_features(rows: list, profile_mat: np.ndarray) -> np.ndarray:
             float(_friction(row)),                      # 3. access friction
             cos_val * (1.0 - age_norm),                 # 4. cosine × freshness
             float(author_match),                        # 5. author_match
+            float(pos_aff[i]),                          # 6. pos_affinity
+            float(neg_aff[i]),                          # 7. neg_affinity
         ])
     if not features:
         return np.zeros((0, LR_FEATURE_DIM), dtype=np.float32)
@@ -763,6 +857,26 @@ def signed_vote_count() -> int:
     except Exception as e:  # noqa: BLE001
         logger.warning("vote: failed to count votes: %s", e)
         return 0
+
+
+def latest_vote_timestamp() -> float | None:
+    """Epoch seconds of the most recent vote of any kind, or None if no votes.
+
+    Used to detect unapplied feedback: if a vote is newer than the trained LR
+    file's mtime, the model is stale regardless of its age. Votes are append-only
+    (a changed vote inserts a newer row), so this catches new AND changed votes.
+    """
+    init_db()
+    try:
+        with session_scope() as s:
+            newest = s.execute(select(func.max(VoteRow.created_at))).scalar()
+        if newest is None:
+            return None
+        ts = newest if newest.tzinfo else newest.replace(tzinfo=timezone.utc)
+        return ts.timestamp()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("vote: failed to read latest vote timestamp: %s", e)
+        return None
 
 
 def lr_training_status() -> dict[str, object]:
