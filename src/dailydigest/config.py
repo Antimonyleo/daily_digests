@@ -46,6 +46,11 @@ class Settings(BaseSettings):
     embed_device: str = "cpu"
     embed_query_prefix: str = "Represent this sentence for searching relevant passages: "
     embed_doc_prefix: str = ""
+    # Embedding backend: "" (auto: fastembed/ONNX, no torch), "fastembed", or
+    # "sentence-transformers" (needs the optional `hf` extra; required for models
+    # outside fastembed's catalog, e.g. SPECTER2). Auto falls back to
+    # sentence-transformers when fastembed cannot load the configured model.
+    embed_backend: str = ""
 
     # --- Quality weighting --------------------------------------------------- #
     # How strongly venue quality influences research ranking. 1.0 = legacy

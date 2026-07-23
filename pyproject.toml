@@ -10,7 +10,7 @@ dependencies = [
     "sqlalchemy>=2.0.30",
     "pydantic>=2.7.0",
     "pydantic-settings>=2.3.0",
-    "sentence-transformers>=3.0.0",
+    "fastembed>=0.3.0",
     "scikit-learn>=1.5.0",
     "numpy>=1.26.0",
     "jinja2>=3.1.4",
@@ -25,6 +25,13 @@ dependencies = [
     "fastapi>=0.110.0",
     "uvicorn[standard]>=0.30.0",
 ]
+
+[project.optional-dependencies]
+# Arbitrary HuggingFace encoders (SPECTER2, MedCPT, bge-large, E5, ...) via
+# sentence-transformers. Pulls in PyTorch (~2 GB+ with CUDA libs), so it is NOT
+# installed by default — the fastembed/ONNX backend covers the default bge-small
+# with no torch. Install with:  uv sync --extra hf
+hf = ["sentence-transformers>=3.0.0"]
 
 [project.scripts]
 dd = "dailydigest.cli:app"

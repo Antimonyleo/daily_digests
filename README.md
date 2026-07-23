@@ -160,7 +160,8 @@ flowchart LR
 
 Typical personal use can stay very cheap:
 
-- Local embeddings and SQLite: free
+- Lightweight install: the default embedder is fastembed (ONNX, CPU) — no PyTorch, so `uv sync` pulls ~400 MB, not multiple GB. A daily brew is a CPU job of a couple of minutes; embeddings are cached so repeat brews only embed new items.
+- Local embeddings and SQLite: free. For an arbitrary HuggingFace encoder (SPECTER2, MedCPT, bge-large), install the optional extra with `uv sync --extra hf` (adds PyTorch).
 - Cached item embeddings are small, roughly 1.5 KB per item with the default model, and are pruned with old items
 - GitHub Actions cron: free tier
 - Resend daily email: free tier

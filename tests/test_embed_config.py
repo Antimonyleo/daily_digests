@@ -21,7 +21,7 @@ def test_active_model_name_follows_settings(monkeypatch):
 
 def test_default_device_is_cpu(monkeypatch):
     _reset_settings(monkeypatch)
-    _model, device, _qp, _dp = embed_mod._embed_config()
+    _model, device, _qp, _dp, _backend = embed_mod._embed_config()
     assert device == "cpu"
 
 
@@ -34,12 +34,12 @@ def test_query_prefix_applied_only_for_queries(monkeypatch):
 
     captured: list[list[str]] = []
 
-    class _FakeModel:
-        def encode(self, texts, **kwargs):
-            captured.append(list(texts))
-            return np.ones((len(texts), 3), dtype=np.float32)
+    def _fake_encoder(texts):
+        captured.append(list(texts))
+        return np.ones((len(texts), 3), dtype=np.float32)
 
-    monkeypatch.setattr(embed_mod, "_get_model", lambda: _FakeModel())
+    # _get_encoder returns a callable: list[str] -> np.ndarray.
+    monkeypatch.setattr(embed_mod, "_get_encoder", lambda: _fake_encoder)
 
     embed_mod.embed_texts(["alpha"], is_query=True)
     embed_mod.embed_texts(["beta"], is_query=False)
