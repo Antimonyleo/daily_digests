@@ -118,7 +118,11 @@ class Settings(BaseSettings):
     # clamped to [min_*, top_*]. A day rich in on-topic items shows more; a quiet
     # day fewer.
     adaptive_section_sizes: bool = True
-    min_research: int = Field(default=5, ge=0, le=100)
+    # Soft floor for the research section on a low-supply day. 3 (was 5) so the
+    # digest shrinks to only the genuinely strong papers rather than padding two
+    # extra weak slots — the cutoff is dynamic, driven by how many items clear the
+    # relevance/quality bar, not a fixed count.
+    min_research: int = Field(default=3, ge=0, le=100)
     min_industry: int = Field(default=3, ge=0, le=100)
     min_ai: int = Field(default=2, ge=0, le=100)
     min_regulatory: int = Field(default=2, ge=0, le=100)

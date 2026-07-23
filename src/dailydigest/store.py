@@ -540,6 +540,16 @@ def write_digest_features(
     with session_scope() as s:
         if s.get(DigestRow, digest_id) is None:
             s.add(DigestRow(id=digest_id, item_count=len(feature_rows)))
+        # A same-day rebrew replaces the slate: drop feature rows for items no
+        # longer featured under this digest_id so the table does not accumulate the
+        # UNION of every rebrew's candidates (which distorted offline evaluation).
+        new_ids = [int(item_id) for _, item_id, _, _ in feature_rows]
+        s.execute(
+            delete(DigestItemFeatureRow).where(
+                DigestItemFeatureRow.digest_id == digest_id,
+                DigestItemFeatureRow.item_id.notin_(new_ids),
+            )
+        )
         for label, item_id, final_score, features in feature_rows:
             payload = json.dumps(features or {}, sort_keys=True)
             stmt = (

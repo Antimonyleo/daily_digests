@@ -134,12 +134,13 @@ def test_low_impact_below_floor_is_excluded():
     assert low == 0
 
 
-def test_low_impact_used_as_last_resort_when_section_would_be_short():
-    # Only low-impact items exist (below floor) → last-resort fill still uses them
-    # rather than ship an empty section.
+def test_low_impact_used_as_last_resort_only_up_to_hard_minimum():
+    # Only low-impact items exist (below floor). The last-resort override fills just
+    # the small hard minimum (3), not the full cap — a short section of the least-bad
+    # items beats padding five weak slots (dynamic cutoff, see min_research/P8).
     scored = [
         (_row(f"Minor paper {i}", f"Journal of Minor Results {i}"), 0.45 - i * 0.01)
         for i in range(6)
     ]
     result = pick_top_per_section(scored, {"research": 5})
-    assert len(result) == 5
+    assert len(result) == 3

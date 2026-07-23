@@ -728,12 +728,17 @@ def reason_penalty_map(rows: Iterable[object] | None = None) -> dict[str, float]
     source_penalties: dict[str, float] = {}
     bucket_penalties: dict[str, float] = {}
     content_penalties: dict[str, float] = {}
+    # Only PUBLISHER/FEED-INTRINSIC reasons generalize by source/bucket/content —
+    # these describe the venue, not the paper. Topic/timing reasons (off_topic,
+    # already_known, not_urgent) do NOT generalize by publisher: a broad-scope
+    # journal (Nature) publishes across all fields, so disliking off-topic Nature
+    # papers must not penalize an on-topic Nature paper (it wrongly buried the one
+    # liked paper on 2026-07-22). Topic dissimilarity is now captured semantically
+    # by the LR's `neg_affinity` feature instead. off_topic etc. still apply their
+    # EXACT per-item penalty above.
     generalizable = {
-        "off_topic",
         "low_impact",
         "promotional",
-        "already_known",
-        "not_urgent",
         "access_friction",
         "duplicate",
     }

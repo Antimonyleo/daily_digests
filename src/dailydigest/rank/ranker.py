@@ -969,11 +969,15 @@ def _pick_research_balanced(
                     break
                 add(row, score)
 
-    # Last resort: rather than ship a short section, allow low-impact items past
-    # their frequency cap / relevance floor.
-    if len(selected) < cap:
+    # Last resort: fill only up to a small HARD MINIMUM (not the full cap) by
+    # overriding the low-impact frequency cap / relevance floor. A short section of
+    # genuinely strong items beats padding every slot with weak low-impact work —
+    # historically the padded tail slots had far lower positive-feedback rates. A
+    # quiet day should simply yield fewer papers, not fifteen mediocre ones.
+    hard_min = min(3, cap)
+    if len(selected) < hard_min:
         for row, score in scored:
-            if len(selected) >= cap:
+            if len(selected) >= hard_min:
                 break
             add(row, score, allow_low_impact_override=True)
 
