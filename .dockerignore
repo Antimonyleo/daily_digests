@@ -1,0 +1,19 @@
+# Keep the build context (and image) small and free of local state/secrets.
+.git
+.github
+.venv
+data
+*.db
+*.db-shm
+*.db-wal
+.env
+.claude
+.codex
+__pycache__
+*.pyc
+.pytest_cache
+.ruff_cache
+htmlcov
+.full-review
+docs
+tests

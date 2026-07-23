@@ -1,0 +1,27 @@
+# DailyDigest via Docker — the zero-Python-setup path.
+#
+#   docker compose up --build      # first run (builds the image)
+#   docker compose up -d           # later runs (background)
+#
+# Then open http://127.0.0.1:8765 in your browser.
+#
+# Works anywhere Docker Desktop runs: macOS, Linux, and Windows (WSL2 backend).
+services:
+  dailydigest:
+    build: .
+    # Loopback-only on the host, matching the app's local-first security stance.
+    ports:
+      - "127.0.0.1:8765:8765"
+    # Persist DB, profile, and learned models across rebuilds.
+    volumes:
+      - ./data:/app/data
+    environment:
+      # Extractive summaries need no API key. To use a hosted LLM, set these:
+      #   LLM_BACKEND: api
+      #   LLM_BASE_URL: https://...
+      #   LLM_API_KEY: ...
+      #   LLM_MODEL: ...
+      LLM_BACKEND: extractive
+      # Local timezone so the 8am gate fires at your morning (e.g. America/New_York).
+      USER_TZ: UTC
+    restart: unless-stopped

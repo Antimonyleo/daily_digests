@@ -25,21 +25,38 @@ It is built for researchers who want signal without opening 40 tabs before break
 
 ## Quickstart
 
+Pick whichever matches how comfortable you are with a terminal. All three end at
+the same place: open `http://127.0.0.1:8765`, where a first-run setup wizard
+writes your profile to `data/profile.yaml` and starts a dry-run brew. The
+default install is lightweight — no PyTorch, ~400 MB.
+
+**A. Docker (least setup — no Python needed).** Install [Docker Desktop](https://www.docker.com/products/docker-desktop/)
+(macOS / Windows / Linux; on Windows it sets up the WSL2 backend for you), then:
+
+```bash
+docker compose up --build
+```
+
+**B. Double-click (macOS).** In Finder, open the `scripts` folder and double-click
+`DailyDigest.command`. It installs `uv` on first run and launches the app.
+(If macOS blocks it: right-click → Open.)
+
+**C. One command (Linux / macOS / Windows-WSL).** Installs `uv` if missing, then launches:
+
 ```bash
 git clone <your-repo-url>
 cd dailydigest
-./scripts/start.sh
+bash scripts/install.sh
 ```
 
-Open `http://127.0.0.1:8765`. First-time users go to setup, which writes the local profile to `data/profile.yaml`, updates `.env`, and starts a dry-run brew with live progress.
+Already have `uv`? Just run `./scripts/start.sh`. Run headless with
+`NO_BROWSER=1 ./scripts/start.sh`.
 
-Run without auto-opening a browser:
+> Windows note: native Windows is not supported directly — use **Docker** (option A,
+> smoothest) or install **WSL2** and use option C inside your Linux distro.
 
-```bash
-NO_BROWSER=1 ./scripts/start.sh
-```
-
-DailyDigest expects to be run from a repo checkout. `uv` is required; the startup script will tell you if it is missing.
+For an arbitrary HuggingFace encoder (SPECTER2, MedCPT, bge-large), add the extra:
+`uv sync --extra hf` (this one pulls in PyTorch).
 
 ## First-Run Tutorial
 
