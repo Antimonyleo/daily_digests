@@ -146,6 +146,20 @@ class Settings(BaseSettings):
     # that bge-small's compressed cosine scores just under the floor. Set to 0 to
     # restore the pure venue-blind floor.
     venue_relevance_credit: float = Field(default=0.10, ge=0.0, le=0.5)
+    # FINAL-fused-score cutoff for the research section. Section SIZING gates on
+    # topic cosine (min_topic_relevance), but the picker then fills those slots by
+    # the FINAL learned/fused score — so a prestigious-but-personally-disliked
+    # paper the model scored near ZERO could still pad a slot. This gate drops
+    # research picks whose final fused score is below ``frac`` of the section's
+    # top score. RELATIVE (a fraction of the top) rather than absolute because the
+    # fused score is RRF min-maxed to [0,1] PER RUN — the top is always ~1.0 and
+    # the floor ~0.0, so a fixed absolute cut would mean different things on
+    # different days, whereas "at least X% as good as the best pick" is stable.
+    # A small hard-minimum (research_final_score_min_keep) guarantees the digest
+    # is never emptied by this gate. Set frac to 0 to disable.
+    research_final_score_floor_frac: float = Field(default=0.35, ge=0.0, le=1.0)
+    research_final_score_min_keep: int = Field(default=3, ge=0, le=100)
+
     # Quality floor (final confidence, 0..1) for the news sections (industry,
     # world). Opinion columns, paywalled "STAT+:" teasers and weak items fall
     # below it and are dropped, so a section shrinks to its genuinely useful

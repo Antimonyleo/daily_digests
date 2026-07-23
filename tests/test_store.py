@@ -94,6 +94,92 @@ def test_exclude_reviewed_items_removes_saved_feedback(monkeypatch, tmp_path):
     assert {row.external_id for row in filtered} == {"fresh"}
 
 
+def _add_item(store_mod, external_id: str, section: str = "research") -> int:
+    with store_mod.session_scope() as s:
+        row = store_mod.ItemRow(
+            source="Test",
+            section=section,
+            external_id=external_id,
+            url=f"https://example.com/{external_id}",
+            title=external_id,
+        )
+        s.add(row)
+        s.flush()
+        return int(row.id)
+
+
+def test_empty_rebrew_deletes_stale_feature_rows(monkeypatch, tmp_path):
+    """A same-date rebrew with an EMPTY slate must clear prior feature rows.
+
+    The early ``if not feature_rows: return`` used to skip the stale-row DELETE,
+    leaving displayed=0 but features=1 after a zero-result rebrew.
+    """
+    store_mod = _reset_store(tmp_path, monkeypatch)
+    item_id = _add_item(store_mod, "feat-1")
+
+    store_mod.write_digest_features("2026-06-01", [("R1", item_id, 0.9, {})])
+    with store_mod.session_scope() as s:
+        assert (
+            s.query(store_mod.DigestItemFeatureRow)
+            .filter_by(digest_id="2026-06-01")
+            .count()
+            == 1
+        )
+
+    # Rebrew the same digest_id with an empty slate.
+    store_mod.write_digest_features("2026-06-01", [])
+    with store_mod.session_scope() as s:
+        assert (
+            s.query(store_mod.DigestItemFeatureRow)
+            .filter_by(digest_id="2026-06-01")
+            .count()
+            == 0
+        )
+
+
+def test_write_impressions_is_append_only_across_rebrews(monkeypatch, tmp_path):
+    """Two rebrews produce TWO run_ids of immutable impression rows, while
+    digest_items only reflects the latest slate."""
+    store_mod = _reset_store(tmp_path, monkeypatch)
+    a = _add_item(store_mod, "imp-a")
+    b = _add_item(store_mod, "imp-b")
+    digest_id = "2026-06-02"
+
+    # Run 1: two items.
+    store_mod.write_digest(digest_id, [("R1", a, 0.9), ("R2", b, 0.8)])
+    run1 = store_mod.write_impressions(
+        digest_id,
+        [("research", a, 0, 0.9), ("research", b, 1, 0.8)],
+        model_version="v-test",
+    )
+    # Run 2 (rebrew): only one item survives.
+    store_mod.write_digest(digest_id, [("R1", a, 0.95)])
+    run2 = store_mod.write_impressions(
+        digest_id,
+        [("research", a, 0, 0.95)],
+        model_version="v-test",
+    )
+
+    assert run1 != run2
+    with store_mod.session_scope() as s:
+        impressions = (
+            s.query(store_mod.ImpressionRow).filter_by(digest_id=digest_id).all()
+        )
+        run_ids = {r.run_id for r in impressions}
+        # Append-only: both runs' rows coexist (2 + 1 = 3 rows, 2 run_ids).
+        assert run_ids == {run1, run2}
+        assert len(impressions) == 3
+        # viewed defaults to False; model_version persisted.
+        assert all(r.viewed is False for r in impressions)
+        assert all(r.model_version == "v-test" for r in impressions)
+
+        # digest_items shows only the LATEST slate (replaced, not appended).
+        digest_items = (
+            s.query(store_mod.DigestItemRow).filter_by(digest_id=digest_id).all()
+        )
+        assert {di.item_id for di in digest_items} == {a}
+
+
 def test_review_filters_use_latest_legacy_vote_rows(monkeypatch, tmp_path):
     db_path = tmp_path / "legacy_store.db"
     conn = sqlite3.connect(db_path)

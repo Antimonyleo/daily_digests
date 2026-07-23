@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ipaddress
 import logging
+import os
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -38,11 +39,31 @@ def _is_loopback_bind(host: str) -> bool:
         return False
 
 
-def _require_loopback_bind(host: str) -> None:
-    if not _is_loopback_bind(host):
-        raise typer.BadParameter(
-            "DailyDigest has no authentication; bind to 127.0.0.1 or localhost."
+def _remote_bind_allowed(allow_remote: bool) -> bool:
+    """True iff the opt-in escape hatch for non-loopback binds is enabled.
+
+    Either the ``--allow-remote`` flag or ``DD_ALLOW_REMOTE_BIND=1`` (used by the
+    Docker image, whose port is loopback-mapped by docker-compose) opts in.
+    """
+    if allow_remote:
+        return True
+    return os.environ.get("DD_ALLOW_REMOTE_BIND", "").strip() in {"1", "true", "yes"}
+
+
+def _require_loopback_bind(host: str, allow_remote: bool = False) -> None:
+    if _is_loopback_bind(host):
+        return
+    if _remote_bind_allowed(allow_remote):
+        typer.echo(
+            f"WARNING: binding {host} (non-loopback). DailyDigest has no auth; "
+            "it must sit behind Docker port-mapping or a trusted network only.",
+            err=True,
         )
+        return
+    raise typer.BadParameter(
+        "DailyDigest has no authentication; bind to 127.0.0.1 or localhost "
+        "(or set DD_ALLOW_REMOTE_BIND=1 / pass --allow-remote for containerized use)."
+    )
 
 
 def should_run_now() -> bool:
@@ -233,11 +254,17 @@ def ingest_replies() -> None:
 def serve(
     host: str = typer.Option("127.0.0.1", "--host", help="Bind address (loopback only by default)."),
     port: int = typer.Option(8765, "--port", help="Port to listen on."),
+    allow_remote: bool = typer.Option(
+        False,
+        "--allow-remote",
+        help="Permit non-loopback --host (also via DD_ALLOW_REMOTE_BIND=1). "
+        "No auth; only safe behind Docker port-mapping / a trusted network.",
+    ),
 ) -> None:
     """Run the local FastAPI web UI for browsing today's digest and voting."""
     import uvicorn
 
-    _require_loopback_bind(host)
+    _require_loopback_bind(host, allow_remote)
     typer.echo(f"Open http://{host}:{port} in a browser.")
     uvicorn.run("dailydigest.web:app", host=host, port=port, log_level="info")
 
@@ -249,6 +276,12 @@ def start(
     no_browser: bool = typer.Option(
         False, "--no-browser", help="Don't auto-open the browser."
     ),
+    allow_remote: bool = typer.Option(
+        False,
+        "--allow-remote",
+        help="Permit non-loopback --host (also via DD_ALLOW_REMOTE_BIND=1). "
+        "No auth; only safe behind Docker port-mapping / a trusted network.",
+    ),
 ) -> None:
     """Boot the FastAPI server and auto-open the browser (recommended entrypoint)."""
     import threading
@@ -256,7 +289,7 @@ def start(
 
     import uvicorn
 
-    _require_loopback_bind(host)
+    _require_loopback_bind(host, allow_remote)
     url = f"http://{host}:{port}"
     typer.echo(f"Starting DailyDigest at {url}")
     if no_browser:

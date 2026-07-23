@@ -48,6 +48,7 @@ from .store import (
     write_digest_audit,
     write_digest,
     write_digest_features,
+    write_impressions,
     write_summaries,
 )
 from .summarize import summarize_items, synthesize_catch_up
@@ -914,6 +915,17 @@ def run_all(
                 for row, score, label in labeled
             ],
         )
+        # Immutable per-run impression log: APPEND this run's final slate (never
+        # overwrites prior runs, unlike write_digest). Position is the 0-based rank
+        # within each section, taken in the score-ordered `labeled` list.
+        _section_pos: dict[str, int] = {}
+        _impressions: list[tuple[str, int, int, float | None]] = []
+        for row, score, _label in labeled:
+            section = row.section or ""
+            pos = _section_pos.get(section, 0)
+            _section_pos[section] = pos + 1
+            _impressions.append((section, int(row.id), pos, float(score)))
+        write_impressions(digest_id, _impressions, model_version=RANKER_VERSION)
         write_digest_audit(digest_id, "missed_top_journals", top_journal_audit)
         write_digest_audit(digest_id, "candidate_funnel", [funnel_audit])
         # Catch-up briefing: only on gap runs, grouping the backlog into themes.

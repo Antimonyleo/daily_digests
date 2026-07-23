@@ -39,6 +39,25 @@ def _insert_item(store_mod) -> int:
         return int(row.id)
 
 
+def _insert_item2(store_mod, suffix: str) -> int:
+    store_mod.init_db()
+    with store_mod.session_scope() as s:
+        row = store_mod.ItemRow(
+            source="Test",
+            section="research",
+            external_id=f"test-{suffix}",
+            url=f"https://example.com/test-{suffix}",
+            title=f"RNA nanotechnology paper {suffix}",
+            abstract="A useful abstract.",
+            published_at=datetime.now(timezone.utc),
+            digest_id="2026-05-05",
+            item_label=f"R{suffix}",
+        )
+        s.add(row)
+        s.flush()
+        return int(row.id)
+
+
 def test_lr_feature_schema_constants_match_feature_matrix(monkeypatch):
     from dailydigest import votes as votes_mod
     from dailydigest.rank import embedding_cache as cache_mod
@@ -100,52 +119,138 @@ def test_neutral_vote_is_persisted_for_visible_feedback(tmp_path, monkeypatch):
     assert votes_mod.get_vote_value(item_id) == 0
 
 
-def test_rocchio_update_applies_recency_decay(tmp_path, monkeypatch):
-    """_update_rocchio with decay=0.995 should decay prior profile before adding."""
+def _rocchio_setup(tmp_path, monkeypatch, stub_vec):
+    """Point the learned-profile path at tmp and stub embeddings.
+
+    ``stub_vec`` may be a single [dim] vector (used for every row) or a
+    dict {item_id: vec}. The stub keys embeddings by the ItemRow.id so a rebuild
+    over multiple canonical votes gets the right vector per row.
+    """
     from pathlib import Path
     from dailydigest.rank import embedding_cache as cache_mod
 
     store_mod = _reset_store_for_tmp_db(monkeypatch, tmp_path)
     from dailydigest import votes as votes_mod
 
-    stub_vec = np.array([[1.0, 0.0, 0.0]], dtype=np.float32)
-    monkeypatch.setattr(cache_mod, "embed_item_rows", lambda rows: stub_vec)
+    if isinstance(stub_vec, dict):
+        def _embed(rows):
+            return np.array([stub_vec[int(r.id)] for r in rows], dtype=np.float32)
+    else:
+        vec = np.asarray(stub_vec, dtype=np.float32)
+
+        def _embed(rows):
+            return np.tile(vec, (len(rows), 1)).astype(np.float32)
+
+    # Both votes.py and the cache module reference embed_item_rows; patch the
+    # source so the rebuild's `from .rank.embedding_cache import embed_item_rows`
+    # picks it up.
+    monkeypatch.setattr(cache_mod, "embed_item_rows", _embed)
 
     profile_path = Path(str(tmp_path / "learned_profile.npz"))
     monkeypatch.setattr(votes_mod, "_learned_profile_path", lambda: profile_path)
+    return store_mod, votes_mod, profile_path
+
+
+def test_rocchio_rebuild_single_vote_is_grade_weighted_alpha_pull(tmp_path, monkeypatch):
+    """Rebuild from one canonical vote: learned = alpha*weight*decay**0*vec."""
+    stub = np.array([1.0, 0.0, 0.0], dtype=np.float32)
+    store_mod, votes_mod, profile_path = _rocchio_setup(tmp_path, monkeypatch, stub)
 
     item_id = _insert_item(store_mod)
-
-    prior_profile = np.array([0.5, 0.2, 0.1], dtype=np.float32)
-    np.savez(profile_path, profile=prior_profile, vote_count=np.array([5], dtype=np.int32))
+    # A stale prior profile must be discarded by the rebuild (not decayed-into).
+    np.savez(profile_path, profile=np.array([9.0, 9.0, 9.0], dtype=np.float32),
+             vote_count=np.array([5], dtype=np.int32))
 
     # "Must read" (grade 100 -> weight 1.0) applies the full alpha pull.
-    votes_mod._update_rocchio(item_id, 1, grade=100)
+    assert votes_mod.record_vote_by_id(item_id, 1, grade=100) is True
 
-    data = np.load(profile_path)
-    learned = data["profile"]
-    expected = 0.995 * prior_profile + 0.08 * 1.0 * stub_vec[0]
-    np.testing.assert_allclose(learned, expected, rtol=1e-5, atol=1e-6)
+    learned = np.load(profile_path)["profile"]
+    np.testing.assert_allclose(learned, 0.08 * 1.0 * stub, rtol=1e-5, atol=1e-6)
 
 
-def test_rocchio_pull_scales_with_grade(tmp_path, monkeypatch):
+def test_rocchio_rebuild_pull_scales_with_grade(tmp_path, monkeypatch):
     """A weaker preference ('Relevant', grade 70) pulls less than 'Must read'."""
-    from pathlib import Path
-    from dailydigest.rank import embedding_cache as cache_mod
-
-    store_mod = _reset_store_for_tmp_db(monkeypatch, tmp_path)
-    from dailydigest import votes as votes_mod
-
-    stub_vec = np.array([[1.0, 0.0, 0.0]], dtype=np.float32)
-    monkeypatch.setattr(cache_mod, "embed_item_rows", lambda rows: stub_vec)
-    profile_path = Path(str(tmp_path / "learned_profile.npz"))
-    monkeypatch.setattr(votes_mod, "_learned_profile_path", lambda: profile_path)
+    stub = np.array([1.0, 0.0, 0.0], dtype=np.float32)
+    store_mod, votes_mod, profile_path = _rocchio_setup(tmp_path, monkeypatch, stub)
     item_id = _insert_item(store_mod)
 
-    # grade 70 -> weight (70-50)/50 = 0.4 -> 0.4 * alpha pull (from zero prior).
-    votes_mod._update_rocchio(item_id, 1, grade=70)
+    # grade 70 -> weight (70-50)/50 = 0.4 -> 0.4 * alpha pull.
+    assert votes_mod.record_vote_by_id(item_id, 1, grade=70) is True
     learned = np.load(profile_path)["profile"]
-    np.testing.assert_allclose(learned, 0.08 * 0.4 * stub_vec[0], rtol=1e-5, atol=1e-6)
+    np.testing.assert_allclose(learned, 0.08 * 0.4 * stub, rtol=1e-5, atol=1e-6)
+
+
+def test_rocchio_rebuild_idempotent_on_repeated_vote(tmp_path, monkeypatch):
+    """Recording the same vote twice yields the same learned profile."""
+    stub = np.array([1.0, 0.0, 0.0], dtype=np.float32)
+    store_mod, votes_mod, profile_path = _rocchio_setup(tmp_path, monkeypatch, stub)
+    item_id = _insert_item(store_mod)
+
+    assert votes_mod.record_vote_by_id(item_id, 1, grade=100) is True
+    once = np.load(profile_path)["profile"].copy()
+    assert votes_mod.record_vote_by_id(item_id, 1, grade=100) is True
+    twice = np.load(profile_path)["profile"]
+    np.testing.assert_allclose(twice, once, rtol=1e-6, atol=1e-8)
+
+
+def test_rocchio_rebuild_vote_change_matches_final_vote_only(tmp_path, monkeypatch):
+    """Voting an item then FLIPPING the vote equals only-the-final-vote existing."""
+    stub = np.array([1.0, 0.0, 0.0], dtype=np.float32)
+    store_mod, votes_mod, profile_path = _rocchio_setup(tmp_path, monkeypatch, stub)
+    item_id = _insert_item(store_mod)
+
+    # Vote up, then change to a down-vote of matching magnitude.
+    assert votes_mod.record_vote_by_id(item_id, 1, grade=100) is True
+    assert votes_mod.record_vote_by_id(item_id, -1, grade=10) is True
+    flipped = np.load(profile_path)["profile"].copy()
+
+    # A fresh DB where only the final (down) vote was ever recorded.
+    store2, votes2, path2 = _rocchio_setup(tmp_path / "fresh", monkeypatch, stub)
+    fresh_id = _insert_item(store2)
+    assert votes2.record_vote_by_id(fresh_id, -1, grade=10) is True
+    final_only = np.load(path2)["profile"]
+
+    np.testing.assert_allclose(flipped, final_only, rtol=1e-6, atol=1e-8)
+    # Down-vote (weight -0.8) pulls negatively with beta rate.
+    np.testing.assert_allclose(flipped, 0.04 * -0.8 * stub, rtol=1e-5, atol=1e-6)
+
+
+def test_rocchio_rebuild_neutral_removes_contribution(tmp_path, monkeypatch):
+    """Voting then setting the vote to neutral removes that item's contribution.
+
+    With a single item, the canonical signed-vote set becomes empty, so the
+    learned-profile file is removed. With a second still-signed item present,
+    the neutralized item simply drops out of the rebuild.
+    """
+    stub_map = {}
+    store_mod = _reset_store_for_tmp_db(monkeypatch, tmp_path)
+    from dailydigest import votes as votes_mod
+    from dailydigest.rank import embedding_cache as cache_mod
+    from pathlib import Path
+
+    id_a = _insert_item2(store_mod, "a")
+    id_b = _insert_item2(store_mod, "b")
+    stub_map[id_a] = np.array([1.0, 0.0, 0.0], dtype=np.float32)
+    stub_map[id_b] = np.array([0.0, 1.0, 0.0], dtype=np.float32)
+
+    def _embed(rows):
+        return np.array([stub_map[int(r.id)] for r in rows], dtype=np.float32)
+
+    monkeypatch.setattr(cache_mod, "embed_item_rows", _embed)
+    profile_path = Path(str(tmp_path / "learned_profile.npz"))
+    monkeypatch.setattr(votes_mod, "_learned_profile_path", lambda: profile_path)
+
+    assert votes_mod.record_vote_by_id(id_a, 1, grade=100) is True
+    assert votes_mod.record_vote_by_id(id_b, 1, grade=100) is True
+
+    # Neutralize A: rebuild should reflect ONLY B's (most-recent) contribution.
+    assert votes_mod.record_vote_by_id(id_a, 0) is True
+    learned = np.load(profile_path)["profile"]
+    np.testing.assert_allclose(learned, 0.08 * 1.0 * stub_map[id_b], rtol=1e-5, atol=1e-6)
+
+    # Neutralize B too: no signed votes remain -> the stale file is removed.
+    assert votes_mod.record_vote_by_id(id_b, 0) is True
+    assert not profile_path.exists()
 
 
 def test_vote_reason_is_persisted_once_per_item(tmp_path, monkeypatch):

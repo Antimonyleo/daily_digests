@@ -8,7 +8,7 @@ affinity) so feedback can suppress an on-profile-but-unwanted subtopic, made
 feedback apply on the next brew (retrain on new votes, not a 7-day timer), removed
 a no-op MMR call, and widened active retrieval to all core interests. Install is now
 lightweight: default embedder is fastembed/ONNX (no PyTorch, ~400 MB).
-**End-to-end verified:** `NO_BROWSER=1 ./scripts/start.sh` syncs deps and boots FastAPI at `http://127.0.0.1:8765`. Held-out preference validation: the learned ranker beats topic-cosine alone (0.79 vs 0.74 pairwise) — no longer net-harmful. `307` pytest tests pass locally.
+**End-to-end verified:** `NO_BROWSER=1 ./scripts/start.sh` syncs deps and boots FastAPI at `http://127.0.0.1:8765`. Held-out preference validation is now a committed, reproducible script (`scripts/benchmark_ranker.py`): a leakage-free chronological split (train = older 75%, test = newer 25%; exemplars built from TRAIN votes only) shows the learned ranker beating topic-cosine alone on held-out pairwise accuracy. The exact number depends on the live vote history — run `uv run python scripts/benchmark_ranker.py` to re-measure; the mechanism is unit-tested on synthetic data in `tests/test_preference_benchmark.py`. `326` pytest tests pass locally.
 
 ---
 
@@ -32,7 +32,7 @@ Open `http://127.0.0.1:8765`. First-time users are sent to `/setup`; the wizard 
 | Rank | `uv run dd rank` | ✅ prints top-20 with freshness-filtered, deduped, topic + source-quality adjusted scores |
 | Full pipeline | `uv run dd run-all --dry-run` | ✅ writes HTML to `data/digest-*.html` |
 | Vote | `uv run dd vote "+R1 R2 -W1"` | ✅ resolves labels, writes to votes table |
-| LR retrain | `uv run dd vote --train` | ✅ (skips if <20 signed votes) |
+| LR retrain | `uv run dd vote --train` | ✅ (skips if <30 signed votes) |
 | Prune | `uv run dd prune` | ✅ deletes items >30d old |
 | TZ gate | `uv run dd run-all --gate` | ✅ skips unless local hour == DIGEST_HOUR |
 | Backfill | `uv run dd run-all --backfill 7` | ✅ widens recency window |
@@ -45,7 +45,7 @@ Open `http://127.0.0.1:8765`. First-time users are sent to `/setup`; the wizard 
 | Local digest viewer | `GET /` | ✅ FastAPI app at 127.0.0.1:8765, graphical overview, confidence-aware must-read cards, source mix, ranking bars, Relevant / Seen / Not for me votes, gated reason chips, top-journal and brew diagnostics; redirects to /setup if no profile |
 | Claude Code backend | `LLM_BACKEND=claude_code uv run dd run-all` | ✅ `claude --print` (+ optional `--model <id>` via `LLM_CLI_MODEL`) |
 | Codex backend | `LLM_BACKEND=codex uv run dd run-all` | ✅ `codex exec` (+ optional `--model`) |
-| Tests | `.venv/bin/python -m pytest -q` | ✅ 177 passed |
+| Tests | `.venv/bin/python -m pytest -q` | ✅ 326 passed |
 
 Live verification artifacts:
 - `data/digest-20260504-081032.html` — 28,224 bytes, all 4 sections (R×8, I×6, G×3, W×3) with emoji headers, inline CSS, vote-syntax footer.
@@ -74,7 +74,7 @@ data/profile.yaml ─► embed (bge-small) ─► freshness + dedupe + cosine + 
 ```
 
 - **Storage:** SQLite at `data/digest.db`. Tables: `items` `votes` `digests` `runs`. 30-day retention on items.
-- **Ranker:** cosine vs profile vector by default; hybrid ranking once ≥20 signed votes train the LR. Source quality is a tie-breaker rather than the dominant force; novelty, access friction, promotional-risk, and low-information commentary filters are exposed in the web UI. Hybrid rank scores are kept separate from absolute confidence so weak pools do not create fake "must read" labels. Item embeddings are cached in SQLite and reused across brews until title/abstract text changes.
+- **Ranker:** cosine vs profile vector by default; hybrid ranking once ≥30 signed votes (`MIN_VOTES_FOR_LR`) train the LR. Source quality is a tie-breaker rather than the dominant force; novelty, access friction, promotional-risk, and low-information commentary filters are exposed in the web UI. Hybrid rank scores are kept separate from absolute confidence so weak pools do not create fake "must read" labels. Item embeddings are cached in SQLite and reused across brews until title/abstract text changes.
 - **Summarizer:** OpenAI-compatible `/chat/completions`. Returns extractive (first 2 sentences) when no key is set. Never raises — failures fall back to extractive.
 - **Email:** Resend. Sandbox `onboarding@resend.dev` works without domain. Dry-run writes to disk. Email and web templates force escaping for feed-controlled content.
 - **Local UI safety:** write routes require a per-process CSRF token, reject foreign origins, and the CLI rejects non-loopback web binds.
@@ -95,7 +95,7 @@ data/profile.yaml ─► embed (bge-small) ─► freshness + dedupe + cosine + 
 | 6 | Polish | tenacity retries on all adapters, `src/dailydigest/health.py`, backfill flag, health footer in template |
 | 7a | Inbound replies | `src/dailydigest/inbound.py`, `dd ingest-replies` command, Reply-To header, `.github/workflows/ingest-replies.yml` |
 | 7b | FreshRSS sidecar | `infra/{docker-compose.yml, Caddyfile, .env.example}`, `src/dailydigest/freshrss_export.py`, `docs/freshrss-setup.md` |
-| 7c | Domain + tests | `docs/domain-setup.md`, `tests/` (68 tests, 5 files), `.github/workflows/test.yml`, pytest dev group |
+| 7c | Domain + tests | `docs/domain-setup.md`, `tests/` (326 tests; see `uv run pytest --collect-only -q`), `.github/workflows/test.yml`, pytest dev group |
 
 ---
 
@@ -224,7 +224,7 @@ Roughly in priority order if/when work resumes:
 3. **Test on real GH Actions runner** — 4 workflows written but never executed. Push to a private repo and trigger `workflow_dispatch` once for `digest`, `prune`, `ingest-replies`, `test`.
 4. **Wire up Gmail App Password and test inbound replies** — set `IMAP_USER` / `IMAP_PASSWORD` / `REPLY_TO_EMAIL`, send yourself a digest, reply with `+R1 -I2`, run `uv run dd ingest-replies`.
 5. **Replace dead feeds** — find current URLs for EMA News, openFDA Drugs@FDA, Reuters. Update `config/sources.yaml`.
-6. **Train the LR ranker** — needs ~20 signed votes. Use the digest a few weeks first, then `uv run dd vote --train`.
+6. **Train the LR ranker** — needs ≥30 signed votes (`MIN_VOTES_FOR_LR`). Use the digest a few weeks first, then `uv run dd vote --train`.
 7. **Stand up FreshRSS sidecar** (optional) — follow `docs/freshrss-setup.md`. Hetzner CX11 + a domain you own. ~$4/mo.
 8. **Per-section length budgets in summary prompt** — currently each section caps item *count*; consider summary length too.
 

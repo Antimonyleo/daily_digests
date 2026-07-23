@@ -981,7 +981,50 @@ def _pick_research_balanced(
                 break
             add(row, score, allow_low_impact_override=True)
 
-    return selected
+    return _apply_final_score_cutoff(selected)
+
+
+def _apply_final_score_cutoff(
+    selected: list[tuple[ItemRow, float]],
+) -> list[tuple[ItemRow, float]]:
+    """Drop research picks the learned model scored near the bottom.
+
+    Section sizing gates on TOPIC cosine, but slots are then filled by FINAL
+    fused score — so a high-topic, high-prestige paper the model learned the
+    reader dislikes (near-zero final score) could still pad the section. This
+    enforces a floor on the FINAL score: keep items scoring at least
+    ``frac`` of the section's top pick, dropping the rest.
+
+    RELATIVE (fraction of the top) rather than absolute: the fused score is RRF
+    min-maxed to [0,1] PER RUN, so the top is ~1.0 and the bottom ~0.0 every
+    run — a fixed absolute cut would drift day to day. A hard-minimum keeps the
+    strongest N picks regardless so the gate never empties the section.
+    """
+    if not selected:
+        return selected
+    try:
+        from ..config import get_settings
+
+        s = get_settings()
+        frac = float(getattr(s, "research_final_score_floor_frac", 0.0))
+        min_keep = int(getattr(s, "research_final_score_min_keep", 3))
+    except Exception:  # noqa: BLE001
+        return selected
+    if frac <= 0.0:
+        return selected
+
+    ranked = sorted(selected, key=lambda t: t[1], reverse=True)
+    top = float(ranked[0][1])
+    if top <= 0.0:
+        # Degenerate run (all scores collapsed to 0): keep the hard-minimum so the
+        # digest is never empty, rather than dropping everything against a 0 floor.
+        return ranked[: max(0, min_keep)] if min_keep else ranked
+    floor = frac * top
+    kept = [(row, score) for row, score in ranked if float(score) >= floor]
+    if len(kept) < min_keep:
+        # Never drop below the hard-minimum of top-ranked items.
+        kept = ranked[: min(min_keep, len(ranked))]
+    return kept
 
 
 def _available(scored: list[tuple[ItemRow, float]], predicate) -> int:

@@ -28,5 +28,7 @@ EXPOSE 8765
 VOLUME ["/app/data"]
 
 # --no-browser: the container cannot open the host browser; the user opens the
-# mapped port themselves. --host 0.0.0.0 so the mapped port is reachable.
-CMD ["uv", "run", "dd", "start", "--host", "0.0.0.0", "--port", "8765", "--no-browser"]
+# mapped port themselves. --host 0.0.0.0 so the mapped port is reachable, with
+# --allow-remote to opt into the non-loopback bind. There is no auth, so
+# docker-compose maps the port to 127.0.0.1 only (keep it that way).
+CMD ["uv", "run", "dd", "start", "--host", "0.0.0.0", "--port", "8765", "--no-browser", "--allow-remote"]

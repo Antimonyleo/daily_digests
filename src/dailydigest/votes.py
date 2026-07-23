@@ -306,59 +306,114 @@ def grade_to_weight(grade: int) -> float:
     return max(-1.0, min(1.0, (int(grade) - VOTE_GRADE_NEUTRAL) / 50.0))
 
 
-def _update_rocchio(item_id: int, vote_value: int, grade: int | None = None) -> None:
-    """Update the Rocchio-style learned profile vector after each vote.
+# Rocchio base pull rates and recency decay. alpha=0.08 (up) / beta=0.04 (down)
+# are scaled by preference strength (from ``grade``); ``decay`` weights recent
+# votes more. These are applied deterministically over the canonical vote set in
+# _rebuild_rocchio_profile so learned_profile.npz is reproducible from votes.
+_ROCCHIO_ALPHA = 0.08
+_ROCCHIO_BETA = 0.04
+_ROCCHIO_DECAY = 0.995
 
-    Base rates alpha=0.08 (up) / beta=0.04 (down) are scaled by the preference
-    strength derived from ``grade`` (falling back to the vote sign), so a stronger
-    preference pulls the learned profile harder. Called outside DB session.
+
+def _rebuild_rocchio_profile() -> None:
+    """Rebuild the learned profile vector from scratch out of the CANONICAL votes.
+
+    Idempotent by construction: the profile is a pure function of the *current*
+    latest signed vote per item, not of the sequence of update events. Re-voting,
+    changing a vote's sign, or setting a vote to neutral all produce exactly the
+    profile that the resulting canonical vote set implies, because the old vector
+    is discarded and recomputed every time.
+
+    Each canonical vote pulls the profile by a grade-weighted, recency-decayed
+    amount: ``rate * weight * decay**rank * vec`` where ``rank`` is the vote's
+    position in newest-first order (rank 0 = most recent, full weight). ``rate``
+    is ``alpha`` for up-votes and ``beta`` for down-votes; ``weight`` is the
+    signed preference strength from the grade (negative for down-votes, so it
+    subtracts). This preserves the original alpha/beta base rates and the 0.995
+    "recent votes count more" intent while being deterministic — unlike the old
+    incremental update, which added a new contribution on every event and so
+    double-counted re-votes and never removed a changed/neutralized contribution.
+
+    Called outside a DB session after each vote is recorded.
     """
-    if vote_value not in (1, -1):
-        return
-    if grade is None:
-        grade = value_to_grade(vote_value)
-    weight = grade_to_weight(grade)
-    alpha, beta = 0.08, 0.04
-    decay = 0.995  # recency decay: recent votes count more (~50% after ~139 votes)
     try:
-        from .store import ItemRow, session_scope
+        init_db()
         with session_scope() as s:
-            item = s.get(ItemRow, item_id)
-            if item is None:
-                return
-            s.expunge(item)
-
-        from .rank.embedding_cache import embed_item_rows
-        vecs = embed_item_rows([item])
-        if vecs.size == 0 or vecs.shape[0] == 0:
-            return
-        vec = vecs[0].astype(np.float32)
+            raw = s.execute(
+                select(VoteRow.item_id, VoteRow.value, VoteRow.grade, ItemRow)
+                .join(ItemRow, VoteRow.item_id == ItemRow.id)
+                .order_by(
+                    VoteRow.created_at.desc(),
+                    VoteRow.id.desc(),
+                )
+            ).all()
+            seen: set[int] = set()
+            canonical: list[tuple[object, int, int | None]] = []
+            for item_id, value, grade, row in raw:
+                iid = int(item_id)
+                if iid in seen:
+                    continue
+                seen.add(iid)
+                if int(value) not in (-1, 1):
+                    # Latest vote is neutral → this item contributes nothing.
+                    continue
+                s.expunge(row)
+                canonical.append((row, int(value), grade))
 
         path = _learned_profile_path()
-        if path.exists():
-            try:
-                data = np.load(path, allow_pickle=False)
-                learned = data["profile"].astype(np.float32)
-                stored_count = int(data["vote_count"][0])
-            except Exception:
-                learned = np.zeros(vec.shape, dtype=np.float32)
-                stored_count = 0
-        else:
-            learned = np.zeros(vec.shape, dtype=np.float32)
-            stored_count = 0
 
-        if weight >= 0:
-            learned = learned * decay + alpha * weight * vec
-        else:
-            learned = learned * decay + beta * weight * vec  # weight < 0 → subtracts
+        if not canonical:
+            # No signed votes remain (all neutral/removed): the learned profile is
+            # empty. Remove any stale file so the ranker falls back cleanly rather
+            # than keeping a now-orphaned learned vector.
+            if path.exists():
+                try:
+                    path.unlink()
+                except OSError:
+                    pass
+            return
+
+        from .rank.embedding_cache import embed_item_rows
+
+        rows = [row for row, _, _ in canonical]
+        vecs = embed_item_rows(rows)
+        if vecs.size == 0 or vecs.shape[0] == 0:
+            return
+        vecs = vecs.astype(np.float32)
+
+        learned = np.zeros(vecs.shape[1], dtype=np.float32)
+        for rank, (_, value, grade) in enumerate(canonical):
+            g = grade if grade is not None else value_to_grade(value)
+            weight = grade_to_weight(g)
+            rate = _ROCCHIO_ALPHA if weight >= 0 else _ROCCHIO_BETA
+            factor = rate * weight * (_ROCCHIO_DECAY ** rank)
+            learned = learned + factor * vecs[rank]
 
         path.parent.mkdir(parents=True, exist_ok=True)
         # np.savez appends .npz to filenames lacking that extension, so use _tmp.npz
         tmp = path.with_name(path.stem + "_tmp.npz")
-        np.savez(tmp, profile=learned, vote_count=np.array([stored_count + 1], dtype=np.int32))
+        np.savez(
+            tmp,
+            profile=learned,
+            vote_count=np.array([len(canonical)], dtype=np.int32),
+        )
         tmp.replace(path)
     except Exception as exc:  # noqa: BLE001
-        logger.warning("Rocchio update failed: %s", exc)
+        logger.warning("Rocchio rebuild failed: %s", exc)
+
+
+def _update_rocchio(item_id: int | None = None, vote_value: int | None = None, grade: int | None = None) -> None:
+    """Refresh the learned profile after a vote change.
+
+    Kept as the vote-record entrypoint (and a stable monkeypatch target) but now
+    a thin wrapper: rather than applying a per-item incremental delta (which was
+    non-idempotent — re-voting or changing a vote left stale contributions), it
+    rebuilds the whole learned profile from the canonical vote set via
+    :func:`_rebuild_rocchio_profile`. The ``item_id`` / ``vote_value`` / ``grade``
+    arguments are accepted for backward compatibility but ignored, since the
+    canonical vote set already reflects the just-recorded vote.
+    """
+    _rebuild_rocchio_profile()
 
 
 # Minimum signed (+1/-1) votes before the learned LR ranker replaces the cosine
@@ -507,12 +562,12 @@ def record_votes(line: str, digest_id: str | None = None) -> dict[str, int]:
         counts["down"] = len(down_ids)
         counts["unknown"] = len(up_missing) + len(down_missing)
 
-    # Update Rocchio learned profile outside DB session
+    # Rebuild the Rocchio learned profile from the canonical vote set (outside the
+    # DB session). One rebuild covers all votes in this batch and is idempotent.
     for item_id in up_ids:
-        _update_rocchio(item_id, 1)
         _clear_vote_reasons(item_id)
-    for item_id in down_ids:
-        _update_rocchio(item_id, -1)
+    if up_ids or down_ids:
+        _update_rocchio()
 
     return counts
 
@@ -537,8 +592,9 @@ def record_vote_by_id(item_id: int, value: int, grade: int | None = None) -> boo
 
         _upsert_vote(s, item_id, value, grade)
 
-    if value in (1, -1):
-        _update_rocchio(item_id, value, grade)
+    # Rebuild the learned profile from the canonical votes. This runs even for a
+    # neutral vote so that clearing a prior signed vote removes its contribution.
+    _update_rocchio(item_id, value, grade)
     if value == 1:
         _clear_vote_reasons(item_id)
     return True

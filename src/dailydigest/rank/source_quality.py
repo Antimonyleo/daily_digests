@@ -655,8 +655,12 @@ def _reason_tags(
 
     if section == "regulatory":
         tags.append("Regulatory update")
-    if learned >= 0.65:
-        tags.append("Matches learned preferences")
+    # NOTE: ``learned`` is the LR sigmoid, but the LR is trained on pairwise
+    # feature *differences*, so its absolute probability saturates ~0.99 for
+    # nearly every item (liked or not) and carries no discriminative signal on
+    # real data. Ranking correctly uses the LR *margin* (relative), but this
+    # per-item scalar has no run-level context to gate on, so we do not surface
+    # a "matches learned preferences" label here — it would be misleading.
     if promo >= 0.35:
         tags.append("Promo risk")
     if access >= 0.14:
@@ -708,8 +712,10 @@ def _why_shown(
         reasons.append("Strong topic match")
     elif topic >= 0.45:
         reasons.append("Relevant to your profile")
-    if learned >= 0.65:
-        reasons.append("Matches your feedback")
+    # ``learned`` (LR sigmoid) saturates ~0.99 for almost every item because the
+    # LR is trained pairwise; the absolute probability is not a calibrated upvote
+    # likelihood, so we intentionally do not emit a "matches your feedback"
+    # reason from it. See _reason_tags for the full rationale.
     if source_quality.quality_tier in {"top", "high", "strong", "trusted-news"}:
         reasons.append("Reliable source")
     if novelty >= 0.55:

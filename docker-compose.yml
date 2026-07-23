@@ -16,6 +16,9 @@ services:
     volumes:
       - ./data:/app/data
     environment:
+      # Opt into the container's non-loopback (0.0.0.0) bind. Safe only because
+      # the port above is mapped to 127.0.0.1 on the host; the app has no auth.
+      DD_ALLOW_REMOTE_BIND: "1"
       # Extractive summaries need no API key. To use a hosted LLM, set these:
       #   LLM_BACKEND: api
       #   LLM_BASE_URL: https://...

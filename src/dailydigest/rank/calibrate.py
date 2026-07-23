@@ -25,7 +25,7 @@ from pathlib import Path
 import numpy as np
 
 from ..store import DigestItemFeatureRow, init_db, session_scope
-from ..votes import _latest_vote_values
+from ..votes import LR_FEATURE_SCHEMA_VERSION, _latest_vote_values
 
 logger = logging.getLogger(__name__)
 
@@ -42,14 +42,28 @@ def _calibration_dataset() -> tuple[np.ndarray, np.ndarray]:
     """Return (scores, labels) from persisted digest features joined to votes."""
     init_db()
     with session_scope() as s:
-        rows = s.query(
-            DigestItemFeatureRow.item_id, DigestItemFeatureRow.final_score
-        ).all()
+        # Order oldest-first so that, when an item appears in several digests,
+        # the assignment below deterministically keeps the LATEST digest's score
+        # (by created_at, then row id as a stable tie-break within one created_at).
+        # The latest score reflects the current scoring model; older snapshots are
+        # the ones most likely produced under a stale feature schema, so preferring
+        # the newest de-confounds the calibration set. (The previous "last write
+        # wins" over an unordered query was non-deterministic.)
+        rows = (
+            s.query(DigestItemFeatureRow.item_id, DigestItemFeatureRow.final_score)
+            .order_by(
+                DigestItemFeatureRow.created_at.asc(),
+                DigestItemFeatureRow.id.asc(),
+            )
+            .all()
+        )
     by_item: dict[int, float] = {}
     for item_id, score in rows:
         if item_id is None or score is None:
             continue
-        by_item[int(item_id)] = float(score)  # last write wins; one score per item
+        # Later rows overwrite earlier ones; with oldest-first ordering the final
+        # value is the most recent digest's score for that item.
+        by_item[int(item_id)] = float(score)
     if not by_item:
         return np.zeros(0, dtype=np.float32), np.zeros(0, dtype=np.float32)
     votes = _latest_vote_values(list(by_item.keys()))
@@ -79,6 +93,11 @@ def fit_calibrator() -> dict | None:
         "a": float(clf.coef_[0][0]),
         "b": float(clf.intercept_[0]),
         "n": int(len(X)),
+        # Stamp the feature-schema version the scores were produced under. The
+        # loader invalidates a calibrator whose schema != current, so a fit made
+        # from scores under an old schema (contaminated after a schema change) is
+        # treated as absent and refit instead of silently applied.
+        "schema": LR_FEATURE_SCHEMA_VERSION,
     }
     path = _calibrator_path()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -97,8 +116,20 @@ def load_calibrator() -> dict | None:
         return None
     try:
         data = json.loads(path.read_text())
-        if "a" in data and "b" in data:
-            return data
+        if "a" not in data or "b" not in data:
+            return None
+        # Treat a calibrator fit under a different feature schema as absent: its
+        # (a, b) were learned from scores of a now-changed scoring model and are
+        # contaminated. A missing "schema" key means a pre-versioning calibrator,
+        # which is likewise stale by definition.
+        if data.get("schema") != LR_FEATURE_SCHEMA_VERSION:
+            logger.info(
+                "calibrator: ignoring stale fit (schema %r != current %r)",
+                data.get("schema"),
+                LR_FEATURE_SCHEMA_VERSION,
+            )
+            return None
+        return data
     except Exception as e:  # noqa: BLE001
         logger.warning("calibrator: failed to load: %s", e)
     return None

@@ -267,7 +267,22 @@ def test_score_breakdown_exposes_user_friendly_reason_tags():
     assert breakdown.topic == pytest.approx(0.75)
     assert "High-quality source" in breakdown.tags
     assert "High novelty" in breakdown.tags
-    assert "Matches learned preferences" in breakdown.tags
+
+
+def test_saturated_learned_score_does_not_earn_matches_tag():
+    # The LR is trained pairwise, so its sigmoid saturates ~0.99 for nearly every
+    # item (including mediocre/disliked ones). A high absolute learned_score must
+    # NOT surface a "matches preferences/feedback" label -- it is not calibrated.
+    class Row:
+        source = "Some Blog"
+        section = "industry"
+        title = "A middling item that the saturated LR happens to score high"
+        abstract = "Nothing special here."
+
+    breakdown = score_breakdown(Row(), 0.30, learned_score=0.99)
+
+    assert "Matches learned preferences" not in breakdown.tags
+    assert "Matches your feedback" not in breakdown.why_shown
 
 
 def test_score_breakdown_exposes_structured_ranking_features():

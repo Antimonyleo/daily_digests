@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 from collections.abc import Iterable
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -10,6 +11,7 @@ from threading import Lock
 from threading import Lock
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     LargeBinary,
     Column,
@@ -181,6 +183,36 @@ class DigestItemRow(Base):
         UniqueConstraint("digest_id", "item_id", name="uq_digest_items_item"),
         UniqueConstraint("digest_id", "item_label", name="uq_digest_items_label"),
     )
+
+
+class ImpressionRow(Base):
+    """Immutable, append-only log of what was shown in each brew RUN.
+
+    Unlike ``digest_items`` (which is REPLACED on every rebrew so it always
+    reflects the latest slate), this table is the permanent record: each brew
+    run INSERTS a fresh set of rows keyed by ``run_id`` and never deletes or
+    overwrites prior runs. This is the raw data offline evaluation and CTR
+    modeling accumulate from, so it must not be clobbered by a dry-run/rebrew.
+    """
+
+    __tablename__ = "impressions"
+
+    id = Column(Integer, primary_key=True)
+    # run_id groups all rows written by one brew; a rebrew of the same digest_id
+    # produces a NEW run_id, so both runs' rows coexist.
+    run_id = Column(String, nullable=False, index=True)
+    digest_id = Column(String, ForeignKey("digests.id", ondelete="CASCADE"), nullable=False, index=True)
+    item_id = Column(Integer, ForeignKey("items.id", ondelete="CASCADE"), nullable=False, index=True)
+    section = Column(String, nullable=False)
+    position = Column(Integer, nullable=False)  # 0-based rank within the section
+    final_score = Column(Float)
+    model_version = Column(String)  # ranker_version at brew time
+    # Set later by the UI when the reader actually views the item; defaults False.
+    viewed = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+    item = relationship("ItemRow")
+    digest = relationship("DigestRow")
 
 
 class RunRow(Base):
@@ -534,8 +566,6 @@ def write_digest_features(
     Each tuple is ``(label, item_id, final_score, features)``. Features are
     stored as JSON so the ranker can evolve without requiring DB migrations.
     """
-    if not feature_rows:
-        return
     init_db()
     with session_scope() as s:
         if s.get(DigestRow, digest_id) is None:
@@ -543,6 +573,9 @@ def write_digest_features(
         # A same-day rebrew replaces the slate: drop feature rows for items no
         # longer featured under this digest_id so the table does not accumulate the
         # UNION of every rebrew's candidates (which distorted offline evaluation).
+        # This DELETE must run even when ``feature_rows`` is empty — an early
+        # `return` before it left stale rows behind after a zero-result rebrew
+        # (displayed=0 but features=1), so it runs regardless of the new slate size.
         new_ids = [int(item_id) for _, item_id, _, _ in feature_rows]
         s.execute(
             delete(DigestItemFeatureRow).where(
@@ -573,6 +606,44 @@ def write_digest_features(
                 )
             )
             s.execute(stmt)
+
+
+def write_impressions(
+    digest_id: str,
+    impression_rows: list[tuple[str, int, int, float | None]],
+    model_version: str | None = None,
+    run_id: str | None = None,
+) -> str:
+    """Append one brew RUN's impressions to the immutable impression log.
+
+    Each tuple is ``(section, item_id, position, final_score)``. A fresh
+    ``run_id`` is minted per call (unless supplied) so a rebrew of the same
+    ``digest_id`` ADDS a new run's rows rather than replacing prior runs — this
+    is the append-only counterpart to ``write_digest`` (which is destructive).
+    Returns the ``run_id`` used.
+    """
+    init_db()
+    # uuid4 is fine in normal Python; callers may pass an explicit id if they
+    # need a deterministic/timestamp-derived one in a restricted context.
+    run_id = run_id or uuid.uuid4().hex
+    with session_scope() as s:
+        if s.get(DigestRow, digest_id) is None:
+            s.add(DigestRow(id=digest_id, item_count=len(impression_rows)))
+        now = datetime.now(timezone.utc)
+        for section, item_id, position, final_score in impression_rows:
+            s.add(
+                ImpressionRow(
+                    run_id=run_id,
+                    digest_id=digest_id,
+                    item_id=int(item_id),
+                    section=str(section or ""),
+                    position=int(position),
+                    final_score=float(final_score) if final_score is not None else None,
+                    model_version=model_version,
+                    created_at=now,
+                )
+            )
+    return run_id
 
 
 def load_digest_features(digest_id: str) -> dict[int, dict]:

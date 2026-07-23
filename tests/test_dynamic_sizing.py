@@ -220,6 +220,61 @@ def test_venue_credit_does_not_rescue_off_topic_prestige(monkeypatch):
     assert off_topic.id not in kept   # 0.55 + 0.04 = 0.59 < 0.68
 
 
+def test_final_score_cutoff_drops_bottom_scored_research(monkeypatch):
+    """Unit test of the relative final-score gate: keep items scoring >= frac*top,
+    drop the rest, but never below the hard-minimum."""
+    from dailydigest.rank.ranker import _apply_final_score_cutoff
+
+    s = get_settings()
+    monkeypatch.setattr(s, "research_final_score_floor_frac", 0.35)
+    monkeypatch.setattr(s, "research_final_score_min_keep", 3)
+
+    class R:
+        def __init__(self, rid):
+            self.id = rid
+            self.section = "research"
+            self.source = "Nature"
+
+    # top=1.0, floor=0.35. 0.10 is below the floor -> dropped; 4 above -> kept.
+    selected = [(R(1), 1.0), (R(2), 0.8), (R(3), 0.6), (R(4), 0.4), (R(5), 0.10)]
+    kept = {row.id for row, _ in _apply_final_score_cutoff(selected)}
+    assert kept == {1, 2, 3, 4}  # bottom near-zero pick excluded
+
+
+def test_pick_research_excludes_high_topic_but_bottom_final_score(monkeypatch):
+    """The core P8 defect: an item with a HIGH topic score but a bottom/near-zero
+    FINAL fused score must be EXCLUDED from the picked research section rather than
+    padding a slot (previously it filled a slot because sizing gated on topic)."""
+    from dailydigest.rank.ranker import _pick_research_balanced
+
+    s = get_settings()
+    monkeypatch.setattr(s, "research_final_score_floor_frac", 0.35)
+    monkeypatch.setattr(s, "research_final_score_min_keep", 3)
+
+    class R:
+        def __init__(self, rid, source):
+            self.id = rid
+            self.section = "research"
+            # Distinct high-quality journals so the per-source cap never binds and
+            # all five are selected by topic sizing — isolating the final-score gate.
+            self.source = source
+            self.title = str(rid)
+            self.abstract = "x" * 100
+
+    # Four strong picks + one high-prestige item the learned model scored ~0.
+    # (final scores are RRF min-maxed to [0,1]; the disliked paper lands at 0.0.)
+    scored = [
+        (R(1, "Nature"), 1.0),
+        (R(2, "Science"), 0.85),
+        (R(3, "Cell"), 0.70),
+        (R(4, "The Lancet"), 0.55),
+        (R(5, "NEJM"), 0.0),  # disliked-but-prestigious -> bottom final score
+    ]
+    picked_ids = {row.id for row, _ in _pick_research_balanced(scored, cap=12)}
+    assert picked_ids == {1, 2, 3, 4}
+    assert 5 not in picked_ids  # bottom/near-zero final score is dropped
+
+
 def test_negative_penalty_gates_out_off_field_item(monkeypatch):
     """An item clearing the topic floor on cosine alone is still gated OUT when it
     carries a large negative-interest penalty (folded into the effective relevance)."""
