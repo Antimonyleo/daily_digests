@@ -7,10 +7,69 @@ from urllib.parse import urlsplit
 
 from jinja2 import Environment, FileSystemLoader
 
-from .store import ItemRow
+from .rank.source_quality import display_breakdown, source_bucket
+from .store import ItemRow, load_digest_features
 
 _TEMPLATE_DIR = Path(__file__).resolve().parents[2] / "templates"
 _ALLOWED_LINK_SCHEMES = {"http", "https"}
+
+# Content types that are NOT primary research get a visible badge so a Nature
+# Reviews piece is not silently mistaken for a primary-research slot. Plain
+# "research"/"article" (and other non-mapped types) render no badge.
+_CONTENT_TYPE_LABELS: dict[str, str] = {
+    "review": "Review",
+    "method": "Method",
+    "dataset": "Dataset",
+    "clinical": "Clinical",
+}
+
+
+def content_type_label(content_type: str | None) -> str:
+    """Map a source_quality content_type to a short badge, or "" for none."""
+    return _CONTENT_TYPE_LABELS.get(str(content_type or "").strip().lower(), "")
+
+
+def _is_high_profile(source_bucket_value: str | None, tags: list[str]) -> bool:
+    """A published-journal venue or an explicit prestige/quality tag."""
+    if str(source_bucket_value or "") == "published_journal":
+        return True
+    lowered = {str(t or "").strip().lower().replace(" ", "_") for t in tags}
+    return "high_quality_source" in lowered
+
+
+def reason_line(
+    primary_facet: str | None,
+    *,
+    high_profile: bool = False,
+    journal: str | None = None,
+    why_shown: list[str] | None = None,
+    tags: list[str] | None = None,
+) -> str:
+    """Build a compact, human-readable "why shown" reason line.
+
+    ``Shown for {primary_facet}`` with an optional ``· high-profile journal``
+    (or the journal name) suffix. When ``primary_facet`` is empty, fall back to
+    the first ``why_shown`` entry, then the first tag; otherwise return "" so the
+    caller omits the line rather than rendering "Shown for .".
+    """
+    facet = str(primary_facet or "").strip()
+    if facet:
+        line = f"Shown for {facet}"
+    else:
+        fallback = ""
+        for candidate in list(why_shown or []) + list(tags or []):
+            text = str(candidate or "").replace("_", " ").strip()
+            if text:
+                fallback = text
+                break
+        if not fallback:
+            return ""
+        line = f"Shown for {fallback}"
+    if high_profile:
+        venue = str(journal or "").strip()
+        line += f" · {venue}" if venue else " · high-profile journal"
+    return line
+
 
 SECTION_META: dict[str, dict[str, str]] = {
     "research": {"title": "Research", "emoji": "🧬"},
@@ -62,6 +121,14 @@ def render_digest(
     env = _env()
     tpl = env.get_template("digest.html.j2")
 
+    # Persisted per-item features (primary_facet, content_type, ...) keyed by
+    # item id. Best-effort: if the store is unavailable we degrade to whatever
+    # display_breakdown(row) can recompute from the row alone.
+    try:
+        persisted_features = load_digest_features(digest_id)
+    except Exception:  # noqa: BLE001
+        persisted_features = {}
+
     rendered_sections = []
     for key in SECTION_ORDER:
         items = sections.get(key) or []
@@ -70,6 +137,29 @@ def render_digest(
         meta = SECTION_META.get(key, {"title": key.title(), "emoji": ""})
         rendered_items = []
         for row, score, summary in items:
+            features = persisted_features.get(int(row.id)) if row.id is not None else None
+            features = features or {}
+            # content_type / quality signals: prefer persisted, else recompute.
+            content_type = str(features.get("content_type") or "")
+            bucket = str(features.get("source_bucket") or "")
+            tags = list(features.get("tags") or [])
+            why = list(features.get("why_shown") or [])
+            if not content_type or not bucket:
+                try:
+                    bd = display_breakdown(row)
+                    content_type = content_type or bd.content_type
+                    bucket = bucket or source_bucket(row)
+                    tags = tags or list(bd.tags) + list(bd.quality_tags)
+                    why = why or list(bd.why_shown)
+                except Exception:  # noqa: BLE001
+                    pass
+            reason = reason_line(
+                features.get("primary_facet"),
+                high_profile=_is_high_profile(bucket, tags),
+                journal=row.source or "",
+                why_shown=why,
+                tags=tags,
+            )
             rendered_items.append(
                 {
                     "label": row.item_label or "",
@@ -79,6 +169,8 @@ def render_digest(
                     "published": _format_date(row),
                     "summary": summary or "",
                     "score": score,
+                    "reason": reason,
+                    "type_label": content_type_label(content_type),
                 }
             )
         rendered_sections.append(

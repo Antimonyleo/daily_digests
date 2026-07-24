@@ -147,6 +147,7 @@ research:
   - name: Nature Communications
     kind: rss
     url: https://www.nature.com/ncomms.rss
+    prestige_score: 0.85  # core venue for materials/nano/soft-matter reader; mid value between strong (0.76) and high (0.90)
 
   # --- Nature Reviews (review journals; can be split to a separate section later) ---
   - name: Nature Reviews Drug Discovery
@@ -267,6 +268,7 @@ research:
   - name: Advanced Materials
     kind: rss
     url: https://onlinelibrary.wiley.com/feed/15214095/most-recent
+    prestige_score: 0.85  # core venue for materials/nano/soft-matter reader; mid value between strong (0.76) and high (0.90)
   - name: Advanced Functional Materials
     kind: rss
     url: https://onlinelibrary.wiley.com/feed/16163028/most-recent

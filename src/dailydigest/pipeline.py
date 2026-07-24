@@ -6,13 +6,19 @@ import logging
 import re
 import time
 from collections.abc import Callable
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from . import health, votes as votes_mod
+from . import health
+from . import votes as votes_mod
 from .config import get_settings, load_profile, load_sources
-from .dedupe import dedupe_by_url, dedupe_ranking_candidates, filter_english
+from .dedupe import (
+    cap_near_duplicates,
+    dedupe_by_url,
+    dedupe_ranking_candidates,
+    filter_english,
+)
 from .email_render import SECTION_ORDER, render_digest
 from .email_send import send_digest
 from .health import IngestStats
@@ -30,9 +36,9 @@ from .rank.source_quality import (
     RANKER_VERSION,
     breakdown_payload,
     is_high_quality_journal_source,
+    should_skip_item,
     source_bucket,
     venue_relevance_credit,
-    should_skip_item,
 )
 from .store import (
     DigestRow,
@@ -45,8 +51,8 @@ from .store import (
     recent_items,
     session_scope,
     upsert_items,
-    write_digest_audit,
     write_digest,
+    write_digest_audit,
     write_digest_features,
     write_impressions,
     write_summaries,
@@ -402,7 +408,7 @@ def _digest_id() -> str:
     try:
         tz: ZoneInfo | timezone = ZoneInfo(get_settings().user_tz)
     except Exception:  # noqa: BLE001 - bad TZ string falls back to UTC
-        tz = timezone.utc
+        tz = UTC
     return datetime.now(tz).strftime("%Y-%m-%d")
 
 
@@ -465,6 +471,7 @@ def _score_items_for_pipeline(
     items: list[ItemRow],
     profile_vec,
     downweight: list[str],
+    attribution=None,
 ) -> tuple[list[tuple[ItemRow, float]], dict[int, dict[str, Any]]]:
     """Score with feature snapshots, falling back for tests that monkeypatch score_items."""
     try:
@@ -498,6 +505,7 @@ def _score_items_for_pipeline(
             profile_vec,
             downweight,
             reason_penalty_map=reason_penalties,
+            attribution=attribution,
         )
     except Exception as e:  # noqa: BLE001
         logger.warning("feature-scoring path failed, falling back to legacy scorer: %s", e)
@@ -681,12 +689,22 @@ def run_all(
         len(quality_rows) + len(quality_drops),
         days,
     )
-    scored, score_features = _score_items_for_pipeline(items, profile_vec, profile.downweight)
+    try:
+        from .rank.profile import build_attribution_context
+
+        _attribution_ctx = build_attribution_context(profile)
+    except Exception as _e:  # noqa: BLE001
+        logger.warning("attribution context build failed: %s", _e)
+        _attribution_ctx = None
+    scored, score_features = _score_items_for_pipeline(
+        items, profile_vec, profile.downweight, attribution=_attribution_ctx
+    )
 
     # Apply negative-interest penalty when the profile has configured negative interests
     if _build_neg_centroid is not None:
         try:
             import numpy as np
+
             from .rank.embedding_cache import embed_item_rows as _embed_rows
             _neg_vecs = _embed_rows([row for row, _ in scored])
 
@@ -804,12 +822,69 @@ def run_all(
     except Exception as _e:  # noqa: BLE001
         logger.warning("citation enrichment failed: %s", _e)
 
+    # Within-day near-duplicate suppression (research only): among the research
+    # candidates, decide which topical near-duplicates to drop so a cluster of
+    # near-identical papers (e.g. five AlphaFold-benchmark variants) contributes
+    # one representative to the digest instead of crowding out other interests.
+    # Scoped to research deliberately — deduping across the whole cross-section
+    # pool could collapse legitimately-distinct industry/world items. The decision
+    # is computed here on the score-desc research subset (highest-scored item of
+    # each cluster always survives) and applied to the SELECTION path below
+    # (`pickable` -> `pick_top_per_section`); the full `scored` list is left intact
+    # so the immutable impression/A-B log still records the complete candidate
+    # pool. No-op when disabled.
+    _wd_drop_research_ids: set[int] = set()
+    _wd_settings = get_settings()
+    if getattr(_wd_settings, "within_day_dedupe", True):
+        try:
+            _wd_threshold = float(
+                getattr(_wd_settings, "within_day_dedupe_threshold", 0.86)
+            )
+            _wd_rows = [
+                row
+                for row, _ in scored
+                if (getattr(row, "section", "") or "") == "research"
+            ]
+            if len(_wd_rows) > 1:
+                from .rank.embedding_cache import embed_item_rows as _wd_embed
+
+                _wd_vecs = _wd_embed(_wd_rows)
+                if (
+                    getattr(_wd_vecs, "shape", (0,))[0] == len(_wd_rows)
+                    and _wd_vecs.size > 0
+                ):
+                    _keep_idx = set(
+                        cap_near_duplicates(_wd_rows, _wd_vecs, _wd_threshold)
+                    )
+                    _wd_drop_research_ids = {
+                        id(_wd_rows[i])
+                        for i in range(len(_wd_rows))
+                        if i not in _keep_idx
+                    }
+                    if _wd_drop_research_ids:
+                        logger.info(
+                            "within_day_dedupe: dropped %d near-duplicate research items",
+                            len(_wd_drop_research_ids),
+                        )
+        except Exception as _e:  # noqa: BLE001
+            logger.warning("within-day near-dup suppression failed: %s", _e)
+
     # Note: do NOT pre-truncate `scored` to a global top-K before per-section picking;
     # a single-domain profile (e.g. biotech-heavy) starves industry/regulatory/world.
     # `pick_top_per_section` already caps per-section, so summary cost is bounded.
     # Hard-gate off-topic research/industry first so prestige can't fill a slot an
     # item's topic relevance never earned, then size + pick from what remains.
     pickable = _filter_off_topic(scored, score_features)
+    # Apply the within-day near-dup decision to the selection candidates only.
+    if _wd_drop_research_ids:
+        pickable = [
+            (row, score)
+            for row, score in pickable
+            if not (
+                (getattr(row, "section", "") or "") == "research"
+                and id(row) in _wd_drop_research_ids
+            )
+        ]
     research_ceiling = _research_ceiling_for_window(window_days)
     picked = pick_top_per_section(
         pickable,
@@ -910,6 +985,14 @@ def run_all(
                         ),
                         selection_reason=_selection_reason(row, _feature(row)),
                         scoring_mode=str(_feature(row).get("scoring_mode", "cosine")),
+                        primary_facet=str(_feature(row).get("primary_facet", "")),
+                        secondary_facets=list(
+                            _feature(row).get("secondary_facets", []) or []
+                        ),
+                        topic_priority=float(_feature(row).get("topic_priority", 0.0)),
+                        topic_priority_bonus=float(
+                            _feature(row).get("topic_priority_bonus", 0.0)
+                        ),
                     ),
                 )
                 for row, score, label in labeled
@@ -928,7 +1011,9 @@ def run_all(
         # score-ordered candidate pool, elsewhere the rank within the section slate.
         RESEARCH_CANDIDATE_POOL_CAP = 100
         _selected_ids = {int(row.id) for row, _s, _l in labeled}
-        _impressions: list[tuple[str, int, int, float | None, bool]] = []
+        _impressions: list[
+            tuple[str, int, int, float | None, bool, str, float | None]
+        ] = []
         # `scored` is (row, score) sorted by final score desc; filter to research
         # and cap the pool so the row count stays bounded.
         _research_scored = [
@@ -948,6 +1033,7 @@ def run_all(
                 _research_pool.append((row, score))
                 _pool_ids.add(int(row.id))
         for pos, (row, score) in enumerate(_research_pool):
+            _feat = _feature(row)
             _impressions.append(
                 (
                     "research",
@@ -955,6 +1041,8 @@ def run_all(
                     pos,
                     float(score),
                     int(row.id) in _selected_ids,
+                    str(_feat.get("primary_facet", "")),
+                    float(_feat.get("topic_score", score)),
                 )
             )
         # Selected non-research items, positioned within their section slate.
@@ -965,7 +1053,18 @@ def run_all(
                 continue  # already covered by the research candidate pool above
             pos = _section_pos.get(section, 0)
             _section_pos[section] = pos + 1
-            _impressions.append((section, int(row.id), pos, float(score), True))
+            _feat = _feature(row)
+            _impressions.append(
+                (
+                    section,
+                    int(row.id),
+                    pos,
+                    float(score),
+                    True,
+                    str(_feat.get("primary_facet", "")),
+                    float(_feat.get("topic_score", score)),
+                )
+            )
         write_impressions(digest_id, _impressions, model_version=RANKER_VERSION)
         write_digest_audit(digest_id, "missed_top_journals", top_journal_audit)
         write_digest_audit(digest_id, "candidate_funnel", [funnel_audit])

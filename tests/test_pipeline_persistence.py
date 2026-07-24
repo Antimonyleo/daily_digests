@@ -116,6 +116,10 @@ def test_run_all_logs_research_candidate_pool_with_selected_flags(monkeypatch, t
 
     monkeypatch.setenv("DB_PATH", str(tmp_path / "digest.db"))
     monkeypatch.setenv("PROFILE_PATH", "config/profile.example.yaml")
+    # This test uses near-identical placeholder research fixtures purely to
+    # exercise impression logging; disable within-day near-dup suppression so it
+    # does not collapse them (its behavior is covered in test_dedupe.py).
+    monkeypatch.setenv("WITHIN_DAY_DEDUPE", "false")
     config_mod.reload_settings()
     store_mod.SETTINGS = config_mod.SETTINGS
     store_mod._ENGINE = None
@@ -193,6 +197,97 @@ def test_run_all_logs_research_candidate_pool_with_selected_flags(monkeypatch, t
         assert impressions[picked_id].model_version == RANKER_VERSION
 
 
+def test_run_all_impressions_carry_primary_facet_and_topic_score(monkeypatch, tmp_path):
+    """Research impression rows carry per-candidate primary_facet + topic_score,
+    sourced from score_features, so the coverage harness can attribute the pool
+    (including UNSELECTED candidates that never reach digest_item_features)."""
+    from dailydigest import config as config_mod
+    from dailydigest import pipeline as pipeline_mod
+    from dailydigest import store as store_mod
+
+    monkeypatch.setenv("DB_PATH", str(tmp_path / "digest.db"))
+    monkeypatch.setenv("PROFILE_PATH", "config/profile.example.yaml")
+    # Near-identical placeholder fixtures; disable within-day dedupe so both survive.
+    monkeypatch.setenv("WITHIN_DAY_DEDUPE", "false")
+    config_mod.reload_settings()
+    store_mod.SETTINGS = config_mod.SETTINGS
+    store_mod._ENGINE = None
+    store_mod._SessionLocal = None
+    store_mod._INITIALIZED = False
+
+    store_mod.init_db()
+    with store_mod.session_scope() as s:
+        picked_row = store_mod.ItemRow(
+            source="Nature",
+            section="research",
+            external_id="facet-picked",
+            url="https://example.com/facet-picked",
+            title="Picked research candidate",
+            abstract="Primary research with methods and efficacy.",
+            published_at=datetime.now(timezone.utc),
+        )
+        unpicked_row = store_mod.ItemRow(
+            source="Nature",
+            section="research",
+            external_id="facet-unpicked",
+            url="https://example.com/facet-unpicked",
+            title="Unpicked research candidate",
+            abstract="Primary research with methods and efficacy.",
+            published_at=datetime.now(timezone.utc),
+        )
+        s.add_all([picked_row, unpicked_row])
+        s.flush()
+        picked_id = int(picked_row.id)
+        unpicked_id = int(unpicked_row.id)
+
+    def recent_items(days=2):
+        with store_mod.session_scope() as s:
+            rows = [s.get(store_mod.ItemRow, picked_id), s.get(store_mod.ItemRow, unpicked_id)]
+            for r in rows:
+                s.expunge(r)
+            return rows
+
+    # Inject facet + topic_score attribution into score_features (this is what the
+    # real feature-scoring path produces; the legacy score_items shim omits it).
+    def _score_for_pipeline(items, _pv, _downweight, attribution=None):
+        by_id = {int(it.id): it for it in items}
+        scored = [(by_id[picked_id], 0.9), (by_id[unpicked_id], 0.8)]
+        features = {
+            picked_id: {"topic_score": 0.82, "primary_facet": "dna nanotechnology"},
+            unpicked_id: {"topic_score": 0.71, "primary_facet": "colloidal self-assembly"},
+        }
+        return scored, features
+
+    def pick_top_per_section(scored, _caps, catch_up=False):
+        return scored[:1]
+
+    monkeypatch.setattr(pipeline_mod, "ingest_all", lambda progress_callback=None, days=2: 0)
+    monkeypatch.setattr(pipeline_mod, "load_profile", lambda: SimpleNamespace(bio="", keywords=[], downweight=[]))
+    monkeypatch.setattr(pipeline_mod, "build_profile_matrix", lambda _profile: __import__("numpy").zeros((1, 3)))
+    monkeypatch.setattr(pipeline_mod, "recent_items", recent_items)
+    monkeypatch.setattr(pipeline_mod, "_score_items_for_pipeline", _score_for_pipeline)
+    monkeypatch.setattr(pipeline_mod, "pick_top_per_section", pick_top_per_section)
+    monkeypatch.setattr(pipeline_mod, "summarize_items", lambda rows, profile=None: {})
+    monkeypatch.setattr(pipeline_mod, "send_digest", lambda html, subject, dry_run=False: True)
+
+    pipeline_mod.run_all(dry_run=True)
+
+    digest_id = pipeline_mod._digest_id()
+    with store_mod.session_scope() as s:
+        impressions = {
+            r.item_id: r
+            for r in s.query(store_mod.ImpressionRow).filter_by(digest_id=digest_id).all()
+        }
+        assert picked_id in impressions and unpicked_id in impressions
+        # Non-empty facet for these on-topic items; topic_score persisted for both.
+        assert impressions[picked_id].primary_facet == "dna nanotechnology"
+        assert impressions[picked_id].topic_score == 0.82
+        # The UNSELECTED candidate also carries attribution (the whole point).
+        assert impressions[unpicked_id].selected is False
+        assert impressions[unpicked_id].primary_facet == "colloidal self-assembly"
+        assert impressions[unpicked_id].topic_score == 0.71
+
+
 def test_run_all_logs_selected_research_item_below_pool_cap(monkeypatch, tmp_path):
     """A selected research item that ranks BELOW RESEARCH_CANDIDATE_POOL_CAP in the
     score-ordered pool (via source balancing / exploration / last-resort fill) must
@@ -204,6 +299,10 @@ def test_run_all_logs_selected_research_item_below_pool_cap(monkeypatch, tmp_pat
 
     monkeypatch.setenv("DB_PATH", str(tmp_path / "digest.db"))
     monkeypatch.setenv("PROFILE_PATH", "config/profile.example.yaml")
+    # Uses 130 near-identical placeholder research fixtures to exercise the
+    # below-cap impression-logging path; disable within-day near-dup suppression
+    # so it does not collapse them (its behavior is covered in test_dedupe.py).
+    monkeypatch.setenv("WITHIN_DAY_DEDUPE", "false")
     config_mod.reload_settings()
     store_mod.SETTINGS = config_mod.SETTINGS
     store_mod._ENGINE = None

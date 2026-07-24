@@ -23,7 +23,6 @@ Routes:
 from __future__ import annotations
 
 import asyncio
-from collections import Counter
 import hmac
 import json
 import logging
@@ -34,6 +33,7 @@ import secrets
 import shutil
 import threading
 import uuid
+from collections import Counter
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
@@ -51,9 +51,17 @@ from fastapi.templating import Jinja2Templates
 from jinja2 import Environment, FileSystemLoader
 from sqlalchemy import select
 
-from . import health, votes as votes_mod
+from . import health
+from . import votes as votes_mod
 from .config import SETTINGS, get_settings, reload_settings
-from .email_render import SECTION_META, SECTION_ORDER, safe_url
+from .email_render import (
+    SECTION_META,
+    SECTION_ORDER,
+    _is_high_profile,
+    content_type_label,
+    reason_line,
+    safe_url,
+)
 from .pipeline import _digest_id, run_all
 from .rank.source_quality import display_breakdown, source_bucket
 from .store import (
@@ -143,6 +151,7 @@ def _breakdown_payload(row: ItemRow, persisted: dict | None = None) -> dict:
             "tags": list(persisted.get("tags") or []),
             "why_shown": list(persisted.get("why_shown") or []),
             "content_type": str(persisted.get("content_type") or "article"),
+            "primary_facet": str(persisted.get("primary_facet") or ""),
             "source_bucket": str(persisted.get("source_bucket") or source_bucket(row)),
             "selection_reason": str(persisted.get("selection_reason") or ""),
             "ranker_version": str(persisted.get("ranker_version") or ""),
@@ -161,6 +170,7 @@ def _breakdown_payload(row: ItemRow, persisted: dict | None = None) -> dict:
         "tags": list(breakdown.tags),
         "why_shown": list(breakdown.why_shown),
         "content_type": breakdown.content_type,
+        "primary_facet": "",
         "source_bucket": source_bucket(row),
         "selection_reason": "",
         "ranker_version": "",
@@ -333,6 +343,16 @@ def _load_today(digest_id: str) -> tuple[list[dict], dict[int, int]]:
             confidence_score = _entry_confidence(
                 {"ranking": ranking, "score_raw": float(row.score or 0.0)}
             )
+            reason = reason_line(
+                ranking.get("primary_facet"),
+                high_profile=_is_high_profile(
+                    ranking.get("source_bucket"), ranking.get("tags") or []
+                ),
+                journal=row.source or "",
+                why_shown=ranking.get("why_shown") or [],
+                tags=ranking.get("tags") or [],
+            )
+            type_label = content_type_label(ranking.get("content_type"))
             if key not in by_section:
                 by_section[key] = []
                 seen_keys.append(key)
@@ -350,6 +370,8 @@ def _load_today(digest_id: str) -> tuple[list[dict], dict[int, int]]:
                     "confidence_score": confidence_score,
                     "ranking": ranking,
                     "ranking_sentence": _ranking_sentence(ranking),
+                    "reason_line": reason,
+                    "type_label": type_label,
                     "current_vote": current_vote.get(int(row.id)),
                     "current_grade": current_grade.get(int(row.id)),
                     "current_reasons": current_reasons.get(int(row.id), []),

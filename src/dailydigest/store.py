@@ -214,6 +214,13 @@ class ImpressionRow(Base):
     selected = Column(Boolean, nullable=False, default=False)
     # Set later by the UI when the reader actually views the item; defaults False.
     viewed = Column(Boolean, nullable=False, default=False)
+    # Per-candidate facet attribution captured at brew time, so the coverage
+    # harness can attribute the UNSELECTED research pool (which is absent from
+    # digest_item_features, that only records the selected slate).
+    #   primary_facet: the item's dominant matched core-interest facet ("" if none).
+    #   topic_score:   the raw relevance cosine the topic gate used (nullable).
+    primary_facet = Column(String, default="")
+    topic_score = Column(Float)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     item = relationship("ItemRow")
@@ -314,6 +321,8 @@ def _migrate_sqlite_schema(eng) -> None:
         "impressions": {
             "selected": "BOOLEAN NOT NULL DEFAULT 0",
             "viewed": "BOOLEAN NOT NULL DEFAULT 0",
+            "primary_facet": "VARCHAR DEFAULT ''",
+            "topic_score": "FLOAT",
         },
     }
 
@@ -628,6 +637,12 @@ def write_impressions(
     Each tuple is ``(section, item_id, position, final_score)`` or, to log the
     scored candidate pool for A/B, ``(section, item_id, position, final_score,
     selected)`` where ``selected`` marks whether the item made the final slate.
+    Two further optional elements carry per-candidate facet attribution so the
+    coverage harness can measure the unselected pool:
+    ``(section, item_id, position, final_score, selected, primary_facet,
+    topic_score)`` — ``primary_facet`` (str, "" when absent) is the item's
+    dominant matched core-interest facet and ``topic_score`` (float or None) is
+    the raw relevance cosine the topic gate used.
     When ``selected`` is omitted it defaults to True (a selected-slate row). A
     fresh ``run_id`` is minted per call (unless supplied) so a rebrew of the same
     ``digest_id`` ADDS a new run's rows rather than replacing prior runs — this
@@ -645,6 +660,10 @@ def write_impressions(
         for row in impression_rows:
             section, item_id, position, final_score = row[0], row[1], row[2], row[3]
             selected = bool(row[4]) if len(row) >= 5 else True
+            primary_facet = str(row[5]) if len(row) >= 6 else ""
+            topic_score = (
+                float(row[6]) if len(row) >= 7 and row[6] is not None else None
+            )
             s.add(
                 ImpressionRow(
                     run_id=run_id,
@@ -655,6 +674,8 @@ def write_impressions(
                     final_score=float(final_score) if final_score is not None else None,
                     model_version=model_version,
                     selected=selected,
+                    primary_facet=primary_facet,
+                    topic_score=topic_score,
                     created_at=now,
                 )
             )

@@ -177,6 +177,13 @@
     background: #f3f5f2; border: 1px solid #dfe6df; border-radius: 6px;
     padding: 2px 7px; font-size: 11px;
   }
+  .type-label {
+    display: inline-flex; align-items: center; min-height: 22px; padding: 3px 8px;
+    border-radius: 999px; font-size: 11px; font-weight: 820;
+    color: #6b5b1f; background: #f5efd6; border: 1px solid #e6dab0;
+    text-transform: uppercase; letter-spacing: 0.03em;
+  }
+  .reason-line { color: var(--muted); font-size: 12px; line-height: 1.4; margin: 5px 0 0; overflow-wrap: anywhere; }
   .priority-pill, .lane-pill {
     display: inline-flex; align-items: center; min-height: 22px; padding: 3px 8px;
     border-radius: 999px; font-size: 11px; font-weight: 820;
@@ -426,6 +433,9 @@
         <div class="item-main">
           <div class="item-head">
             <span class="label-pill">{{ item.label }}</span>
+            {% if item.type_label %}
+            <span class="type-label">{{ item.type_label }}</span>
+            {% endif %}
             <span class="priority-pill {{ priority }}">{{ priority_label }}</span>
           </div>
           <div>
@@ -434,6 +444,9 @@
           <div class="meta">
             {{ item.source }}{% if item.published %} &middot; {{ item.published }}{% endif %}
           </div>
+          {% if item.reason_line %}
+          <div class="reason-line">{{ item.reason_line }}</div>
+          {% endif %}
           <div class="ranking-sentence">{{ item.ranking_sentence }}</div>
           <details class="why-shown">
             <summary>Why shown?</summary>

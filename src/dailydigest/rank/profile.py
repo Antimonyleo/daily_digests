@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+from dataclasses import dataclass, field
 
 import numpy as np
 
@@ -13,6 +14,36 @@ from .embed import embed_texts
 logger = logging.getLogger(__name__)
 
 _SENT_RE = re.compile(r"(?<=[.!?;])\s+|\n+")
+
+# --- Facet attribution / topic-priority (P1 + P3) -------------------------- #
+# A matched core interest must reach this cosine to be named the "primary" facet;
+# below it the item has no clear facet (primary="").
+_PRIMARY_FACET_MIN_SIM = 0.32
+# Secondaries must be within this margin of the primary sim, and above this floor.
+_SECONDARY_MARGIN = 0.06
+_SECONDARY_MIN_SIM = 0.30
+_MAX_SECONDARIES = 2
+# Default normalized priority for keywords absent from profile.topic_priorities.
+_DEFAULT_PRIORITY = 0.5
+
+
+def _topic_priority_bonus_scale() -> float:
+    """Read the topic-priority bonus scale from settings (safe fallback).
+
+    Mirrors ``source_quality._research_quality_weight`` — a small nudge scale
+    added to the FINAL ordering score only, never the relevance gate.
+    """
+    try:
+        from ..config import get_settings
+
+        return float(get_settings().topic_priority_bonus_scale)
+    except Exception:  # noqa: BLE001
+        return 0.06
+
+
+# Convenience constant mirroring the settings default; the live value is read via
+# _topic_priority_bonus_scale() so env overrides take effect.
+TOPIC_PRIORITY_BONUS_SCALE = 0.06
 
 # Down-weight applied to context ("keep-me-informed") interest facets relative to
 # core research keywords (weight 1.0). At 0.45 a context-only cosine match of
@@ -164,7 +195,7 @@ def query_aware_cosine(vecs: np.ndarray, profile_mat: np.ndarray) -> np.ndarray:
     return cos
 
 
-def build_negative_centroid(profile: "Profile") -> np.ndarray | None:
+def build_negative_centroid(profile: Profile) -> np.ndarray | None:
     """Return a normalized negative-interest centroid, or None if not configured.
 
     Items whose embeddings are similar to this centroid will receive a penalty
@@ -186,7 +217,7 @@ def build_negative_centroid(profile: "Profile") -> np.ndarray | None:
         return None
 
 
-def build_negative_vectors(profile: "Profile") -> list[np.ndarray]:
+def build_negative_vectors(profile: Profile) -> list[np.ndarray]:
     """Return individual embedding vectors for each negative interest.
 
     Unlike build_negative_centroid (which averages), this returns per-topic vectors
@@ -207,7 +238,7 @@ def build_negative_vectors(profile: "Profile") -> list[np.ndarray]:
         return []
 
 
-def get_negative_interest_weights(profile: "Profile") -> list[float]:
+def get_negative_interest_weights(profile: Profile) -> list[float]:
     """Return weights for each negative interest vector, in same order as build_negative_vectors."""
     neg = getattr(profile, "negative_interests", None) or {}
     return [float(v) for v in neg.values()]
@@ -234,7 +265,144 @@ def build_profile_vector(profile: Profile) -> np.ndarray:
     return mean.astype(np.float32, copy=False)
 
 
-def build_profile_matrix_with_rocchio(profile: "Profile", vote_count: int = 0) -> np.ndarray:
+# --------------------------------------------------------------------------- #
+# Facet attribution (P1) + topic-priority axis (P3)
+# --------------------------------------------------------------------------- #
+
+# Cache the core-facet matrix keyed by the keyword tuple so we don't re-embed on
+# every scoring call. Bounded to the most recent profile's keywords.
+_CORE_FACET_CACHE: dict[tuple[str, ...], tuple[np.ndarray, list[str]]] = {}
+
+
+def build_core_facet_matrix(profile: Profile) -> tuple[np.ndarray, list[str]]:
+    """Embed each core interest (``profile.keywords``) as a unit query row.
+
+    Returns ``(matrix [K, D], labels)`` where each row is L2-normalized and
+    ``labels[i]`` is the originating keyword string. Cached by the keyword tuple
+    so repeated calls (e.g. per-run scoring) don't re-embed.
+    """
+    labels = [str(k).strip() for k in (profile.keywords or []) if k and str(k).strip()]
+    if not labels:
+        return np.zeros((0, 0), dtype=np.float32), []
+    key = tuple(labels)
+    cached = _CORE_FACET_CACHE.get(key)
+    if cached is not None:
+        return cached
+    vecs = embed_texts(labels, is_query=True)  # already L2-normalized [K, D]
+    norms = np.linalg.norm(vecs, axis=1, keepdims=True)
+    matrix = (vecs / np.clip(norms, 1e-9, None)).astype(np.float32, copy=False)
+    result = (matrix, labels)
+    _CORE_FACET_CACHE[key] = result
+    return result
+
+
+def _normalized_priorities(profile: Profile) -> dict[str, float]:
+    """Normalize ``profile.topic_priorities`` so the top raw value maps to 1.0.
+
+    Empty/degenerate input yields an empty dict (callers then fall back to the
+    moderate default for every keyword, making the bonus a harmless constant).
+    """
+    raw: dict[str, float] = {}
+    for key, value in (getattr(profile, "topic_priorities", None) or {}).items():
+        text = str(key).strip()
+        if not text:
+            continue
+        try:
+            fval = float(value)
+        except (TypeError, ValueError):
+            logger.warning("Ignoring non-numeric topic_priority for %r", text)
+            continue
+        raw[text] = fval
+    if not raw:
+        return {}
+    max_raw = max(raw.values())
+    if max_raw <= 0:
+        return {}
+    return {label: val / max_raw for label, val in raw.items()}
+
+
+@dataclass(frozen=True)
+class AttributionContext:
+    """Prebuilt inputs for facet attribution, constructed once per run."""
+
+    matrix: np.ndarray  # [K, D], unit rows
+    labels: list[str]
+    priorities: dict[str, float]  # normalized 0..1 (top interest = 1.0)
+
+
+@dataclass(frozen=True)
+class ItemAttribution:
+    """Per-item facet attribution result."""
+
+    primary: str = ""
+    secondaries: list[str] = field(default_factory=list)
+    priority: float = 0.0
+    priority_bonus: float = 0.0
+
+
+def build_attribution_context(profile: Profile) -> AttributionContext | None:
+    """Build an :class:`AttributionContext`, or ``None`` when no core keywords."""
+    matrix, labels = build_core_facet_matrix(profile)
+    if not labels or matrix.size == 0:
+        return None
+    return AttributionContext(
+        matrix=matrix,
+        labels=labels,
+        priorities=_normalized_priorities(profile),
+    )
+
+
+def attribute_items(
+    item_vecs: np.ndarray, ctx: AttributionContext
+) -> list[ItemAttribution]:
+    """Attribute each item vector to the core interest(s) it best matches.
+
+    ``item_vecs`` is ``[N, D]`` (rows need not be normalized — cosine is computed
+    against the unit facet rows). Returns one :class:`ItemAttribution` per row,
+    aligned to the input order.
+    """
+    n = int(item_vecs.shape[0]) if item_vecs.ndim == 2 else 0
+    if n == 0 or ctx is None or ctx.matrix.size == 0:
+        return [ItemAttribution() for _ in range(max(0, n))]
+
+    scale = _topic_priority_bonus_scale()
+    vecs = np.asarray(item_vecs, dtype=np.float32)
+    norms = np.linalg.norm(vecs, axis=1, keepdims=True)
+    unit = vecs / np.clip(norms, 1e-9, None)
+    sims = (unit @ ctx.matrix.T.astype(np.float32)).astype(np.float32)  # [N, K]
+
+    out: list[ItemAttribution] = []
+    labels = ctx.labels
+    for row in sims:
+        primary_idx = int(np.argmax(row))
+        primary_sim = float(row[primary_idx])
+        if primary_sim < _PRIMARY_FACET_MIN_SIM:
+            out.append(ItemAttribution())
+            continue
+        primary = labels[primary_idx]
+        sec_floor = max(primary_sim - _SECONDARY_MARGIN, _SECONDARY_MIN_SIM)
+        # Candidate secondaries: other facets at/above the floor, highest first.
+        cand = [
+            (float(row[i]), i)
+            for i in range(len(labels))
+            if i != primary_idx and float(row[i]) >= sec_floor
+        ]
+        cand.sort(key=lambda t: t[0], reverse=True)
+        secondaries = [labels[i] for _sim, i in cand[:_MAX_SECONDARIES]]
+        priority = float(ctx.priorities.get(primary, _DEFAULT_PRIORITY))
+        priority_bonus = float(scale * priority)
+        out.append(
+            ItemAttribution(
+                primary=primary,
+                secondaries=secondaries,
+                priority=priority,
+                priority_bonus=priority_bonus,
+            )
+        )
+    return out
+
+
+def build_profile_matrix_with_rocchio(profile: Profile, vote_count: int = 0) -> np.ndarray:
     """Build profile matrix, blending in the Rocchio-learned vector when available.
 
     After a user has voted on items, we accumulate a learned direction vector
@@ -246,8 +414,9 @@ def build_profile_matrix_with_rocchio(profile: "Profile", vote_count: int = 0) -
     if vote_count <= 0:
         return static_mat
     try:
-        from ..config import get_settings
         from pathlib import Path
+
+        from ..config import get_settings
         learned_path = Path(get_settings().db_path).parent / "learned_profile.npz"
         if not learned_path.exists():
             return static_mat

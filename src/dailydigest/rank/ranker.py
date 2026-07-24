@@ -8,9 +8,10 @@ available.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 import logging
 import math
+from collections.abc import Mapping
+from datetime import UTC
 from pathlib import Path
 from threading import Lock
 from typing import Any
@@ -27,8 +28,8 @@ from .source_quality import (
     is_preprint_source,
     is_published_journal_source,
     quality_adjusted_score,
-    source_bucket,
     should_skip_item,
+    source_bucket,
 )
 
 logger = logging.getLogger(__name__)
@@ -439,6 +440,10 @@ def _feature_payload(
     reason_penalty: float,
     downweight_penalty: float,
     scoring_mode: str,
+    primary_facet: str = "",
+    secondary_facets: list[str] | None = None,
+    topic_priority: float = 0.0,
+    topic_priority_bonus: float = 0.0,
 ) -> dict[str, Any]:
     return {
         "ranker_version": RANKER_VERSION,
@@ -452,6 +457,11 @@ def _feature_payload(
         "downweight_penalty": float(downweight_penalty),
         "source_bucket": source_bucket(row),
         "scoring_mode": scoring_mode,
+        # Facet attribution (P1) — CONTRACT keys, always present.
+        "primary_facet": str(primary_facet or ""),
+        "secondary_facets": list(secondary_facets or []),
+        "topic_priority": float(topic_priority),
+        "topic_priority_bonus": float(topic_priority_bonus),
     }
 
 
@@ -493,12 +503,12 @@ def _cosine_score_items(
 
 def _freshness_penalty(row: Any) -> float:
     """Return a score penalty based on item age, with per-section decay curves."""
-    from datetime import datetime, timezone
+    from datetime import datetime
     published = getattr(row, "published_at", None)
     if not isinstance(published, datetime):
         return 0.0  # unknown date — don't guess from fetched_at
-    ref = published if published.tzinfo is not None else published.replace(tzinfo=timezone.utc)
-    now = datetime.now(timezone.utc)
+    ref = published if published.tzinfo is not None else published.replace(tzinfo=UTC)
+    now = datetime.now(UTC)
     age_days = max(0.0, (now - ref).total_seconds() / 86400)
     age_hours = age_days * 24
     section = str(getattr(row, "section", "") or "").lower()
@@ -522,6 +532,27 @@ def _freshness_penalty(row: Any) -> float:
         return min(0.10, max(0.0, (age_days - 1.5) * 0.010))
 
 
+def _attribute_or_none(
+    vecs: np.ndarray, attribution: Any | None, n_items: int
+) -> list[Any] | None:
+    """Compute per-item facet attributions aligned to ``items``, or None.
+
+    Returns None (fully backward-compatible: no bonus, default feature keys) when
+    no attribution context is supplied or item vectors are unavailable.
+    """
+    if attribution is None:
+        return None
+    if vecs is None or getattr(vecs, "size", 0) == 0 or vecs.shape[0] != n_items:
+        return None
+    try:
+        from .profile import attribute_items
+
+        return attribute_items(vecs, attribution)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("facet attribution failed: %s", e)
+        return None
+
+
 def _apply_quality_adjustments_with_features(
     items: list[ItemRow],
     base_scores: np.ndarray,
@@ -531,19 +562,20 @@ def _apply_quality_adjustments_with_features(
     learned_scores: np.ndarray,
     hybrid_scores: np.ndarray,
     scoring_mode: str,
+    facet_attr: list[Any] | None = None,
 ) -> tuple[list[float], ScoreFeatureMap]:
     texts = [_item_text(r) for r in items]
     terms_lc = [t.lower() for t in downweight_terms if t and t.strip()]
     result: list[float] = []
     features: ScoreFeatureMap = {}
-    for row, base, learned, hybrid, txt in zip(
+    for idx, (row, base, learned, hybrid, txt) in enumerate(zip(
         items,
         base_scores,
         learned_scores,
         hybrid_scores,
         texts,
         strict=True,
-    ):
+    )):
         reason_penalty = _reason_penalty_for(row, reason_penalty_map)
         score = quality_adjusted_score(row, float(base)) - reason_penalty
         freshness_pen = _freshness_penalty(row)
@@ -555,6 +587,13 @@ def _apply_quality_adjustments_with_features(
         )
         if downweight_penalty:
             score -= downweight_penalty
+        # Topic-priority nudge (P3): ORDERING-ONLY. Applied to the final score
+        # AFTER all quality/penalty logic. It never feeds back into topic_score
+        # (the relevance gate), which is recorded from `base` below.
+        attr = facet_attr[idx] if facet_attr is not None and idx < len(facet_attr) else None
+        priority_bonus = float(getattr(attr, "priority_bonus", 0.0)) if attr is not None else 0.0
+        if priority_bonus:
+            score += priority_bonus
         score_float = float(score)
         result.append(score_float)
         features[_row_feature_key(row)] = _feature_payload(
@@ -566,6 +605,10 @@ def _apply_quality_adjustments_with_features(
             reason_penalty=float(reason_penalty),
             downweight_penalty=float(downweight_penalty),
             scoring_mode=scoring_mode,
+            primary_facet=str(getattr(attr, "primary", "") or "") if attr is not None else "",
+            secondary_facets=list(getattr(attr, "secondaries", []) or []) if attr is not None else [],
+            topic_priority=float(getattr(attr, "priority", 0.0)) if attr is not None else 0.0,
+            topic_priority_bonus=priority_bonus,
         )
     return result, features
 
@@ -575,6 +618,7 @@ def _cosine_score_items_with_features(
     profile_vec: np.ndarray,
     downweight_terms: list[str],
     reason_penalty_map: Mapping[Any, float] | None = None,
+    attribution: Any | None = None,
 ) -> tuple[list[tuple[ItemRow, float]], ScoreFeatureMap]:
     items = [item for item in items if not should_skip_item(item)]
     if not items:
@@ -586,6 +630,7 @@ def _cosine_score_items_with_features(
     else:
         sims = _cosine_sim(vecs, profile_vec)
 
+    facet_attr = _attribute_or_none(vecs, attribution, len(items))
     final, features = _apply_quality_adjustments_with_features(
         items,
         sims,
@@ -594,6 +639,7 @@ def _cosine_score_items_with_features(
         learned_scores=np.zeros(len(items), dtype=np.float32),
         hybrid_scores=sims,
         scoring_mode="cosine",
+        facet_attr=facet_attr,
     )
     scored = list(zip(items, final, strict=True))
     scored.sort(key=lambda t: t[1], reverse=True)
@@ -605,6 +651,7 @@ def score_items_lr(
     profile_vec: np.ndarray,
     downweight_terms: list[str],
     reason_penalty_map: Mapping[Any, float] | None = None,
+    attribution: Any | None = None,
 ) -> list[tuple[ItemRow, float]]:
     """Hybrid cosine + LR scorer with downweight penalty.
 
@@ -624,6 +671,7 @@ def score_items_lr(
             profile_vec,
             downweight_terms,
             reason_penalty_map,
+            attribution=attribution,
         )
         return scored
 
@@ -648,9 +696,11 @@ def score_items_lr(
             profile_vec,
             downweight_terms,
             reason_penalty_map,
+            attribution=attribution,
         )
         return scored
 
+    facet_attr = _attribute_or_none(vecs, attribution, len(items))
     # Apply quality adjustments on raw cosine so calibrated thresholds remain meaningful
     final, _features = _apply_quality_adjustments_with_features(
         items,
@@ -660,6 +710,7 @@ def score_items_lr(
         learned_scores=lr_prob,
         hybrid_scores=cosine,
         scoring_mode="hybrid_lr",
+        facet_attr=facet_attr,
     )
     # Fuse quality-adjusted score with the LR MARGIN (not the saturated probability)
     # for final ranking — see LRRanker.decision_function.
@@ -674,6 +725,7 @@ def score_items_with_features(
     profile_vec: np.ndarray,
     downweight_terms: list[str],
     reason_penalty_map: Mapping[Any, float] | None = None,
+    attribution: Any | None = None,
 ) -> tuple[list[tuple[ItemRow, float]], ScoreFeatureMap]:
     """Score items and return per-row feature snapshots keyed by item id/id(row)."""
     items = [item for item in items if not should_skip_item(item)]
@@ -689,6 +741,7 @@ def score_items_with_features(
             profile_vec,
             downweight_terms,
             reason_penalty_map,
+            attribution=attribution,
         )
 
     vecs = embed_item_rows(items)
@@ -712,8 +765,10 @@ def score_items_with_features(
             profile_vec,
             downweight_terms,
             reason_penalty_map,
+            attribution=attribution,
         )
 
+    facet_attr = _attribute_or_none(vecs, attribution, len(items))
     # Apply quality adjustments on raw cosine so calibrated thresholds remain meaningful
     final, features = _apply_quality_adjustments_with_features(
         items,
@@ -723,6 +778,7 @@ def score_items_with_features(
         learned_scores=lr_prob,
         hybrid_scores=cosine,
         scoring_mode="hybrid_lr",
+        facet_attr=facet_attr,
     )
     # Fuse quality-adjusted score with the LR MARGIN (not the saturated probability)
     # for final ranking — see LRRanker.decision_function.

@@ -11,8 +11,10 @@ from datetime import datetime, timezone
 
 import pytest
 
+import numpy as np
+
 from dailydigest.ingest.rss import canonicalize_url
-from dailydigest.dedupe import dedupe_by_url, dedupe_ranking_candidates
+from dailydigest.dedupe import cap_near_duplicates, dedupe_by_url, dedupe_ranking_candidates
 from dailydigest.models import Item
 
 
@@ -239,3 +241,89 @@ class TestDedupeRankingCandidates:
 
         assert len(result) == 1
         assert result[0].source == "PubMed"
+
+
+# ---------------------------------------------------------------------------
+# cap_near_duplicates (within-day near-duplicate suppression)
+# ---------------------------------------------------------------------------
+
+def _unit(vec: list[float]) -> np.ndarray:
+    v = np.asarray(vec, dtype=np.float32)
+    return v / (np.linalg.norm(v) + 1e-9)
+
+
+class TestCapNearDuplicates:
+    def test_cluster_of_three_collapses_to_highest_scored(self):
+        # Three near-identical vectors (cosine > 0.99), rows sorted by score DESC.
+        # The first (highest-scored) is the surviving representative.
+        base = _unit([1.0, 0.0, 0.0])
+        v1 = _unit([1.0, 0.02, 0.0])
+        v2 = _unit([1.0, 0.0, 0.02])
+        vecs = np.vstack([base, v1, v2])
+        rows = ["top", "mid", "low"]  # already sorted by score desc
+
+        keep = cap_near_duplicates(rows, vecs, threshold=0.86)
+
+        assert keep == [0]  # only the top-scored representative survives
+
+    def test_three_distinct_all_survive(self):
+        # Orthogonal (cosine 0) vectors are clearly distinct → all kept.
+        vecs = np.vstack([_unit([1, 0, 0]), _unit([0, 1, 0]), _unit([0, 0, 1])])
+        rows = ["a", "b", "c"]
+
+        keep = cap_near_duplicates(rows, vecs, threshold=0.86)
+
+        assert keep == [0, 1, 2]
+
+    def test_threshold_boundary_respected(self):
+        # Two vectors with a known cosine; keep both above the threshold, drop
+        # the second when the threshold is at/below their similarity.
+        a = _unit([1.0, 0.0])
+        b = _unit([0.9, np.sqrt(1 - 0.81)])  # cosine(a, b) == 0.9
+        vecs = np.vstack([a, b])
+        cos = float(np.dot(vecs[0] / np.linalg.norm(vecs[0]),
+                           vecs[1] / np.linalg.norm(vecs[1])))
+        assert abs(cos - 0.9) < 1e-5
+
+        # threshold just ABOVE the pair's similarity → both kept (not a near-dup)
+        assert cap_near_duplicates(["x", "y"], vecs, threshold=0.95) == [0, 1]
+        # threshold at/below the similarity → second dropped as a near-dup
+        assert cap_near_duplicates(["x", "y"], vecs, threshold=0.90) == [0]
+        assert cap_near_duplicates(["x", "y"], vecs, threshold=0.85) == [0]
+
+    def test_empty_input_returns_empty(self):
+        assert cap_near_duplicates([], np.zeros((0, 0), dtype=np.float32), 0.86) == []
+
+    def test_single_item_always_kept(self):
+        assert cap_near_duplicates(["only"], _unit([1, 0, 0]).reshape(1, -1), 0.86) == [0]
+
+    def test_does_not_mutate_inputs(self):
+        vecs = np.vstack([_unit([1, 0]), _unit([1, 0.01])])
+        vecs_copy = vecs.copy()
+        rows = ["a", "b"]
+        rows_copy = list(rows)
+
+        cap_near_duplicates(rows, vecs, threshold=0.86)
+
+        assert np.array_equal(vecs, vecs_copy)
+        assert rows == rows_copy
+
+    def test_misaligned_matrix_keeps_all(self):
+        # If the embedding matrix does not align with rows, keep everything
+        # rather than silently dropping items.
+        vecs = np.vstack([_unit([1, 0]), _unit([1, 0])])  # 2 rows
+        keep = cap_near_duplicates(["a", "b", "c"], vecs, threshold=0.86)  # 3 rows
+        assert keep == [0, 1, 2]
+
+    def test_representative_is_first_of_each_cluster(self):
+        # Two separate clusters interleaved by score; each keeps its first
+        # (highest-scored) member.
+        c1a = _unit([1.0, 0.0, 0.0])
+        c2a = _unit([0.0, 1.0, 0.0])
+        c1b = _unit([1.0, 0.01, 0.0])  # near c1a
+        c2b = _unit([0.0, 1.0, 0.01])  # near c2a
+        vecs = np.vstack([c1a, c2a, c1b, c2b])  # score-desc order
+
+        keep = cap_near_duplicates(["c1a", "c2a", "c1b", "c2b"], vecs, threshold=0.86)
+
+        assert keep == [0, 1]  # both distinct cluster heads kept, near-dups dropped

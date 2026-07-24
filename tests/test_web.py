@@ -313,6 +313,114 @@ def test_index_renders_reader_card_hierarchy_and_feedback_controls(tmp_path, mon
     assert "Learned" not in text
 
 
+def test_index_renders_reason_line_and_content_type_label(tmp_path, monkeypatch):
+    from dailydigest import config as config_mod
+    from dailydigest import store as store_mod
+    from dailydigest import web
+
+    monkeypatch.setenv("DB_PATH", str(tmp_path / "digest.db"))
+    config_mod.reload_settings()
+    store_mod.SETTINGS = config_mod.SETTINGS
+    store_mod._ENGINE = None
+    store_mod._SessionLocal = None
+    store_mod._INITIALIZED = False
+    profile_path = tmp_path / "profile.yaml"
+    profile_path.write_text("name: Ada\nbio: Researcher.\nkeywords: []\ndownweight: []\n")
+    monkeypatch.setattr(web, "_get_profile_path", lambda: profile_path)
+    monkeypatch.setattr(web, "_digest_id", lambda: "2026-05-05")
+
+    store_mod.init_db()
+    with store_mod.session_scope() as s:
+        s.add(store_mod.DigestRow(id="2026-05-05", item_count=3))
+        review = store_mod.ItemRow(
+            source="Nature",
+            section="research",
+            external_id="facet-review",
+            url="https://example.com/facet-review",
+            title="A comprehensive review of RNA delivery",
+            abstract="Review.",
+            digest_id="2026-05-05",
+            item_label="R1",
+        )
+        primary = store_mod.ItemRow(
+            source="Nature",
+            section="research",
+            external_id="facet-primary",
+            url="https://example.com/facet-primary",
+            title="Primary RNA delivery study",
+            abstract="Primary.",
+            digest_id="2026-05-05",
+            item_label="R2",
+        )
+        plain = store_mod.ItemRow(
+            source="OpenAlex",
+            section="research",
+            external_id="facet-plain",
+            url="https://example.com/facet-plain",
+            title="Plain aggregator item",
+            abstract="Thin.",
+            digest_id="2026-05-05",
+            item_label="R3",
+        )
+        s.add_all([review, primary, plain])
+        s.flush()
+        review_id, primary_id, plain_id = int(review.id), int(primary.id), int(plain.id)
+
+    store_mod.write_digest_features(
+        "2026-05-05",
+        [
+            (
+                "R1",
+                review_id,
+                0.9,
+                {
+                    "primary_facet": "RNA nanotechnology",
+                    "content_type": "review",
+                    "source_bucket": "published_journal",
+                    "tags": ["high_quality_source"],
+                },
+            ),
+            (
+                "R2",
+                primary_id,
+                0.9,
+                {
+                    "primary_facet": "RNA nanotechnology",
+                    "content_type": "research",
+                    "source_bucket": "published_journal",
+                    "tags": ["high_quality_source"],
+                },
+            ),
+            (
+                "R3",
+                plain_id,
+                0.4,
+                {
+                    "primary_facet": "",
+                    "content_type": "research",
+                    "source_bucket": "aggregator",
+                    "tags": [],
+                    "why_shown": [],
+                },
+            ),
+        ],
+    )
+
+    response = web.index(_request("GET", "/"))
+    text = _text_payload(response)
+
+    assert response.status_code == 200
+    # Reason line from primary_facet, with high-profile journal suffix.
+    assert "Shown for RNA nanotechnology" in text
+    # Review content type gets a visible badge; plain research does not.
+    assert 'class="type-label">Review<' in text
+    # Exactly one type badge overall (only the review item), so primary research
+    # is not silently tagged.
+    assert text.count('class="type-label"') == 1
+    # Empty-facet plain item never renders a broken reason line.
+    assert "Shown for ." not in text
+
+
 def test_index_marks_latest_run_impressions_viewed(tmp_path, monkeypatch):
     from dailydigest import config as config_mod
     from dailydigest import store as store_mod

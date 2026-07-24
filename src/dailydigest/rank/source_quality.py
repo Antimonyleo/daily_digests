@@ -824,6 +824,10 @@ def breakdown_payload(
     negative_interest_penalty: float = 0.0,
     selection_reason: str | None = None,
     scoring_mode: str | None = None,
+    primary_facet: str = "",
+    secondary_facets: list[str] | None = None,
+    topic_priority: float = 0.0,
+    topic_priority_bonus: float = 0.0,
 ) -> dict[str, Any]:
     """Return a JSON-serializable rank explanation for persistence/UI."""
     breakdown = score_breakdown(
@@ -857,6 +861,14 @@ def breakdown_payload(
         "quality_tags": list(breakdown.quality_tags),
         "freshness_tags": list(breakdown.freshness_tags),
         "why_shown": list(breakdown.why_shown),
+        # Facet attribution (which core interest the item matched) + the
+        # ordering-only topic-priority nudge. Persisted so the coverage harness,
+        # web/email UI ("Shown for …"), and A/B log can all read the interest a
+        # paper was surfaced for. Defaults keep this inert for legacy callers.
+        "primary_facet": str(primary_facet or ""),
+        "secondary_facets": list(secondary_facets or []),
+        "topic_priority": round(float(topic_priority), 4),
+        "topic_priority_bonus": round(float(topic_priority_bonus), 4),
     }
 
 

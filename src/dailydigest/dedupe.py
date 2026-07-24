@@ -3,9 +3,54 @@ from __future__ import annotations
 import re
 from datetime import datetime
 from typing import Any
-from urllib.parse import parse_qsl, quote, unquote, urlencode, urldefrag, urlparse, urlunparse
+from urllib.parse import parse_qsl, quote, unquote, urldefrag, urlencode, urlparse, urlunparse
 
 from .models import Item
+
+
+def cap_near_duplicates(rows: list[Any], vecs: Any, threshold: float) -> list[int]:
+    """Greedily suppress within-day topical near-duplicates by embedding cosine.
+
+    ``rows`` must already be sorted by final score DESC and ``vecs`` (a 2D array
+    of L2-normalizable embeddings) aligned by index. Walking in score order, an
+    item is KEPT unless its maximum cosine similarity to any already-kept item is
+    ``>= threshold`` — so the highest-scored representative of each near-duplicate
+    cluster survives and lower-scored near-copies are dropped. Returns the list of
+    indices to KEEP (a subset of ``range(len(rows))``, in ascending order). The
+    top-scored item of any cluster is never dropped (nothing is kept before it).
+
+    Complexity is O(n * k) over the kept set (a few hundred items is fine). Inputs
+    are not mutated.
+    """
+    n = len(rows)
+    if n == 0:
+        return []
+    try:
+        import numpy as np
+    except Exception:  # noqa: BLE001 - numpy always present in practice
+        return list(range(n))
+
+    arr = np.asarray(vecs, dtype=np.float32)
+    # Defensive: if the embedding matrix is missing/misaligned, keep everything
+    # so a degraded embedder never silently drops items.
+    if arr.ndim != 2 or arr.shape[0] != n or arr.shape[1] == 0:
+        return list(range(n))
+
+    normed = arr / (np.linalg.norm(arr, axis=1, keepdims=True) + 1e-9)
+
+    kept_indices: list[int] = []
+    kept_vecs: list[Any] = []
+    for i in range(n):
+        v = normed[i]
+        is_dup = False
+        for kv in kept_vecs:
+            if float(np.dot(v, kv)) >= threshold:
+                is_dup = True
+                break
+        if not is_dup:
+            kept_indices.append(i)
+            kept_vecs.append(v)
+    return kept_indices
 
 
 def _canonical_doi(raw: str) -> str:

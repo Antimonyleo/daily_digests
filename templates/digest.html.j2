@@ -30,11 +30,19 @@
             <td style="padding:8px 24px 14px 24px;">
               <div style="font-size:14px;line-height:1.45;">
                 <span style="display:inline-block;font-weight:700;color:#0a66c2;margin-right:6px;font-family:Menlo,Consolas,monospace;font-size:12px;background:#eef4fb;padding:1px 6px;border-radius:4px;">{{ item.label }}</span>
+                {% if item.type_label %}
+                <span style="display:inline-block;font-weight:700;color:#6b5b1f;margin-right:6px;font-size:10px;text-transform:uppercase;letter-spacing:0.04em;background:#f5efd6;padding:1px 6px;border-radius:4px;">{{ item.type_label }}</span>
+                {% endif %}
                 <a href="{{ item.url }}" style="color:#0a66c2;text-decoration:none;font-weight:600;">{{ item.title }}</a>
               </div>
               <div style="font-size:11px;color:#888;margin-top:3px;">
                 {{ item.source }}{% if item.published %} &middot; {{ item.published }}{% endif %}
               </div>
+              {% if item.reason %}
+              <div style="font-size:11px;color:#999;margin-top:3px;font-style:italic;">
+                {{ item.reason }}
+              </div>
+              {% endif %}
               {% if item.summary %}
               <div style="font-size:13px;line-height:1.5;margin-top:6px;color:#333;">
                 {{ item.summary }}

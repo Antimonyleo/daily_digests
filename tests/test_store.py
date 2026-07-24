@@ -207,6 +207,100 @@ def test_write_impressions_stores_selected_flag_for_candidate_pool(monkeypatch, 
         assert by_item[b].selected is False
 
 
+def test_write_impressions_persists_facet_and_topic_score(monkeypatch, tmp_path):
+    """A 7-tuple persists per-candidate primary_facet + topic_score attribution."""
+    store_mod = _reset_store(tmp_path, monkeypatch)
+    a = _add_item(store_mod, "facet-a")
+    b = _add_item(store_mod, "facet-b")
+    digest_id = "2026-06-04"
+
+    store_mod.write_impressions(
+        digest_id,
+        [
+            ("research", a, 0, 0.9, True, "dna nanotechnology", 0.81),
+            ("research", b, 1, 0.7, False, "colloidal self-assembly", 0.72),
+        ],
+        model_version="v-test",
+    )
+
+    with store_mod.session_scope() as s:
+        by_item = {
+            r.item_id: r
+            for r in s.query(store_mod.ImpressionRow).filter_by(digest_id=digest_id).all()
+        }
+        assert by_item[a].primary_facet == "dna nanotechnology"
+        assert by_item[a].topic_score == 0.81
+        assert by_item[b].primary_facet == "colloidal self-assembly"
+        assert by_item[b].topic_score == 0.72
+
+
+def test_write_impressions_facet_topic_default_when_omitted(monkeypatch, tmp_path):
+    """Omitting the facet/topic elements defaults to ""/None (5-tuple stays valid)."""
+    store_mod = _reset_store(tmp_path, monkeypatch)
+    a = _add_item(store_mod, "default-a")
+    digest_id = "2026-06-05"
+
+    store_mod.write_impressions(
+        digest_id,
+        [("research", a, 0, 0.9, True)],
+        model_version="v-test",
+    )
+
+    with store_mod.session_scope() as s:
+        row = s.query(store_mod.ImpressionRow).filter_by(digest_id=digest_id).one()
+        assert row.primary_facet == ""
+        assert row.topic_score is None
+
+
+def test_migration_adds_facet_and_topic_columns_to_legacy_impressions(
+    monkeypatch, tmp_path
+):
+    """A legacy impressions table (no facet/topic columns) gains them via ALTER."""
+    db_path = tmp_path / "legacy.db"
+    # Hand-build a legacy impressions table WITHOUT the new columns.
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        """
+        CREATE TABLE impressions (
+            id INTEGER PRIMARY KEY,
+            run_id VARCHAR NOT NULL,
+            digest_id VARCHAR NOT NULL,
+            item_id INTEGER NOT NULL,
+            section VARCHAR NOT NULL,
+            position INTEGER NOT NULL,
+            final_score FLOAT,
+            model_version VARCHAR,
+            created_at DATETIME
+        )
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    cols_before = {r[1] for r in sqlite3.connect(db_path).execute(
+        "PRAGMA table_info(impressions)"
+    ).fetchall()}
+    assert "primary_facet" not in cols_before
+    assert "topic_score" not in cols_before
+
+    from dailydigest import config as config_mod
+    from dailydigest import store as store_mod
+
+    monkeypatch.setenv("DB_PATH", str(db_path))
+    config_mod.reload_settings()
+    store_mod.SETTINGS = config_mod.SETTINGS
+    store_mod._ENGINE = None
+    store_mod._SessionLocal = None
+    store_mod._INITIALIZED = False
+    store_mod.init_db()  # runs the ALTER-TABLE migration.
+
+    cols_after = {r[1] for r in sqlite3.connect(db_path).execute(
+        "PRAGMA table_info(impressions)"
+    ).fetchall()}
+    assert "primary_facet" in cols_after
+    assert "topic_score" in cols_after
+
+
 def test_mark_impressions_viewed_updates_only_latest_run(monkeypatch, tmp_path):
     store_mod = _reset_store(tmp_path, monkeypatch)
     a = _add_item(store_mod, "view-a")

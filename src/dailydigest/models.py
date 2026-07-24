@@ -4,7 +4,6 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field, field_validator
 
-
 _VALID_SECTIONS = {"research", "industry", "ai", "regulatory", "world"}
 
 
@@ -70,6 +69,11 @@ class Profile(BaseModel):
     # Items semantically similar to these topics will be penalized.
     # Example: {"cryptocurrency": 1.0, "sports": 1.0}
     negative_interests: dict[str, float] = Field(default_factory=dict)
+    # Raw relative priority per core interest (keys should match `keywords`).
+    # ONLY affects ordering (a small nudge to the final score), NEVER the
+    # relevance gate. Normalized so the top interest = 1.0; unlisted keywords
+    # default to a moderate 0.5. Empty dict = uniform (inert on ordering).
+    topic_priorities: dict[str, float] = Field(default_factory=dict)
 
 
 class SourceSpec(BaseModel):
