@@ -313,6 +313,58 @@ def test_index_renders_reader_card_hierarchy_and_feedback_controls(tmp_path, mon
     assert "Learned" not in text
 
 
+def test_index_marks_latest_run_impressions_viewed(tmp_path, monkeypatch):
+    from dailydigest import config as config_mod
+    from dailydigest import store as store_mod
+    from dailydigest import web
+
+    monkeypatch.setenv("DB_PATH", str(tmp_path / "digest.db"))
+    config_mod.reload_settings()
+    store_mod.SETTINGS = config_mod.SETTINGS
+    store_mod._ENGINE = None
+    store_mod._SessionLocal = None
+    store_mod._INITIALIZED = False
+    profile_path = tmp_path / "profile.yaml"
+    profile_path.write_text("name: Ada\nbio: Researcher.\nkeywords: []\ndownweight: []\n")
+    monkeypatch.setattr(web, "_get_profile_path", lambda: profile_path)
+    monkeypatch.setattr(web, "_digest_id", lambda: "2026-05-05")
+
+    store_mod.init_db()
+    with store_mod.session_scope() as s:
+        s.add(store_mod.DigestRow(id="2026-05-05", item_count=1))
+        item = store_mod.ItemRow(
+            source="Nature",
+            section="research",
+            external_id="viewed-web",
+            url="https://example.com/viewed-web",
+            title="Viewed flag item",
+            abstract="A primary result.",
+            digest_id="2026-05-05",
+            item_label="R1",
+        )
+        s.add(item)
+        s.flush()
+        item_id = int(item.id)
+
+    run_id = store_mod.write_impressions(
+        "2026-05-05",
+        [("research", item_id, 0, 0.9)],
+        model_version="v-test",
+    )
+
+    response = web.index(_request("GET", "/"))
+    assert response.status_code == 200
+
+    with store_mod.session_scope() as s:
+        rows = (
+            s.query(store_mod.ImpressionRow)
+            .filter_by(digest_id="2026-05-05", run_id=run_id)
+            .all()
+        )
+        assert rows
+        assert all(r.viewed is True for r in rows)
+
+
 def test_index_uses_confidence_not_relative_rank_for_priority_labels(tmp_path, monkeypatch):
     from dailydigest import config as config_mod
     from dailydigest import store as store_mod

@@ -16,7 +16,7 @@ from typing import Any
 
 from ..models import SourceSpec
 
-RANKER_VERSION = "2026-05-15-ranking-improvements-v5"
+RANKER_VERSION = "2026-07-23-preference-affinity-v6-cutoff"
 
 _ARXIV_CS_RE = re.compile(r"\barxiv[\s:_\-]*cs[\s:./\-]", re.IGNORECASE)
 

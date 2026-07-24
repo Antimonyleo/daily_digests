@@ -172,12 +172,68 @@ def test_write_impressions_is_append_only_across_rebrews(monkeypatch, tmp_path):
         # viewed defaults to False; model_version persisted.
         assert all(r.viewed is False for r in impressions)
         assert all(r.model_version == "v-test" for r in impressions)
+        # selected defaults to True when the tuple omits the flag (selected slate).
+        assert all(r.selected is True for r in impressions)
 
         # digest_items shows only the LATEST slate (replaced, not appended).
         digest_items = (
             s.query(store_mod.DigestItemRow).filter_by(digest_id=digest_id).all()
         )
         assert {di.item_id for di in digest_items} == {a}
+
+
+def test_write_impressions_stores_selected_flag_for_candidate_pool(monkeypatch, tmp_path):
+    """A 5-tuple carries the ``selected`` flag so unpicked candidates log as False."""
+    store_mod = _reset_store(tmp_path, monkeypatch)
+    a = _add_item(store_mod, "sel-a")
+    b = _add_item(store_mod, "sel-b")
+    digest_id = "2026-06-03"
+
+    store_mod.write_impressions(
+        digest_id,
+        [
+            ("research", a, 0, 0.9, True),
+            ("research", b, 1, 0.7, False),
+        ],
+        model_version="v-test",
+    )
+
+    with store_mod.session_scope() as s:
+        by_item = {
+            r.item_id: r
+            for r in s.query(store_mod.ImpressionRow).filter_by(digest_id=digest_id).all()
+        }
+        assert by_item[a].selected is True
+        assert by_item[b].selected is False
+
+
+def test_mark_impressions_viewed_updates_only_latest_run(monkeypatch, tmp_path):
+    store_mod = _reset_store(tmp_path, monkeypatch)
+    a = _add_item(store_mod, "view-a")
+    digest_id = "2026-06-04"
+
+    run1 = store_mod.write_impressions(
+        digest_id, [("research", a, 0, 0.9)], model_version="v-test"
+    )
+    run2 = store_mod.write_impressions(
+        digest_id, [("research", a, 0, 0.95)], model_version="v-test"
+    )
+    assert run1 != run2
+
+    updated = store_mod.mark_impressions_viewed(digest_id)
+    assert updated == 1
+
+    with store_mod.session_scope() as s:
+        by_run = {
+            r.run_id: r
+            for r in s.query(store_mod.ImpressionRow).filter_by(digest_id=digest_id).all()
+        }
+        # Only the latest run's rows are flagged viewed.
+        assert by_run[run2].viewed is True
+        assert by_run[run1].viewed is False
+
+    # No impressions for an unknown digest → 0 rows updated, no error.
+    assert store_mod.mark_impressions_viewed("2099-01-01") == 0
 
 
 def test_review_filters_use_latest_legacy_vote_rows(monkeypatch, tmp_path):

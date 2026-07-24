@@ -28,7 +28,7 @@ Open `http://127.0.0.1:8765`. First-time users are sent to `/setup`; the wizard 
 
 | Stage | Command | Status |
 |---|---|---|
-| Ingest | `uv run dd ingest` | ✅ 929 items from 26 active sources in ~37s |
+| Ingest | `uv run dd ingest` | ✅ pulls from 26 active sources in ~37s; DB has accumulated tens of thousands of items (~36k) |
 | Rank | `uv run dd rank` | ✅ prints top-20 with freshness-filtered, deduped, topic + source-quality adjusted scores |
 | Full pipeline | `uv run dd run-all --dry-run` | ✅ writes HTML to `data/digest-*.html` |
 | Vote | `uv run dd vote "+R1 R2 -W1"` | ✅ resolves labels, writes to votes table |
@@ -48,8 +48,8 @@ Open `http://127.0.0.1:8765`. First-time users are sent to `/setup`; the wizard 
 | Tests | `.venv/bin/python -m pytest -q` | ✅ 326 passed |
 
 Live verification artifacts:
-- `data/digest-20260504-081032.html` — 28,224 bytes, all 4 sections (R×8, I×6, G×3, W×3) with emoji headers, inline CSS, vote-syntax footer.
-- DB: `data/digest.db` ~929 items.
+- `data/digest-20260504-081032.html` — 28,224 bytes, all 4 sections with emoji headers, inline CSS, vote-syntax footer (section sizes are adaptive, not fixed R8/I6/G3/W3).
+- DB: `data/digest.db` ~36k items (tens of thousands, accumulated across runs).
 
 ---
 
@@ -64,7 +64,7 @@ data/profile.yaml ─► embed (bge-small) ─► freshness + dedupe + cosine + 
                                                             │
                                                             ▼
                                             pick_top_per_section
-                                            (R8 / I6 / G3 / W3)
+                                            (adaptive per-section sizing)
                                                             │
                                                             ▼
                                             summarize (LLM or extractive)
@@ -73,7 +73,7 @@ data/profile.yaml ─► embed (bge-small) ─► freshness + dedupe + cosine + 
                                             jinja2 → Resend email
 ```
 
-- **Storage:** SQLite at `data/digest.db`. Tables: `items` `votes` `digests` `runs`. 30-day retention on items.
+- **Storage:** SQLite at `data/digest.db`. Tables: `items` `votes` `digests` `digest_items` `digest_item_features` `impressions` `item_embeddings` `item_enrichment` `digest_audits` `runs`. 30-day retention on items. Section sizing is adaptive (not a fixed R8/I6/G3/W3 split).
 - **Ranker:** cosine vs profile vector by default; hybrid ranking once ≥30 signed votes (`MIN_VOTES_FOR_LR`) train the LR. Source quality is a tie-breaker rather than the dominant force; novelty, access friction, promotional-risk, and low-information commentary filters are exposed in the web UI. Hybrid rank scores are kept separate from absolute confidence so weak pools do not create fake "must read" labels. Item embeddings are cached in SQLite and reused across brews until title/abstract text changes.
 - **Summarizer:** OpenAI-compatible `/chat/completions`. Returns extractive (first 2 sentences) when no key is set. Never raises — failures fall back to extractive.
 - **Email:** Resend. Sandbox `onboarding@resend.dev` works without domain. Dry-run writes to disk. Email and web templates force escaping for feed-controlled content.

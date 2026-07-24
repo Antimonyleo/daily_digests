@@ -105,6 +105,94 @@ def test_run_all_persists_summaries_for_web_view(monkeypatch, tmp_path):
     assert audit[0]["after_cross_source_dedupe"] == 1
 
 
+def test_run_all_logs_research_candidate_pool_with_selected_flags(monkeypatch, tmp_path):
+    """A brew logs the research candidate pool: picked items selected=True and at
+    least one scored-but-unpicked research item selected=False. This is the A/B
+    substrate — alternative rankers can be scored against the identical pool."""
+    from dailydigest import config as config_mod
+    from dailydigest import pipeline as pipeline_mod
+    from dailydigest import store as store_mod
+    from dailydigest.rank.source_quality import RANKER_VERSION
+
+    monkeypatch.setenv("DB_PATH", str(tmp_path / "digest.db"))
+    monkeypatch.setenv("PROFILE_PATH", "config/profile.example.yaml")
+    config_mod.reload_settings()
+    store_mod.SETTINGS = config_mod.SETTINGS
+    store_mod._ENGINE = None
+    store_mod._SessionLocal = None
+    store_mod._INITIALIZED = False
+
+    store_mod.init_db()
+    with store_mod.session_scope() as s:
+        picked_row = store_mod.ItemRow(
+            source="Nature",
+            section="research",
+            external_id="cand-picked",
+            url="https://example.com/cand-picked",
+            title="Picked research candidate",
+            abstract="Primary research with methods and efficacy.",
+            published_at=datetime.now(timezone.utc),
+        )
+        unpicked_row = store_mod.ItemRow(
+            source="Nature",
+            section="research",
+            external_id="cand-unpicked",
+            url="https://example.com/cand-unpicked",
+            title="Unpicked research candidate",
+            abstract="Primary research with methods and efficacy.",
+            published_at=datetime.now(timezone.utc),
+        )
+        s.add_all([picked_row, unpicked_row])
+        s.flush()
+        picked_id = int(picked_row.id)
+        unpicked_id = int(unpicked_row.id)
+
+    def recent_items(days=2):
+        with store_mod.session_scope() as s:
+            rows = [s.get(store_mod.ItemRow, picked_id), s.get(store_mod.ItemRow, unpicked_id)]
+            for r in rows:
+                s.expunge(r)
+            return rows
+
+    def score_items(items, _pv, _downweight, reason_penalty_map=None):
+        # Higher score for the picked item; both are research candidates.
+        ordered = sorted(items, key=lambda it: 0 if int(it.id) == picked_id else 1)
+        return [(ordered[0], 0.9), (ordered[1], 0.8)]
+
+    # pick_top_per_section returns only the top-scored item, so the other stays
+    # in the scored candidate pool as an unpicked (selected=False) impression.
+    def pick_top_per_section(scored, _caps, catch_up=False):
+        return scored[:1]
+
+    monkeypatch.setattr(pipeline_mod, "ingest_all", lambda progress_callback=None, days=2: 0)
+    monkeypatch.setattr(pipeline_mod, "load_profile", lambda: SimpleNamespace(bio="", keywords=[], downweight=[]))
+    monkeypatch.setattr(pipeline_mod, "build_profile_matrix", lambda _profile: __import__("numpy").zeros((1, 3)))
+    monkeypatch.setattr(pipeline_mod, "recent_items", recent_items)
+    monkeypatch.setattr(pipeline_mod, "score_items", score_items)
+    monkeypatch.setattr(pipeline_mod, "pick_top_per_section", pick_top_per_section)
+    monkeypatch.setattr(pipeline_mod, "summarize_items", lambda rows, profile=None: {})
+    monkeypatch.setattr(pipeline_mod, "send_digest", lambda html, subject, dry_run=False: True)
+
+    pipeline_mod.run_all(dry_run=True)
+
+    digest_id = pipeline_mod._digest_id()
+    with store_mod.session_scope() as s:
+        impressions = {
+            r.item_id: r
+            for r in s.query(store_mod.ImpressionRow).filter_by(digest_id=digest_id).all()
+        }
+        # Both research candidates were logged (pool, not just the slate).
+        assert picked_id in impressions
+        assert unpicked_id in impressions
+        assert impressions[picked_id].selected is True
+        assert impressions[unpicked_id].selected is False
+        # Positions reflect score-ordered rank within the research candidate pool.
+        assert impressions[picked_id].position == 0
+        assert impressions[unpicked_id].position == 1
+        # Accurate policy version is stamped as the model_version.
+        assert impressions[picked_id].model_version == RANKER_VERSION
+
+
 def test_non_dry_run_skips_when_digest_already_sent(monkeypatch, tmp_path):
     from dailydigest import pipeline as pipeline_mod
 

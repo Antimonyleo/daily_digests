@@ -29,6 +29,7 @@ from sqlalchemy import (
     or_,
     select,
     text,
+    update,
 )
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import DeclarativeBase, Session, relationship, sessionmaker
@@ -207,6 +208,10 @@ class ImpressionRow(Base):
     position = Column(Integer, nullable=False)  # 0-based rank within the section
     final_score = Column(Float)
     model_version = Column(String)  # ranker_version at brew time
+    # True when the item made the final digest slate; False for scored-but-unpicked
+    # candidates (e.g. the research candidate pool). This makes the log an A/B
+    # substrate: alternative rankers can be compared against the identical pool.
+    selected = Column(Boolean, nullable=False, default=False)
     # Set later by the UI when the reader actually views the item; defaults False.
     viewed = Column(Boolean, nullable=False, default=False)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
@@ -305,6 +310,10 @@ def _migrate_sqlite_schema(eng) -> None:
         "votes": {
             "created_at": "DATETIME",
             "grade": "INTEGER",
+        },
+        "impressions": {
+            "selected": "BOOLEAN NOT NULL DEFAULT 0",
+            "viewed": "BOOLEAN NOT NULL DEFAULT 0",
         },
     }
 
@@ -610,14 +619,17 @@ def write_digest_features(
 
 def write_impressions(
     digest_id: str,
-    impression_rows: list[tuple[str, int, int, float | None]],
+    impression_rows: list[tuple],
     model_version: str | None = None,
     run_id: str | None = None,
 ) -> str:
     """Append one brew RUN's impressions to the immutable impression log.
 
-    Each tuple is ``(section, item_id, position, final_score)``. A fresh
-    ``run_id`` is minted per call (unless supplied) so a rebrew of the same
+    Each tuple is ``(section, item_id, position, final_score)`` or, to log the
+    scored candidate pool for A/B, ``(section, item_id, position, final_score,
+    selected)`` where ``selected`` marks whether the item made the final slate.
+    When ``selected`` is omitted it defaults to True (a selected-slate row). A
+    fresh ``run_id`` is minted per call (unless supplied) so a rebrew of the same
     ``digest_id`` ADDS a new run's rows rather than replacing prior runs — this
     is the append-only counterpart to ``write_digest`` (which is destructive).
     Returns the ``run_id`` used.
@@ -630,7 +642,9 @@ def write_impressions(
         if s.get(DigestRow, digest_id) is None:
             s.add(DigestRow(id=digest_id, item_count=len(impression_rows)))
         now = datetime.now(timezone.utc)
-        for section, item_id, position, final_score in impression_rows:
+        for row in impression_rows:
+            section, item_id, position, final_score = row[0], row[1], row[2], row[3]
+            selected = bool(row[4]) if len(row) >= 5 else True
             s.add(
                 ImpressionRow(
                     run_id=run_id,
@@ -640,10 +654,39 @@ def write_impressions(
                     position=int(position),
                     final_score=float(final_score) if final_score is not None else None,
                     model_version=model_version,
+                    selected=selected,
                     created_at=now,
                 )
             )
     return run_id
+
+
+def mark_impressions_viewed(digest_id: str) -> int:
+    """Mark the LATEST run's impression rows for ``digest_id`` as viewed.
+
+    Called from the web digest view so the ``viewed`` flag reflects that the
+    reader actually opened this digest. Only the most-recent run's rows are
+    updated (older runs stay as recorded). Returns the number of rows updated.
+    """
+    init_db()
+    with session_scope() as s:
+        latest_run = s.execute(
+            select(ImpressionRow.run_id)
+            .where(ImpressionRow.digest_id == digest_id)
+            .order_by(ImpressionRow.created_at.desc(), ImpressionRow.id.desc())
+            .limit(1)
+        ).scalar_one_or_none()
+        if latest_run is None:
+            return 0
+        result = s.execute(
+            update(ImpressionRow)
+            .where(
+                ImpressionRow.digest_id == digest_id,
+                ImpressionRow.run_id == latest_run,
+            )
+            .values(viewed=True)
+        )
+        return result.rowcount or 0
 
 
 def load_digest_features(digest_id: str) -> dict[int, dict]:

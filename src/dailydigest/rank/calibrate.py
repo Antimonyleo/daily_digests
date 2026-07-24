@@ -26,6 +26,7 @@ import numpy as np
 
 from ..store import DigestItemFeatureRow, init_db, session_scope
 from ..votes import LR_FEATURE_SCHEMA_VERSION, _latest_vote_values
+from .source_quality import RANKER_VERSION
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +40,19 @@ def _calibrator_path() -> Path:
 
 
 def _calibration_dataset() -> tuple[np.ndarray, np.ndarray]:
-    """Return (scores, labels) from persisted digest features joined to votes."""
+    """Return (scores, labels) from persisted digest features joined to votes.
+
+    Only feature rows produced under the CURRENT ranking POLICY
+    (``features_json.ranker_version == RANKER_VERSION``) are used. Scores from
+    older policies are not comparable — the fused/quality-adjusted score means a
+    different thing after a policy change, so mixing them contaminates the Platt
+    fit. Schema-stamping the *output* cannot catch this because a single schema
+    version can span several policies; the policy that produced each row must be
+    filtered at read time. Rows from other policies are excluded here, which is
+    why a freshly bumped RANKER_VERSION legitimately yields an empty set until
+    same-policy snapshots accumulate (the loader then falls back to the safe
+    default — a default beats a cross-policy-contaminated fit).
+    """
     init_db()
     with session_scope() as s:
         # Order oldest-first so that, when an item appears in several digests,
@@ -50,7 +63,11 @@ def _calibration_dataset() -> tuple[np.ndarray, np.ndarray]:
         # the newest de-confounds the calibration set. (The previous "last write
         # wins" over an unordered query was non-deterministic.)
         rows = (
-            s.query(DigestItemFeatureRow.item_id, DigestItemFeatureRow.final_score)
+            s.query(
+                DigestItemFeatureRow.item_id,
+                DigestItemFeatureRow.final_score,
+                DigestItemFeatureRow.features_json,
+            )
             .order_by(
                 DigestItemFeatureRow.created_at.asc(),
                 DigestItemFeatureRow.id.asc(),
@@ -58,8 +75,18 @@ def _calibration_dataset() -> tuple[np.ndarray, np.ndarray]:
             .all()
         )
     by_item: dict[int, float] = {}
-    for item_id, score in rows:
+    for item_id, score, features_json in rows:
         if item_id is None or score is None:
+            continue
+        # Same-policy filter: keep only rows whose stored ranker_version matches
+        # the current RANKER_VERSION. Malformed/absent ranker_version → excluded
+        # (an unattributable row cannot be proven same-policy). Never hardcode the
+        # version string — always compare against the imported constant.
+        try:
+            row_version = (json.loads(features_json) or {}).get("ranker_version")
+        except (TypeError, ValueError):
+            row_version = None
+        if row_version != RANKER_VERSION:
             continue
         # Later rows overwrite earlier ones; with oldest-first ordering the final
         # value is the most recent digest's score for that item.
@@ -81,7 +108,15 @@ def _calibration_dataset() -> tuple[np.ndarray, np.ndarray]:
 
 
 def fit_calibrator() -> dict | None:
-    """Fit and persist a Platt calibrator; return its params or None."""
+    """Fit and persist a Platt calibrator; return its params or None.
+
+    The dataset is restricted to the current ranking policy (see
+    ``_calibration_dataset``). If fewer than ``MIN_VOTES_FOR_CALIBRATION``
+    same-policy rows remain we return None (not-enough-data), so the loader falls
+    back to the safe default. This is the correct de-contaminated behavior: a
+    freshly bumped RANKER_VERSION has no same-policy calibration data yet, and a
+    default beats a fit contaminated by cross-policy snapshots.
+    """
     X, y = _calibration_dataset()
     if len(X) < MIN_VOTES_FOR_CALIBRATION or np.unique(y).size < 2:
         return None

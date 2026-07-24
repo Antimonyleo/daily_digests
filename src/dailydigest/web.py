@@ -63,6 +63,7 @@ from .store import (
     init_db,
     load_digest_audit,
     load_digest_features,
+    mark_impressions_viewed,
     session_scope,
 )
 
@@ -636,6 +637,14 @@ def index(request: Request) -> Response:
     digest_id = _digest_id()
     sections, current_vote = _load_today(digest_id)
     brewed = bool(sections) or _digest_exists(digest_id)
+    if brewed:
+        # The reader is viewing this digest: flag its latest run's impressions as
+        # viewed. Measurement-only; best-effort so a logging hiccup never blocks
+        # the page render.
+        try:
+            mark_impressions_viewed(digest_id)
+        except Exception as _e:  # noqa: BLE001
+            logger.warning("mark_impressions_viewed failed: %s", _e)
     overview = _digest_overview(sections)
     top_journal_audit = load_digest_audit(digest_id, "missed_top_journals") if brewed else []
     candidate_funnel = (

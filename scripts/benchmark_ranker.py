@@ -1,31 +1,43 @@
 #!/usr/bin/env python
-"""Leakage-free chronological held-out benchmark of the preference ranker.
+"""Leakage-free chronological held-out evaluation of the preference ranker.
 
-Prior status claimed "0.79 vs 0.74 pairwise held-out" with no committed,
-reproducible script. This is that script.
+Two DISTINCT numbers are reported, each clearly labeled, because they measure
+DIFFERENT things:
 
-What it does, from the REAL votes DB:
+  A. PREFERENCE-FEATURE PROBE (``run_benchmark``)
+     A diagnostic. It trains a simple POINTWISE LogisticRegression on the v6
+     engineered features (including the pos/neg affinity "memory" columns) and
+     reads its probability directly. It answers: "do the affinity features let a
+     simple pointwise model separate held-out liked vs. disliked items better
+     than topic-cosine alone?" It is NOT the deployed ranker: production trains
+     on PAIRWISE feature differences and fuses the LR MARGIN with the topic
+     ranking via RRF (see ``dailydigest.rank.ranker``). Treat this as a feature
+     sanity probe, not a benchmark of what ships.
 
-  1. Take the latest signed (+1/-1) vote per item and order the items
-     CHRONOLOGICALLY by that vote's timestamp.
-  2. Split TRAIN = older 75%, TEST = newer 25%.
-  3. Build pos/neg exemplar arrays from TRAIN votes ONLY. This is the crux of
-     "leakage-free": the test items and their votes must never appear in the
-     exemplar construction that produces the `pos_affinity`/`neg_affinity`
-     memory features, otherwise a test item can "recognize itself".
-     NOTE: `votes._build_item_features` is NOT reused here because it calls
-     `_load_vote_exemplars`, which loads ALL votes (train + test) from the DB —
-     that would leak the test set into the affinity features. We therefore build
-     the affinity columns manually from the train-only exemplar arrays via
-     `votes._affinity`, and compute the remaining columns with the same helpers
-     the production feature builder uses.
-  4. Train a LogisticRegression (fixed random_state) on the TRAIN feature matrix.
-  5. Score TEST items with (a) topic-cosine only and (b) the full model, and
-     report pairwise accuracy: over every (liked, disliked) test pair, the
-     fraction the scorer orders correctly (liked scored above disliked).
+  B. PRODUCTION-FAITHFUL EVALUATION (``run_production_benchmark``)
+     Mirrors deployment. It builds PAIRWISE training examples (liked-minus-
+     disliked feature differences, ±, exactly as ``votes.vote_dataset`` does)
+     from the TRAIN split only, fits the standardized ``LRRanker`` the same way
+     production does, then ranks the held-out TEST research items by RRF-fusing
+     the LR MARGIN with the topic-cosine ranking (``ranker._fuse_scores``).
+     It reports pairwise accuracy AND nDCG@10 for BOTH the deployed-style fused
+     ranker and the topic-only baseline. THIS is the deployable-ranker signal:
+     "does the shipped-style ranker beat topic-only on held-out votes?"
 
-The real-DB number depends entirely on the live vote history and is NOT a fixed
-claim. Run it to get a current, reproducible number:
+Both modes are leakage-free in the same way:
+  * TRAIN = older 75% of items (ordered chronologically by their signing vote),
+    TEST = newer 25%.
+  * The pos/neg exemplar arrays that feed the affinity features are built from
+    TRAIN votes ONLY, so a held-out test item can never "recognize itself".
+  * The profile is the STATIC config profile matrix
+    (``rank.profile.build_profile_matrix``) — NOT the Rocchio-learned
+    ``learned_profile.npz``, which is rebuilt from ALL current votes (train +
+    test) and would leak the held-out set into the profile vector. This is the
+    key leakage the third audit found; the headline probe number is essentially
+    unchanged by the fix, but the methodology is now correct regardless.
+
+The real-DB numbers depend entirely on the live vote history and are NOT fixed
+claims. Run it to get current, reproducible numbers:
 
     uv run python scripts/benchmark_ranker.py
 
@@ -34,6 +46,7 @@ is a measurement tool, not a gate).
 """
 from __future__ import annotations
 
+import math
 import sys
 from datetime import datetime, timezone
 
@@ -174,57 +187,45 @@ def _pairwise_accuracy(scores: np.ndarray, labels: np.ndarray) -> tuple[float, i
     return correct / n_pairs, n_pairs
 
 
-def run_benchmark(
-    rows: list,
-    labels: list[int],
-    timestamps: list[datetime],
-    grades: list[int] | None = None,
-    profile_mat: np.ndarray | None = None,
-    train_frac: float = 0.75,
-    random_state: int = 0,
-) -> dict:
-    """Core benchmark logic — reusable by the synthetic test.
+def _dcg(gains: list[float]) -> float:
+    return sum(g / math.log2(i + 2) for i, g in enumerate(gains))
 
-    ``rows`` are item-like objects (real ItemRow or SimpleNamespace with ``id``,
-    ``title``, ``abstract``, ``published_at``), ``labels`` are +1/-1 per row,
-    ``timestamps`` are the signing vote's time (chronological order key).
 
-    Returns a dict with keys: n_train, n_test, topic_acc, full_acc, n_test_pairs,
-    train_exemplar_ids, test_ids.
+def _ndcg_at_k(scores: np.ndarray, labels: np.ndarray, k: int = 10) -> float:
+    """nDCG@k for a single ranked list; label +1 -> gain 1, else 0.
+
+    Ranks items by ``scores`` (desc, stable) and compares the resulting gain
+    sequence to the ideal ordering. Returns float('nan') when no positive label
+    exists (nDCG undefined). Mirrors ``rank.evaluate._ndcg_at_k`` gains.
     """
-    from sklearn.linear_model import LogisticRegression
+    n = len(labels)
+    if n == 0:
+        return float("nan")
+    order = np.argsort(-np.asarray(scores, dtype=np.float64), kind="stable")
+    ranked_gains = [1.0 if labels[i] > 0 else 0.0 for i in order[:k]]
+    ideal = sorted((1.0 if lbl > 0 else 0.0 for lbl in labels), reverse=True)[:k]
+    idcg = _dcg(ideal)
+    if idcg <= 0:
+        return float("nan")
+    return _dcg(ranked_gains) / idcg
 
-    from dailydigest.votes import VOTE_GRADE_NEUTRAL, value_to_grade
 
-    n = len(rows)
-    if grades is None:
-        grades = [value_to_grade(v) for v in labels]
-
+def _split_chronological(
+    n: int, timestamps: list[datetime], train_frac: float
+) -> tuple[list[int], list[int]]:
+    """Return (train_idx, test_idx): older ``train_frac`` vs. newer remainder."""
     order = sorted(range(n), key=lambda i: (timestamps[i], i))
     n_train = max(1, int(round(n * train_frac)))
     n_train = min(n_train, n - 1) if n > 1 else n
-    train_idx = order[:n_train]
-    test_idx = order[n_train:]
+    return order[:n_train], order[n_train:]
 
-    if profile_mat is None:
-        from pathlib import Path
 
-        import yaml
+def _build_train_exemplars(
+    rows: list, labels: list[int], grades: list[int], train_idx: list[int]
+):
+    """Pack TRAIN-only (pos, neg) grade-weighted exemplar tuples (leakage-free)."""
+    from dailydigest.votes import VOTE_GRADE_NEUTRAL
 
-        from dailydigest.config import load_settings
-        from dailydigest.models import Profile
-        from dailydigest.rank.profile import build_profile_matrix_with_rocchio
-
-        settings = load_settings()
-        profile_data = yaml.safe_load(
-            Path(settings.profile_path).read_text(encoding="utf-8")
-        )
-        profile = Profile(**profile_data)
-        # Only TRAIN votes exist "so far" chronologically -> use their count for
-        # the Rocchio ramp so the profile matches what the model would have seen.
-        profile_mat = build_profile_matrix_with_rocchio(profile, len(train_idx))
-
-    # Build TRAIN-only exemplars for the affinity features (leakage-free).
     pos_rows, pos_w, neg_rows, neg_w = [], [], [], []
     for i in train_idx:
         w = max(0.05, abs(grades[i] - VOTE_GRADE_NEUTRAL) / 50.0)
@@ -234,8 +235,76 @@ def run_benchmark(
         else:
             neg_rows.append(rows[i])
             neg_w.append(w)
-    pos_ex = _pack_exemplars(pos_rows, pos_w)
-    neg_ex = _pack_exemplars(neg_rows, neg_w)
+    return _pack_exemplars(pos_rows, pos_w), _pack_exemplars(neg_rows, neg_w)
+
+
+def _load_default_static_profile() -> np.ndarray:
+    """Load the STATIC config profile matrix (no Rocchio, no learned_profile.npz).
+
+    Using the static profile is what keeps BOTH benchmark modes leakage-free at
+    the profile level: ``build_profile_matrix`` is a pure function of the config
+    profile file, so it cannot encode the held-out test votes the way the
+    vote-derived Rocchio vector (rebuilt from ALL votes) would.
+    """
+    from pathlib import Path
+
+    import yaml
+
+    from dailydigest.config import load_settings
+    from dailydigest.models import Profile
+    from dailydigest.rank.profile import build_profile_matrix  # STATIC — no Rocchio
+
+    settings = load_settings()
+    profile_data = yaml.safe_load(
+        Path(settings.profile_path).read_text(encoding="utf-8")
+    )
+    profile = Profile(**profile_data)
+    return build_profile_matrix(profile)
+
+
+def run_benchmark(
+    rows: list,
+    labels: list[int],
+    timestamps: list[datetime],
+    grades: list[int] | None = None,
+    profile_mat: np.ndarray | None = None,
+    train_frac: float = 0.75,
+    random_state: int = 0,
+) -> dict:
+    """PREFERENCE-FEATURE PROBE (mode A) — NOT the deployed ranker.
+
+    Trains a POINTWISE LogisticRegression on the v6 features and evaluates its
+    probability directly. This measures whether the pos/neg affinity features
+    help a simple pointwise model separate held-out liked/disliked items — a
+    feature sanity probe. Production trains PAIRWISE and fuses the LR margin with
+    topic-cosine via RRF; for that, use :func:`run_production_benchmark`.
+
+    ``rows`` are item-like objects (real ItemRow or SimpleNamespace with ``id``,
+    ``title``, ``abstract``, ``published_at``), ``labels`` are +1/-1 per row,
+    ``timestamps`` are the signing vote's time (chronological order key).
+
+    The default (``profile_mat is None``) path uses the STATIC config profile
+    matrix (``build_profile_matrix``), never the Rocchio ``learned_profile.npz``,
+    so the profile cannot encode held-out votes.
+
+    Returns a dict with keys: n_train, n_test, topic_acc, full_acc, n_test_pairs,
+    train_exemplar_ids, test_ids.
+    """
+    from sklearn.linear_model import LogisticRegression
+
+    from dailydigest.votes import value_to_grade
+
+    n = len(rows)
+    if grades is None:
+        grades = [value_to_grade(v) for v in labels]
+
+    train_idx, test_idx = _split_chronological(n, timestamps, train_frac)
+
+    if profile_mat is None:
+        profile_mat = _load_default_static_profile()
+
+    # Build TRAIN-only exemplars for the affinity features (leakage-free).
+    pos_ex, neg_ex = _build_train_exemplars(rows, labels, grades, train_idx)
 
     train_exemplar_ids = np.concatenate([pos_ex[0], neg_ex[0]]).tolist()
     test_ids = [
@@ -257,7 +326,7 @@ def run_benchmark(
     )
     y_train = np.array(train_labels, dtype=np.int32)
 
-    # Full model: standardized LR over the v6 feature set (fixed seed).
+    # Full model: standardized POINTWISE LR over the v6 feature set (fixed seed).
     mean = X_train.mean(axis=0)
     scale = X_train.std(axis=0)
     scale = np.where(scale < 1e-6, 1.0, scale).astype(np.float32)
@@ -291,11 +360,150 @@ def run_benchmark(
     }
 
 
-def _load_signed_votes_chronological():
+def _pairwise_training_matrix(
+    X: np.ndarray, y: np.ndarray, max_pairs: int = 300, seed: int = 0
+) -> tuple[np.ndarray, np.ndarray]:
+    """Replicate ``votes.vote_dataset`` pairwise construction on a given (X, y).
+
+    For each sampled (up, down) index pair, emit the feature difference
+    ``X[up] - X[down]`` with label +1 and its negation with label -1, so the LR
+    learns the gradient from disliked to liked. Sampling and the ± balancing
+    mirror ``_sample_training_pairs`` / ``vote_dataset`` exactly (fixed seed).
+    """
+    import itertools
+
+    up_indices = [i for i, lbl in enumerate(y) if lbl == 1]
+    down_indices = [i for i, lbl in enumerate(y) if lbl == -1]
+    n_up, n_down = len(up_indices), len(down_indices)
+    total = n_up * n_down
+    if total == 0:
+        raise ValueError("pairwise construction needs both +1 and -1 examples")
+
+    if total <= max_pairs:
+        pairs = list(itertools.product(up_indices, down_indices))
+    else:
+        rng = np.random.default_rng(seed)  # fixed seed → reproducible (matches vote_dataset)
+        chosen = rng.choice(total, size=max_pairs, replace=False)
+        pairs = [
+            (up_indices[int(i) // n_down], down_indices[int(i) % n_down]) for i in chosen
+        ]
+
+    pairs_X: list[np.ndarray] = []
+    pairs_y: list[float] = []
+    for ui, di in pairs:
+        diff = X[ui] - X[di]
+        pairs_X.append(diff)
+        pairs_y.append(1.0)
+        pairs_X.append(-diff)
+        pairs_y.append(-1.0)
+    return np.array(pairs_X, dtype=np.float32), np.array(pairs_y, dtype=np.float32)
+
+
+def run_production_benchmark(
+    rows: list,
+    labels: list[int],
+    timestamps: list[datetime],
+    grades: list[int] | None = None,
+    profile_mat: np.ndarray | None = None,
+    train_frac: float = 0.75,
+) -> dict:
+    """PRODUCTION-FAITHFUL EVALUATION (mode B) — the deployable-ranker signal.
+
+    Mirrors deployment end to end, on RESEARCH items only (production ranks the
+    research section this way), excluding any item with no signed vote:
+
+      1. Split TRAIN (older 75%) / TEST (newer 25%) chronologically.
+      2. Build the v6 features with TRAIN-only affinity exemplars (leakage-free)
+         and the STATIC config profile (no Rocchio) unless one is injected.
+      3. Build PAIRWISE training examples from the TRAIN features exactly as
+         ``votes.vote_dataset`` does (liked-minus-disliked differences, ±).
+      4. Fit the standardized ``LRRanker`` (same fit path production uses).
+      5. Rank the held-out TEST items by RRF-fusing the LR MARGIN with the
+         topic-cosine ranking via ``ranker._fuse_scores``.
+      6. Report pairwise accuracy AND nDCG@10 for the fused (deployed-style)
+         ranker AND the topic-only baseline.
+
+    Returns a dict with keys: n_train, n_test, n_test_pairs,
+    topic_acc, fused_acc, topic_ndcg, fused_ndcg,
+    train_exemplar_ids, test_ids.
+    """
+    from dailydigest.rank.ranker import LRRanker, _fuse_scores
+    from dailydigest.votes import value_to_grade
+
+    n = len(rows)
+    if grades is None:
+        grades = [value_to_grade(v) for v in labels]
+
+    train_idx, test_idx = _split_chronological(n, timestamps, train_frac)
+
+    if profile_mat is None:
+        profile_mat = _load_default_static_profile()
+
+    pos_ex, neg_ex = _build_train_exemplars(rows, labels, grades, train_idx)
+    train_exemplar_ids = np.concatenate([pos_ex[0], neg_ex[0]]).tolist()
+    test_ids = [
+        int(rid)
+        for i in test_idx
+        if isinstance((rid := getattr(rows[i], "id", None)), int)
+    ]
+
+    train_rows = [rows[i] for i in train_idx]
+    train_labels = [labels[i] for i in train_idx]
+    test_rows = [rows[i] for i in test_idx]
+    test_labels = np.array([labels[i] for i in test_idx], dtype=np.int32)
+
+    X_train = _build_features_train_only(
+        train_rows, train_labels, profile_mat, pos_ex, neg_ex
+    )
+    X_test = _build_features_train_only(
+        test_rows, test_labels.tolist(), profile_mat, pos_ex, neg_ex
+    )
+    y_train = np.array(train_labels, dtype=np.int32)
+
+    if np.unique(y_train).size < 2:
+        raise ValueError("train split has only one class; cannot fit pairwise LR")
+
+    # PAIRWISE training exactly as production (votes.vote_dataset) does, then fit
+    # the SAME standardized LRRanker production fits.
+    pair_X, pair_y = _pairwise_training_matrix(X_train, y_train)
+    ranker = LRRanker()
+    ranker.fit(pair_X, pair_y)
+
+    # Deployed ranking: RRF-fuse the topic-cosine ranking (feature col 0) with the
+    # LR MARGIN (decision_function), the same fusion ranker.score_items_lr uses.
+    # NOTE: production fuses the QUALITY-ADJUSTED topic score; here TEST rows are
+    # research items so quality adjustment is a monotone-ish per-item shift — we
+    # fuse the raw topic cosine to keep the held-out measurement dependent only on
+    # the learned preference signal vs. topic, not on venue metadata.
+    lr_margin = ranker.decision_function(X_test)
+    topic_scores = X_test[:, 0].astype(np.float32)
+    fused_scores = _fuse_scores(topic_scores, lr_margin)
+
+    topic_acc, n_pairs = _pairwise_accuracy(topic_scores, test_labels)
+    fused_acc, _ = _pairwise_accuracy(fused_scores, test_labels)
+    topic_ndcg = _ndcg_at_k(topic_scores, test_labels, k=10)
+    fused_ndcg = _ndcg_at_k(fused_scores, test_labels, k=10)
+
+    return {
+        "n_train": len(train_idx),
+        "n_test": len(test_idx),
+        "n_test_pairs": n_pairs,
+        "topic_acc": topic_acc,
+        "fused_acc": fused_acc,
+        "topic_ndcg": topic_ndcg,
+        "fused_ndcg": fused_ndcg,
+        "train_exemplar_ids": train_exemplar_ids,
+        "test_ids": test_ids,
+    }
+
+
+def _load_signed_votes_chronological(research_only: bool = False):
     """Return (rows, labels, timestamps, grades) for the latest signed vote/item.
 
     Ordered so the newest-vote items are last; chronological split key is the
-    vote's ``created_at``.
+    vote's ``created_at``. When ``research_only`` is True, only items whose
+    ``section == "research"`` are returned (the section production's LR path
+    ranks).
     """
     from sqlalchemy import select
 
@@ -322,6 +530,8 @@ def _load_signed_votes_chronological():
             v = int(value)
             if v not in (-1, 1):
                 continue
+            if research_only and str(getattr(row, "section", "") or "").lower() != "research":
+                continue
             s.expunge(row)
             ts = _as_utc(created_at) or datetime.now(timezone.utc)
             rows.append(row)
@@ -331,48 +541,84 @@ def _load_signed_votes_chronological():
     return rows, labels, timestamps, grades
 
 
+def _fmt(x: float) -> str:
+    return "n/a" if x is None or (isinstance(x, float) and math.isnan(x)) else f"{x:.3f}"
+
+
 def main() -> int:
+    print("=" * 68)
+    print("  DailyDigest ranker — leakage-free chronological benchmark")
+    print("  (STATIC config profile; no Rocchio learned_profile.npz)")
+    print("=" * 68)
+
+    # ------------------------------------------------------------------ #
+    # Mode A: preference-FEATURE PROBE (pointwise LR on v6 features).
+    # ------------------------------------------------------------------ #
     rows, labels, timestamps, grades = _load_signed_votes_chronological()
     n = len(rows)
     n_pos = sum(1 for v in labels if v > 0)
     n_neg = n - n_pos
-
-    print("=" * 64)
-    print("  DailyDigest ranker — leakage-free chronological benchmark")
-    print("=" * 64)
-    print(f"  signed votes: {n}  (+{n_pos} / -{n_neg})")
+    print(f"  [A] preference-feature probe  (all sections)")
+    print(f"      signed votes: {n}  (+{n_pos} / -{n_neg})")
 
     if n < 8 or n_pos < 2 or n_neg < 2:
-        print("  INSUFFICIENT DATA: need >=8 signed votes with >=2 of each sign.")
-        print("  (real-DB result depends on live votes; nothing to report yet)")
-        print("=" * 64)
-        return 0
+        print("      INSUFFICIENT DATA: need >=8 signed votes with >=2 of each sign.")
+    else:
+        try:
+            a = run_benchmark(rows, labels, timestamps, grades=grades)
+            leaked_a = set(a["test_ids"]) & set(a["train_exemplar_ids"])
+            print(
+                f"      split {a['n_train']}/{a['n_test']} "
+                f"({a['n_test_pairs']} held-out pairs)  "
+                f"leakage: {'FAIL' if leaked_a else 'OK'}"
+            )
+            print(f"      topic-cosine only   pairwise acc : {_fmt(a['topic_acc'])}")
+            print(f"      pointwise+affinity  pairwise acc : {_fmt(a['full_acc'])}")
+            print(
+                f"      delta                            : "
+                f"{a['full_acc'] - a['topic_acc']:+.3f}"
+            )
+            print("      NOTE: probe of the affinity FEATURES, NOT the deployed ranker.")
+        except ValueError as e:
+            print(f"      could not run probe: {e}")
 
-    try:
-        result = run_benchmark(rows, labels, timestamps, grades=grades)
-    except ValueError as e:
-        print(f"  could not run benchmark: {e}")
-        print("=" * 64)
-        return 0
+    print("-" * 68)
 
-    # Leakage self-check: no test item may appear among train exemplars.
-    leaked = set(result["test_ids"]) & set(result["train_exemplar_ids"])
-    topic = result["topic_acc"]
-    full = result["full_acc"]
-    delta = full - topic
+    # ------------------------------------------------------------------ #
+    # Mode B: PRODUCTION-FAITHFUL (pairwise LR + RRF fuse), research only.
+    # ------------------------------------------------------------------ #
+    r_rows, r_labels, r_ts, r_grades = _load_signed_votes_chronological(research_only=True)
+    rn = len(r_rows)
+    rn_pos = sum(1 for v in r_labels if v > 0)
+    rn_neg = rn - rn_pos
+    print(f"  [B] production-faithful  (pairwise LR + RRF fuse, research items)")
+    print(f"      signed research votes: {rn}  (+{rn_pos} / -{rn_neg})")
 
-    print(f"  train / test split: {result['n_train']} / {result['n_test']} "
-          f"({result['n_test_pairs']} held-out pairs)")
-    print(f"  leakage check: {'FAIL' if leaked else 'OK'} "
-          f"({len(leaked)} test ids in train exemplars)")
-    print("-" * 64)
-    print(f"  topic-cosine only  pairwise acc : {topic:.3f}")
-    print(f"  full model         pairwise acc : {full:.3f}")
-    print(f"  delta (full - topic)            : {delta:+.3f} "
-          f"({'model helps' if delta > 0 else 'model does NOT beat baseline'})")
-    print("=" * 64)
-    print("  NOTE: this number reflects the CURRENT live vote history and is not")
-    print("  a fixed guarantee. Re-run after voting to re-measure.")
+    if rn < 8 or rn_pos < 2 or rn_neg < 2:
+        print("      INSUFFICIENT DATA: need >=8 signed research votes, >=2 each sign.")
+    else:
+        try:
+            b = run_production_benchmark(r_rows, r_labels, r_ts, grades=r_grades)
+            leaked_b = set(b["test_ids"]) & set(b["train_exemplar_ids"])
+            print(
+                f"      split {b['n_train']}/{b['n_test']} "
+                f"({b['n_test_pairs']} held-out pairs)  "
+                f"leakage: {'FAIL' if leaked_b else 'OK'}"
+            )
+            print(f"      topic-only    pairwise acc : {_fmt(b['topic_acc'])}   "
+                  f"nDCG@10 : {_fmt(b['topic_ndcg'])}")
+            print(f"      deployed(fuse) pairwise acc : {_fmt(b['fused_acc'])}   "
+                  f"nDCG@10 : {_fmt(b['fused_ndcg'])}")
+            d_acc = (b["fused_acc"] - b["topic_acc"])
+            print(f"      delta pairwise acc          : {d_acc:+.3f} "
+                  f"({'deployed ranker helps' if d_acc > 0 else 'no gain over topic-only'})")
+            print("      THIS is the deployable-ranker signal (pairwise+RRF, as shipped).")
+        except ValueError as e:
+            print(f"      could not run production benchmark: {e}")
+
+    print("=" * 68)
+    print("  Both numbers reflect the CURRENT live vote history and are not fixed")
+    print("  guarantees. Re-run after voting to re-measure.")
     return 0
 
 

@@ -15,6 +15,7 @@ from dailydigest.rank.calibrate import (
     fit_calibrator,
     load_calibrator,
 )
+from dailydigest.rank.source_quality import RANKER_VERSION
 
 
 def _insert_item(title: str) -> int:
@@ -35,15 +36,19 @@ def _insert_item(title: str) -> int:
 
 
 def _seed_votes_correlated_with_score(n_each: int = 10) -> None:
-    """High-scored items upvoted, low-scored items downvoted."""
+    """High-scored items upvoted, low-scored items downvoted.
+
+    Feature rows are stamped with the current RANKER_VERSION so they pass the
+    same-policy filter in ``_calibration_dataset`` and the calibrator can fit.
+    """
     feats = []
     actions = []
     for i in range(n_each):
         up = _insert_item(f"up{i}")
-        feats.append((f"R{i}", up, 0.80, {}))
+        feats.append((f"R{i}", up, 0.80, {"ranker_version": RANKER_VERSION}))
         actions.append((up, 1))
         down = _insert_item(f"down{i}")
-        feats.append((f"D{i}", down, 0.30, {}))
+        feats.append((f"D{i}", down, 0.30, {"ranker_version": RANKER_VERSION}))
         actions.append((down, -1))
     store_mod.write_digest_features("2026-01-01", feats)
     for item_id, value in actions:
@@ -161,17 +166,17 @@ def test_multi_digest_score_selection_is_deterministic_latest_digest():
         s.flush()
         s.add(store_mod.DigestItemFeatureRow(
             digest_id="d-new", item_id=item_id, item_label="R1",
-            final_score=0.90, features_json="{}",
+            final_score=0.90, features_json='{"ranker_version": "%s"}' % RANKER_VERSION,
             created_at=base + timedelta(hours=1),
         ))
         s.add(store_mod.DigestItemFeatureRow(
             digest_id="d-old", item_id=item_id, item_label="R1",
-            final_score=0.10, features_json="{}",
+            final_score=0.10, features_json='{"ranker_version": "%s"}' % RANKER_VERSION,
             created_at=base,
         ))
         s.add(store_mod.DigestItemFeatureRow(
             digest_id="d-new", item_id=other, item_label="R2",
-            final_score=0.20, features_json="{}",
+            final_score=0.20, features_json='{"ranker_version": "%s"}' % RANKER_VERSION,
             created_at=base + timedelta(hours=1),
         ))
 
@@ -185,3 +190,63 @@ def test_multi_digest_score_selection_is_deterministic_latest_digest():
     # not the older 0.10 — proving deterministic latest-digest selection.
     assert by_label[1] == pytest.approx(0.90, abs=1e-5)
     assert by_label[0] == pytest.approx(0.20, abs=1e-5)
+
+
+def test_calibration_dataset_excludes_other_policy_rows():
+    """Only feature rows stamped with the current RANKER_VERSION enter the
+    calibration set; rows from an older ranking policy are excluded."""
+    cur_up = _insert_item("cur_up")
+    cur_down = _insert_item("cur_down")
+    old_up = _insert_item("old_up")
+    old_down = _insert_item("old_down")
+
+    feats = [
+        ("R1", cur_up, 0.85, {"ranker_version": RANKER_VERSION}),
+        ("R2", cur_down, 0.25, {"ranker_version": RANKER_VERSION}),
+        # Old-policy rows carry a different ranker_version and must be dropped.
+        ("R3", old_up, 0.85, {"ranker_version": "2025-01-01-old-policy-v0"}),
+        ("R4", old_down, 0.25, {"ranker_version": "2025-01-01-old-policy-v0"}),
+    ]
+    store_mod.write_digest_features("2026-01-03", feats)
+    for item_id in (cur_up, old_up):
+        votes_mod.record_vote_by_id(item_id, 1)
+    for item_id in (cur_down, old_down):
+        votes_mod.record_vote_by_id(item_id, -1)
+
+    scores, labels = calib_mod._calibration_dataset()
+    # Exactly the two current-policy rows survive; the two old-policy rows do not.
+    assert len(scores) == 2
+    assert sorted(float(s) for s in scores) == pytest.approx([0.25, 0.85])
+
+
+def test_fit_skips_when_only_a_few_current_policy_rows():
+    """With a MIX of policies, the calibrator fits ONLY from current-policy rows.
+    When too few of those exist (below MIN_VOTES_FOR_CALIBRATION), it returns
+    not-enough-data so the loader falls back to the safe default instead of
+    fitting on cross-policy-contaminated snapshots."""
+    feats = []
+    # Only 2 current-policy voted rows — below MIN_VOTES_FOR_CALIBRATION (12).
+    cur_up = _insert_item("only_cur_up")
+    cur_down = _insert_item("only_cur_down")
+    feats.append(("R1", cur_up, 0.85, {"ranker_version": RANKER_VERSION}))
+    feats.append(("R2", cur_down, 0.25, {"ranker_version": RANKER_VERSION}))
+    # Plenty of old-policy rows that would clear the threshold IF they counted —
+    # they must be excluded, so the fit is still refused.
+    old_actions = []
+    for i in range(10):
+        up = _insert_item(f"old_up{i}")
+        down = _insert_item(f"old_down{i}")
+        feats.append((f"OU{i}", up, 0.85, {"ranker_version": "2025-01-01-old-policy-v0"}))
+        feats.append((f"OD{i}", down, 0.25, {"ranker_version": "2025-01-01-old-policy-v0"}))
+        old_actions.append((up, 1))
+        old_actions.append((down, -1))
+    store_mod.write_digest_features("2026-01-04", feats)
+    votes_mod.record_vote_by_id(cur_up, 1)
+    votes_mod.record_vote_by_id(cur_down, -1)
+    for item_id, value in old_actions:
+        votes_mod.record_vote_by_id(item_id, value)
+
+    # 22 total voted rows, but only 2 same-policy → below threshold → no fit.
+    assert fit_calibrator() is None
+    assert load_calibrator() is None
+    assert adaptive_relevance_floor(0.58) == 0.58

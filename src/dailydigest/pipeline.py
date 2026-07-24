@@ -915,16 +915,46 @@ def run_all(
                 for row, score, label in labeled
             ],
         )
-        # Immutable per-run impression log: APPEND this run's final slate (never
-        # overwrites prior runs, unlike write_digest). Position is the 0-based rank
-        # within each section, taken in the score-ordered `labeled` list.
+        # Immutable per-run impression log: APPEND this run's slate (never
+        # overwrites prior runs, unlike write_digest). This is the A/B substrate,
+        # so it records more than the final slate:
+        #  * For the RESEARCH section we log the scored candidate POOL (top
+        #    RESEARCH_CANDIDATE_POOL_CAP by final score) with selected=True when the
+        #    item made the final `labeled` slate and False otherwise — so an
+        #    alternative ranker can be scored against the identical candidate set.
+        #  * For the OTHER sections we log only the selected slate (selected=True),
+        #    matching the prior behavior.
+        # Position is the 0-based rank; within research it is the rank in the
+        # score-ordered candidate pool, elsewhere the rank within the section slate.
+        RESEARCH_CANDIDATE_POOL_CAP = 100
+        _selected_ids = {int(row.id) for row, _s, _l in labeled}
+        _impressions: list[tuple[str, int, int, float | None, bool]] = []
+        # `scored` is (row, score) sorted by final score desc; filter to research
+        # and cap the pool so the row count stays bounded.
+        _research_pool = [
+            (row, score)
+            for row, score in scored
+            if (getattr(row, "section", "") or "") == "research"
+        ][:RESEARCH_CANDIDATE_POOL_CAP]
+        for pos, (row, score) in enumerate(_research_pool):
+            _impressions.append(
+                (
+                    "research",
+                    int(row.id),
+                    pos,
+                    float(score),
+                    int(row.id) in _selected_ids,
+                )
+            )
+        # Selected non-research items, positioned within their section slate.
         _section_pos: dict[str, int] = {}
-        _impressions: list[tuple[str, int, int, float | None]] = []
         for row, score, _label in labeled:
             section = row.section or ""
+            if section == "research":
+                continue  # already covered by the research candidate pool above
             pos = _section_pos.get(section, 0)
             _section_pos[section] = pos + 1
-            _impressions.append((section, int(row.id), pos, float(score)))
+            _impressions.append((section, int(row.id), pos, float(score), True))
         write_impressions(digest_id, _impressions, model_version=RANKER_VERSION)
         write_digest_audit(digest_id, "missed_top_journals", top_journal_audit)
         write_digest_audit(digest_id, "candidate_funnel", [funnel_audit])
