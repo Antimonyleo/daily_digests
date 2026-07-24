@@ -128,7 +128,7 @@ class LRRanker:
 
     # ---- training -----------------------------------------------------------
 
-    def fit(self, X: np.ndarray, y: np.ndarray) -> None:
+    def fit(self, X: np.ndarray, y: np.ndarray, *, persist: bool = True) -> None:
         from sklearn.linear_model import LogisticRegression
 
         X = np.asarray(X, dtype=np.float32)
@@ -170,6 +170,11 @@ class LRRanker:
         self.intercept_ = float(clf.intercept_[0])
         self.mean_ = mean
         self.scale_ = scale
+
+        if not persist:
+            # In-memory fit only (e.g. benchmarks/experiments). Never touch the
+            # production model artifact.
+            return
 
         target = _lr_weights_path()
         target.parent.mkdir(parents=True, exist_ok=True)

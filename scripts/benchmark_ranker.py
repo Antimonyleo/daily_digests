@@ -467,7 +467,7 @@ def run_production_benchmark(
     # the SAME standardized LRRanker production fits.
     pair_X, pair_y = _pairwise_training_matrix(X_train, y_train)
     ranker = LRRanker()
-    ranker.fit(pair_X, pair_y)
+    ranker.fit(pair_X, pair_y, persist=False)
 
     # Deployed ranking: RRF-fuse the topic-cosine ranking (feature col 0) with the
     # LR MARGIN (decision_function), the same fusion ranker.score_items_lr uses.

@@ -931,11 +931,22 @@ def run_all(
         _impressions: list[tuple[str, int, int, float | None, bool]] = []
         # `scored` is (row, score) sorted by final score desc; filter to research
         # and cap the pool so the row count stays bounded.
-        _research_pool = [
+        _research_scored = [
             (row, score)
             for row, score in scored
             if (getattr(row, "section", "") or "") == "research"
-        ][:RESEARCH_CANDIDATE_POOL_CAP]
+        ]
+        # Log the top-CAP research candidates by final score PLUS every selected
+        # research item, even if it ranks below the cap (source balancing /
+        # exploration / last-resort fill can select items past position CAP). This
+        # preserves the invariant that every displayed research item has an
+        # impression row with selected=True. Appended tail items keep score order.
+        _research_pool = _research_scored[:RESEARCH_CANDIDATE_POOL_CAP]
+        _pool_ids = {int(row.id) for row, _s in _research_pool}
+        for row, score in _research_scored[RESEARCH_CANDIDATE_POOL_CAP:]:
+            if int(row.id) in _selected_ids and int(row.id) not in _pool_ids:
+                _research_pool.append((row, score))
+                _pool_ids.add(int(row.id))
         for pos, (row, score) in enumerate(_research_pool):
             _impressions.append(
                 (

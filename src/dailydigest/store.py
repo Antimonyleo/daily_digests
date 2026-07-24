@@ -662,11 +662,14 @@ def write_impressions(
 
 
 def mark_impressions_viewed(digest_id: str) -> int:
-    """Mark the LATEST run's impression rows for ``digest_id`` as viewed.
+    """Mark the LATEST run's SELECTED impression rows for ``digest_id`` as viewed.
 
     Called from the web digest view so the ``viewed`` flag reflects that the
     reader actually opened this digest. Only the most-recent run's rows are
-    updated (older runs stay as recorded). Returns the number of rows updated.
+    updated (older runs stay as recorded). Within that run, only ``selected``
+    rows — the items actually displayed in the digest — are marked viewed;
+    unselected candidate-pool rows (logged for A/B but never shown) stay
+    ``viewed=False``. Returns the number of rows updated.
     """
     init_db()
     with session_scope() as s:
@@ -683,6 +686,7 @@ def mark_impressions_viewed(digest_id: str) -> int:
             .where(
                 ImpressionRow.digest_id == digest_id,
                 ImpressionRow.run_id == latest_run,
+                ImpressionRow.selected.is_(True),
             )
             .values(viewed=True)
         )

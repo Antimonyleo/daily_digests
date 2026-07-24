@@ -193,6 +193,90 @@ def test_run_all_logs_research_candidate_pool_with_selected_flags(monkeypatch, t
         assert impressions[picked_id].model_version == RANKER_VERSION
 
 
+def test_run_all_logs_selected_research_item_below_pool_cap(monkeypatch, tmp_path):
+    """A selected research item that ranks BELOW RESEARCH_CANDIDATE_POOL_CAP in the
+    score-ordered pool (via source balancing / exploration / last-resort fill) must
+    still get an impression row with selected=True. The pool logs the UNION of the
+    top-CAP items and every selected research item, so no displayed item is dropped."""
+    from dailydigest import config as config_mod
+    from dailydigest import pipeline as pipeline_mod
+    from dailydigest import store as store_mod
+
+    monkeypatch.setenv("DB_PATH", str(tmp_path / "digest.db"))
+    monkeypatch.setenv("PROFILE_PATH", "config/profile.example.yaml")
+    config_mod.reload_settings()
+    store_mod.SETTINGS = config_mod.SETTINGS
+    store_mod._ENGINE = None
+    store_mod._SessionLocal = None
+    store_mod._INITIALIZED = False
+
+    store_mod.init_db()
+    # Build more than the pool cap (100) research candidates. The LAST one (lowest
+    # final score) is the one that gets selected, forcing it below the cap.
+    N = 130
+    with store_mod.session_scope() as s:
+        rows = [
+            store_mod.ItemRow(
+                source="Nature",
+                section="research",
+                external_id=f"cand-{i}",
+                url=f"https://example.com/cand-{i}",
+                title=f"Research candidate {i}",
+                abstract="Primary research with methods and efficacy.",
+                published_at=datetime.now(timezone.utc),
+            )
+            for i in range(N)
+        ]
+        s.add_all(rows)
+        s.flush()
+        ids = [int(r.id) for r in rows]
+    tail_id = ids[-1]  # will be selected despite ranking last
+
+    def recent_items(days=2):
+        with store_mod.session_scope() as s:
+            fetched = [s.get(store_mod.ItemRow, i) for i in ids]
+            for r in fetched:
+                s.expunge(r)
+            return fetched
+
+    def score_items(items, _pv, _downweight, reason_penalty_map=None):
+        # Descending scores in candidate order; tail item gets the LOWEST score,
+        # so it sorts to the bottom of the pool (rank > cap).
+        by_id = {int(it.id): it for it in items}
+        return [(by_id[i], 1.0 - idx * 0.001) for idx, i in enumerate(ids)]
+
+    def pick_top_per_section(scored, _caps, catch_up=False):
+        # Simulate exploration / last-resort fill selecting the lowest-scored item.
+        return [t for t in scored if int(t[0].id) == tail_id]
+
+    monkeypatch.setattr(pipeline_mod, "ingest_all", lambda progress_callback=None, days=2: 0)
+    monkeypatch.setattr(pipeline_mod, "load_profile", lambda: SimpleNamespace(bio="", keywords=[], downweight=[]))
+    monkeypatch.setattr(pipeline_mod, "build_profile_matrix", lambda _profile: __import__("numpy").zeros((1, 3)))
+    monkeypatch.setattr(pipeline_mod, "recent_items", recent_items)
+    monkeypatch.setattr(pipeline_mod, "score_items", score_items)
+    monkeypatch.setattr(pipeline_mod, "pick_top_per_section", pick_top_per_section)
+    monkeypatch.setattr(pipeline_mod, "summarize_items", lambda rows, profile=None: {})
+    monkeypatch.setattr(pipeline_mod, "send_digest", lambda html, subject, dry_run=False: True)
+
+    pipeline_mod.run_all(dry_run=True)
+
+    digest_id = pipeline_mod._digest_id()
+    with store_mod.session_scope() as s:
+        impressions = {
+            r.item_id: r
+            for r in s.query(store_mod.ImpressionRow).filter_by(digest_id=digest_id).all()
+        }
+        # The selected tail item ranks below the cap yet must still be logged.
+        assert tail_id in impressions
+        assert impressions[tail_id].selected is True
+        # Invariant: EVERY selected research item has an impression row with selected=True.
+        selected_ids = {tail_id}
+        for sid in selected_ids:
+            assert sid in impressions and impressions[sid].selected is True
+        # Its position is a stable rank appended after the top-CAP block.
+        assert impressions[tail_id].position == 100
+
+
 def test_non_dry_run_skips_when_digest_already_sent(monkeypatch, tmp_path):
     from dailydigest import pipeline as pipeline_mod
 

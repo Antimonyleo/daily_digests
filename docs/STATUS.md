@@ -8,7 +8,7 @@ affinity) so feedback can suppress an on-profile-but-unwanted subtopic, made
 feedback apply on the next brew (retrain on new votes, not a 7-day timer), removed
 a no-op MMR call, and widened active retrieval to all core interests. Install is now
 lightweight: default embedder is fastembed/ONNX (no PyTorch, ~400 MB).
-**End-to-end verified:** `NO_BROWSER=1 ./scripts/start.sh` syncs deps and boots FastAPI at `http://127.0.0.1:8765`. Held-out preference validation is now a committed, reproducible script (`scripts/benchmark_ranker.py`): a leakage-free chronological split (train = older 75%, test = newer 25%; exemplars built from TRAIN votes only) shows the learned ranker beating topic-cosine alone on held-out pairwise accuracy. The exact number depends on the live vote history — run `uv run python scripts/benchmark_ranker.py` to re-measure; the mechanism is unit-tested on synthetic data in `tests/test_preference_benchmark.py`. `326` pytest tests pass locally.
+**End-to-end verified:** `NO_BROWSER=1 ./scripts/start.sh` syncs deps and boots FastAPI at `http://127.0.0.1:8765`. Held-out preference validation is a committed, reproducible script (`scripts/benchmark_ranker.py`) with a leakage-free chronological split (train = older 75%, test = newer 25%; exemplars built from TRAIN votes only) and two modes. Mode [A] is a *pointwise feature probe* — an optimistic, best-case measurement of whether the preference features carry signal; it is NOT the deployed model and should not be read as production performance. Mode [B] is *production-faithful* — the actual shipped ranker (pairwise LR + RRF fusion, research-only) — and this is the one that reflects what users get. In production-faithful mode the learned personalization layer is currently ~NEUTRAL versus topic-cosine: it does not durably beat topic-only (pairwise ~0.767 deployed vs ~0.774 topic-only; nDCG@10 identical at ~0.173). The binding constraint here is DATA, not model architecture — there are only ~7 positive research votes out of +80/−226 total, too few to move the pairwise/RRF layer off the topic baseline. The exact numbers depend on the live vote history — run `uv run python scripts/benchmark_ranker.py` to re-measure; the mechanism is unit-tested on synthetic data in `tests/test_preference_benchmark.py`. `340` pytest tests pass locally.
 
 ---
 
@@ -45,7 +45,7 @@ Open `http://127.0.0.1:8765`. First-time users are sent to `/setup`; the wizard 
 | Local digest viewer | `GET /` | ✅ FastAPI app at 127.0.0.1:8765, graphical overview, confidence-aware must-read cards, source mix, ranking bars, Relevant / Seen / Not for me votes, gated reason chips, top-journal and brew diagnostics; redirects to /setup if no profile |
 | Claude Code backend | `LLM_BACKEND=claude_code uv run dd run-all` | ✅ `claude --print` (+ optional `--model <id>` via `LLM_CLI_MODEL`) |
 | Codex backend | `LLM_BACKEND=codex uv run dd run-all` | ✅ `codex exec` (+ optional `--model`) |
-| Tests | `.venv/bin/python -m pytest -q` | ✅ 326 passed |
+| Tests | `.venv/bin/python -m pytest -q` | ✅ 340 passed |
 
 Live verification artifacts:
 - `data/digest-20260504-081032.html` — 28,224 bytes, all 4 sections with emoji headers, inline CSS, vote-syntax footer (section sizes are adaptive, not fixed R8/I6/G3/W3).

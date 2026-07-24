@@ -13,6 +13,13 @@ fits a logistic map ``P(relevant) = sigmoid(a*score + b)`` from the persisted
 A monotonic (a > 0) calibrator does not reorder items, so this never changes
 ranking order — only the meaning of the score scale and the derived threshold.
 Everything degrades to the configured default when no calibrator exists.
+
+The persisted calibrator is stamped with BOTH the feature-schema version and the
+ranking-policy version, and the loader invalidates a fit whose either identity
+differs from the current one. Scores depend on the policy (fusion / quality
+adjustment) as well as the feature schema, so a single schema version can span
+several policies; gating on schema alone would silently accept a calibrator fit
+under an old policy but the same schema.
 """
 
 from __future__ import annotations
@@ -116,6 +123,10 @@ def fit_calibrator() -> dict | None:
     back to the safe default. This is the correct de-contaminated behavior: a
     freshly bumped RANKER_VERSION has no same-policy calibration data yet, and a
     default beats a fit contaminated by cross-policy snapshots.
+
+    The persisted params are stamped with BOTH the feature-schema version and the
+    ranking-policy version so ``load_calibrator`` can invalidate a fit whose
+    either identity no longer matches the current one.
     """
     X, y = _calibration_dataset()
     if len(X) < MIN_VOTES_FOR_CALIBRATION or np.unique(y).size < 2:
@@ -133,6 +144,12 @@ def fit_calibrator() -> dict | None:
         # from scores under an old schema (contaminated after a schema change) is
         # treated as absent and refit instead of silently applied.
         "schema": LR_FEATURE_SCHEMA_VERSION,
+        # Stamp the ranking-policy version too. Scores depend on the policy
+        # (fusion / quality adjustment) as well as the feature schema, and one
+        # schema version can span several policies — so schema alone cannot catch
+        # a fit made under an old policy. The loader invalidates on policy
+        # mismatch (or a missing policy key) the same way it does for schema.
+        "policy": RANKER_VERSION,
     }
     path = _calibrator_path()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -146,6 +163,15 @@ def fit_calibrator() -> dict | None:
 
 
 def load_calibrator() -> dict | None:
+    """Load the persisted calibrator, or None if absent/stale.
+
+    A fit is invalidated (treated as absent) when its stamped feature-schema
+    version OR its stamped ranking-policy version differs from the current one.
+    Both identities matter: (a, b) were learned from scores of a specific scoring
+    model, and a change to either the feature schema or the ranking policy
+    contaminates them. A missing "schema" or "policy" key means a pre-versioning
+    calibrator, which is likewise stale by definition.
+    """
     path = _calibrator_path()
     if not path.exists():
         return None
@@ -162,6 +188,17 @@ def load_calibrator() -> dict | None:
                 "calibrator: ignoring stale fit (schema %r != current %r)",
                 data.get("schema"),
                 LR_FEATURE_SCHEMA_VERSION,
+            )
+            return None
+        # Same for the ranking policy: scores depend on it, and a single schema
+        # version can span several policies, so schema alone cannot catch a fit
+        # made under an old policy. A missing "policy" key means a pre-policy-
+        # versioning calibrator, which is stale by definition.
+        if data.get("policy") != RANKER_VERSION:
+            logger.info(
+                "calibrator: ignoring stale fit (policy %r != current %r)",
+                data.get("policy"),
+                RANKER_VERSION,
             )
             return None
         return data

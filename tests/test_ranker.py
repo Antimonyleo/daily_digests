@@ -421,6 +421,36 @@ class TestLRRankerPersistence:
         np.testing.assert_allclose(loaded.score(X), ranker.score(X), rtol=1e-5, atol=1e-6)
         assert loaded.score(X).shape == (8,)
 
+    def test_fit_persist_false_does_not_touch_artifact(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("DB_PATH", str(tmp_path / "digest.db"))
+        from dailydigest import config as config_mod
+
+        config_mod.reload_settings()
+        _feature_schema_version, feature_dim = _current_lr_schema()
+        rng = np.random.default_rng(0)
+        X = rng.uniform(0.0, 0.2, size=(8, feature_dim)).astype(np.float32)
+        y = np.asarray([1, 1, 1, 1, -1, -1, -1, -1], dtype=np.float32)
+        X[y > 0, 0] += 0.7  # high cosine -> positive class
+
+        target = _lr_weights_path()
+        assert not target.exists()
+
+        # persist=False fits in memory but must NOT write the artifact.
+        ranker = LRRanker()
+        ranker.fit(X, y, persist=False)
+        assert ranker.coef_ is not None
+        assert ranker.score(X).shape == (8,)
+        assert not target.exists()
+
+        # A subsequent persist=True (default) fit must write the artifact.
+        LRRanker().fit(X, y)
+        assert target.exists()
+
+        # persist=False must not modify an already-present artifact.
+        before = target.read_bytes()
+        LRRanker().fit(X, y, persist=False)
+        assert target.read_bytes() == before
+
     def test_decision_function_breaks_ties_the_saturated_probability_hides(self):
         # The retrieved pool is pre-filtered to be relevant, so predict_proba
         # saturates: many items map to prob==1.0 (float precision) and tie.

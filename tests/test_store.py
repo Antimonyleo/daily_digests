@@ -236,6 +236,38 @@ def test_mark_impressions_viewed_updates_only_latest_run(monkeypatch, tmp_path):
     assert store_mod.mark_impressions_viewed("2099-01-01") == 0
 
 
+def test_mark_impressions_viewed_only_flags_selected_rows(monkeypatch, tmp_path):
+    """Unselected candidate-pool rows stay viewed=False; only shown rows flip."""
+    store_mod = _reset_store(tmp_path, monkeypatch)
+    shown = _add_item(store_mod, "view-shown")
+    candidate = _add_item(store_mod, "view-candidate")
+    digest_id = "2026-06-05"
+
+    store_mod.write_impressions(
+        digest_id,
+        [
+            ("research", shown, 0, 0.9, True),
+            ("research", candidate, 1, 0.4, False),
+        ],
+        model_version="v-test",
+    )
+
+    updated = store_mod.mark_impressions_viewed(digest_id)
+    # Only the single selected/displayed row is marked viewed.
+    assert updated == 1
+
+    with store_mod.session_scope() as s:
+        by_item = {
+            r.item_id: r
+            for r in s.query(store_mod.ImpressionRow).filter_by(digest_id=digest_id).all()
+        }
+    assert by_item[shown].selected is True
+    assert by_item[shown].viewed is True
+    # Unselected candidate never shown → must remain viewed=False.
+    assert by_item[candidate].selected is False
+    assert by_item[candidate].viewed is False
+
+
 def test_review_filters_use_latest_legacy_vote_rows(monkeypatch, tmp_path):
     db_path = tmp_path / "legacy_store.db"
     conn = sqlite3.connect(db_path)

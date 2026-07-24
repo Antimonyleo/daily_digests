@@ -210,7 +210,7 @@ def eval_deployed(
 
     pair_X, pair_y = _pairwise_training_matrix(X_train, y_train)
     ranker = LRRanker()
-    ranker.fit(pair_X, pair_y)
+    ranker.fit(pair_X, pair_y, persist=False)
     lr_margin = ranker.decision_function(X_test)
     topic_scores = X_test[:, 0].astype(np.float32)
     fused = _fuse_scores(topic_scores, lr_margin)

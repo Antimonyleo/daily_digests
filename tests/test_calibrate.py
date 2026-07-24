@@ -110,9 +110,43 @@ def test_fit_stamps_current_schema_and_load_accepts_it():
     params = fit_calibrator()
     assert params is not None
     assert params["schema"] == votes_mod.LR_FEATURE_SCHEMA_VERSION
-    # A same-schema fit round-trips through the loader.
+    # The policy identity is stamped alongside the schema.
+    assert params["policy"] == RANKER_VERSION
+    # A same-schema, same-policy fit round-trips through the loader.
     loaded = load_calibrator()
-    assert loaded is not None and loaded["schema"] == votes_mod.LR_FEATURE_SCHEMA_VERSION
+    assert loaded is not None
+    assert loaded["schema"] == votes_mod.LR_FEATURE_SCHEMA_VERSION
+    assert loaded["policy"] == RANKER_VERSION
+
+
+def test_load_invalidates_stale_or_missing_policy():
+    """A calibrator whose stored policy != current RANKER_VERSION (or is missing)
+    is treated as absent, even when its feature schema still matches — scores
+    depend on the ranking policy too."""
+    import json
+
+    _seed_votes_correlated_with_score(10)
+    assert fit_calibrator() is not None
+    path = calib_mod._calibrator_path()
+
+    # Correct schema but WRONG policy → loader returns None.
+    data = json.loads(path.read_text())
+    assert data["schema"] == votes_mod.LR_FEATURE_SCHEMA_VERSION  # schema is fine
+    data["policy"] = "2025-01-01-old-policy-v0"
+    path.write_text(json.dumps(data))
+    assert load_calibrator() is None
+    # Downstream consumers (which load internally) also degrade safely.
+    assert calibrated_probability(0.7) is None
+    assert adaptive_relevance_floor(0.58) == 0.58
+
+    # Missing policy (pre-policy-versioning calibrator) → also invalidated.
+    data.pop("policy", None)
+    path.write_text(json.dumps(data))
+    assert load_calibrator() is None
+
+    # Re-fitting under the current policy restores a usable calibrator.
+    assert fit_calibrator() is not None
+    assert load_calibrator() is not None
 
 
 def test_load_invalidates_stale_or_missing_schema():
