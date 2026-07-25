@@ -182,7 +182,6 @@ class TestLoadProfile:
         assert len(profile.keywords) == 3
 
     def test_missing_profile_file_raises(self, tmp_path, monkeypatch):
-        # No fallback example file in tmp_path; should raise FileNotFoundError.
-        monkeypatch.chdir(tmp_path)  # ensure no config/profile.example.yaml exists
+        # The tracked example is documentation, never a default user profile.
         with pytest.raises(FileNotFoundError):
             load_profile(str(tmp_path / "nonexistent.yaml"))

@@ -220,6 +220,7 @@ class ImpressionRow(Base):
     #   primary_facet: the item's dominant matched core-interest facet ("" if none).
     #   topic_score:   the raw relevance cosine the topic gate used (nullable).
     primary_facet = Column(String, default="")
+    primary_facet_score = Column(Float)
     topic_score = Column(Float)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
@@ -322,6 +323,7 @@ def _migrate_sqlite_schema(eng) -> None:
             "selected": "BOOLEAN NOT NULL DEFAULT 0",
             "viewed": "BOOLEAN NOT NULL DEFAULT 0",
             "primary_facet": "VARCHAR DEFAULT ''",
+            "primary_facet_score": "FLOAT",
             "topic_score": "FLOAT",
         },
     }
@@ -640,9 +642,9 @@ def write_impressions(
     Two further optional elements carry per-candidate facet attribution so the
     coverage harness can measure the unselected pool:
     ``(section, item_id, position, final_score, selected, primary_facet,
-    topic_score)`` — ``primary_facet`` (str, "" when absent) is the item's
-    dominant matched core-interest facet and ``topic_score`` (float or None) is
-    the raw relevance cosine the topic gate used.
+    primary_facet_score, topic_score)`` — ``primary_facet`` (str, "" when
+    absent) and its raw per-facet cosine are distinct from ``topic_score``, the
+    overall profile relevance cosine used by the topic gate.
     When ``selected`` is omitted it defaults to True (a selected-slate row). A
     fresh ``run_id`` is minted per call (unless supplied) so a rebrew of the same
     ``digest_id`` ADDS a new run's rows rather than replacing prior runs — this
@@ -661,8 +663,15 @@ def write_impressions(
             section, item_id, position, final_score = row[0], row[1], row[2], row[3]
             selected = bool(row[4]) if len(row) >= 5 else True
             primary_facet = str(row[5]) if len(row) >= 6 else ""
+            # Keep the prior 7-tuple contract: its final value was topic_score.
+            # The new per-facet score is present only in the explicit 8-tuple.
+            primary_facet_score = (
+                float(row[6]) if len(row) >= 8 and row[6] is not None else None
+            )
             topic_score = (
-                float(row[6]) if len(row) >= 7 and row[6] is not None else None
+                float(row[7]) if len(row) >= 8 and row[7] is not None
+                else float(row[6]) if len(row) == 7 and row[6] is not None
+                else None
             )
             s.add(
                 ImpressionRow(
@@ -675,6 +684,7 @@ def write_impressions(
                     model_version=model_version,
                     selected=selected,
                     primary_facet=primary_facet,
+                    primary_facet_score=primary_facet_score,
                     topic_score=topic_score,
                     created_at=now,
                 )
@@ -712,6 +722,68 @@ def mark_impressions_viewed(digest_id: str) -> int:
             .values(viewed=True)
         )
         return result.rowcount or 0
+
+
+def recent_viewed_facet_dates(
+    *,
+    before_digest_id: str,
+    days: int = 7,
+    min_primary_facet_score: float = 0.0,
+) -> dict[str, datetime]:
+    """Return the latest viewed selection date for each recent research facet.
+
+    Only the newest brew run per sent digest and facets at or above
+    ``min_primary_facet_score`` count. This prevents an earlier, viewed rebrew
+    or a weak/broad attribution from suppressing coverage for a genuine niche
+    match. The helper issues SELECTs only.
+    """
+    if days <= 0:
+        return {}
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    with session_scope() as s:
+        latest = (
+            select(
+                ImpressionRow.digest_id.label("digest_id"),
+                func.max(ImpressionRow.created_at).label("created_at"),
+            )
+            .group_by(ImpressionRow.digest_id)
+            .subquery()
+        )
+        rows = s.execute(
+            select(ImpressionRow.primary_facet, DigestRow.sent_at)
+            .join(
+                latest,
+                (ImpressionRow.digest_id == latest.c.digest_id)
+                & (ImpressionRow.created_at == latest.c.created_at),
+            )
+            .join(DigestRow, DigestRow.id == ImpressionRow.digest_id)
+            .where(
+                ImpressionRow.section == "research",
+                ImpressionRow.selected.is_(True),
+                ImpressionRow.viewed.is_(True),
+                ImpressionRow.primary_facet.is_not(None),
+                ImpressionRow.primary_facet != "",
+                ImpressionRow.primary_facet_score.is_not(None),
+                ImpressionRow.primary_facet_score >= float(min_primary_facet_score),
+                DigestRow.id != before_digest_id,
+                DigestRow.sent_at.is_not(None),
+                DigestRow.sent_at >= cutoff,
+            )
+        ).all()
+    latest_by_facet: dict[str, datetime] = {}
+    for facet, sent_at in rows:
+        key = str(facet or "").casefold()
+        if not key or not isinstance(sent_at, datetime):
+            continue
+        # SQLite commonly round-trips timezone-aware timestamps as naive values.
+        # Digest sent times are written in UTC, so restore that contract before
+        # the pipeline computes a recency age against an aware UTC `now`.
+        if sent_at.tzinfo is None:
+            sent_at = sent_at.replace(tzinfo=timezone.utc)
+        previous = latest_by_facet.get(key)
+        if previous is None or sent_at > previous:
+            latest_by_facet[key] = sent_at
+    return latest_by_facet
 
 
 def load_digest_features(digest_id: str) -> dict[int, dict]:

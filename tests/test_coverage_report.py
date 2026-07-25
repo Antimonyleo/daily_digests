@@ -1,15 +1,16 @@
-"""Tests for the READ-ONLY coverage & precision harness (scripts/coverage_report.py).
+"""Tests for the READ-ONLY coverage harness (scripts/coverage_report.py).
 
 These build a small synthetic DB (via the store's write helpers, on the tmp
 DB_PATH provided by the conftest ``_isolate_env`` fixture) with a couple of sent
 digests plus impression + feature rows, then assert the computed coverage /
-off-field / supply numbers, and — critically — that the script writes NOTHING
+attribution / supply numbers, and — critically — that the script writes NOTHING
 (no model artifact, no DB mutation via fit).
 """
 
 from __future__ import annotations
 
 import importlib.util
+import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -17,6 +18,7 @@ import pytest
 
 from dailydigest import store as store_mod
 from dailydigest.config import get_settings
+from dailydigest.models import Profile
 
 # Load scripts/coverage_report.py by path (it lives outside the package).
 _SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "coverage_report.py"
@@ -28,11 +30,11 @@ _spec.loader.exec_module(cov)
 # --------------------------------------------------------------------------- #
 # Fixtures / builders
 # --------------------------------------------------------------------------- #
-def _insert_item(title: str, section: str = "research") -> int:
+def _insert_item(title: str, section: str = "research", source: str = "Test") -> int:
     store_mod.init_db()
     with store_mod.session_scope() as s:
         row = store_mod.ItemRow(
-            source="Test",
+            source=source,
             section=section,
             external_id=title,
             url=f"https://example.com/{title}",
@@ -76,7 +78,7 @@ def _build_digest(digest_id: str, rows: list[dict], floor: float) -> None:
     impressions = []
     feature_rows = []
     for i, r in enumerate(rows):
-        item_id = _insert_item(f"{digest_id}-{i}")
+        item_id = _insert_item(f"{digest_id}-{i}", source=r.get("source", "Test"))
         impressions.append(
             (
                 "research",
@@ -112,12 +114,43 @@ def _build_digest(digest_id: str, rows: list[dict], floor: float) -> None:
 # Tests
 # --------------------------------------------------------------------------- #
 def test_empty_store_is_insufficient_not_crash():
+    db_path = Path(get_settings().db_path)
+    assert not db_path.exists()
     report = cov.compute_report(n=10)
     assert report["n_digests"] == 0
     assert "insufficient" in report["status"]
     # Robust: numeric criteria are None rather than exploding.
-    assert report["off_field_per_digest"] is None
+    assert report["unattributed_selected_per_digest"] is None
     assert report["high_profile_omissions"] == 0
+    assert not db_path.exists(), "read-only report must not create a fresh SQLite file"
+
+
+def test_canonical_interest_falls_back_for_real_profile_with_empty_default():
+    profile = Profile(bio="RNA researcher", keywords=["RNA nanotechnology"])
+    assert cov._canonical_interests(profile) == ["RNA nanotechnology"]
+
+
+def test_partial_database_is_reported_without_schema_writes(monkeypatch, tmp_path):
+    """A report must not initialize a partially migrated database to recover."""
+    db_path = tmp_path / "partial.db"
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "CREATE TABLE digests (id VARCHAR PRIMARY KEY, created_at DATETIME, sent_at DATETIME)"
+    )
+    conn.execute(
+        "INSERT INTO digests VALUES (?, ?, ?)",
+        ("2026-06-01", "2026-06-01 08:00:00", "2026-06-01 08:00:00"),
+    )
+    conn.commit()
+    conn.close()
+    monkeypatch.setenv("DB_PATH", str(db_path))
+    get_settings.cache_clear()
+
+    report = cov.compute_report(n=1)
+
+    assert report["n_digests"] == 1
+    assert "insufficient" in report["status"]
+    assert not (tmp_path / "partial.db-wal").exists()
 
 
 def test_coverage_offfield_supply_numbers(monkeypatch):
@@ -125,7 +158,7 @@ def test_coverage_offfield_supply_numbers(monkeypatch):
     hi = floor + 0.10  # clears the floor
     lo = floor - 0.10  # below floor
 
-    # Profile with two core interests, one negative interest.
+    # Profile with two canonical interests.
     class _P:
         keywords = ["dna nanotechnology", "colloidal self-assembly"]
         negative_interests = {"clinical oncology": 1.0}
@@ -135,8 +168,8 @@ def test_coverage_offfield_supply_numbers(monkeypatch):
     # Digest 1: rich supply.
     #  - dna item: qualified + selected      -> covers dna
     #  - colloidal item: qualified, NOT selected -> eligible but not covered
-    #  - off-field (empty facet) selected     -> +1 off-field
-    #  - negative-facet selected              -> +1 off-field
+    #  - empty-facet selected                 -> +1 unattributed
+    #  - noncanonical-facet selected          -> +1 unattributed
     #  - high-venue on-interest NOT selected  -> +1 high-profile omission
     _build_digest(
         "2026-01-01",
@@ -146,12 +179,12 @@ def test_coverage_offfield_supply_numbers(monkeypatch):
             {"facet": "", "topic": hi, "final": 0.7, "selected": True},
             {"facet": "clinical oncology", "topic": hi, "final": 0.6, "selected": True},
             {"facet": "dna nanotechnology", "topic": hi, "final": 0.95,
-             "bucket": "published_journal", "selected": False},
+             "source": "Nature", "selected": False},
         ],
         floor,
     )
 
-    # Digest 2: quiet day — only one qualified item, one selected. No off-field.
+    # Digest 2: quiet day — only one qualified item, one selected.
     _build_digest(
         "2026-01-02",
         [
@@ -180,21 +213,24 @@ def test_coverage_offfield_supply_numbers(monkeypatch):
     assert "colloidal self-assembly" in report["routinely_absent"]
     assert "dna nanotechnology" not in report["routinely_absent"]
 
-    # --- Criterion 2: off-field precision ---------------------------------
-    # Digest 1 has 2 off-field selected (empty facet + negative), digest 2 has 0.
+    # --- Criterion 2: attribution completeness ----------------------------
+    # Digest 1 has 2 selected items without a qualified canonical attribution,
+    # digest 2 has 0.
     # mean = (2 + 0) / 2 = 1.0  -> target < 1.0 NOT met.
-    assert report["off_field_per_digest"] == pytest.approx(1.0)
-    assert report["off_field_target_met"] is False
+    assert report["unattributed_selected_per_digest"] == pytest.approx(1.0)
+    assert report["unattributed_selected_target_met"] is False
 
     # --- Criterion 3: high-profile omissions ------------------------------
-    # Only the published_journal dna item in digest 1 qualifies.
+    # The unselected Nature item is counted from its ItemRow source; selected-only
+    # feature JSON is deliberately ignored when assessing omissions.
     assert report["high_profile_omissions"] == 1
+    assert "off_field_per_digest" not in report
 
     # --- Criterion 4: supply responsiveness -------------------------------
     supply = {r["digest_id"]: r for r in report["supply_responsiveness"]}
-    # Digest 1: 3 selected, 5 qualified (all topic=hi).
+    # Digest 1: 3 selected, 3 canonically attributed qualified candidates.
     assert supply["2026-01-01"]["n_selected"] == 3
-    assert supply["2026-01-01"]["n_qualified"] == 5
+    assert supply["2026-01-01"]["n_qualified"] == 3
     # Digest 2 (quiet): 1 selected, 1 qualified (the lo item is below floor).
     assert supply["2026-01-02"]["n_selected"] == 1
     assert supply["2026-01-02"]["n_qualified"] == 1
@@ -231,17 +267,15 @@ def test_only_sent_digests_are_counted(monkeypatch):
     assert report["n_digests"] == 1
 
 
-def test_watched_interests_reported(monkeypatch):
+def test_configured_interest_status_has_no_hardcoded_topics(monkeypatch):
     class _P:
-        keywords = ["dna nanotechnology"]  # missing colloidal + rna
+        keywords = ["custom research topic"]
         negative_interests = {}
 
     monkeypatch.setattr(cov, "load_profile", lambda: _P())
     report = cov.compute_report(n=5)
     watched = report["watched_interests"]
-    # All three watched interests must be reported, even if not configured.
-    assert set(watched) == set(cov.WATCHED_INTERESTS)
-    assert "not a configured core interest" in watched["colloidal self-assembly"]
+    assert watched == {"custom research topic": "no data in window"}
 
 
 def test_script_is_read_only_no_artifact_written(monkeypatch):
@@ -292,6 +326,44 @@ def test_script_is_read_only_no_artifact_written(monkeypatch):
     assert not cal_path.exists()
 
 
+def test_primary_facet_score_wins_over_legacy_topic_score():
+    """A newer facet-specific score wins over the legacy overall topic score."""
+    row = {
+        "primary_facet": "dna nanotechnology",
+        "primary_facet_score": 0.40,
+        "topic_score": 0.95,
+    }
+    assert not cov._is_qualified_canonical_attribution(
+        row, ["dna nanotechnology"], min_topic_relevance=0.65
+    )
+
+
+def test_pool_reads_persisted_primary_facet_score():
+    item_id = _insert_item("facet-specific-score")
+    run_id = store_mod.write_impressions(
+        "2026-04-01",
+        [
+            (
+                "research", item_id, 0, 0.95, False,
+                "dna nanotechnology", 0.40, 0.95,
+            )
+        ],
+    )
+    pool = cov._pool_rows("2026-04-01", run_id)
+    assert pool[0]["primary_facet_score"] == pytest.approx(0.40)
+    assert pool[0]["topic_score"] == pytest.approx(0.95)
+    assert pool[0]["facet_score_source"] == "primary_facet_score"
+
+
+def test_high_venue_uses_persisted_source_not_final_score():
+    assert not cov._is_high_venue(
+        {"source": "OpenAlex", "venue": "", "final_score": 0.99}
+    )
+    assert cov._is_high_venue(
+        {"source": "Nature Communications", "venue": "", "final_score": 0.0}
+    )
+
+
 def test_main_smoke(capsys, monkeypatch):
     class _P:
         keywords = ["dna nanotechnology"]
@@ -302,5 +374,5 @@ def test_main_smoke(capsys, monkeypatch):
     assert rc == 0
     out = capsys.readouterr().out
     assert "PER-INTEREST COVERAGE" in out
-    assert "OFF-FIELD PRECISION" in out
+    assert "UNATTRIBUTED SELECTED" in out
     assert "SUPPLY RESPONSIVENESS" in out

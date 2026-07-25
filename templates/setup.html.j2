@@ -88,12 +88,9 @@
       <textarea id="bio" name="bio" placeholder="What do you research? What topics matter most to you?">{{ form.bio }}</textarea>
       <div class="hint">Used to build a vector that ranks items against your interests.</div>
 
-      <label for="kw-text">Interest keywords</label>
-      <div class="chip-input" id="kw-input">
-        <input type="text" id="kw-text" placeholder="Type and press comma or Enter…">
-      </div>
-      <input type="hidden" name="keywords" id="kw-hidden" value="{{ form.keywords }}">
-      <div class="hint">Examples: CRISPR, mRNA therapeutics, FDA approval.</div>
+      <label for="topics">Research interests and relative weights</label>
+      <textarea id="topics" name="topics" required placeholder="RNA nanotechnology | 17&#10;DNA nanotechnology | 15&#10;Gene therapy | 10">{{ form.topics }}</textarea>
+      <div class="hint">Add 1–10 specific interests, one per line. Weights are relative (for example 18, 15, 10), not daily quotas.</div>
 
       <label for="dw-text">Downweight terms (push these down)</label>
       <div class="chip-input" id="dw-input">
@@ -261,7 +258,6 @@
     render();
   }
 
-	  makeChipInput("kw-input", "kw-text", "kw-hidden");
 	  makeChipInput("dw-input", "dw-text", "dw-hidden");
 
 	  const errors = document.querySelector(".errors");

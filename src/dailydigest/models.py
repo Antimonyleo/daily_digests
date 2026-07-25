@@ -41,6 +41,19 @@ class Item(BaseModel):
         return v
 
 
+class CanonicalFacet(BaseModel):
+    """One named research interest used for attribution, not retrieval.
+
+    ``anchors`` are specific descriptions of the work the reader wants.
+    ``aliases`` retain related retrieval vocabulary. ``priority`` is a raw
+    relative ordering preference and never changes relevance.
+    """
+
+    anchors: list[str] = Field(default_factory=list)
+    aliases: list[str] = Field(default_factory=list)
+    priority: float | None = Field(default=None, ge=0.0)
+
+
 class Profile(BaseModel):
     name: str = ""
     bio: str
@@ -74,6 +87,10 @@ class Profile(BaseModel):
     # relevance gate. Normalized so the top interest = 1.0; unlisted keywords
     # default to a moderate 0.5. Empty dict = uniform (inert on ordering).
     topic_priorities: dict[str, float] = Field(default_factory=dict)
+    # Named, non-overlapping interests for attribution and coverage. They do
+    # not replace ``keywords``: source retrieval continues to use those terms.
+    # Empty preserves the historical one-facet-per-keyword attribution.
+    canonical_facets: dict[str, CanonicalFacet] = Field(default_factory=dict)
 
 
 class SourceSpec(BaseModel):

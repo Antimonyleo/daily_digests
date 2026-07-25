@@ -82,7 +82,7 @@ def test_setup_post_accepts_urlencoded_form_without_multipart(tmp_path, monkeypa
                     "_csrf_token": web._CSRF_TOKEN,
                     "name": "Hao",
                     "bio": "Researcher in RNA nanotechnology.",
-                    "keywords": "RNA nanotechnology, protein design",
+                    "topics": "RNA nanotechnology | 17\nprotein design | 15",
                     "downweight": "celebrity news",
                     "llm_backend": "extractive",
                     "llm_base_url": "https://api.openai.com/v1",
@@ -100,7 +100,119 @@ def test_setup_post_accepts_urlencoded_form_without_multipart(tmp_path, monkeypa
     saved_profile = profile_path.read_text()
     assert "name: Hao" in saved_profile
     assert "RNA nanotechnology" in saved_profile
+    assert "priority: 17.0" in saved_profile
     assert "LLM_BACKEND=extractive" in env_path.read_text()
+
+
+def test_setup_defaults_load_canonical_weights_and_handle_missing_priority(
+    tmp_path, monkeypatch
+):
+    from dailydigest import web
+
+    profile_path = tmp_path / "profile.yaml"
+    profile_path.write_text(
+        "bio: Researcher.\n"
+        "canonical_facets:\n"
+        "  protein design: {anchors: [protein design], priority: 18}\n"
+        "  RNA delivery: {anchors: [RNA delivery]}\n"
+    )
+    monkeypatch.setattr(web, "_get_profile_path", lambda: profile_path)
+    monkeypatch.setattr(web, "_ENV_PATH", tmp_path / ".env")
+
+    form = web._load_existing_form_defaults()
+
+    assert form["topics"] == "protein design | 18\nRNA delivery | 1"
+
+
+def test_setup_post_requires_one_to_ten_weighted_topics(tmp_path, monkeypatch):
+    from dailydigest import web
+
+    monkeypatch.setattr(web, "_get_profile_path", lambda: tmp_path / "profile.yaml")
+    monkeypatch.setattr(web, "_ENV_PATH", tmp_path / ".env")
+    response = asyncio.run(
+        web.setup_post(
+            _request(
+                "POST",
+                "/setup",
+                form={
+                    "_csrf_token": web._CSRF_TOKEN,
+                    "bio": "Researcher.",
+                    "topics": "RNA nanotechnology | 17\nRNA nanotechnology | 10",
+                    "llm_backend": "extractive",
+                },
+            )
+        )
+    )
+    assert response.status_code == 400
+    assert "duplicates" in _text_payload(response)
+    assert not (tmp_path / "profile.yaml").exists()
+
+
+@pytest.mark.parametrize(
+    ("raw", "message"),
+    [
+        ("", "at least one"),
+        ("topic without weight", "must use"),
+        ("topic | 0", "greater than 0"),
+        ("\n".join(f"topic {i} | 1" for i in range(11)), "at most 10"),
+    ],
+)
+def test_ranked_topic_parser_rejects_invalid_input(raw, message):
+    from dailydigest import web
+
+    _topics, errors = web._parse_ranked_topics(raw)
+    assert any(message in error for error in errors)
+
+
+def test_setup_post_preserves_profile_fields_it_does_not_edit(tmp_path, monkeypatch):
+    from dailydigest import web
+
+    profile_path = tmp_path / "profile.yaml"
+    profile_path.write_text(
+        "bio: Existing bio.\n"
+        "keywords: [old topic]\n"
+        "canonical_facets:\n"
+        "  protein design:\n"
+        "    anchors: [de novo protein design]\n"
+        "    aliases: [protein engineering]\n"
+        "    priority: 10\n"
+        "context_keywords: [biotech news]\n"
+        "interest_weights: {old topic: 2.0}\n"
+        "negative_interests: {clinical pathology: 1.0}\n"
+        "authors_of_interest: [Ada Lovelace]\n"
+    )
+    monkeypatch.setattr(web, "_get_profile_path", lambda: profile_path)
+    monkeypatch.setattr(web, "_ENV_PATH", tmp_path / ".env")
+
+    response = asyncio.run(
+        web.setup_post(
+            _request(
+                "POST",
+                "/setup",
+                form={
+                    "_csrf_token": web._CSRF_TOKEN,
+                    "bio": "Updated bio.",
+                    "topics": "protein design | 18",
+                    "llm_backend": "extractive",
+                },
+            )
+        )
+    )
+
+    assert response.status_code == 303
+    saved = web.yaml.safe_load(profile_path.read_text())
+    assert saved["keywords"] == ["protein design"]
+    assert saved["canonical_facets"]["protein design"]["anchors"] == [
+        "de novo protein design"
+    ]
+    assert saved["canonical_facets"]["protein design"]["aliases"] == [
+        "protein engineering"
+    ]
+    assert saved["canonical_facets"]["protein design"]["priority"] == 18.0
+    assert "interest_weights" not in saved
+    assert saved["context_keywords"] == ["biotech news"]
+    assert saved["negative_interests"] == {"clinical pathology": 1.0}
+    assert saved["authors_of_interest"] == ["Ada Lovelace"]
 
 
 def test_profile_name_post_updates_existing_profile(tmp_path, monkeypatch):
@@ -608,7 +720,11 @@ def test_setup_post_rejects_missing_csrf_token(tmp_path, monkeypatch):
                 _request(
                     "POST",
                     "/setup",
-                    form={"bio": "Researcher.", "keywords": "RNA", "llm_backend": "extractive"},
+                    form={
+                        "bio": "Researcher.",
+                        "topics": "RNA | 10",
+                        "llm_backend": "extractive",
+                    },
                 )
             )
         )
@@ -632,7 +748,7 @@ def test_setup_post_rejects_env_newline_injection(tmp_path, monkeypatch):
                 form={
                     "_csrf_token": web._CSRF_TOKEN,
                     "bio": "Researcher.",
-                    "keywords": "RNA",
+                    "topics": "RNA | 10",
                     "llm_backend": "api",
                     "llm_base_url": "https://api.openai.com/v1",
                     "llm_model": "gpt-4o-mini\nTOP_RESEARCH=30",

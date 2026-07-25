@@ -826,8 +826,11 @@ def breakdown_payload(
     scoring_mode: str | None = None,
     primary_facet: str = "",
     secondary_facets: list[str] | None = None,
+    primary_facet_score: float = 0.0,
     topic_priority: float = 0.0,
     topic_priority_bonus: float = 0.0,
+    topic_coverage_bonus: float = 0.0,
+    selection_order_bonus: float = 0.0,
 ) -> dict[str, Any]:
     """Return a JSON-serializable rank explanation for persistence/UI."""
     breakdown = score_breakdown(
@@ -867,8 +870,11 @@ def breakdown_payload(
         # paper was surfaced for. Defaults keep this inert for legacy callers.
         "primary_facet": str(primary_facet or ""),
         "secondary_facets": list(secondary_facets or []),
+        "primary_facet_score": round(float(primary_facet_score), 4),
         "topic_priority": round(float(topic_priority), 4),
         "topic_priority_bonus": round(float(topic_priority_bonus), 4),
+        "topic_coverage_bonus": round(float(topic_coverage_bonus), 4),
+        "selection_order_bonus": round(float(selection_order_bonus), 4),
     }
 
 

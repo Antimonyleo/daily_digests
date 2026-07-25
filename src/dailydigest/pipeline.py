@@ -49,6 +49,7 @@ from .store import (
     init_db,
     mark_sent,
     recent_items,
+    recent_viewed_facet_dates,
     session_scope,
     upsert_items,
     write_digest,
@@ -381,6 +382,83 @@ def _filter_off_topic(
                 continue
         out.append((row, score))
     return out
+
+
+def _apply_topic_selection_preferences(
+    scored: list[tuple[ItemRow, float]],
+    features: ScoreFeatureMap,
+    *,
+    digest_id: str,
+) -> list[tuple[ItemRow, float]]:
+    """Reorder qualified research candidates by small topic/coverage preferences.
+
+    The returned tuples retain their original scores.  This matters: priority and
+    coverage influence which otherwise-qualified paper is considered first, but
+    never change relevance, low-impact eligibility, or final-score cutoffs.  At
+    most the strongest candidate for an absent facet receives the coverage bonus;
+    there are no reserved slots or daily quotas.
+    """
+    if not scored:
+        return scored
+    settings = get_settings()
+    topic_floor = float(getattr(settings, "min_topic_relevance", 0.65))
+    coverage_scale = float(getattr(settings, "topic_coverage_bonus_scale", 0.03))
+    history = recent_viewed_facet_dates(
+        before_digest_id=digest_id,
+        days=7,
+        min_primary_facet_score=topic_floor,
+    )
+    now = datetime.now(timezone.utc)
+
+    qualified_by_facet: dict[str, tuple[int, float]] = {}
+    ordering_bonus: dict[int, float] = {}
+    for idx, (row, score) in enumerate(scored):
+        if (row.section or "") != "research":
+            continue
+        feat = features.get(_row_feature_key(row), {})
+        facet = str(feat.get("primary_facet", "") or "").strip()
+        facet_score = float(feat.get("primary_facet_score", 0.0) or 0.0)
+        if not facet or facet_score < topic_floor:
+            continue
+        priority_bonus = float(feat.get("topic_priority_bonus", 0.0) or 0.0)
+        ordering_bonus[idx] = priority_bonus
+        key = facet.casefold()
+        current = qualified_by_facet.get(key)
+        if current is None or float(score) > current[1]:
+            qualified_by_facet[key] = (idx, float(score))
+
+    # Do not infer missingness without any viewed history. Existing topic
+    # priority still works, while coverage starts only after a real digest view.
+    if history and coverage_scale > 0.0:
+        for facet, (idx, _score) in qualified_by_facet.items():
+            feat = features.get(_row_feature_key(scored[idx][0]), {})
+            priority = float(feat.get("topic_priority", 0.0) or 0.0)
+            last_seen = history.get(facet)
+            if last_seen is None:
+                absence_fraction = 1.0
+            else:
+                # Defensive normalization for custom stores/test doubles. The
+                # built-in store normalizes SQLite timestamps to UTC as well.
+                if last_seen.tzinfo is None:
+                    last_seen = last_seen.replace(tzinfo=timezone.utc)
+                age_days = max(0.0, (now - last_seen).total_seconds() / 86400.0)
+                absence_fraction = min(1.0, age_days / 7.0)
+            coverage_bonus = coverage_scale * priority * absence_fraction
+            if coverage_bonus:
+                ordering_bonus[idx] = ordering_bonus.get(idx, 0.0) + coverage_bonus
+                feat["topic_coverage_bonus"] = round(coverage_bonus, 4)
+
+    for idx, bonus in ordering_bonus.items():
+        feat = features.get(_row_feature_key(scored[idx][0]), {})
+        feat["selection_order_bonus"] = round(bonus, 4)
+    return [
+        pair
+        for _idx, pair in sorted(
+            enumerate(scored),
+            key=lambda entry: float(entry[1][1]) + ordering_bonus.get(entry[0], 0.0),
+            reverse=True,
+        )
+    ]
 
 
 def _assign_labels(
@@ -885,6 +963,11 @@ def run_all(
                 and id(row) in _wd_drop_research_ids
             )
         ]
+    pickable = _apply_topic_selection_preferences(
+        pickable,
+        score_features,
+        digest_id=digest_id,
+    )
     research_ceiling = _research_ceiling_for_window(window_days)
     picked = pick_top_per_section(
         pickable,
@@ -989,9 +1072,18 @@ def run_all(
                         secondary_facets=list(
                             _feature(row).get("secondary_facets", []) or []
                         ),
+                        primary_facet_score=float(
+                            _feature(row).get("primary_facet_score", 0.0)
+                        ),
                         topic_priority=float(_feature(row).get("topic_priority", 0.0)),
                         topic_priority_bonus=float(
                             _feature(row).get("topic_priority_bonus", 0.0)
+                        ),
+                        topic_coverage_bonus=float(
+                            _feature(row).get("topic_coverage_bonus", 0.0)
+                        ),
+                        selection_order_bonus=float(
+                            _feature(row).get("selection_order_bonus", 0.0)
                         ),
                     ),
                 )
@@ -1012,7 +1104,7 @@ def run_all(
         RESEARCH_CANDIDATE_POOL_CAP = 100
         _selected_ids = {int(row.id) for row, _s, _l in labeled}
         _impressions: list[
-            tuple[str, int, int, float | None, bool, str, float | None]
+            tuple[str, int, int, float | None, bool, str, float | None, float | None]
         ] = []
         # `scored` is (row, score) sorted by final score desc; filter to research
         # and cap the pool so the row count stays bounded.
@@ -1042,6 +1134,7 @@ def run_all(
                     float(score),
                     int(row.id) in _selected_ids,
                     str(_feat.get("primary_facet", "")),
+                    float(_feat.get("primary_facet_score", 0.0)),
                     float(_feat.get("topic_score", score)),
                 )
             )
@@ -1062,6 +1155,7 @@ def run_all(
                     float(score),
                     True,
                     str(_feat.get("primary_facet", "")),
+                    float(_feat.get("primary_facet_score", 0.0)),
                     float(_feat.get("topic_score", score)),
                 )
             )

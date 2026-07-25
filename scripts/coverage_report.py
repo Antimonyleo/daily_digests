@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""READ-ONLY per-interest coverage & precision measurement harness.
+"""READ-ONLY per-interest coverage measurement harness.
 
 This script measures, over the last N *sent* digests, how well the research
 section covers each of the reader's core interests and how much off-field
@@ -7,8 +7,10 @@ content leaks in. It answers the user's five finite success criteria:
 
   1. Per-interest coverage  — when a qualified candidate for an interest exists
      in the pool, does a selected item actually cover that interest?
-  2. Off-field precision     — how many selected research items per digest are
-     off-field (no facet match, or closer to a negative interest)?
+  2. Unattributed selections — how many selected research items per digest lack
+     a persisted, qualified canonical-facet attribution?  This is *not*
+     semantic precision: attribution comes from the production ranker and must
+     not be presented as an independent judgement of topical relevance.
   3. High-profile omissions  — strong, on-interest, high-venue candidates that
      were available but not shown.
   4. Supply responsiveness   — selected count vs qualified-candidate count per
@@ -28,7 +30,13 @@ import argparse
 import json
 import sys
 from collections import defaultdict
+from contextlib import contextmanager
 from pathlib import Path
+from urllib.parse import quote
+
+from sqlalchemy import create_engine
+from sqlalchemy.exc import OperationalError
+from sqlalchemy.orm import sessionmaker
 
 # Make ``src`` importable when run directly (uv run python scripts/coverage_report.py).
 _ROOT = Path(__file__).resolve().parent.parent
@@ -38,29 +46,51 @@ if str(_SRC) not in sys.path:
 
 from dailydigest.config import get_settings, load_profile  # noqa: E402
 from dailydigest.store import (  # noqa: E402
-    DigestItemFeatureRow,
     DigestRow,
     ImpressionRow,
-    init_db,
-    session_scope,
+    ItemEnrichmentRow,
+    ItemRow,
 )
+from dailydigest.rank.source_quality import source_bucket  # noqa: E402
 
 RESEARCH_SECTION = "research"
 
 # source_bucket values that indicate a top/high venue (see rank.source_quality).
-HIGH_VENUE_BUCKETS = {"published_journal", "published_database"}
+# A publication database (e.g. PubMed) is not itself evidence of a high-profile
+# venue.  An actual top/high/strong journal maps to ``published_journal``.
+HIGH_VENUE_BUCKETS = {"published_journal"}
 
-# Interests we specifically flag as "routinely absent" per the success criteria.
-WATCHED_INTERESTS = [
-    "colloidal self-assembly",
-    "DNA nanotechnology",
-    "RNA nanotechnology",
-]
+
+class _VenueProbe:
+    """Minimal source-quality input for a persisted source or journal name."""
+
+    section = RESEARCH_SECTION
+
+    def __init__(self, source: str):
+        self.source = source
 
 
 # --------------------------------------------------------------------------- #
 # Read-only data access
 # --------------------------------------------------------------------------- #
+@contextmanager
+def session_scope():
+    """Yield a SQLite session opened read-only, without schema/pragma writes."""
+    db_path = Path(get_settings().db_path)
+    if not db_path.exists():
+        raise OperationalError("coverage database does not exist", None, None)
+    # `mode=ro` prohibits both database creation and journal/WAL changes. Use a
+    # local engine rather than the application's write-capable store engine.
+    url = f"sqlite+pysqlite:///file:{quote(str(db_path), safe='/')}?mode=ro&uri=true"
+    engine = create_engine(url, future=True)
+    session = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)()
+    try:
+        yield session
+    finally:
+        session.close()
+        engine.dispose()
+
+
 def _sent_digest_ids(limit: int, include_unsent: bool = False) -> list[str]:
     """Return up to ``limit`` most-recently SENT digest ids (newest first).
 
@@ -69,52 +99,74 @@ def _sent_digest_ids(limit: int, include_unsent: bool = False) -> list[str]:
     are ordered by ``created_at`` — useful for measuring dry-run/preview brews
     (which never set ``sent_at``) during offline validation.
     """
-    with session_scope() as s:
-        q = s.query(DigestRow.id)
-        if include_unsent:
-            q = q.order_by(DigestRow.created_at.desc())
-        else:
-            q = q.filter(DigestRow.sent_at.isnot(None)).order_by(
-                DigestRow.sent_at.desc(), DigestRow.created_at.desc()
-            )
-        rows = q.limit(limit).all()
+    try:
+        with session_scope() as s:
+            q = s.query(DigestRow.id)
+            if include_unsent:
+                q = q.order_by(DigestRow.created_at.desc())
+            else:
+                q = q.filter(DigestRow.sent_at.isnot(None)).order_by(
+                    DigestRow.sent_at.desc(), DigestRow.created_at.desc()
+                )
+            rows = q.limit(limit).all()
+    except OperationalError:
+        # A genuinely fresh database has no schema.  Do not call ``init_db``:
+        # this command is a report, not a schema-management operation.
+        return []
     return [r[0] for r in rows]
 
 
 def _latest_run_id(digest_id: str) -> str | None:
     """The most-recent brew run for a digest (a rebrew mints a new run_id)."""
-    with session_scope() as s:
-        run_id = (
-            s.query(ImpressionRow.run_id)
-            .filter(ImpressionRow.digest_id == digest_id)
-            .order_by(ImpressionRow.created_at.desc(), ImpressionRow.id.desc())
-            .limit(1)
-            .scalar()
-        )
+    try:
+        with session_scope() as s:
+            run_id = (
+                s.query(ImpressionRow.run_id)
+                .filter(ImpressionRow.digest_id == digest_id)
+                .order_by(ImpressionRow.created_at.desc(), ImpressionRow.id.desc())
+                .limit(1)
+                .scalar()
+            )
+    except OperationalError:
+        # A partially migrated database is still read-only here; report no
+        # candidate pool instead of invoking schema setup or crashing.
+        return None
     return run_id
 
 
 def _pool_rows(digest_id: str, run_id: str) -> list[dict]:
     """Return the research candidate pool for one run, enriched with attribution.
 
-    Each dict carries: item_id, selected, final_score, and the per-candidate
-    attribution keys ``primary_facet`` / ``topic_score`` — read DIRECTLY from the
-    ``impressions`` table (research section, both selected AND unselected rows).
-    This is what lets the harness attribute the UNSELECTED candidate pool:
-    ``digest_item_features`` only records the ~selected slate, so unselected
-    candidates have no feature JSON. ``source_bucket`` (used only for the
-    high-venue heuristic) is still read from the feature JSON when present — it
-    exists for selected items and is best-effort for the pool. Read-only.
+    Attribution comes DIRECTLY from the ``impressions`` table (research section,
+    both selected AND unselected rows).  Actual source/venue comes from the
+    associated item/enrichment records for both populations; feature JSON is
+    selected-only and must not be used to measure omissions.
     """
     with session_scope() as s:
+        # The report must work against old immutable logs after a newer ORM adds
+        # ``primary_facet_score``.  Inspecting SQLite's schema is read-only and
+        # avoids selecting a not-yet-migrated column.
+        columns = {
+            str(row[1])
+            for row in s.connection().exec_driver_sql("PRAGMA table_info(impressions)")
+        }
+        score_column = getattr(ImpressionRow, "primary_facet_score", None)
+        has_primary_facet_score = bool(
+            score_column is not None and "primary_facet_score" in columns
+        )
+        selected_columns = [
+            ImpressionRow.item_id,
+            ImpressionRow.selected,
+            ImpressionRow.final_score,
+            ImpressionRow.primary_facet,
+            ImpressionRow.topic_score,
+        ]
+        if has_primary_facet_score:
+            selected_columns.append(score_column)
         impressions = (
-            s.query(
-                ImpressionRow.item_id,
-                ImpressionRow.selected,
-                ImpressionRow.final_score,
-                ImpressionRow.primary_facet,
-                ImpressionRow.topic_score,
-            )
+            s.query(*selected_columns, ItemRow.source, ItemEnrichmentRow.venue)
+            .outerjoin(ItemRow, ItemRow.id == ImpressionRow.item_id)
+            .outerjoin(ItemEnrichmentRow, ItemEnrichmentRow.item_id == ImpressionRow.item_id)
             .filter(
                 ImpressionRow.digest_id == digest_id,
                 ImpressionRow.run_id == run_id,
@@ -122,38 +174,31 @@ def _pool_rows(digest_id: str, run_id: str) -> list[dict]:
             )
             .all()
         )
-        feat_raw = (
-            s.query(DigestItemFeatureRow.item_id, DigestItemFeatureRow.features_json)
-            .filter(DigestItemFeatureRow.digest_id == digest_id)
-            .all()
-        )
-
-    # Feature JSON is only present for the SELECTED slate; used solely as a
-    # best-effort source for source_bucket (the high-venue heuristic).
-    features: dict[int, dict] = {}
-    for item_id, raw in feat_raw:
-        try:
-            payload = json.loads(raw or "{}")
-        except (json.JSONDecodeError, TypeError):
-            payload = {}
-        if isinstance(payload, dict):
-            features[int(item_id)] = payload
-
     pool: list[dict] = []
-    for item_id, selected, final_score, primary_facet, topic_score in impressions:
-        feat = features.get(int(item_id), {})
+    for row in impressions:
+        item_id, selected, final_score, primary_facet, topic_score = row[:5]
+        offset = 5
+        primary_facet_score = row[offset] if has_primary_facet_score else None
+        if has_primary_facet_score:
+            offset += 1
+        source, venue = row[offset:offset + 2]
+        # ``primary_facet_score`` was added after the first impression schema.
+        # Prefer it whenever present; old rows have only the overall topic score.
+        score_from_legacy_topic = primary_facet_score is None
+        if primary_facet_score is None:
+            primary_facet_score = topic_score
         pool.append(
             {
                 "item_id": int(item_id),
                 "selected": bool(selected),
-                "impression_score": float(final_score) if final_score is not None else 0.0,
-                # Attribution sourced from the impression row (covers unselected).
+                "impression_score": float(final_score or 0.0),
                 "primary_facet": str(primary_facet or ""),
-                "topic_score": float(topic_score) if topic_score is not None else 0.0,
-                "final_score": float(
-                    final_score if final_score is not None else 0.0
-                ),
-                "source_bucket": str(feat.get("source_bucket", "") or ""),
+                "primary_facet_score": float(primary_facet_score or 0.0),
+                "facet_score_source": "topic_score" if score_from_legacy_topic else "primary_facet_score",
+                "topic_score": float(topic_score or 0.0),
+                "final_score": float(final_score or 0.0),
+                "source": str(source or ""),
+                "venue": str(venue or ""),
             }
         )
     return pool
@@ -168,22 +213,23 @@ def compute_report(n: int = 10, include_unsent: bool = False) -> dict:
     Returns a dict keyed for machine assertion (see module docstring for the
     five criteria). Never writes anything.
     """
-    init_db()  # read-only: creates schema if a fresh DB, but writes no data rows.
     settings = get_settings()
     min_topic_relevance = float(settings.min_topic_relevance)
 
     try:
         profile = load_profile()
-        interests = list(profile.keywords)
-        negative_interests = dict(profile.negative_interests)
+        interests = _canonical_interests(profile)
     except Exception as exc:  # profile missing/invalid — degrade gracefully.
         interests = []
-        negative_interests = {}
         _profile_error = str(exc)
     else:
         _profile_error = ""
 
-    digest_ids = _sent_digest_ids(n, include_unsent=include_unsent)
+    # Opening SQLite through the application's normal engine would create a
+    # missing file (and enable WAL), which is a write. A report over a fresh
+    # path therefore returns insufficient data without opening a connection.
+    db_exists = Path(settings.db_path).exists()
+    digest_ids = _sent_digest_ids(n, include_unsent=include_unsent) if db_exists else []
 
     report: dict = {
         "n_requested": n,
@@ -194,9 +240,9 @@ def compute_report(n: int = 10, include_unsent: bool = False) -> dict:
         # criterion 1
         "per_interest_coverage": {},
         "routinely_absent": [],
-        # criterion 2
-        "off_field_per_digest": None,
-        "off_field_target_met": None,
+        # criterion 2.  This is attribution completeness, not semantic precision.
+        "unattributed_selected_per_digest": None,
+        "unattributed_selected_target_met": None,
         # criterion 3
         "high_profile_omissions": 0,
         "high_profile_omissions_per_digest": None,
@@ -216,7 +262,7 @@ def compute_report(n: int = 10, include_unsent: bool = False) -> dict:
     # Accumulators.
     # coverage[interest] = [eligible_digests, covered_digests]
     coverage: dict[str, list[int]] = defaultdict(lambda: [0, 0])
-    off_field_counts: list[int] = []
+    unattributed_counts: list[int] = []
     total_omissions = 0
     supply: list[dict] = []
     per_digest: list[dict] = []
@@ -233,36 +279,43 @@ def compute_report(n: int = 10, include_unsent: bool = False) -> dict:
 
         selected = [r for r in pool if r["selected"]]
         qualified = [
-            r for r in pool if r["topic_score"] >= min_topic_relevance
+            r
+            for r in pool
+            if _is_qualified_canonical_attribution(r, interests, min_topic_relevance)
         ]
 
         # --- criterion 1: per-interest coverage --------------------------- #
         # An interest is "eligible" in this digest if a QUALIFIED candidate for
         # it exists in the pool; "covered" if a SELECTED item has that facet.
-        selected_facets = {r["primary_facet"] for r in selected if r["primary_facet"]}
-        qualified_facets = {
-            r["primary_facet"]
-            for r in qualified
-            if r["primary_facet"]
+        selected_facets = {
+            _canonical_facet_name(r, interests)
+            for r in selected
+            if _is_qualified_canonical_attribution(r, interests, min_topic_relevance)
         }
+        qualified_facets = {_canonical_facet_name(r, interests) for r in qualified}
         for interest in interests:
             if interest in qualified_facets:
                 coverage[interest][0] += 1
                 if interest in selected_facets:
                     coverage[interest][1] += 1
 
-        # --- criterion 2: off-field precision ----------------------------- #
-        off_field = sum(
-            1 for r in selected if _is_off_field(r, interests, negative_interests)
+        # --- criterion 2: persisted-attribution completeness -------------- #
+        # It would be circular to call a configured primary facet proof that a
+        # paper is semantically on-field.  Report only what the log can prove:
+        # whether selected items lacked a qualified canonical attribution.
+        unattributed = sum(
+            1
+            for r in selected
+            if not _is_qualified_canonical_attribution(r, interests, min_topic_relevance)
         )
-        off_field_counts.append(off_field)
+        unattributed_counts.append(unattributed)
 
         # --- criterion 3: high-profile omissions -------------------------- #
         omissions = [
             r
             for r in pool
             if not r["selected"]
-            and r["primary_facet"] != ""
+            and _is_qualified_canonical_attribution(r, interests, min_topic_relevance)
             and _is_high_venue(r)
         ]
         total_omissions += len(omissions)
@@ -283,7 +336,7 @@ def compute_report(n: int = 10, include_unsent: bool = False) -> dict:
                 "pool_size": len(pool),
                 "n_selected": len(selected),
                 "n_qualified": len(qualified),
-                "off_field_selected": off_field,
+                "unattributed_selected": unattributed,
                 "high_profile_omissions": len(omissions),
                 "selected_facets": sorted(f for f in selected_facets if f),
             }
@@ -306,15 +359,15 @@ def compute_report(n: int = 10, include_unsent: bool = False) -> dict:
     # Always surface the watched interests' status explicitly.
     watched_status = _watched_status(per_interest, interests)
 
-    n_scored = len(off_field_counts)
-    off_field_mean = (sum(off_field_counts) / n_scored) if n_scored else None
+    n_scored = len(unattributed_counts)
+    unattributed_mean = (sum(unattributed_counts) / n_scored) if n_scored else None
 
     report["per_interest_coverage"] = per_interest
     report["routinely_absent"] = routinely_absent
     report["watched_interests"] = watched_status
-    report["off_field_per_digest"] = off_field_mean
-    report["off_field_target_met"] = (
-        (off_field_mean < 1.0) if off_field_mean is not None else None
+    report["unattributed_selected_per_digest"] = unattributed_mean
+    report["unattributed_selected_target_met"] = (
+        (unattributed_mean < 1.0) if unattributed_mean is not None else None
     )
     report["high_profile_omissions"] = total_omissions
     report["high_profile_omissions_per_digest"] = (
@@ -328,18 +381,12 @@ def compute_report(n: int = 10, include_unsent: bool = False) -> dict:
 
 
 def _watched_status(per_interest: dict, interests: list[str] | None = None) -> dict:
-    """Explicit status for the specifically-watched interests (criterion 1)."""
-    configured = {i.lower() for i in (interests or [])}
+    """Return an explicit coverage status for every configured user interest."""
     watched_status = {}
-    for interest in WATCHED_INTERESTS:
+    for interest in interests or []:
         info = per_interest.get(interest)
         if info is None:
-            # Distinguish a genuinely-unconfigured interest from one that is
-            # configured but simply had no data in the window (empty per_interest).
-            if configured and interest.lower() not in configured:
-                watched_status[interest] = "not a configured core interest"
-            else:
-                watched_status[interest] = "no data in window"
+            watched_status[interest] = "no data in window"
         elif info["eligible_digests"] == 0:
             watched_status[interest] = "no qualified candidates in window"
         else:
@@ -349,61 +396,57 @@ def _watched_status(per_interest: dict, interests: list[str] | None = None) -> d
     return watched_status
 
 
-def _is_off_field(
-    row: dict, interests: list[str], negative_interests: dict[str, float]
-) -> bool:
-    """Off-field = no clear interest match, or facet is a negative interest.
+def _canonical_interests(profile) -> list[str]:
+    """Return configured canonical facets, with a legacy-keyword fallback."""
+    canonical_facets = getattr(profile, "canonical_facets", None)
+    if isinstance(canonical_facets, dict) and canonical_facets:
+        return list(canonical_facets)
+    canonical = getattr(profile, "canonical_interests", None)
+    if isinstance(canonical, dict) and canonical:
+        return list(canonical)
+    if isinstance(canonical, (list, tuple)):
+        return [str(v) for v in canonical]
+    return list(getattr(profile, "keywords", []) or [])
 
-    We work purely from persisted features (no embedding recompute, keeping the
-    harness read-only and cheap): an item is off-field when its ``primary_facet``
-    is empty (no core-interest match) OR its facet appears among the reader's
-    negative interests. Facet matching is case-insensitive.
-    """
-    facet = row["primary_facet"]
-    if facet == "":
-        return True
-    facet_lc = facet.lower()
-    interest_lc = {i.lower() for i in interests}
-    if facet_lc in interest_lc:
-        return False
-    neg_lc = {k.lower() for k in negative_interests}
-    if facet_lc in neg_lc:
-        return True
-    # A facet that is neither a known core interest nor a known negative is
-    # treated as off-field (it did not match the reader's field).
-    return True
+
+def _is_qualified_canonical_attribution(
+    row: dict, interests: list[str], min_topic_relevance: float
+) -> bool:
+    """Whether the log proves a qualified attribution to a canonical facet."""
+    facet = str(row.get("primary_facet") or "").casefold()
+    canonical = {str(interest).casefold() for interest in interests}
+    return (
+        bool(facet)
+        and facet in canonical
+        and float(row.get("primary_facet_score") or 0.0) >= min_topic_relevance
+    )
+
+
+def _canonical_facet_name(row: dict, interests: list[str]) -> str:
+    """Return the configured spelling of a row's canonical facet, if any."""
+    facet = str(row.get("primary_facet") or "").casefold()
+    return next(
+        (str(interest) for interest in interests if str(interest).casefold() == facet),
+        "",
+    )
 
 
 def _is_high_venue(row: dict) -> bool:
-    """High-profile candidate: top/high venue bucket, or a high final score."""
-    if row["source_bucket"] in HIGH_VENUE_BUCKETS:
-        return True
-    # Fallback signal when the source bucket is unknown: a strong final score.
-    return row["final_score"] >= 0.85
+    """High-profile only when the candidate's actual source or venue proves it."""
+    # Topic-search aggregators often preserve the actual journal only in
+    # item_enrichment.  Prefer it; do not substitute a ranking score for venue.
+    source = row.get("venue") or row.get("source")
+    if not source:
+        return False
+    return source_bucket(_VenueProbe(str(source))) in HIGH_VENUE_BUCKETS
 
 
 def _vote_eval() -> dict | None:
-    """Read-only overall pairwise/precision via the existing evaluator.
-
-    ``evaluate_history`` only issues SELECTs (it replays persisted orderings and
-    reads votes) and never fits or writes — safe to call here. Returns None with
-    a note if it cannot run cleanly.
-    """
-    try:
-        from dailydigest.rank.evaluate import evaluate_history
-
-        rep = evaluate_history(k=10)
-        d = rep.as_dict()
-        return {
-            "digests_scored": d.get("digests_scored"),
-            "votes_used": d.get("votes_used"),
-            "pairwise_accuracy": d.get("pairwise_accuracy"),
-            "precision_at_k": d.get("precision_at_k"),
-            "map": d.get("map"),
-            "ndcg_at_k": d.get("ndcg_at_k"),
-        }
-    except Exception as exc:  # keep the harness robust; skip criterion 5.
-        return {"error": f"skipped (evaluate_history unavailable): {exc}"}
+    """Explain why the existing evaluator is intentionally not called here."""
+    # ``evaluate_history`` currently calls ``init_db``.  Keeping this script
+    # SELECT-only means it cannot be called from here until its own schema setup
+    # is separated from replay.  State that limitation rather than mutating a DB.
+    return {"error": "skipped: evaluate_history initializes schema; this report is SELECT-only"}
 
 
 # --------------------------------------------------------------------------- #
@@ -417,7 +460,7 @@ def _fmt(x, nd: int = 2) -> str:
 
 def print_report(report: dict) -> None:
     print("=" * 70)
-    print("DailyDigest coverage & precision report (READ-ONLY)")
+    print("DailyDigest coverage report (READ-ONLY)")
     print("=" * 70)
     print(
         f"Window: last {report['n_requested']} sent digests "
@@ -449,16 +492,17 @@ def print_report(report: dict) -> None:
             )
     watched = report.get("watched_interests") or {}
     if watched:
-        print("    Watched interests:")
+        print("    Configured interest status:")
         for interest, status in watched.items():
             print(f"      * {interest}: {status}")
     if report.get("routinely_absent"):
         print(f"    FAIL flags (routinely absent): {report['routinely_absent']}")
 
     # --- Criterion 2 -----------------------------------------------------
-    print("\n[2] OFF-FIELD PRECISION (mean off-field selected research items / digest)")
-    off = report.get("off_field_per_digest")
-    met = report.get("off_field_target_met")
+    print("\n[2] UNATTRIBUTED SELECTED (not semantic off-field precision)")
+    print("    mean selected research items without a qualified canonical attribution / digest")
+    off = report.get("unattributed_selected_per_digest")
+    met = report.get("unattributed_selected_target_met")
     verdict = "PASS" if met else ("FAIL" if met is False else "n/a")
     print(f"    mean = {_fmt(off)} per digest  (target < 1.0)  -> {verdict}")
 

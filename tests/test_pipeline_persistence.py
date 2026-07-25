@@ -4,6 +4,51 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 
 
+def test_topic_selection_preferences_are_soft_and_keep_raw_scores(monkeypatch):
+    """Coverage can promote one qualified, absent facet without reserving a slot."""
+    from dailydigest import pipeline as pipeline_mod
+
+    rows = [
+        SimpleNamespace(id=1, section="research"),  # recently viewed facet
+        SimpleNamespace(id=2, section="research"),  # best absent-facet item
+        SimpleNamespace(id=3, section="research"),  # same facet, not its best
+        SimpleNamespace(id=4, section="research"),  # fails per-facet relevance
+    ]
+    scored = [(rows[0], 0.72), (rows[1], 0.70), (rows[2], 0.69), (rows[3], 0.71)]
+    features = {
+        1: {"primary_facet": "colloids", "primary_facet_score": 0.8, "topic_priority": 0.5, "topic_priority_bonus": 0.03},
+        2: {"primary_facet": "dna nano", "primary_facet_score": 0.8, "topic_priority": 1.0, "topic_priority_bonus": 0.06},
+        3: {"primary_facet": "dna nano", "primary_facet_score": 0.8, "topic_priority": 1.0, "topic_priority_bonus": 0.06},
+        4: {"primary_facet": "rna nano", "primary_facet_score": 0.4, "topic_priority": 1.0, "topic_priority_bonus": 0.06},
+    }
+    monkeypatch.setattr(
+        pipeline_mod,
+        "get_settings",
+        lambda: SimpleNamespace(min_topic_relevance=0.65, topic_coverage_bonus_scale=0.03),
+    )
+    monkeypatch.setattr(
+        pipeline_mod,
+        "recent_viewed_facet_dates",
+        # SQLite's digest timestamps are historically naive; the store helper
+        # normalizes them before the real pipeline sees them.
+        lambda **_kwargs: {"colloids": datetime.now()},
+    )
+
+    ordered = pipeline_mod._apply_topic_selection_preferences(
+        scored, features, digest_id="2026-06-07"
+    )
+
+    # The unseen high-priority DNA facet is gently promoted, but output scores
+    # remain exactly the ranker scores and no slot was reserved.
+    assert [row.id for row, _score in ordered][0] == 2
+    assert dict((row.id, score) for row, score in ordered) == dict(
+        (row.id, score) for row, score in scored
+    )
+    assert features[2]["topic_coverage_bonus"] == 0.03
+    assert "topic_coverage_bonus" not in features[3]
+    assert "selection_order_bonus" not in features[4]
+
+
 def _reset_store(tmp_path, monkeypatch):
     from dailydigest import config as config_mod
     from dailydigest import store as store_mod
@@ -253,8 +298,8 @@ def test_run_all_impressions_carry_primary_facet_and_topic_score(monkeypatch, tm
         by_id = {int(it.id): it for it in items}
         scored = [(by_id[picked_id], 0.9), (by_id[unpicked_id], 0.8)]
         features = {
-            picked_id: {"topic_score": 0.82, "primary_facet": "dna nanotechnology"},
-            unpicked_id: {"topic_score": 0.71, "primary_facet": "colloidal self-assembly"},
+            picked_id: {"topic_score": 0.82, "primary_facet": "dna nanotechnology", "primary_facet_score": 0.79},
+            unpicked_id: {"topic_score": 0.71, "primary_facet": "colloidal self-assembly", "primary_facet_score": 0.74},
         }
         return scored, features
 
@@ -281,10 +326,12 @@ def test_run_all_impressions_carry_primary_facet_and_topic_score(monkeypatch, tm
         assert picked_id in impressions and unpicked_id in impressions
         # Non-empty facet for these on-topic items; topic_score persisted for both.
         assert impressions[picked_id].primary_facet == "dna nanotechnology"
+        assert impressions[picked_id].primary_facet_score == 0.79
         assert impressions[picked_id].topic_score == 0.82
         # The UNSELECTED candidate also carries attribution (the whole point).
         assert impressions[unpicked_id].selected is False
         assert impressions[unpicked_id].primary_facet == "colloidal self-assembly"
+        assert impressions[unpicked_id].primary_facet_score == 0.74
         assert impressions[unpicked_id].topic_score == 0.71
 
 

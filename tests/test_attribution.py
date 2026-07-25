@@ -6,7 +6,7 @@ Covers:
 - priority normalization (max -> 1.0, unlisted -> 0.5 default)
 - priority_bonus == scale * priority
 - the 4 new feature-payload keys are ALWAYS present
-- the priority bonus changes final_score/ordering but NEVER topic_score (the gate)
+- the priority bonus is recorded for later selection ordering, never ranker score/gate
 """
 
 from __future__ import annotations
@@ -134,6 +134,49 @@ class TestBuildContext:
         norms = np.linalg.norm(ctx.matrix, axis=1)
         assert np.allclose(norms, 1.0, atol=1e-5)
 
+    def test_canonical_facets_replace_keyword_attribution_only(self):
+        p = Profile(
+            bio="x",
+            # These stay available to retrieval, but are not attribution labels.
+            keywords=["alpha", "beta", "gamma"],
+            canonical_facets={
+                "structural nucleic-acid nanotechnology": {
+                    "anchors": ["alpha"],
+                    "aliases": ["beta"],
+                    "priority": 18,
+                },
+                "programmable colloidal assembly": {
+                    "anchors": ["gamma"],
+                    "priority": 9,
+                },
+            },
+        )
+        ctx = build_attribution_context(p)
+        assert ctx is not None
+        assert ctx.labels == [
+            "structural nucleic-acid nanotechnology",
+            "programmable colloidal assembly",
+        ]
+        # An item aligned to gamma receives the canonical (not raw keyword) name.
+        attrs = attribute_items(_VOCAB["gamma"].reshape(1, -1), ctx)
+        assert attrs[0].primary == "programmable colloidal assembly"
+        assert attrs[0].primary_score == pytest.approx(1.0)
+        assert attrs[0].primary_facet_score == pytest.approx(1.0)
+
+    def test_canonical_priority_overrides_legacy_keyword_priorities(self):
+        p = Profile(
+            bio="x",
+            keywords=["alpha", "beta"],
+            topic_priorities={"alpha": 99, "beta": 1},
+            canonical_facets={
+                "first": {"anchors": ["alpha"], "priority": 4},
+                "second": {"anchors": ["beta"], "priority": 2},
+            },
+        )
+        ctx = build_attribution_context(p)
+        assert ctx is not None
+        assert ctx.priorities == {"first": pytest.approx(1.0), "second": pytest.approx(0.5)}
+
 
 # --------------------------------------------------------------------------- #
 # Priority normalization + bonus
@@ -255,9 +298,8 @@ class TestFeaturePayloadContract:
         assert payload["topic_priority"] == pytest.approx(1.0)
         assert payload["topic_priority_bonus"] == pytest.approx(0.06)
 
-    def test_priority_bonus_moves_final_not_topic_score(self, monkeypatch):
-        """Two items with EQUAL cosine but different priority: identical topic_score
-        (the gate), different final_score (ordering)."""
+    def test_priority_bonus_does_not_change_ranker_score_or_topic_gate(self, monkeypatch):
+        """Priority is persisted for the selection layer, not folded into ranker scores."""
         self._fake_ranker_embed(monkeypatch)
         monkeypatch.setattr(profile_mod, "_topic_priority_bonus_scale", lambda: 0.06)
         from dailydigest.rank.ranker import _apply_quality_adjustments_with_features
@@ -287,9 +329,12 @@ class TestFeaturePayloadContract:
         assert f_hi["topic_score"] == pytest.approx(0.80)
         assert f_lo["topic_score"] == pytest.approx(0.80)
         assert f_hi["topic_score"] == pytest.approx(f_lo["topic_score"])
-        # Final/ordering score differs by exactly the bonus difference.
-        assert f_hi["final_score"] - f_lo["final_score"] == pytest.approx(0.06 - 0.03, abs=1e-6)
-        assert finals[0] > finals[1]
+        assert f_hi["topic_priority_bonus"] == pytest.approx(0.06)
+        assert f_lo["topic_priority_bonus"] == pytest.approx(0.03)
+        # The selection layer may use that metadata later; ranker scores are
+        # intentionally equal, so priority cannot cross a quality/final cutoff.
+        assert f_hi["final_score"] == pytest.approx(f_lo["final_score"])
+        assert finals[0] == pytest.approx(finals[1])
 
     def test_bonus_absent_leaves_final_equal_to_no_attribution(self, monkeypatch):
         """With attribution=None, final_score == quality-adjusted score (no nudge)."""

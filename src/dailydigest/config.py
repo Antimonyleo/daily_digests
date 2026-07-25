@@ -57,12 +57,15 @@ class Settings(BaseSettings):
     # (prestige is a mild tie-breaker). Higher values reward high-quality AND
     # relevant work more and suppress low-impact venues harder.
     research_quality_weight: float = Field(default=1.4, ge=0.0, le=5.0)
-    # Scale of the topic-priority ordering nudge. Multiplied by a normalized
-    # per-interest priority (0..1) and added to the FINAL ordering score only —
-    # it never touches the relevance gate (topic_score). Max nudge = scale*1.0.
-    # Small by design: reorders near-ties but cannot override a clearly more
-    # relevant item.
+    # Scale of the topic-priority selection nudge. Multiplied by a normalized
+    # per-interest priority (0..1) after the relevance and quality gates. It
+    # never changes stored final scores or eligibility. Max nudge = scale*1.0.
+    # Small by design: it reorders near-ties but cannot override clearly better
+    # work.
     topic_priority_bonus_scale: float = Field(default=0.06, ge=0.0, le=1.0)
+    # Small selection-only boost for an interest absent from recent viewed
+    # digests. It never changes semantic eligibility or quality thresholds.
+    topic_coverage_bonus_scale: float = Field(default=0.03, ge=0.0, le=0.2)
     # A low-impact-venue research item must clear this base topic relevance to be
     # eligible for the digest at all — so the few that appear are strongly on-topic.
     low_impact_relevance_floor: float = Field(default=0.58, ge=0.0, le=1.0)
@@ -109,13 +112,12 @@ class Settings(BaseSettings):
     cross_day_dedupe_days: int = Field(default=7, ge=1, le=60)
     cross_day_dedupe_threshold: float = Field(default=0.93, ge=0.5, le=1.0)
 
-    # Within-day near-duplicate suppression: inside a SINGLE digest, collapse
-    # topical near-duplicates among the research candidates (e.g. five nearly
-    # identical AlphaFold-benchmark papers) so one representative survives and the
-    # rest don't crowd out other interests. The threshold is deliberately HIGH so
-    # only genuine near-duplicates are dropped; the highest-scored item of each
-    # cluster is always kept.
-    within_day_dedupe: bool = True
+    # Within-day semantic suppression: inside a SINGLE digest, collapse similar
+    # research candidates so one representative survives. Disabled by default:
+    # the current 0.86 threshold can also suppress distinct papers. It remains
+    # available as an explicit opt-in; the highest-scored item of each cluster is
+    # always kept.
+    within_day_dedupe: bool = False
     within_day_dedupe_threshold: float = Field(default=0.86, ge=0.5, le=1.0)
 
     # Per-section size. When adaptive_section_sizes is on, top_* is the CEILING
@@ -236,12 +238,9 @@ def load_profile(path: str | None = None) -> Profile:
     settings = get_settings()
     p = Path(path or settings.profile_path)
     if not p.exists():
-        # fall back to example so a fresh checkout still runs
-        example = Path("config/profile.example.yaml")
-        if example.exists():
-            p = example
-        else:
-            raise FileNotFoundError(f"Profile not found: {p}")
+        # The example is documentation, not a default reader identity. A new
+        # user must complete local setup before retrieval/ranking can run.
+        raise FileNotFoundError(f"Profile not found: {p}; complete setup at /setup")
     data = yaml.safe_load(p.read_text()) or {}
     if not isinstance(data, dict):
         raise ValueError(f"Profile at {p} must be a YAML mapping, got {type(data).__name__}")

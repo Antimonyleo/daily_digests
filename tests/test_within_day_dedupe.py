@@ -23,17 +23,16 @@ def _unit(vec: list[float]) -> np.ndarray:
 class TestWithinDayDedupeConfig:
     def test_defaults(self):
         s = Settings(_env_file=None)
-        assert s.within_day_dedupe is True
+        assert s.within_day_dedupe is False
         assert s.within_day_dedupe_threshold == 0.86
 
-    def test_threshold_is_high_by_design(self):
-        # Guard against an accidental lowering of the deliberately-high default.
+    def test_threshold_default_is_preserved_for_opt_in(self):
         s = Settings(_env_file=None)
-        assert s.within_day_dedupe_threshold >= 0.86
+        assert s.within_day_dedupe_threshold == 0.86
 
-    def test_disable_flag(self):
-        s = Settings(_env_file=None, within_day_dedupe=False)
-        assert s.within_day_dedupe is False
+    def test_enable_flag_preserves_opt_in(self):
+        s = Settings(_env_file=None, within_day_dedupe=True)
+        assert s.within_day_dedupe is True
 
     def test_threshold_override(self):
         s = Settings(_env_file=None, within_day_dedupe_threshold=0.90)

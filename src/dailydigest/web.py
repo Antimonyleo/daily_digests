@@ -12,7 +12,7 @@ Routes:
 - ``POST /ranking/train``  — train the local LR ranker when enough votes exist
 - ``POST /refresh``        — kick off a dry-run pipeline in the background
 - ``GET /healthz``         — liveness probe
-- ``GET /setup``           — onboarding wizard (bio, keywords, LLM backend)
+- ``GET /setup``           — onboarding wizard (weighted interests, LLM backend)
 - ``POST /setup``          — write local profile YAML and .env, redirect to /run
 - ``GET /run``             — brewing page with live SSE progress feed
 - ``POST /run/start``      — kick off pipeline.run_all in a background thread
@@ -489,12 +489,47 @@ def _parse_csv(value: str | None) -> list[str]:
     return [p.strip() for p in value.split(",") if p.strip()]
 
 
+def _parse_ranked_topics(value: str | None) -> tuple[list[tuple[str, float]], list[str]]:
+    """Parse one ``topic | relative weight`` entry per non-empty line."""
+    topics: list[tuple[str, float]] = []
+    errors: list[str] = []
+    seen: set[str] = set()
+    for line_number, raw_line in enumerate((value or "").splitlines(), start=1):
+        line = raw_line.strip()
+        if not line:
+            continue
+        topic, sep, raw_weight = line.partition("|")
+        topic = topic.strip()
+        if not sep or not topic or not raw_weight.strip():
+            errors.append(f"Topic line {line_number} must use: topic | relative weight.")
+            continue
+        try:
+            weight = float(raw_weight.strip())
+        except ValueError:
+            errors.append(f"Topic line {line_number} has an invalid weight.")
+            continue
+        if not 0.0 < weight <= 100.0:
+            errors.append(f"Topic line {line_number} weight must be greater than 0 and at most 100.")
+            continue
+        key = topic.casefold()
+        if key in seen:
+            errors.append(f"Topic line {line_number} duplicates {topic!r}.")
+            continue
+        seen.add(key)
+        topics.append((topic, weight))
+    if not errors and not topics:
+        errors.append("Add at least one weighted research interest.")
+    if len(topics) > 10:
+        errors.append("Add at most 10 weighted research interests.")
+    return topics, errors
+
+
 def _load_existing_form_defaults() -> dict[str, str]:
     """Pre-populate the form from any existing profile.yaml + .env values."""
     out: dict[str, str] = {
         "name": "",
         "bio": "",
-        "keywords": "",
+        "topics": "",
         "downweight": "",
         "llm_backend": SETTINGS.llm_backend or "extractive",
         "llm_base_url": SETTINGS.llm_base_url,
@@ -512,7 +547,21 @@ def _load_existing_form_defaults() -> dict[str, str]:
             data = yaml.safe_load(_get_profile_path().read_text()) or {}
             out["name"] = str(data.get("name") or "").strip()
             out["bio"] = (data.get("bio") or "").strip()
-            out["keywords"] = ", ".join(data.get("keywords") or [])
+            canonical = data.get("canonical_facets") or {}
+            if isinstance(canonical, dict) and canonical:
+                lines = []
+                for topic, spec in canonical.items():
+                    priority = spec.get("priority", 1) if isinstance(spec, dict) else 1
+                    if priority is None:
+                        priority = 1
+                    lines.append(f"{topic} | {priority}")
+                out["topics"] = "\n".join(lines)
+            else:
+                priorities = data.get("topic_priorities") or {}
+                out["topics"] = "\n".join(
+                    f"{topic} | {priorities.get(topic, 1)}"
+                    for topic in (data.get("keywords") or [])
+                )
             out["downweight"] = ", ".join(data.get("downweight") or [])
         except Exception as e:  # noqa: BLE001
             logger.warning("could not parse existing profile.yaml: %s", e)
@@ -600,10 +649,8 @@ def _validate_setup(form: dict[str, str]) -> list[str]:
     backend = form.get("llm_backend", "extractive")
     if backend not in ("extractive", "claude_code", "codex", "api"):
         errors.append(f"Unknown backend: {backend}")
-    bio = (form.get("bio") or "").strip()
-    keywords = _parse_csv(form.get("keywords"))
-    if not bio and not keywords:
-        errors.append("Please provide either a bio or at least one keyword.")
+    _topics, topic_errors = _parse_ranked_topics(form.get("topics"))
+    errors.extend(topic_errors)
     if backend == "api":
         if not (form.get("llm_base_url") or "").strip():
             errors.append("API backend requires a base URL.")
@@ -912,7 +959,7 @@ async def setup_post(request: Request) -> Response:
     form: dict[str, str] = {
         "name": str(raw.get("name", "")),
         "bio": str(raw.get("bio", "")),
-        "keywords": str(raw.get("keywords", "")),
+        "topics": str(raw.get("topics", "")),
         "downweight": str(raw.get("downweight", "")),
         "llm_backend": str(raw.get("llm_backend", "extractive")),
         "llm_base_url": str(raw.get("llm_base_url", "")),
@@ -942,13 +989,37 @@ async def setup_post(request: Request) -> Response:
         response.headers["Cache-Control"] = "no-store"
         return response
 
-    # Write profile.yaml.
-    profile = {
-        "name": form["name"].strip(),
-        "bio": form["bio"].strip() or "General reader.",
-        "keywords": _parse_csv(form["keywords"]),
-        "downweight": _parse_csv(form["downweight"]),
-    }
+    topics, _topic_errors = _parse_ranked_topics(form["topics"])
+    # Write the private user profile. Keywords drive retrieval; the same named
+    # facets carry the user-entered relative priority for attribution/selection.
+    profile = _profile_data()
+    existing_canonical = profile.get("canonical_facets") or {}
+    existing_by_name = (
+        {str(name).casefold(): spec for name, spec in existing_canonical.items()}
+        if isinstance(existing_canonical, dict)
+        else {}
+    )
+    canonical_facets: dict[str, dict[str, Any]] = {}
+    for topic, weight in topics:
+        previous = existing_by_name.get(topic.casefold())
+        spec = dict(previous) if isinstance(previous, dict) else {}
+        if not spec.get("anchors"):
+            spec["anchors"] = [topic]
+        spec["priority"] = weight
+        canonical_facets[topic] = spec
+    # The weighted-topic editor supersedes these older parallel weighting maps.
+    # Keeping them would let removed topics continue influencing the profile.
+    for legacy_key in ("topic_priorities", "interest_weights", "facet_weights"):
+        profile.pop(legacy_key, None)
+    profile.update(
+        {
+            "name": form["name"].strip(),
+            "bio": form["bio"].strip() or "General reader.",
+            "keywords": [topic for topic, _weight in topics],
+            "canonical_facets": canonical_facets,
+            "downweight": _parse_csv(form["downweight"]),
+        }
+    )
     _get_profile_path().parent.mkdir(parents=True, exist_ok=True)
     _get_profile_path().write_text(yaml.safe_dump(profile, sort_keys=False))
 

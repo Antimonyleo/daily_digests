@@ -4,12 +4,12 @@ DailyDigest is a personalized morning research and news digest. It pulls from jo
 
 It is built for researchers who want signal without opening 40 tabs before breakfast.
 
-**Status:** public-release hardened local app. Verified with `177` passing tests plus a live local web smoke test. See [docs/STATUS.md](docs/STATUS.md).
+**Status:** public-release hardened local app. Verified with `407` passing tests plus a live local web smoke test. See [docs/STATUS.md](docs/STATUS.md).
 
 ## Features
 
 - One-command local web app with `./scripts/start.sh`
-- First-run setup wizard for name, research profile, keywords, downweights, digest size, and summarizer backend
+- First-run setup wizard for name, 1–10 weighted research interests, downweights, digest size, and summarizer backend
 - Broad source coverage: journals, bioRxiv/medRxiv/arXiv, PubMed/OpenAlex, FDA/ClinicalTrials.gov, biotech news, and world news
 - Profile-aware ranking with local embeddings, source-quality boosts, novelty signals, freshness gates, cross-source dedupe, anti-promo penalties, and source-balance caps
 - Interest facet weights in `data/profile.yaml` so you can strengthen or soften topics without editing code
@@ -63,10 +63,29 @@ For an arbitrary HuggingFace encoder (SPECTER2, MedCPT, bge-large), add the extr
 ### First run
 
 1. Start the app (`./scripts/start.sh`, double-click `DailyDigest.command`, or `docker compose up`).
-2. On the setup screen, fill in your **bio** and **interest keywords** — these define what gets retrieved and ranked. Be specific (e.g. "protein design", "lipid nanoparticle delivery") rather than broad ("biology").
+2. On the setup screen, add **1–10 specific research interests** and a relative weight for each (for example, `protein design | 18`). These define what gets retrieved and ranked; weights are preferences, not quotas. Be specific rather than broad (e.g. "lipid nanoparticle delivery", not "biology").
 3. Choose the **`Extractive`** summarizer for the easiest first run — no login or API key, fully offline. You can switch to an LLM backend later (see *Summarizer Backends*).
 4. Click **`Brew my morning cup of tea`**. The first brew downloads the small embedding model (~130 MB) and takes a couple of minutes; later brews are faster (embeddings are cached).
 5. Read the **`Must read first`** cards, then scan each section (Research / Industry / Regulatory / World).
+
+#### Choosing interest weights
+
+Enter one interest per line using `topic | weight`:
+
+```text
+protein engineering and design | 18
+RNA nanotechnology | 15
+gene and RNA therapeutics | 10
+```
+
+Use any positive weights up to 100. Only their ratios matter: `18, 15, 10` has
+the same meaning as `36, 30, 20`. A higher weight gently favors that interest
+among papers that already passed the relevance and quality gates. It is not a
+percentage of the digest and does not reserve a daily slot.
+
+Keep the list to ten or fewer specific research areas. Put peripheral subjects
+you merely want to monitor in the bio or edit `context_keywords` in the profile
+rather than making every related field a core interest.
 
 ### The daily loop (this is what makes it good)
 
@@ -100,16 +119,61 @@ DailyDigest balances personal topic fit with editorial quality. Top journals sti
 
 You can tune source hints in `config/sources.yaml` with `quality_tier`, `prestige_score`, `impact_floor`, and `promo_risk`. Exact impact factors are not fetched during brewing; the app uses stable local tiers to stay fast and reproducible.
 
-You can tune personal facets in `data/profile.yaml`:
+Your private, ignored `data/profile.yaml` is created by setup and can be reset for a new user. It stores the weighted facets:
 
 ```yaml
-interest_weights:
-  RNA therapeutics: 1.25
-  clinical translation: 1.15
-  arXiv CS methods: 0.45
+canonical_facets:
+  RNA nanotechnology:
+    anchors: [RNA nanotechnology]
+    priority: 17
+  DNA nanotechnology:
+    anchors: [DNA nanotechnology]
+    priority: 15
 ```
 
-Values above `1.0` strengthen a topic; values below `1.0` soften it. This is useful when a topic is relevant but should not crowd out published journal papers.
+Priorities are relative and influence only selection among already-qualified candidates. They do not guarantee a fixed number of slots or let weak papers bypass relevance gates.
+
+### Edit, reset interests, or switch users
+
+- Use **Settings** in the web app to change topics or weights. Fields not shown
+  by the form, such as watched authors and negative interests, are preserved.
+- The active profile is `data/profile.yaml`. It is local and ignored by Git;
+  `config/profile.example.yaml` is documentation and is never automatically
+  loaded as a user.
+- To reset only the interests while keeping the same reader's votes and digest
+  history, stop the app and rename the profile:
+
+```bash
+mv data/profile.yaml data/profile.previous.yaml
+```
+
+Start DailyDigest again. Because the active profile is missing, the app opens
+the first-run setup wizard and creates a fresh profile. Restore the prior
+interest configuration by moving that backup back to `data/profile.yaml`.
+
+For a genuinely different reader, isolate all personal state—not only the
+profile—so the new reader does not inherit votes, viewed-history coverage, or a
+learned ranker. Stop the app and move the whole data directory:
+
+```bash
+mv data data.previous
+```
+
+Restart the app and complete setup. The old reader's profile, database, model
+artifacts, and digest history remain recoverable in `data.previous/`. Email and
+API settings live in `.env`; update those separately if the recipient changes.
+
+### Check interest coverage
+
+After several viewed digests, run the read-only coverage report:
+
+```bash
+uv run python scripts/coverage_report.py --num-digests 10
+```
+
+It reports supply and selection coverage for the interests in the current
+profile. It does not contain a built-in topic list and does not retrain or modify
+the ranking model.
 
 ## Summarizer Backends
 

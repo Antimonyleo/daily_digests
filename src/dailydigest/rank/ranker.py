@@ -442,6 +442,7 @@ def _feature_payload(
     scoring_mode: str,
     primary_facet: str = "",
     secondary_facets: list[str] | None = None,
+    primary_facet_score: float = 0.0,
     topic_priority: float = 0.0,
     topic_priority_bonus: float = 0.0,
 ) -> dict[str, Any]:
@@ -460,6 +461,7 @@ def _feature_payload(
         # Facet attribution (P1) — CONTRACT keys, always present.
         "primary_facet": str(primary_facet or ""),
         "secondary_facets": list(secondary_facets or []),
+        "primary_facet_score": float(primary_facet_score),
         "topic_priority": float(topic_priority),
         "topic_priority_bonus": float(topic_priority_bonus),
     }
@@ -587,13 +589,11 @@ def _apply_quality_adjustments_with_features(
         )
         if downweight_penalty:
             score -= downweight_penalty
-        # Topic-priority nudge (P3): ORDERING-ONLY. Applied to the final score
-        # AFTER all quality/penalty logic. It never feeds back into topic_score
-        # (the relevance gate), which is recorded from `base` below.
+        # Topic priority is persisted here, but applied later as a selection-order
+        # preference in the pipeline. Keeping it out of this score ensures it
+        # cannot change low-impact eligibility or the final-score cutoff.
         attr = facet_attr[idx] if facet_attr is not None and idx < len(facet_attr) else None
         priority_bonus = float(getattr(attr, "priority_bonus", 0.0)) if attr is not None else 0.0
-        if priority_bonus:
-            score += priority_bonus
         score_float = float(score)
         result.append(score_float)
         features[_row_feature_key(row)] = _feature_payload(
@@ -607,6 +607,7 @@ def _apply_quality_adjustments_with_features(
             scoring_mode=scoring_mode,
             primary_facet=str(getattr(attr, "primary", "") or "") if attr is not None else "",
             secondary_facets=list(getattr(attr, "secondaries", []) or []) if attr is not None else [],
+            primary_facet_score=float(getattr(attr, "primary_score", 0.0)) if attr is not None else 0.0,
             topic_priority=float(getattr(attr, "priority", 0.0)) if attr is not None else 0.0,
             topic_priority_bonus=priority_bonus,
         )

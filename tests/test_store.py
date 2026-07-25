@@ -208,7 +208,7 @@ def test_write_impressions_stores_selected_flag_for_candidate_pool(monkeypatch, 
 
 
 def test_write_impressions_persists_facet_and_topic_score(monkeypatch, tmp_path):
-    """A 7-tuple persists per-candidate primary_facet + topic_score attribution."""
+    """An 8-tuple keeps facet cosine distinct from the overall topic score."""
     store_mod = _reset_store(tmp_path, monkeypatch)
     a = _add_item(store_mod, "facet-a")
     b = _add_item(store_mod, "facet-b")
@@ -217,8 +217,8 @@ def test_write_impressions_persists_facet_and_topic_score(monkeypatch, tmp_path)
     store_mod.write_impressions(
         digest_id,
         [
-            ("research", a, 0, 0.9, True, "dna nanotechnology", 0.81),
-            ("research", b, 1, 0.7, False, "colloidal self-assembly", 0.72),
+            ("research", a, 0, 0.9, True, "dna nanotechnology", 0.74, 0.81),
+            ("research", b, 1, 0.7, False, "colloidal self-assembly", 0.68, 0.72),
         ],
         model_version="v-test",
     )
@@ -229,8 +229,10 @@ def test_write_impressions_persists_facet_and_topic_score(monkeypatch, tmp_path)
             for r in s.query(store_mod.ImpressionRow).filter_by(digest_id=digest_id).all()
         }
         assert by_item[a].primary_facet == "dna nanotechnology"
+        assert by_item[a].primary_facet_score == 0.74
         assert by_item[a].topic_score == 0.81
         assert by_item[b].primary_facet == "colloidal self-assembly"
+        assert by_item[b].primary_facet_score == 0.68
         assert by_item[b].topic_score == 0.72
 
 
@@ -249,6 +251,7 @@ def test_write_impressions_facet_topic_default_when_omitted(monkeypatch, tmp_pat
     with store_mod.session_scope() as s:
         row = s.query(store_mod.ImpressionRow).filter_by(digest_id=digest_id).one()
         assert row.primary_facet == ""
+        assert row.primary_facet_score is None
         assert row.topic_score is None
 
 
@@ -281,6 +284,7 @@ def test_migration_adds_facet_and_topic_columns_to_legacy_impressions(
         "PRAGMA table_info(impressions)"
     ).fetchall()}
     assert "primary_facet" not in cols_before
+    assert "primary_facet_score" not in cols_before
     assert "topic_score" not in cols_before
 
     from dailydigest import config as config_mod
@@ -298,6 +302,7 @@ def test_migration_adds_facet_and_topic_columns_to_legacy_impressions(
         "PRAGMA table_info(impressions)"
     ).fetchall()}
     assert "primary_facet" in cols_after
+    assert "primary_facet_score" in cols_after
     assert "topic_score" in cols_after
 
 
@@ -360,6 +365,59 @@ def test_mark_impressions_viewed_only_flags_selected_rows(monkeypatch, tmp_path)
     # Unselected candidate never shown → must remain viewed=False.
     assert by_item[candidate].selected is False
     assert by_item[candidate].viewed is False
+
+
+def test_recent_viewed_facet_dates_uses_only_latest_brew(monkeypatch, tmp_path):
+    """A viewed obsolete rebrew must not count after a newer slate replaces it."""
+    store_mod = _reset_store(tmp_path, monkeypatch)
+    old_item = _add_item(store_mod, "coverage-old")
+    new_item = _add_item(store_mod, "coverage-new")
+    digest_id = "2026-06-06"
+
+    store_mod.write_digest(digest_id, [("R1", old_item)])
+    store_mod.mark_sent(digest_id)
+    old_run = store_mod.write_impressions(
+        digest_id,
+        [("research", old_item, 0, 0.9, True, "old facet", 0.8, 0.8)],
+    )
+    new_run = store_mod.write_impressions(
+        digest_id,
+        [("research", new_item, 0, 0.9, True, "new facet", 0.8, 0.8)],
+    )
+    with store_mod.session_scope() as s:
+        # Simulate a reader opening the obsolete slate before the rebrew. The
+        # current slate is what they later viewed and the only run that counts.
+        for row in s.query(store_mod.ImpressionRow).filter_by(digest_id=digest_id).all():
+            row.viewed = row.run_id in {old_run, new_run}
+
+    weak_digest_id = "2026-06-05"
+    store_mod.write_digest(weak_digest_id, [("R1", old_item)])
+    store_mod.mark_sent(weak_digest_id)
+    store_mod.write_impressions(
+        weak_digest_id,
+        [("research", old_item, 0, 0.9, True, "weak facet", 0.4, 0.8)],
+    )
+    store_mod.mark_impressions_viewed(weak_digest_id)
+
+    seen = store_mod.recent_viewed_facet_dates(
+        before_digest_id="2026-06-07", min_primary_facet_score=0.65
+    )
+    assert set(seen) == {"new facet"}
+    assert seen["new facet"].tzinfo is not None
+
+
+def test_write_impressions_keeps_legacy_seven_tuple_contract(monkeypatch, tmp_path):
+    """The old (..., primary_facet, topic_score) tuple remains unambiguous."""
+    store_mod = _reset_store(tmp_path, monkeypatch)
+    item_id = _add_item(store_mod, "legacy-impression")
+    store_mod.write_impressions(
+        "2026-06-08",
+        [("research", item_id, 0, 0.9, True, "dna nanotechnology", 0.81)],
+    )
+    with store_mod.session_scope() as s:
+        row = s.query(store_mod.ImpressionRow).one()
+        assert row.primary_facet_score is None
+        assert row.topic_score == 0.81
 
 
 def test_review_filters_use_latest_legacy_vote_rows(monkeypatch, tmp_path):

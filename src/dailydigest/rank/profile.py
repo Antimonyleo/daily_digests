@@ -269,40 +269,100 @@ def build_profile_vector(profile: Profile) -> np.ndarray:
 # Facet attribution (P1) + topic-priority axis (P3)
 # --------------------------------------------------------------------------- #
 
-# Cache the core-facet matrix keyed by the keyword tuple so we don't re-embed on
-# every scoring call. Bounded to the most recent profile's keywords.
-_CORE_FACET_CACHE: dict[tuple[str, ...], tuple[np.ndarray, list[str]]] = {}
+# Cache the facet matrix keyed by the canonical descriptions (or historical
+# keywords) so we don't re-embed on every scoring call.
+_CORE_FACET_CACHE: dict[
+    tuple[tuple[str, tuple[str, ...]], ...], tuple[np.ndarray, list[str]]
+] = {}
+
+
+def _clean_facet_texts(texts: list[object]) -> list[str]:
+    """Return distinct, non-empty anchor texts while retaining input order."""
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in texts:
+        text = str(value).strip() if value is not None else ""
+        key = text.casefold()
+        if text and key not in seen:
+            result.append(text)
+            seen.add(key)
+    return result
+
+
+def _facet_definitions(profile: Profile) -> list[tuple[str, list[str]]]:
+    """Return attribution labels and semantic texts for each canonical facet.
+
+    Canonical facets are opt-in.  Keeping the legacy keyword fallback matters
+    for existing profiles and means retrieval configuration is untouched.
+    """
+    canonical = getattr(profile, "canonical_facets", None) or {}
+    definitions: list[tuple[str, list[str]]] = []
+    if canonical:
+        for raw_label, spec in canonical.items():
+            label = str(raw_label).strip()
+            if not label:
+                continue
+            anchors = list(getattr(spec, "anchors", None) or [])
+            aliases = list(getattr(spec, "aliases", None) or [])
+            # Prefer the specific descriptions over the concise user-visible
+            # name: a name such as "RNA nanotechnology" is often too broad to
+            # be an attribution vector by itself. Fall back to the name only
+            # for a minimally configured facet.
+            texts = _clean_facet_texts([*anchors, *aliases]) or [label]
+            if texts:
+                definitions.append((label, texts))
+        return definitions
+
+    for keyword in profile.keywords or []:
+        text = str(keyword).strip() if keyword else ""
+        if text:
+            definitions.append((text, [text]))
+    return definitions
 
 
 def build_core_facet_matrix(profile: Profile) -> tuple[np.ndarray, list[str]]:
-    """Embed each core interest (``profile.keywords``) as a unit query row.
+    """Embed each canonical core interest as a unit query row.
 
     Returns ``(matrix [K, D], labels)`` where each row is L2-normalized and
-    ``labels[i]`` is the originating keyword string. Cached by the keyword tuple
-    so repeated calls (e.g. per-run scoring) don't re-embed.
+    ``labels[i]`` is its user-visible name. When ``canonical_facets`` is
+    absent, retains the former one-row-per-keyword behavior.
     """
-    labels = [str(k).strip() for k in (profile.keywords or []) if k and str(k).strip()]
-    if not labels:
+    definitions = _facet_definitions(profile)
+    if not definitions:
         return np.zeros((0, 0), dtype=np.float32), []
-    key = tuple(labels)
+    key = tuple((label, tuple(texts)) for label, texts in definitions)
     cached = _CORE_FACET_CACHE.get(key)
     if cached is not None:
         return cached
-    vecs = embed_texts(labels, is_query=True)  # already L2-normalized [K, D]
-    norms = np.linalg.norm(vecs, axis=1, keepdims=True)
-    matrix = (vecs / np.clip(norms, 1e-9, None)).astype(np.float32, copy=False)
+    flat_texts = [text for _label, texts in definitions for text in texts]
+    vecs = embed_texts(flat_texts, is_query=True)
+    rows: list[np.ndarray] = []
+    offset = 0
+    for _label, texts in definitions:
+        facet_vecs = vecs[offset : offset + len(texts)]
+        offset += len(texts)
+        unit = facet_vecs / np.clip(
+            np.linalg.norm(facet_vecs, axis=1, keepdims=True), 1e-9, None
+        )
+        centroid = unit.mean(axis=0)
+        rows.append(centroid / max(float(np.linalg.norm(centroid)), 1e-9))
+    matrix = np.asarray(rows, dtype=np.float32)
+    labels = [label for label, _texts in definitions]
     result = (matrix, labels)
     _CORE_FACET_CACHE[key] = result
     return result
 
 
-def _normalized_priorities(profile: Profile) -> dict[str, float]:
-    """Normalize ``profile.topic_priorities`` so the top raw value maps to 1.0.
+def _normalized_priorities(profile: Profile, labels: list[str] | None = None) -> dict[str, float]:
+    """Normalize relative priorities so the top configured value maps to 1.0.
 
     Empty/degenerate input yields an empty dict (callers then fall back to the
-    moderate default for every keyword, making the bonus a harmless constant).
+    moderate default for every facet, making the bonus a harmless constant).
+    Canonical facet priorities take precedence; legacy ``topic_priorities`` are
+    used as a fallback by canonical name or alias.
     """
-    raw: dict[str, float] = {}
+    legacy: dict[str, float] = {}
+    legacy_lookup: dict[str, float] = {}
     for key, value in (getattr(profile, "topic_priorities", None) or {}).items():
         text = str(key).strip()
         if not text:
@@ -312,7 +372,32 @@ def _normalized_priorities(profile: Profile) -> dict[str, float]:
         except (TypeError, ValueError):
             logger.warning("Ignoring non-numeric topic_priority for %r", text)
             continue
-        raw[text] = fval
+        legacy[text] = fval
+        legacy_lookup[text.casefold()] = fval
+
+    canonical = getattr(profile, "canonical_facets", None) or {}
+    raw: dict[str, float] = {}
+    if canonical:
+        allowed = {label.casefold() for label in labels or []}
+        for raw_label, spec in canonical.items():
+            label = str(raw_label).strip()
+            if not label or (allowed and label.casefold() not in allowed):
+                continue
+            explicit = getattr(spec, "priority", None)
+            if explicit is not None:
+                raw[label] = float(explicit)
+                continue
+            aliases = list(getattr(spec, "aliases", None) or [])
+            candidates = [label, *aliases]
+            matched = [
+                legacy_lookup[text.casefold()]
+                for text in candidates
+                if text.casefold() in legacy_lookup
+            ]
+            if matched:
+                raw[label] = max(matched)
+    else:
+        raw = legacy
     if not raw:
         return {}
     max_raw = max(raw.values())
@@ -336,8 +421,16 @@ class ItemAttribution:
 
     primary: str = ""
     secondaries: list[str] = field(default_factory=list)
+    # Raw cosine against the winning canonical-facet vector. This is distinct
+    # from the overall profile topic score used by the relevance gate.
+    primary_score: float = 0.0
     priority: float = 0.0
     priority_bonus: float = 0.0
+
+    @property
+    def primary_facet_score(self) -> float:
+        """Explicit alias for callers persisting this as a feature payload."""
+        return self.primary_score
 
 
 def build_attribution_context(profile: Profile) -> AttributionContext | None:
@@ -348,7 +441,7 @@ def build_attribution_context(profile: Profile) -> AttributionContext | None:
     return AttributionContext(
         matrix=matrix,
         labels=labels,
-        priorities=_normalized_priorities(profile),
+        priorities=_normalized_priorities(profile, labels),
     )
 
 
@@ -395,6 +488,7 @@ def attribute_items(
             ItemAttribution(
                 primary=primary,
                 secondaries=secondaries,
+                primary_score=primary_sim,
                 priority=priority,
                 priority_bonus=priority_bonus,
             )

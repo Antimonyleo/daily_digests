@@ -27,6 +27,19 @@ keywords:
   - AI in biology
   - machine learning for drug discovery
 
+# Optional: use a small set of named, non-overlapping interests for attribution,
+# priority, and coverage reporting. Retrieval still uses `keywords` above. Keep
+# this list focused (roughly 6–10); priorities are relative, not quotas.
+# canonical_facets:
+#   RNA nanotechnology:
+#     anchors: [RNA origami, RNA nanostructure design]
+#     aliases: [RNA nanotechnology, RNA self-assembly]
+#     priority: 17
+#   Protein engineering and design:
+#     anchors: [protein engineering, de novo protein design]
+#     aliases: [protein design]
+#     priority: 15
+
 # Authors / labs / institutions to follow. Items whose byline matches any entry
 # are boosted in ranking and exposed as a learnable feature. Prefer full names;
 # a bare surname matches broadly.
