@@ -117,7 +117,7 @@ def test_promotional_negative_does_generalize_by_source(tmp_path, monkeypatch):
 def test_duplicate_currently_generalizes_by_publisher_debatable(tmp_path, monkeypatch):
     """DOCUMENTS current behavior: `duplicate` generalizes by publisher/source.
 
-    NOTE (Codex flag, debatable): `duplicate` is arguably ITEM-SPECIFIC — one
+    NOTE (debatable): `duplicate` is arguably ITEM-SPECIFIC — one
     paper appearing twice says nothing about the *next* paper from the same
     publisher, so it is questionable that it lives in votes.py's `generalizable`
     set {low_impact, promotional, access_friction, duplicate}. This test pins the

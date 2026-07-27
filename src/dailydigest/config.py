@@ -20,11 +20,8 @@ class Settings(BaseSettings):
     llm_base_url: str = "https://api.openai.com/v1"
     llm_api_key: str = ""
     llm_model: str = "gpt-4o-mini"
-    # Backend selector: "api" | "claude_code" | "codex" | "extractive"
+    # Backend selector: "api" | "extractive"
     llm_backend: str = "extractive"
-    # Optional model pin for CLI backends (claude_code, codex). Empty = inherit
-    # the CLI's default. e.g. "claude-haiku-4-5-20251001" or "gpt-5-mini".
-    llm_cli_model: str = ""
 
     resend_api_key: str = ""
     digest_from: str = "onboarding@resend.dev"

@@ -30,7 +30,6 @@ import os
 import queue as std_queue
 import re
 import secrets
-import shutil
 import threading
 import uuid
 from collections import Counter
@@ -476,13 +475,6 @@ async def _read_urlencoded_form(request: Request) -> dict[str, str]:
     return {k: values[-1] if values else "" for k, values in parsed.items()}
 
 
-def _detect_clis() -> dict[str, bool]:
-    return {
-        "claude": shutil.which("claude") is not None,
-        "codex": shutil.which("codex") is not None,
-    }
-
-
 def _parse_csv(value: str | None) -> list[str]:
     if not value:
         return []
@@ -526,17 +518,18 @@ def _parse_ranked_topics(value: str | None) -> tuple[list[tuple[str, float]], li
 
 def _load_existing_form_defaults() -> dict[str, str]:
     """Pre-populate the form from any existing profile.yaml + .env values."""
+    backend = (SETTINGS.llm_backend or "extractive").lower()
+    if backend not in {"api", "extractive"}:
+        backend = "extractive"
     out: dict[str, str] = {
         "name": "",
         "bio": "",
         "topics": "",
         "downweight": "",
-        "llm_backend": SETTINGS.llm_backend or "extractive",
+        "llm_backend": backend,
         "llm_base_url": SETTINGS.llm_base_url,
         "llm_api_key": "***" if SETTINGS.llm_api_key else "",
         "llm_model": SETTINGS.llm_model,
-        "claude_cli_model": "",
-        "codex_cli_model": "",
         "top_research": str(SETTINGS.top_research),
         "top_industry": str(SETTINGS.top_industry),
         "top_regulatory": str(SETTINGS.top_regulatory),
@@ -565,14 +558,6 @@ def _load_existing_form_defaults() -> dict[str, str]:
             out["downweight"] = ", ".join(data.get("downweight") or [])
         except Exception as e:  # noqa: BLE001
             logger.warning("could not parse existing profile.yaml: %s", e)
-    # LLM_CLI_MODEL is read by the config agent; we just preserve whatever the
-    # current .env has so the user doesn't lose their pin if they revisit /setup.
-    env = _read_env_file(_ENV_PATH)
-    cli_model = env.get("LLM_CLI_MODEL", "")
-    if out["llm_backend"] == "claude_code":
-        out["claude_cli_model"] = cli_model
-    elif out["llm_backend"] == "codex":
-        out["codex_cli_model"] = cli_model
     return out
 
 
@@ -647,7 +632,7 @@ def _env_value_has_control_chars(value: str | None) -> bool:
 def _validate_setup(form: dict[str, str]) -> list[str]:
     errors: list[str] = []
     backend = form.get("llm_backend", "extractive")
-    if backend not in ("extractive", "claude_code", "codex", "api"):
+    if backend not in ("extractive", "api"):
         errors.append(f"Unknown backend: {backend}")
     _topics, topic_errors = _parse_ranked_topics(form.get("topics"))
     errors.extend(topic_errors)
@@ -656,17 +641,10 @@ def _validate_setup(form: dict[str, str]) -> list[str]:
             errors.append("API backend requires a base URL.")
         if not (form.get("llm_model") or "").strip():
             errors.append("API backend requires a model name.")
-    clis = _detect_clis()
-    if backend == "claude_code" and not clis["claude"]:
-        errors.append("`claude` CLI not found in PATH. Install Claude Code first.")
-    if backend == "codex" and not clis["codex"]:
-        errors.append("`codex` CLI not found in PATH. Install Codex first.")
     for key, label in (
         ("llm_base_url", "API base URL"),
         ("llm_api_key", "API key"),
         ("llm_model", "API model"),
-        ("claude_cli_model", "Claude model"),
-        ("codex_cli_model", "Codex model"),
     ):
         if _env_value_has_control_chars(form.get(key)):
             errors.append(f"{label} cannot contain line breaks.")
@@ -944,7 +922,6 @@ def setup_get(request: Request) -> Response:
         {
             "form": form,
             "errors": [],
-            "cli_status": _detect_clis(),
             "csrf_token": _CSRF_TOKEN,
         },
     )
@@ -965,8 +942,6 @@ async def setup_post(request: Request) -> Response:
         "llm_base_url": str(raw.get("llm_base_url", "")),
         "llm_api_key": str(raw.get("llm_api_key", "")),
         "llm_model": str(raw.get("llm_model", "")),
-        "claude_cli_model": str(raw.get("claude_cli_model", "")),
-        "codex_cli_model": str(raw.get("codex_cli_model", "")),
         "top_research": str(raw.get("top_research", SETTINGS.top_research)),
         "top_industry": str(raw.get("top_industry", SETTINGS.top_industry)),
         "top_regulatory": str(raw.get("top_regulatory", SETTINGS.top_regulatory)),
@@ -981,7 +956,6 @@ async def setup_post(request: Request) -> Response:
             {
                 "form": form,
                 "errors": errors,
-                "cli_status": _detect_clis(),
                 "csrf_token": _CSRF_TOKEN,
             },
             status_code=400,
@@ -1024,22 +998,11 @@ async def setup_post(request: Request) -> Response:
     _get_profile_path().write_text(yaml.safe_dump(profile, sort_keys=False))
 
     # Write/update .env.
-    backend = form["llm_backend"]
-    cli_model = ""
-    if backend == "claude_code":
-        cli_model = form["claude_cli_model"].strip()
-    elif backend == "codex":
-        cli_model = form["codex_cli_model"].strip()
-
     env_updates: dict[str, str] = {
-        "LLM_BACKEND": backend,
+        "LLM_BACKEND": form["llm_backend"],
         "LLM_BASE_URL": form["llm_base_url"].strip()
         or (SETTINGS.llm_base_url or "https://api.openai.com/v1"),
         "LLM_MODEL": form["llm_model"].strip() or "gpt-4o-mini",
-        # NOTE: LLM_CLI_MODEL is the new env var owned by the config agent;
-        # we write it now so when that agent lands their config field, the
-        # value is already on disk.
-        "LLM_CLI_MODEL": cli_model,
         "TOP_RESEARCH": _int_form(form, "top_research", SETTINGS.top_research),
         "TOP_INDUSTRY": _int_form(form, "top_industry", SETTINGS.top_industry),
         "TOP_REGULATORY": _int_form(form, "top_regulatory", SETTINGS.top_regulatory),

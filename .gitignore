@@ -5,6 +5,7 @@ __pycache__/
 .env
 data/
 config/profile.yaml
+# Local AI-tool configuration is private and never part of a release.
 .claude/
 .codex/
 *.db
@@ -19,6 +20,6 @@ build/
 .coverage
 htmlcov/
 
-# Review / tooling artifacts (not part of the project)
+# Local review artifacts (not part of the project)
 .full-review/
 .playwright-mcp/

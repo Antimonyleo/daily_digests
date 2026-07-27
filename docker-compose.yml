@@ -19,12 +19,12 @@ services:
       # Opt into the container's non-loopback (0.0.0.0) bind. Safe only because
       # the port above is mapped to 127.0.0.1 on the host; the app has no auth.
       DD_ALLOW_REMOTE_BIND: "1"
-      # Extractive summaries need no API key. To use a hosted LLM, set these:
-      #   LLM_BACKEND: api
-      #   LLM_BASE_URL: https://...
-      #   LLM_API_KEY: ...
-      #   LLM_MODEL: ...
-      LLM_BACKEND: extractive
+      # Compose reads these optional values from the host's .env file. Extractive
+      # summaries remain the zero-configuration default.
+      LLM_BACKEND: "${LLM_BACKEND:-extractive}"
+      LLM_BASE_URL: "${LLM_BASE_URL:-https://api.openai.com/v1}"
+      LLM_API_KEY: "${LLM_API_KEY:-}"
+      LLM_MODEL: "${LLM_MODEL:-gpt-4o-mini}"
       # Local timezone so the 8am gate fires at your morning (e.g. America/New_York).
-      USER_TZ: UTC
+      USER_TZ: "${USER_TZ:-UTC}"
     restart: unless-stopped

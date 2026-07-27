@@ -4,10 +4,6 @@ Backends, selected by ``SETTINGS.llm_backend``:
 
 * ``api``: OpenAI-compatible HTTP API. Requires ``LLM_API_KEY``;
   silently falls through to ``extractive`` if no key is configured.
-* ``claude_code``: shells out to the local ``claude`` CLI in non-interactive
-  print mode. Uses your Anthropic subscription quota instead of API credits.
-* ``codex``: shells out to the local ``codex`` CLI (``codex exec``). Uses your
-  OpenAI subscription / login.
 * ``extractive`` (default): no LLM. Returns the first 1-2 sentences of each
   abstract. Also the per-batch fallback whenever any other backend fails.
 """
@@ -16,10 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import re
-import signal
-import subprocess
 
 import httpx
 
@@ -67,8 +60,6 @@ def _matched_interests(row: ItemRow) -> list[str]:
 _SENT_SPLIT = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9])")
 _BATCH_SIZE = 6
 _TIMEOUT = 60.0
-_CLI_TIMEOUT = 120  # seconds per batch for subprocess backends
-_CLI_TOTAL_BUDGET = 300  # seconds total across all batches before extractive-only
 _TOKEN_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]+")
 _INFORMATIVE_TERMS = (
     "method",
@@ -96,10 +87,6 @@ _INFORMATIVE_TERMS = (
     "reduced",
     "improved",
 )
-
-# One-shot guard so a missing CLI does not spam ERROR logs once per batch.
-_cli_missing_warned: set[str] = set()
-
 
 def _tokens(text: str) -> set[str]:
     return {tok.lower() for tok in _TOKEN_RE.findall(text) if len(tok) > 2}
@@ -225,48 +212,6 @@ def _build_prompt(batch: list[ItemRow]) -> tuple[str, str]:
     return sys, user
 
 
-def _build_cli_prompt(batch: list[ItemRow]) -> str:
-    """Single-string prompt for stdin-fed CLI backends.
-
-    The system instructions are inlined since some CLIs do not expose a stable
-    system-prompt flag for stdin mode. The JSON-only requirement is repeated
-    twice to make refusals less likely.
-    """
-    sys, user = _build_prompt(batch)
-    return (
-        f"{sys}\n\n"
-        f"{user}\n\n"
-        "Respond ONLY with a JSON object mapping item ids (as string keys) "
-        "to summaries with Key finding, Why read, and Caveat fields. "
-        "No prose, no markdown fences, no explanation."
-    )
-
-
-# ANSI color/cursor escapes that CLIs sometimes emit even when piped.
-_ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
-# Best-effort balanced-brace JSON object extractor. Greedy on outermost { ... }.
-_JSON_OBJ_RE = re.compile(r"\{.*\}", re.DOTALL)
-# Markdown code fences such as ```json\n{...}\n```
-_FENCE_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL | re.IGNORECASE)
-
-
-def _extract_json_object(text: str) -> str:
-    """Pull the first JSON object out of free-form CLI output.
-
-    Strips ANSI escapes, prefers fenced ```json``` blocks, otherwise greedily
-    matches the outermost ``{...}``. Raises ``json.JSONDecodeError`` indirectly
-    by returning a string the caller will pass to ``json.loads``.
-    """
-    cleaned = _ANSI_RE.sub("", text)
-    fence = _FENCE_RE.search(cleaned)
-    if fence:
-        return fence.group(1)
-    match = _JSON_OBJ_RE.search(cleaned)
-    if match:
-        return match.group(0)
-    return cleaned.strip()
-
-
 def _parse_id_summary_map(raw: str) -> dict[int, str]:
     parsed = json.loads(raw)
     if not isinstance(parsed, dict):
@@ -317,138 +262,6 @@ def _call_llm(batch: list[ItemRow]) -> dict[int, str]:
     return _filter_to_batch_ids(_parse_id_summary_map(content), batch)
 
 
-def _call_cli(batch: list[ItemRow], cli_cmd: list[str]) -> dict[int, str]:
-    """Run a CLI subprocess with the prompt fed via stdin, parse JSON stdout.
-
-    The CLI (e.g. ``claude``, ``codex``) is a Node process that spawns its own
-    child processes (MCP servers, tool workers). ``subprocess.run(timeout=...)``
-    only kills the direct child on timeout; the surviving grandchildren keep the
-    stdout pipe open, so ``run``'s cleanup ``communicate()`` then blocks FOREVER
-    on that pipe — the digest hangs indefinitely at summarization. To prevent
-    that, start the CLI in its own process group and, on timeout, SIGKILL the
-    whole group so every descendant dies and the pipe closes. Raising
-    ``TimeoutExpired`` lets the caller fall back to extractive for the batch.
-    """
-    prompt = _build_cli_prompt(batch)
-    # start_new_session=True -> the child is a process-group leader, so we can
-    # kill the entire tree (child + grandchildren) in one signal.
-    proc = subprocess.Popen(  # noqa: S603 - cli_cmd is hard-coded, no shell
-        cli_cmd,
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        start_new_session=True,
-    )
-    try:
-        stdout, stderr = proc.communicate(prompt, timeout=_CLI_TIMEOUT)
-    except subprocess.TimeoutExpired:
-        _kill_process_group(proc)
-        raise
-    except BaseException:
-        # Ctrl-C / any error: never leave an orphaned CLI + its children behind.
-        _kill_process_group(proc)
-        raise
-    if proc.returncode != 0:
-        raise subprocess.CalledProcessError(
-            proc.returncode, cli_cmd, output=stdout, stderr=stderr
-        )
-    raw = _extract_json_object(stdout or "")
-    return _filter_to_batch_ids(_parse_id_summary_map(raw), batch)
-
-
-def _kill_process_group(proc: subprocess.Popen) -> None:
-    """SIGKILL the child's whole process group, then reap it (best-effort).
-
-    Killing the group (not just ``proc``) closes the stdout pipe that
-    grandchildren would otherwise keep open — the cause of the indefinite hang.
-    """
-    try:
-        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-    except (ProcessLookupError, PermissionError):
-        try:
-            proc.kill()
-        except ProcessLookupError:
-            pass
-    try:
-        proc.wait(timeout=5)
-    except (subprocess.TimeoutExpired, Exception):  # noqa: BLE001
-        pass
-    for stream in (proc.stdin, proc.stdout, proc.stderr):
-        try:
-            if stream is not None:
-                stream.close()
-        except Exception:  # noqa: BLE001
-            pass
-
-
-def _summarize_via_cli(
-    items: list[ItemRow], cli_cmd: list[str]
-) -> dict[int, str]:
-    """Generic subprocess summarizer.
-
-    On per-batch failure (missing CLI, timeout, non-zero exit, malformed JSON)
-    falls back to extractive for that batch only — never aborts the digest.
-    """
-    out: dict[int, str] = {}
-    cli_name = cli_cmd[0]
-    import time as _time
-    _start = _time.monotonic()
-    _budget_hit = False
-    for i in range(0, len(items), _BATCH_SIZE):
-        batch = items[i : i + _BATCH_SIZE]
-        # Overall wall-clock guard: if summarization has already spent the total
-        # budget (e.g. the CLI is timing out on every batch), stop calling it and
-        # extractively summarize the remainder so a brew is never dominated by a
-        # misbehaving summarizer.
-        if _budget_hit or _time.monotonic() - _start > _CLI_TOTAL_BUDGET:
-            if not _budget_hit:
-                logger.warning(
-                    "%s exceeded total summarize budget (%ds); using extractive "
-                    "for remaining items",
-                    cli_name, _CLI_TOTAL_BUDGET,
-                )
-                _budget_hit = True
-            for row in batch:
-                if row.id is not None:
-                    out.setdefault(int(row.id), _extractive(row))
-            continue
-        try:
-            out.update(_call_cli(batch, cli_cmd))
-        except FileNotFoundError:
-            if cli_name not in _cli_missing_warned:
-                logger.error(
-                    "CLI %r not installed; falling back to extractive for "
-                    "all batches in this run",
-                    cli_name,
-                )
-                _cli_missing_warned.add(cli_name)
-            for row in batch:
-                if row.id is not None:
-                    out.setdefault(int(row.id), _extractive(row))
-        except subprocess.TimeoutExpired:
-            logger.warning(
-                "%s timed out after %ds for batch %d; falling back",
-                cli_name, _CLI_TIMEOUT, i,
-            )
-            for row in batch:
-                if row.id is not None:
-                    out.setdefault(int(row.id), _extractive(row))
-        except (subprocess.CalledProcessError, json.JSONDecodeError, ValueError) as e:
-            logger.warning(
-                "%s failed for batch %d: %s; falling back to extractive",
-                cli_name, i, e,
-            )
-            for row in batch:
-                if row.id is not None:
-                    out.setdefault(int(row.id), _extractive(row))
-
-    for row in items:
-        if row.id is not None and not out.get(int(row.id)):  # fill missing or empty-string summaries
-            out[int(row.id)] = _extractive(row)
-    return out
-
-
 def _summarize_via_api(items: list[ItemRow]) -> dict[int, str]:
     out: dict[int, str] = {}
     for i in range(0, len(items), _BATCH_SIZE):
@@ -493,57 +306,11 @@ def summarize_items(items: list[ItemRow], profile: object | None = None) -> dict
 
     if backend == "extractive":
         return _summarize_extractive(items)
-    if backend == "claude_code":
-        # --strict-mcp-config + empty --mcp-config: start the CLI with NO MCP
-        # servers. The user's global ~/.claude config can register MCP servers
-        # (playwright, codex, …) that the CLI boots on startup; from a headless
-        # server brew those spawn node children, take a long time, and — via the
-        # grandchild-pipe hang — could stall summarization. Summarization needs no
-        # tools, so loading none makes it fast and reliable.
-        cmd: list[str] = [
-            "claude",
-            "--print",
-            "--strict-mcp-config",
-            "--mcp-config",
-            '{"mcpServers":{}}',
-        ]
-        if s.llm_cli_model:
-            cmd += ["--model", s.llm_cli_model]
-        return _summarize_via_cli(items, cmd)
-    if backend == "codex":
-        # --color never: keep stdout free of ANSI escapes.
-        # --skip-git-repo-check: work when called outside a git repo.
-        # reasoning_effort=low: summarization is simple; high effort burns quota needlessly.
-        cmd = [
-            "codex", "exec",
-            "--color", "never",
-            "--skip-git-repo-check",
-            "-c", "reasoning_effort=low",
-        ]
-        if s.llm_cli_model:
-            cmd += ["--model", s.llm_cli_model]
-        return _summarize_via_cli(items, cmd)
-
-    # default: OpenAI-compatible HTTP API; no key -> extractive
-    if not s.llm_api_key:
-        return _summarize_extractive(items)
-    return _summarize_via_api(items)
-
-
-def _cli_command(s) -> list[str] | None:
-    backend = (s.llm_backend or "extractive").lower()
-    if backend == "claude_code":
-        cmd = ["claude", "--print"]
-        if s.llm_cli_model:
-            cmd += ["--model", s.llm_cli_model]
-        return cmd
-    if backend == "codex":
-        cmd = ["codex", "exec", "--color", "never", "--skip-git-repo-check",
-               "-c", "reasoning_effort=low"]
-        if s.llm_cli_model:
-            cmd += ["--model", s.llm_cli_model]
-        return cmd
-    return None
+    if backend == "api" and s.llm_api_key:
+        return _summarize_via_api(items)
+    if backend not in {"api", "extractive"}:
+        logger.warning("Unknown LLM_BACKEND=%r; using extractive summaries", backend)
+    return _summarize_extractive(items)
 
 
 def _llm_text(system: str, user: str) -> str:
@@ -552,15 +319,6 @@ def _llm_text(system: str, user: str) -> str:
 
     s = get_settings()
     backend = (s.llm_backend or "extractive").lower()
-    cli_cmd = _cli_command(s)
-    if cli_cmd is not None:
-        completed = subprocess.run(  # noqa: S603 - cli_cmd hard-coded, no shell
-            cli_cmd, input=f"{system}\n\n{user}", text=True,
-            capture_output=True, timeout=_CLI_TIMEOUT, check=False,
-        )
-        if completed.returncode != 0:
-            raise subprocess.CalledProcessError(completed.returncode, cli_cmd, completed.stdout, completed.stderr)
-        return (completed.stdout or "").strip()
     if backend == "api" and s.llm_api_key:
         body = {
             "model": s.llm_model,

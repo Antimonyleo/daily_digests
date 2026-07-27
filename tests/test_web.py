@@ -88,8 +88,6 @@ def test_setup_post_accepts_urlencoded_form_without_multipart(tmp_path, monkeypa
                     "llm_base_url": "https://api.openai.com/v1",
                     "llm_api_key": "",
                     "llm_model": "gpt-4o-mini",
-                    "claude_cli_model": "",
-                    "codex_cli_model": "",
                 },
             )
         )
@@ -122,6 +120,18 @@ def test_setup_defaults_load_canonical_weights_and_handle_missing_priority(
     form = web._load_existing_form_defaults()
 
     assert form["topics"] == "protein design | 18\nRNA delivery | 1"
+
+
+def test_setup_defaults_replace_removed_backend_with_extractive(monkeypatch):
+    from dailydigest import web
+
+    monkeypatch.setattr(
+        web,
+        "SETTINGS",
+        web.SETTINGS.model_copy(update={"llm_backend": "legacy_cli"}),
+    )
+
+    assert web._load_existing_form_defaults()["llm_backend"] == "extractive"
 
 
 def test_setup_post_requires_one_to_ten_weighted_topics(tmp_path, monkeypatch):

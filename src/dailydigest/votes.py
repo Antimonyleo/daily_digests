@@ -417,7 +417,7 @@ def _update_rocchio(item_id: int | None = None, vote_value: int | None = None, g
 
 
 # Minimum signed (+1/-1) votes before the learned LR ranker replaces the cosine
-# baseline. 30 matches the documented design (CLAUDE.md, README) and is the
+# baseline. 30 matches the documented design and is the
 # defensible floor for an 11-feature model — below it the LR over-parameterizes.
 # Single source of truth: reference this constant in docs/code, do not hardcode.
 MIN_VOTES_FOR_LR = 30
