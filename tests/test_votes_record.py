@@ -20,6 +20,18 @@ def _reset_store_for_tmp_db(monkeypatch, tmp_path):
     return store_mod
 
 
+def _set_test_profile(monkeypatch, tmp_path) -> None:
+    """Give tests that build profile-relative vote features an isolated reader."""
+    profile_path = tmp_path / "profile.yaml"
+    profile_path.write_text(
+        "bio: Researcher testing personalized ranking.\n"
+        "keywords:\n"
+        "  - RNA nanotechnology\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("PROFILE_PATH", str(profile_path))
+
+
 def _insert_item(store_mod) -> int:
     store_mod.init_db()
     with store_mod.session_scope() as s:
@@ -555,6 +567,7 @@ def test_legacy_duplicate_vote_rows_use_latest_vote_for_counts_and_training(tmp_
     conn.close()
 
     monkeypatch.setenv("DB_PATH", str(db_path))
+    _set_test_profile(monkeypatch, tmp_path)
     from dailydigest import config as config_mod
     from dailydigest import store as store_mod
     from dailydigest import votes as votes_mod
@@ -631,6 +644,7 @@ def test_legacy_duplicate_latest_neutral_is_not_signed_for_training(tmp_path, mo
     conn.close()
 
     monkeypatch.setenv("DB_PATH", str(db_path))
+    _set_test_profile(monkeypatch, tmp_path)
     from dailydigest import config as config_mod
     from dailydigest import store as store_mod
     from dailydigest import votes as votes_mod
@@ -670,6 +684,7 @@ def test_vote_dataset_returns_pairwise_differences_when_both_signs_present(
     from dailydigest import votes as votes_mod
 
     monkeypatch.setenv("DB_PATH", str(tmp_path / "test.db"))
+    _set_test_profile(monkeypatch, tmp_path)
     config_mod.reload_settings()
     store_mod.SETTINGS = config_mod.SETTINGS
     store_mod._ENGINE = None
