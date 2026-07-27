@@ -32,6 +32,21 @@ def _set_test_profile(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("PROFILE_PATH", str(profile_path))
 
 
+def _stub_vote_dataset_embeddings(monkeypatch, embed_rows, dimension: int) -> None:
+    """Keep vote-dataset tests offline at the modules imported at call time."""
+    from dailydigest.rank import embedding_cache as cache_mod
+    from dailydigest.rank import profile as profile_mod
+
+    monkeypatch.setattr(cache_mod, "embed_item_rows", embed_rows)
+    profile_row = np.ones((1, dimension), dtype=np.float32)
+    profile_row /= np.linalg.norm(profile_row, axis=1, keepdims=True)
+    monkeypatch.setattr(
+        profile_mod,
+        "build_profile_matrix_with_rocchio",
+        lambda _profile, _vote_count=0: profile_row,
+    )
+
+
 def _insert_item(store_mod) -> int:
     store_mod.init_db()
     with store_mod.session_scope() as s:
@@ -578,10 +593,10 @@ def test_legacy_duplicate_vote_rows_use_latest_vote_for_counts_and_training(tmp_
     store_mod._SessionLocal = None
     store_mod._INITIALIZED = False
     monkeypatch.setattr(votes_mod, "MIN_VOTES_FOR_LR", 1)
-    monkeypatch.setattr(
-        votes_mod,
-        "embed_item_rows",
+    _stub_vote_dataset_embeddings(
+        monkeypatch,
         lambda rows: np.ones((len(rows), 2), dtype=np.float32),
+        dimension=2,
     )
 
     assert votes_mod.get_vote_value(1) == -1
@@ -655,10 +670,10 @@ def test_legacy_duplicate_latest_neutral_is_not_signed_for_training(tmp_path, mo
     store_mod._SessionLocal = None
     store_mod._INITIALIZED = False
     monkeypatch.setattr(votes_mod, "MIN_VOTES_FOR_LR", 1)
-    monkeypatch.setattr(
-        votes_mod,
-        "embed_item_rows",
+    _stub_vote_dataset_embeddings(
+        monkeypatch,
         lambda rows: np.ones((len(rows), 2), dtype=np.float32),
+        dimension=2,
     )
 
     counts = votes_mod.vote_counts()
@@ -694,7 +709,11 @@ def test_vote_dataset_returns_pairwise_differences_when_both_signs_present(
     # Mock embed to return distinct per-item vectors
     n_items = 6
     fake_vecs = np.eye(n_items, 10, dtype=np.float32)
-    monkeypatch.setattr(votes_mod, "embed_item_rows", lambda rows: fake_vecs[:len(rows)])
+    _stub_vote_dataset_embeddings(
+        monkeypatch,
+        lambda rows: fake_vecs[:len(rows)],
+        dimension=fake_vecs.shape[1],
+    )
 
     # Insert items and votes: 3 up, 3 down
     store_mod.init_db()
