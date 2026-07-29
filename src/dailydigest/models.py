@@ -103,11 +103,9 @@ class SourceSpec(BaseModel):
     @field_validator("section")
     @classmethod
     def _validate_section(cls, v: str) -> str:
-        _VALID = {"research", "industry", "ai", "regulatory", "world"}
-        if v not in _VALID:
-            import logging
-            logging.getLogger(__name__).warning(
-                "SourceSpec has unknown section %r; items from this source will be dropped from email", v
+        if v not in _VALID_SECTIONS:
+            raise ValueError(
+                f"unknown section {v!r}; expected one of {sorted(_VALID_SECTIONS)}"
             )
         return v
     # Optional ranking metadata. These are deliberately coarse, stable knobs:

@@ -204,6 +204,11 @@ def ingest_all(
         "ingest_done",
         {"sources": len(specs), "raw_items": len(all_items)},
     )
+    if not all_items:
+        raise RuntimeError(
+            "No items were retrieved from any configured source; brew stopped "
+            "to avoid stale recommendations. Check network/source health and retry."
+        )
     deduped = dedupe_by_url(all_items)
     en_only = filter_english(deduped)
     logger.info(
@@ -221,6 +226,11 @@ def ingest_all(
             "english": len(en_only),
         },
     )
+    if not en_only:
+        raise RuntimeError(
+            "All retrieved items were removed during deduplication/language filtering; "
+            "brew stopped to avoid stale recommendations."
+        )
     return upsert_items(en_only)
 
 
@@ -488,10 +498,6 @@ def _digest_id() -> str:
     except Exception:  # noqa: BLE001 - bad TZ string falls back to UTC
         tz = UTC
     return datetime.now(tz).strftime("%Y-%m-%d")
-
-
-def _row_feature_key(row: ItemRow) -> int:
-    return int(row.id) if isinstance(row.id, int) else id(row)
 
 
 def _selection_reason(row: ItemRow, features: dict[str, Any]) -> str:
@@ -842,7 +848,7 @@ def run_all(
             if _neg_sims is not None:
                 # Capture penalties BEFORE creating the new scored list
                 _penalty_list = []
-                for i, (row, score) in enumerate(scored):
+                for i, _pair in enumerate(scored):
                     if i < len(_neg_sims):
                         raw_sim = float(_neg_sims[i])
                         penalty = (_neg_w * _neg_scale) * max(0.0, raw_sim)

@@ -51,8 +51,19 @@ class BiorxivSource:
                 try:
                     data = _get_json(client, url)
                 except Exception as e:
-                    logger.warning("%s fetch failed: %s: %s", getattr(spec, "name", "BiorxivSource"), type(e).__name__, str(e)[:200])
-                    break
+                    name = getattr(spec, "name", "BiorxivSource")
+                    if out:
+                        logger.warning(
+                            "%s pagination stopped after %d items: %s: %s",
+                            name,
+                            len(out),
+                            type(e).__name__,
+                            str(e)[:200],
+                        )
+                        break
+                    raise RuntimeError(
+                        f"{name} fetch failed: {type(e).__name__}: {str(e)[:200]}"
+                    ) from e
                 if not data:
                     break
                 collection = data.get("collection") or []

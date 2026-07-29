@@ -8,8 +8,6 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import Lock
 
-from threading import Lock
-
 from sqlalchemy import (
     Boolean,
     CheckConstraint,
@@ -22,6 +20,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    and_,
     create_engine,
     delete,
     event,
@@ -402,14 +401,22 @@ def upsert_items(items: Iterable[Item]) -> int:
 
 def recent_items(days: int = 2) -> list[ItemRow]:
     init_db()
-    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(days=days)
+    # Publication APIs occasionally report a next-day issue date because of
+    # timezone differences. Allow that small skew, but reject malformed or
+    # scheduled dates months/years ahead so they do not remain "recent" forever.
+    future_cutoff = now + timedelta(days=1)
     with session_scope() as s:
         rows = (
             s.execute(
                 select(ItemRow)
                 .where(
                     or_(
-                        ItemRow.published_at >= cutoff,
+                        and_(
+                            ItemRow.published_at >= cutoff,
+                            ItemRow.published_at <= future_cutoff,
+                        ),
                         (ItemRow.published_at.is_(None) & (ItemRow.fetched_at >= cutoff)),
                     )
                 )

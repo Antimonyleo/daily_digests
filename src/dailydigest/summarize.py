@@ -15,8 +15,6 @@ import logging
 import re
 
 import httpx
-
-from .config import SETTINGS
 from .rank.source_quality import (
     access_friction_score,
     infer_source_quality,

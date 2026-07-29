@@ -602,7 +602,6 @@ def should_skip_item(row: Any) -> bool:
     if not title:
         return True
     if section == "research":
-        source_lc = _row_source(row).lower()
         text = _row_text(row)
         title_lc = title.lower()
         if title_lc in {

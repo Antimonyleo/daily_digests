@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import json
 import logging
-import math
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -20,11 +19,17 @@ from typing import Iterable
 import numpy as np
 from sqlalchemy import func, select
 
-from .rank.embedding_cache import embed_item_rows
+from .rank import embedding_cache as _embedding_cache
 from .rank.ranker import LRRanker, reset_lr_cache
 from .store import DigestItemRow, DigestRow, ItemRow, VoteRow, init_db, session_scope
 
 logger = logging.getLogger(__name__)
+
+
+def embed_item_rows(rows):
+    """Indirection kept as the test/runtime injection seam for item embeddings."""
+    return _embedding_cache.embed_item_rows(rows)
+
 
 _TOKEN_RE = re.compile(r"^([+-]?)([A-Za-z]+)(\d+)$")
 ALLOWED_REASONS = {
@@ -116,7 +121,6 @@ def _load_vote_exemplars() -> tuple[tuple, tuple]:
     so the model learns strong preferences more sharply. Uses the latest vote per
     item, so changing a vote replaces its exemplar (idempotent).
     """
-    from .rank.embedding_cache import embed_item_rows
     from .store import ItemRow as _ItemRow
 
     init_db()
@@ -203,13 +207,11 @@ def _build_item_features(rows: list, profile_mat: np.ndarray) -> np.ndarray:
     injects collinear, sign-flipped coefficients under a skewed vote history. See
     ``LR_FEATURE_NAMES`` for the full rationale.
     """
-    from .rank.embedding_cache import embed_item_rows
     from .rank.source_quality import (
         novelty_score as _nov,
         promotional_score as _promo,
         access_friction_score as _friction,
     )
-    from datetime import datetime, timezone
 
     try:
         from .config import load_profile
@@ -372,8 +374,6 @@ def _rebuild_rocchio_profile() -> None:
                 except OSError:
                     pass
             return
-
-        from .rank.embedding_cache import embed_item_rows
 
         rows = [row for row, _, _ in canonical]
         vecs = embed_item_rows(rows)

@@ -123,14 +123,18 @@ class RSSSource:
         try:
             content = _http_get_bytes(spec.url)
         except Exception as e:
-            logger.warning("%s fetch failed: %s: %s", getattr(spec, "name", "RSSSource"), type(e).__name__, str(e)[:200])
-            return []
+            name = getattr(spec, "name", "RSSSource")
+            raise RuntimeError(
+                f"{name} RSS fetch failed: {type(e).__name__}: {str(e)[:200]}"
+            ) from e
         if not content:
-            return []
+            raise RuntimeError(f"{spec.name} RSS fetch failed: empty response")
         feed = feedparser.parse(content)
         if feed.bozo and not feed.entries:
-            logger.warning("RSS parse error for %s: %s", getattr(spec, "name", "?"), getattr(feed, "bozo_exception", "error"))
-            return []
+            raise RuntimeError(
+                f"{spec.name} RSS parse failed: "
+                f"{getattr(feed, 'bozo_exception', 'invalid feed')}"
+            )
         if feed.bozo:
             logger.info("%s: bozo flag set (%s); proceeding with %d entries",
                         getattr(spec, "name", "RSSSource"),

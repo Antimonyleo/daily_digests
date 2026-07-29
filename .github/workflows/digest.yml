@@ -40,15 +40,15 @@ jobs:
           key: hf-bge-small-v1
 
       - name: Install dependencies
-        run: uv sync
+        run: uv sync --frozen
 
       - name: Run digest pipeline (dry-run)
         env:
           LLM_BACKEND: extractive
-          PROFILE_PATH: config/profile.yaml
-          # Per-journal quality prior (venue impact). Degrades to a no-op if
-          # OpenAlex is unavailable.
-          CITATION_ENRICHMENT: 'true'
+          PROFILE_PATH: config/profile.example.yaml
+          # Keep the reference run bounded and independent of optional
+          # per-paper OpenAlex citation enrichment.
+          CITATION_ENRICHMENT: 'false'
         run: uv run dd run-all --dry-run
 
       - name: Upload digest-db artifact

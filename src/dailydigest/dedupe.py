@@ -159,7 +159,7 @@ def dedupe_ranking_candidates[T](items: list[T]) -> list[T]:
         for key in keys:
             key_to_index[key] = idx
 
-    return [item for item, d in zip(out, deleted) if not d]
+    return [item for item, d in zip(out, deleted, strict=True) if not d]
 
 
 def _candidate_representative_score(it: Any) -> float:

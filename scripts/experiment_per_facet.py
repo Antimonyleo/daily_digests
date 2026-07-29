@@ -38,7 +38,6 @@ from __future__ import annotations
 
 import math
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -381,7 +380,7 @@ def main() -> int:
     # misleading. Re-run across nearby train fractions and report how often the
     # +GATE_DELTA gate would pass. A robust ADOPT should pass at MOST fractions.
     print("-" * 70)
-    print(f"  robustness sweep (per-facet+aff nDCG@10 - deployed nDCG@10):")
+    print("  robustness sweep (per-facet+aff nDCG@10 - deployed nDCG@10):")
     fracs = (0.60, 0.65, 0.70, 0.75, 0.80, 0.85)
     passes = 0
     considered = 0
@@ -428,14 +427,14 @@ def main() -> int:
               f"(nDCG@10 {_fmt(pf_ndcg)} vs deployed {_fmt(dep_ndcg)}, +{pf_ndcg - dep_ndcg:.3f})")
         print(f"  and the gate holds at ALL {considered} nearby split fractions (robust).")
     elif gate_pass and not robust:
-        print(f"  DECISION: STOP (keep current ranker) — DO NOT trust the pass.")
-        print(f"  The mandated 75/25 split passes the gate "
+        print("  DECISION: STOP (keep current ranker) — DO NOT trust the pass.")
+        print("  The mandated 75/25 split passes the gate "
               f"(per-facet nDCG@10 {_fmt(pf_ndcg)} vs deployed {_fmt(dep_ndcg)}, "
               f"+{pf_ndcg - dep_ndcg:.3f}),")
-        print(f"  BUT the sign FLIPS across split fractions (gate passes only "
+        print("  BUT the sign FLIPS across split fractions (gate passes only "
               f"{passes}/{considered}), so the")
-        print(f"  advantage is a small-sample nDCG artifact, not a durable signal. "
-              f"Also note the")
+        print("  advantage is a small-sample nDCG artifact, not a durable signal. "
+              "Also note the")
         print(f"  per-facet ranker's pairwise acc ({_fmt(pf['perfacet_acc'])}) is WORSE than "
               f"deployed ({_fmt(dep['deployed_acc'])})")
         print(f"  / topic-only ({_fmt(dep['topic_acc'])}) on {dep['n_test_pairs']} pairs — "

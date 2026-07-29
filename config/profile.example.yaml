@@ -10,22 +10,23 @@ bio: |
   affecting the broader biotech industry.
 
 keywords:
-  - CRISPR
-  - gene editing
+  - CRISPR gene editing
   - mRNA therapeutics
   - cell therapy
-  - cancer immunotherapy
-  - protein structure prediction
-  - AlphaFold
+  - protein engineering and structure prediction
   - drug discovery
-  - clinical trials phase 3
-  - FDA approval
-  - biotech IPO
   - synthetic biology
   - single-cell RNA sequencing
   - structural biology
   - AI in biology
   - machine learning for drug discovery
+
+# Broader "keep me informed" topics. These help retrieval/news coverage but are
+# deliberately weaker than the ten core research interests above.
+context_keywords:
+  - clinical trials phase 3
+  - FDA approval
+  - biotech industry
 
 # Optional: use a small set of named, non-overlapping interests for attribution,
 # priority, and coverage reporting. Retrieval still uses `keywords` above. Keep

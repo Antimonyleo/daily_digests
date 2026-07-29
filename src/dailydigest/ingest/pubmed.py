@@ -68,16 +68,18 @@ class PubMedSource:
                 time.sleep(self.SLEEP)
                 xml_text = self._efetch(client, ids)
         except Exception as e:
-            logger.warning("%s fetch failed: %s: %s", getattr(spec, "name", "PubMedSource"), type(e).__name__, str(e)[:200])
-            return out
+            name = getattr(spec, "name", "PubMedSource")
+            raise RuntimeError(
+                f"{name} fetch failed: {type(e).__name__}: {str(e)[:200]}"
+            ) from e
 
         if not xml_text:
             return out
 
         try:
             root = ET_fromstring(xml_text)
-        except Exception:
-            return out
+        except Exception as e:
+            raise RuntimeError(f"{spec.name} returned invalid PubMed XML") from e
 
         for art in root.findall(".//PubmedArticle"):
             try:

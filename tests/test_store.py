@@ -52,6 +52,15 @@ def test_recent_items_uses_published_at_before_fetched_at(monkeypatch, tmp_path)
                     published_at=now,
                     fetched_at=now - timedelta(days=30),
                 ),
+                store_mod.ItemRow(
+                    source="FuturePub",
+                    section="research",
+                    external_id="future-pub",
+                    url="https://example.com/future-pub",
+                    title="Implausibly future publication",
+                    published_at=now + timedelta(days=30),
+                    fetched_at=now,
+                ),
             ]
         )
 
@@ -61,6 +70,7 @@ def test_recent_items_uses_published_at_before_fetched_at(monkeypatch, tmp_path)
     assert "old-pub-new-fetch" not in external_ids
     assert "no-pub-new-fetch" in external_ids
     assert "fresh-pub-old-fetch" in external_ids
+    assert "future-pub" not in external_ids
 
 
 def test_exclude_reviewed_items_removes_saved_feedback(monkeypatch, tmp_path):

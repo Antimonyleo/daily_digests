@@ -121,8 +121,12 @@ class OpenAlexSource:
         else:
             recognized_research_venue = None  # type: ignore[assignment]
 
-        window_start = (datetime.now(timezone.utc).date() - timedelta(days=max(1, days))).isoformat()
-        filter_str = f"from_publication_date:{window_start},type:article"
+        today = datetime.now(timezone.utc).date()
+        window_start = (today - timedelta(days=max(1, days))).isoformat()
+        filter_str = (
+            f"from_publication_date:{window_start},"
+            f"to_publication_date:{today.isoformat()},type:article"
+        )
         if extra_filter:
             filter_str = f"{filter_str},{extra_filter}"
         base_params: dict[str, str] = {
@@ -142,8 +146,19 @@ class OpenAlexSource:
             try:
                 payload = _get_json(self.BASE, params, headers)
             except Exception as e:
-                logger.warning("%s fetch failed: %s: %s", getattr(spec, "name", "OpenAlexSource"), type(e).__name__, str(e)[:200])
-                break
+                name = getattr(spec, "name", "OpenAlexSource")
+                if out:
+                    logger.warning(
+                        "%s pagination stopped after %d items: %s: %s",
+                        name,
+                        len(out),
+                        type(e).__name__,
+                        str(e)[:200],
+                    )
+                    break
+                raise RuntimeError(
+                    f"{name} fetch failed: {type(e).__name__}: {str(e)[:200]}"
+                ) from e
             if not payload:
                 break
 
@@ -295,4 +310,3 @@ class OpenAlexAuthorsSource:
         raw_id = str(results[0].get("id") or "")
         # id is a URL like https://openalex.org/A5023888391 → keep the bare id.
         return raw_id.rstrip("/").rsplit("/", 1)[-1] or None
-

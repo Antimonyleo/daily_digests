@@ -87,7 +87,7 @@ def _get_profile_path() -> Path:
     try:
         candidate.relative_to(_REPO_ROOT)
     except ValueError:
-        raise ValueError(f"PROFILE_PATH escapes repo root: {candidate}")
+        raise ValueError(f"PROFILE_PATH escapes repo root: {candidate}") from None
     return candidate
 
 app = FastAPI(title="DailyDigest")

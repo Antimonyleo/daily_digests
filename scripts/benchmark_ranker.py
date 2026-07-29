@@ -558,7 +558,7 @@ def main() -> int:
     n = len(rows)
     n_pos = sum(1 for v in labels if v > 0)
     n_neg = n - n_pos
-    print(f"  [A] preference-feature probe  (all sections)")
+    print("  [A] preference-feature probe  (all sections)")
     print(f"      signed votes: {n}  (+{n_pos} / -{n_neg})")
 
     if n < 8 or n_pos < 2 or n_neg < 2:
@@ -591,7 +591,7 @@ def main() -> int:
     rn = len(r_rows)
     rn_pos = sum(1 for v in r_labels if v > 0)
     rn_neg = rn - rn_pos
-    print(f"  [B] production-faithful  (pairwise LR + RRF fuse, research items)")
+    print("  [B] production-faithful  (pairwise LR + RRF fuse, research items)")
     print(f"      signed research votes: {rn}  (+{rn_pos} / -{rn_neg})")
 
     if rn < 8 or rn_pos < 2 or rn_neg < 2:

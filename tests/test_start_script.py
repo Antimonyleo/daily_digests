@@ -54,6 +54,6 @@ def test_start_script_runs_uv_sync_then_dd_start_with_no_browser(tmp_path):
 
     assert result.returncode == 0
     assert log.read_text().splitlines() == [
-        "sync",
+        "sync --frozen",
         "run dd start --host 127.0.0.1 --port 9999 --no-browser",
     ]

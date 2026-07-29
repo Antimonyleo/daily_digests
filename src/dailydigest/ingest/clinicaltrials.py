@@ -76,8 +76,19 @@ class ClinicalTrialsSource:
             try:
                 payload = _get_json(self.BASE, params)
             except Exception as e:
-                logger.warning("%s fetch failed: %s: %s", getattr(spec, "name", "ClinicalTrialsSource"), type(e).__name__, str(e)[:200])
-                break
+                name = getattr(spec, "name", "ClinicalTrialsSource")
+                if out:
+                    logger.warning(
+                        "%s pagination stopped after %d items: %s: %s",
+                        name,
+                        len(out),
+                        type(e).__name__,
+                        str(e)[:200],
+                    )
+                    break
+                raise RuntimeError(
+                    f"{name} fetch failed: {type(e).__name__}: {str(e)[:200]}"
+                ) from e
             if not payload:
                 break
 

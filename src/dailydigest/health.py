@@ -19,7 +19,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from .config import get_settings, ensure_data_dir
 

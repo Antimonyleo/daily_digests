@@ -83,8 +83,10 @@ class ArxivSource:
         try:
             body = _http_get_text(self.BASE, params)
         except Exception as e:
-            logger.warning("%s fetch failed: %s: %s", getattr(spec, "name", "ArxivSource"), type(e).__name__, str(e)[:200])
-            return out
+            name = getattr(spec, "name", "ArxivSource")
+            raise RuntimeError(
+                f"{name} fetch failed: {type(e).__name__}: {str(e)[:200]}"
+            ) from e
         if not body:
             return out
 

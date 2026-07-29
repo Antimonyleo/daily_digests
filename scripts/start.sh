@@ -15,7 +15,7 @@ fi
 mkdir -p data
 
 echo "Syncing DailyDigest dependencies..."
-uv sync
+uv sync --frozen
 
 if [[ "$NO_BROWSER" == "1" ]]; then
   exec uv run dd start --host "$HOST" --port "$PORT" --no-browser

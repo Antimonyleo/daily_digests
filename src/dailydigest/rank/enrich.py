@@ -188,7 +188,7 @@ def fetch_openalex(dois: list[str], email: str = "") -> dict[str, dict]:
                 if sid and isinstance(mc, (int, float)) and math.isfinite(mc):
                     impact_by_source[sid] = min(max(float(mc), 0.0), _MAX_VENUE_MEAN_CITEDNESS)
 
-    for doi, entry in out.items():
+    for entry in out.values():
         sid = entry.get("venue_source_id")
         if sid and sid in impact_by_source:
             entry["venue_impact"] = impact_by_source[sid]

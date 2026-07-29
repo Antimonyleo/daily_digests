@@ -119,6 +119,25 @@ class TestLoadSources:
         assert nature.impact_floor == pytest.approx(7.0)
         assert press.promo_risk == pytest.approx(0.8)
 
+    def test_unknown_section_is_rejected(self, tmp_path):
+        p = tmp_path / "sources.yaml"
+        p.write_text(
+            yaml.dump(
+                {
+                    "reserach": [
+                        {
+                            "name": "Typo",
+                            "kind": "rss",
+                            "url": "https://example.com/rss",
+                        }
+                    ]
+                }
+            )
+        )
+
+        with pytest.raises(ValueError, match="section"):
+            load_sources(str(p))
+
 
 # ---------------------------------------------------------------------------
 # load_profile

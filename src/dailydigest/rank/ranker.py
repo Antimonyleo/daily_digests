@@ -785,7 +785,7 @@ def score_items_with_features(
     # for final ranking — see LRRanker.decision_function.
     blended_rank = _fuse_scores(np.array(final, dtype=np.float32), lr_margin).tolist()
     # Update features to record the hybrid blend
-    for i, (row, _) in enumerate(zip(items, blended_rank)):
+    for i, (row, _) in enumerate(zip(items, blended_rank, strict=True)):
         key = _row_feature_key(row)
         if key in features:
             features[key]["confidence_score"] = float(final[i])

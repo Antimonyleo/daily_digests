@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
+import pytest
+
 from dailydigest.models import SourceSpec
 
 
@@ -162,6 +166,24 @@ def test_openalex_url_fallback_uses_https_openalex_url(monkeypatch):
     assert "openalex.org" in items[0].url
 
 
+def test_openalex_bounds_publication_window_at_today(monkeypatch):
+    """OpenAlex must not admit records with erroneous future publication dates."""
+    from dailydigest.ingest.openalex import OpenAlexSource
+
+    captured: dict[str, str] = {}
+
+    def fake_get_json(url, params, headers):
+        captured["filter"] = params["filter"]
+        return {"results": [], "meta": {"next_cursor": None}}
+
+    monkeypatch.setattr("dailydigest.ingest.openalex._get_json", fake_get_json)
+
+    OpenAlexSource().fetch(_spec(name="OpenAlex", kind="openalex", query="RNA"), days=2)
+
+    today = datetime.now(timezone.utc).date().isoformat()
+    assert f"to_publication_date:{today}" in captured["filter"]
+
+
 def test_openalex_skips_work_with_no_url_at_all(monkeypatch):
     from dailydigest.ingest.openalex import OpenAlexSource
 
@@ -183,6 +205,21 @@ def test_openalex_skips_work_with_no_url_at_all(monkeypatch):
 
     items = OpenAlexSource().fetch(_spec(name="OpenAlex", kind="openalex"))
     assert len(items) == 0
+
+
+def test_rss_transport_failure_is_reported_to_pipeline(monkeypatch):
+    """A failed feed is not a healthy zero-result fetch."""
+    from dailydigest.ingest.rss import RSSSource
+
+    def fail(_url):
+        raise OSError("broken runtime")
+
+    monkeypatch.setattr("dailydigest.ingest.rss._http_get_bytes", fail)
+
+    with pytest.raises(RuntimeError, match="RSS fetch failed"):
+        RSSSource().fetch(
+            _spec(name="Broken feed", kind="rss", url="https://example.com/feed")
+        )
 
 
 def test_openalex_venues_tags_items_with_real_journal(monkeypatch):

@@ -62,8 +62,10 @@ class FDASource:
         try:
             payload = _get_json(url, params)
         except Exception as e:
-            logger.warning("%s fetch failed: %s: %s", getattr(spec, "name", "FDASource"), type(e).__name__, str(e)[:200])
-            return out
+            name = getattr(spec, "name", "FDASource")
+            raise RuntimeError(
+                f"{name} fetch failed: {type(e).__name__}: {str(e)[:200]}"
+            ) from e
         if not payload:
             return out
 

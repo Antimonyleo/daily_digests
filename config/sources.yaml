@@ -103,11 +103,13 @@ research:
     profile_driven: true
     # profile keywords are OR'd over title/abstract; `query` is an extra fallback.
     query: clinical trial[pt]
-  # ACS flagship journals: their native RSS is Cloudflare-blocked (403 from
-  # datacenter IPs), so pull them via OpenAlex by venue id instead. Each item is
-  # tagged with its real journal name (strong-tier prestige); the topic gate then
-  # keeps only on-field work. Venue ids resolved from api.openalex.org/sources.
-  - name: ACS journals (via OpenAlex)
+  # ACS native RSS endpoints return publisher-side 403 responses in common
+  # server environments. Pull ACS journals through OpenAlex by venue id instead.
+  # Two disjoint groups keep short catch-up windows below the adapter's per-source
+  # cap. Items retain their real journal names and are still topic-gated later.
+  # OpenAlex may index a paper after the ACS site; the profile-driven OpenAlex and
+  # PubMed searches above provide additional retrieval paths.
+  - name: ACS flagships (via OpenAlex)
     kind: openalex_venues
     polite_email: noreply@example.com
     venue_ids:
@@ -118,6 +120,14 @@ research:
       - S2765035057  # ACS Central Science
       - S4210207119  # JACS Au
       - S164001016   # ACS Applied Materials & Interfaces
+  - name: ACS field flagships (via OpenAlex)
+    kind: openalex_venues
+    polite_email: noreply@example.com
+    venue_ids:
+      - S37391459    # ACS Catalysis
+      - S118914585   # ACS Chemical Biology
+      - S177196338   # Macromolecules
+      - S167262187   # Journal of Chemical Information and Modeling
 
   # --- Nature family (high-impact) ---
   - name: Nature Nanotechnology
@@ -226,29 +236,6 @@ research:
   - name: Chem (Cell Press)
     kind: rss
     url: https://www.cell.com/chem/current.rss
-
-  # --- ACS flagships ---
-  - name: JACS (J. Am. Chem. Soc.)
-    kind: rss
-    url: https://pubs.acs.org/action/showFeed?type=etoc&feed=rss&jc=jacsat
-  - name: ACS Nano
-    kind: rss
-    url: https://pubs.acs.org/action/showFeed?type=etoc&feed=rss&jc=ancac3
-  - name: Nano Letters
-    kind: rss
-    url: https://pubs.acs.org/action/showFeed?type=etoc&feed=rss&jc=nalefd
-  - name: ACS Catalysis
-    kind: rss
-    url: https://pubs.acs.org/action/showFeed?type=etoc&feed=rss&jc=accacs
-  - name: Chemistry of Materials
-    kind: rss
-    url: https://pubs.acs.org/action/showFeed?type=etoc&feed=rss&jc=cmatex
-  - name: ACS Central Science
-    kind: rss
-    url: https://pubs.acs.org/action/showFeed?type=etoc&feed=rss&jc=acscii
-  - name: ACS Chemical Biology
-    kind: rss
-    url: https://pubs.acs.org/action/showFeed?type=etoc&feed=rss&jc=acbcct
 
   # --- RSC flagships ---
   - name: Chemical Science

@@ -3,6 +3,93 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
+import pytest
+
+
+def test_ingest_all_aborts_when_every_source_returns_nothing(monkeypatch):
+    """A total ingest failure must not fall through to ranking stale DB rows."""
+    from dailydigest import pipeline as pipeline_mod
+
+    source = SimpleNamespace(fetch=lambda _spec, days=2: [])
+    monkeypatch.setattr(pipeline_mod, "init_db", lambda: None)
+    monkeypatch.setattr(
+        pipeline_mod,
+        "load_sources",
+        lambda: [SimpleNamespace(name="Unavailable source")],
+    )
+    monkeypatch.setattr(pipeline_mod, "dispatch_source", lambda _spec: source)
+    monkeypatch.setattr(pipeline_mod.health, "record", lambda _stats: None)
+
+    with pytest.raises(RuntimeError, match="No items were retrieved"):
+        pipeline_mod.ingest_all(days=2)
+
+
+def test_ingest_all_allows_zero_new_rows_after_successful_fetch(monkeypatch):
+    """A duplicate-only fetch is healthy even when its database insert count is zero."""
+    from dailydigest import pipeline as pipeline_mod
+
+    fetched = [SimpleNamespace(url="https://example.com/already-seen")]
+    source = SimpleNamespace(fetch=lambda _spec, days=2: fetched)
+    monkeypatch.setattr(pipeline_mod, "init_db", lambda: None)
+    monkeypatch.setattr(
+        pipeline_mod,
+        "load_sources",
+        lambda: [SimpleNamespace(name="Working source")],
+    )
+    monkeypatch.setattr(pipeline_mod, "dispatch_source", lambda _spec: source)
+    monkeypatch.setattr(pipeline_mod.health, "record", lambda _stats: None)
+    monkeypatch.setattr(pipeline_mod, "dedupe_by_url", lambda items: items)
+    monkeypatch.setattr(pipeline_mod, "filter_english", lambda items: items)
+    monkeypatch.setattr(pipeline_mod, "upsert_items", lambda _items: 0)
+
+    assert pipeline_mod.ingest_all(days=2) == 0
+
+
+def test_ingest_all_aborts_when_every_retrieved_item_is_filtered_out(monkeypatch):
+    """A broken language/filter stage must not fall through to stale DB rows."""
+    from dailydigest import pipeline as pipeline_mod
+
+    fetched = [SimpleNamespace(url="https://example.com/new")]
+    source = SimpleNamespace(fetch=lambda _spec, days=2: fetched)
+    monkeypatch.setattr(pipeline_mod, "init_db", lambda: None)
+    monkeypatch.setattr(
+        pipeline_mod,
+        "load_sources",
+        lambda: [SimpleNamespace(name="Working source")],
+    )
+    monkeypatch.setattr(pipeline_mod, "dispatch_source", lambda _spec: source)
+    monkeypatch.setattr(pipeline_mod.health, "record", lambda _stats: None)
+    monkeypatch.setattr(pipeline_mod, "dedupe_by_url", lambda items: items)
+    monkeypatch.setattr(pipeline_mod, "filter_english", lambda _items: [])
+
+    with pytest.raises(RuntimeError, match="removed during deduplication/language filtering"):
+        pipeline_mod.ingest_all(days=2)
+
+
+def test_ingest_all_records_adapter_exceptions_as_failed_health(monkeypatch):
+    from dailydigest import pipeline as pipeline_mod
+
+    class BrokenSource:
+        def fetch(self, _spec, days=2):
+            raise RuntimeError("network unavailable")
+
+    recorded = []
+    monkeypatch.setattr(pipeline_mod, "init_db", lambda: None)
+    monkeypatch.setattr(
+        pipeline_mod,
+        "load_sources",
+        lambda: [SimpleNamespace(name="Broken source")],
+    )
+    monkeypatch.setattr(pipeline_mod, "dispatch_source", lambda _spec: BrokenSource())
+    monkeypatch.setattr(pipeline_mod.health, "record", lambda stats: recorded.extend(stats))
+
+    with pytest.raises(RuntimeError, match="No items were retrieved"):
+        pipeline_mod.ingest_all(days=2)
+
+    assert len(recorded) == 1
+    assert recorded[0].ok is False
+    assert "network unavailable" in (recorded[0].error or "")
+
 
 def test_topic_selection_preferences_are_soft_and_keep_raw_scores(monkeypatch):
     """Coverage can promote one qualified, absent facet without reserving a slot."""
