@@ -8,8 +8,8 @@ Off-topic items (low cosine) are excluded outright rather than filling slots.
 from __future__ import annotations
 
 from dailydigest.config import get_settings
-from dailydigest.pipeline import _dynamic_section_caps
-from dailydigest.rank.ranker import _row_feature_key
+from dailydigest.pipeline import _dynamic_section_caps, _section_caps
+from dailydigest.rank.ranker import _row_feature_key, pick_top_per_section
 
 
 class _Row:
@@ -37,6 +37,70 @@ def _cfg(monkeypatch, **kw):
     for k, v in kw.items():
         monkeypatch.setattr(s, k, v)
     return s
+
+
+def test_disabled_sections_have_zero_caps_in_fixed_and_adaptive_modes(monkeypatch):
+    settings = _cfg(
+        monkeypatch,
+        top_research=12,
+        top_industry=6,
+        top_ai=4,
+        top_regulatory=3,
+        top_world=3,
+        include_industry=False,
+        include_ai=False,
+        include_regulatory=False,
+        include_world=False,
+    )
+
+    assert _section_caps() == {
+        "research": 12,
+        "industry": 0,
+        "ai": 0,
+        "regulatory": 0,
+        "world": 0,
+    }
+
+    scored = [
+        (_Row(1, "industry"), 0.9),
+        (_Row(2, "ai"), 0.9),
+        (_Row(3, "regulatory"), 0.9),
+        (_Row(4, "world"), 0.9),
+    ]
+    assert _dynamic_section_caps(scored, {}) == {
+        "research": 3,
+        "industry": 0,
+        "ai": 0,
+        "regulatory": 0,
+        "world": 0,
+    }
+    assert pick_top_per_section(scored, _section_caps()) == []
+
+    monkeypatch.setattr(settings, "adaptive_section_sizes", False)
+    assert _dynamic_section_caps(scored, {}) == _section_caps()
+
+
+def test_enabled_sections_keep_configured_caps(monkeypatch):
+    _cfg(
+        monkeypatch,
+        top_research=12,
+        top_industry=6,
+        top_ai=4,
+        top_regulatory=3,
+        top_world=3,
+        include_industry=True,
+        include_ai=True,
+        include_regulatory=True,
+        include_world=True,
+    )
+
+    assert _section_caps() == {
+        "research": 12,
+        "industry": 6,
+        "ai": 4,
+        "regulatory": 3,
+        "world": 3,
+    }
 
 
 def test_many_on_topic_grows_toward_ceiling(monkeypatch):

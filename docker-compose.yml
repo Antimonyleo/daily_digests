@@ -12,9 +12,11 @@ services:
     # Loopback-only on the host, matching the app's local-first security stance.
     ports:
       - "127.0.0.1:8765:8765"
-    # Persist DB, profile, and learned models across rebuilds.
+    # Persist DB, profile, learned models, and settings across rebuilds.
+    # Create .env from .env.example before starting Compose.
     volumes:
       - ./data:/app/data
+      - ./.env:/app/.env
     environment:
       # Opt into the container's non-loopback (0.0.0.0) bind. Safe only because
       # the port above is mapped to 127.0.0.1 on the host; the app has no auth.

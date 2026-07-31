@@ -377,6 +377,34 @@ def test_mark_impressions_viewed_only_flags_selected_rows(monkeypatch, tmp_path)
     assert by_item[candidate].viewed is False
 
 
+def test_mark_impressions_viewed_only_flags_visible_selected_rows(
+    monkeypatch, tmp_path
+):
+    store_mod = _reset_store(tmp_path, monkeypatch)
+    visible = _add_item(store_mod, "visible-selected")
+    hidden = _add_item(store_mod, "hidden-selected")
+    digest_id = "2026-06-06"
+
+    store_mod.write_impressions(
+        digest_id,
+        [
+            ("research", visible, 0, 0.9, True),
+            ("industry", hidden, 0, 0.8, True),
+        ],
+        model_version="v-test",
+    )
+
+    assert store_mod.mark_impressions_viewed(digest_id, [visible]) == 1
+
+    with store_mod.session_scope() as s:
+        by_item = {
+            r.item_id: r
+            for r in s.query(store_mod.ImpressionRow).filter_by(digest_id=digest_id).all()
+        }
+    assert by_item[visible].viewed is True
+    assert by_item[hidden].viewed is False
+
+
 def test_recent_viewed_facet_dates_uses_only_latest_brew(monkeypatch, tmp_path):
     """A viewed obsolete rebrew must not count after a newer slate replaces it."""
     store_mod = _reset_store(tmp_path, monkeypatch)

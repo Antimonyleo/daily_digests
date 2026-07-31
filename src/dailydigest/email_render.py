@@ -74,8 +74,8 @@ def reason_line(
 SECTION_META: dict[str, dict[str, str]] = {
     "research": {"title": "Research", "emoji": "🧬"},
     "industry": {"title": "Industry", "emoji": "💊"},
-    "ai": {"title": "AI Tools & Tricks", "emoji": "🤖"},
-    "regulatory": {"title": "Regulatory", "emoji": "📋"},
+    "ai": {"title": "AI Tools & Methods", "emoji": "🤖"},
+    "regulatory": {"title": "Clinical & Regulatory", "emoji": "📋"},
     "world": {"title": "World", "emoji": "🌍"},
 }
 

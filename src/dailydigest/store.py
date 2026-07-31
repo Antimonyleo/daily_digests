@@ -11,12 +11,12 @@ from threading import Lock
 from sqlalchemy import (
     Boolean,
     CheckConstraint,
-    LargeBinary,
     Column,
     DateTime,
     Float,
     ForeignKey,
     Integer,
+    LargeBinary,
     String,
     Text,
     UniqueConstraint,
@@ -699,16 +699,28 @@ def write_impressions(
     return run_id
 
 
-def mark_impressions_viewed(digest_id: str) -> int:
+def mark_impressions_viewed(
+    digest_id: str, visible_item_ids: Iterable[int] | None = None
+) -> int:
     """Mark the LATEST run's SELECTED impression rows for ``digest_id`` as viewed.
 
     Called from the web digest view so the ``viewed`` flag reflects that the
     reader actually opened this digest. Only the most-recent run's rows are
     updated (older runs stay as recorded). Within that run, only ``selected``
-    rows — the items actually displayed in the digest — are marked viewed;
-    unselected candidate-pool rows (logged for A/B but never shown) stay
-    ``viewed=False``. Returns the number of rows updated.
+    rows that are still visible under the reader's current section settings are
+    marked viewed; hidden and unselected candidate-pool rows stay
+    ``viewed=False``. Returns the number of rows updated. When
+    ``visible_item_ids`` is omitted, all selected rows retain the legacy
+    behavior.
     """
+    visible_ids = (
+        {int(item_id) for item_id in visible_item_ids}
+        if visible_item_ids is not None
+        else None
+    )
+    if visible_ids is not None and not visible_ids:
+        return 0
+
     init_db()
     with session_scope() as s:
         latest_run = s.execute(
@@ -719,14 +731,15 @@ def mark_impressions_viewed(digest_id: str) -> int:
         ).scalar_one_or_none()
         if latest_run is None:
             return 0
+        conditions = [
+            ImpressionRow.digest_id == digest_id,
+            ImpressionRow.run_id == latest_run,
+            ImpressionRow.selected.is_(True),
+        ]
+        if visible_ids is not None:
+            conditions.append(ImpressionRow.item_id.in_(visible_ids))
         result = s.execute(
-            update(ImpressionRow)
-            .where(
-                ImpressionRow.digest_id == digest_id,
-                ImpressionRow.run_id == latest_run,
-                ImpressionRow.selected.is_(True),
-            )
-            .values(viewed=True)
+            update(ImpressionRow).where(*conditions).values(viewed=True)
         )
         return result.rowcount or 0
 

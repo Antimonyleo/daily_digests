@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 from functools import lru_cache
 from pathlib import Path
@@ -9,6 +10,8 @@ from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from .models import Profile, SourceSpec
+
+logger = logging.getLogger(__name__)
 
 
 class Settings(BaseSettings):
@@ -117,11 +120,19 @@ class Settings(BaseSettings):
     within_day_dedupe: bool = False
     within_day_dedupe_threshold: float = Field(default=0.86, ge=0.5, le=1.0)
 
+    # Optional digest sections. Enabled by default so existing installations
+    # preserve their current digest until the reader switches a section off.
+    # Research is the core product and is always enabled.
+    include_industry: bool = True
+    include_ai: bool = True
+    include_regulatory: bool = True
+    include_world: bool = True
+
     # Per-section size. When adaptive_section_sizes is on, top_* is the CEILING
     # and min_* is the floor; the actual count for a section flexes between them
     # with the day's supply of on-topic items (see min_topic_relevance).
     # When adaptive sizing is off, top_* is a fixed cap (legacy behavior).
-    top_research: int = Field(default=12, ge=0, le=100)
+    top_research: int = Field(default=12, ge=1, le=100)
     top_industry: int = Field(default=6, ge=0, le=100)
     top_ai: int = Field(default=4, ge=0, le=100)
     top_regulatory: int = Field(default=3, ge=0, le=100)
@@ -197,6 +208,21 @@ class Settings(BaseSettings):
     imap_user: str = ""
     imap_password: str = ""
 
+    @field_validator("top_research", mode="before")
+    @classmethod
+    def _upgrade_legacy_zero_research_cap(cls, value: object) -> object:
+        """Keep legacy ``TOP_RESEARCH=0`` installs bootable and enable Research."""
+        try:
+            if int(str(value).strip()) == 0:
+                logger.warning(
+                    "TOP_RESEARCH=0 is no longer supported; using 1 so Research "
+                    "remains available. Change the Research count in Settings."
+                )
+                return 1
+        except (TypeError, ValueError):
+            pass
+        return value
+
     @field_validator("user_tz")
     @classmethod
     def _validate_tz(cls, v: str) -> str:
@@ -229,6 +255,29 @@ def load_settings() -> Settings:
     if not s.user_tz:
         s = s.model_copy(update={"user_tz": "UTC"})
     return s
+
+
+_OPTIONAL_SECTION_FLAGS: dict[str, str] = {
+    "industry": "include_industry",
+    "ai": "include_ai",
+    "regulatory": "include_regulatory",
+    "world": "include_world",
+}
+
+
+def section_enabled(settings: Settings, section: str) -> bool:
+    """Return whether a digest section is enabled under *settings*.
+
+    A zero legacy ``TOP_*`` value continues to mean disabled. Research has no
+    switch and its validated cap is always at least one.
+    """
+    key = str(section or "").strip().lower()
+    flag = _OPTIONAL_SECTION_FLAGS.get(key)
+    if flag is None:
+        return True
+    return bool(getattr(settings, flag, True)) and int(
+        getattr(settings, f"top_{key}", 1)
+    ) > 0
 
 
 def load_profile(path: str | None = None) -> Profile:

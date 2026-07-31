@@ -52,7 +52,7 @@ from sqlalchemy import select
 
 from . import health
 from . import votes as votes_mod
-from .config import SETTINGS, get_settings, reload_settings
+from .config import SETTINGS, get_settings, reload_settings, section_enabled
 from .email_render import (
     SECTION_META,
     SECTION_ORDER,
@@ -305,6 +305,10 @@ def _load_today(digest_id: str) -> tuple[list[dict], dict[int, int]]:
         if not rows:
             return [], {}
 
+        rows = [r for r in rows if section_enabled(SETTINGS, r.section or "")]
+        if not rows:
+            return [], {}
+
         item_ids = [r.id for r in rows]
         vote_rows = s.execute(
             select(VoteRow.item_id, VoteRow.value, VoteRow.grade)
@@ -531,8 +535,13 @@ def _load_existing_form_defaults() -> dict[str, str]:
         "llm_api_key": "***" if SETTINGS.llm_api_key else "",
         "llm_model": SETTINGS.llm_model,
         "top_research": str(SETTINGS.top_research),
+        "include_industry": str(section_enabled(SETTINGS, "industry")).lower(),
         "top_industry": str(SETTINGS.top_industry),
+        "include_ai": str(section_enabled(SETTINGS, "ai")).lower(),
+        "top_ai": str(SETTINGS.top_ai),
+        "include_regulatory": str(section_enabled(SETTINGS, "regulatory")).lower(),
         "top_regulatory": str(SETTINGS.top_regulatory),
+        "include_world": str(section_enabled(SETTINGS, "world")).lower(),
         "top_world": str(SETTINGS.top_world),
     }
     if _get_profile_path().exists():
@@ -648,20 +657,22 @@ def _validate_setup(form: dict[str, str]) -> list[str]:
     ):
         if _env_value_has_control_chars(form.get(key)):
             errors.append(f"{label} cannot contain line breaks.")
-    for key, label in (
-        ("top_research", "Research items"),
-        ("top_industry", "Industry items"),
-        ("top_regulatory", "Regulatory items"),
-        ("top_world", "World items"),
+    for key, label, enabled_key in (
+        ("top_research", "Research items", None),
+        ("top_industry", "Industry items", "include_industry"),
+        ("top_ai", "AI tools and methods items", "include_ai"),
+        ("top_regulatory", "Clinical and regulatory items", "include_regulatory"),
+        ("top_world", "World news items", "include_world"),
     ):
+        minimum = 1 if enabled_key is None or form.get(enabled_key) == "true" else 0
         raw = (form.get(key) or "").strip()
         try:
             value = int(raw)
         except ValueError:
             errors.append(f"{label} must be a number.")
             continue
-        if value < 0 or value > 30:
-            errors.append(f"{label} must be between 0 and 30.")
+        if value < minimum or value > 30:
+            errors.append(f"{label} must be between {minimum} and 30.")
     return errors
 
 
@@ -670,6 +681,12 @@ def _int_form(form: dict[str, str], key: str, default: int) -> str:
         return str(int((form.get(key) or "").strip()))
     except ValueError:
         return str(default)
+
+
+def _bool_form(form: dict[str, str], key: str, default: bool) -> str:
+    if key not in form:
+        return "true" if default else "false"
+    return "true" if str(form.get(key, "")).lower() == "true" else "false"
 
 
 # ---------------------------------------------------------------------------
@@ -689,7 +706,12 @@ def index(request: Request) -> Response:
         # viewed. Measurement-only; best-effort so a logging hiccup never blocks
         # the page render.
         try:
-            mark_impressions_viewed(digest_id)
+            visible_item_ids = [
+                int(entry["id"])
+                for section in sections
+                for entry in section.get("entries", [])
+            ]
+            mark_impressions_viewed(digest_id, visible_item_ids)
         except Exception as _e:  # noqa: BLE001
             logger.warning("mark_impressions_viewed failed: %s", _e)
     overview = _digest_overview(sections)
@@ -943,8 +965,19 @@ async def setup_post(request: Request) -> Response:
         "llm_api_key": str(raw.get("llm_api_key", "")),
         "llm_model": str(raw.get("llm_model", "")),
         "top_research": str(raw.get("top_research", SETTINGS.top_research)),
+        "include_industry": _bool_form(
+            raw, "include_industry", section_enabled(SETTINGS, "industry")
+        ),
         "top_industry": str(raw.get("top_industry", SETTINGS.top_industry)),
+        "include_ai": _bool_form(raw, "include_ai", section_enabled(SETTINGS, "ai")),
+        "top_ai": str(raw.get("top_ai", SETTINGS.top_ai)),
+        "include_regulatory": _bool_form(
+            raw, "include_regulatory", section_enabled(SETTINGS, "regulatory")
+        ),
         "top_regulatory": str(raw.get("top_regulatory", SETTINGS.top_regulatory)),
+        "include_world": _bool_form(
+            raw, "include_world", section_enabled(SETTINGS, "world")
+        ),
         "top_world": str(raw.get("top_world", SETTINGS.top_world)),
     }
 
@@ -1004,8 +1037,13 @@ async def setup_post(request: Request) -> Response:
         or (SETTINGS.llm_base_url or "https://api.openai.com/v1"),
         "LLM_MODEL": form["llm_model"].strip() or "gpt-4o-mini",
         "TOP_RESEARCH": _int_form(form, "top_research", SETTINGS.top_research),
+        "INCLUDE_INDUSTRY": form["include_industry"],
         "TOP_INDUSTRY": _int_form(form, "top_industry", SETTINGS.top_industry),
+        "INCLUDE_AI": form["include_ai"],
+        "TOP_AI": _int_form(form, "top_ai", SETTINGS.top_ai),
+        "INCLUDE_REGULATORY": form["include_regulatory"],
         "TOP_REGULATORY": _int_form(form, "top_regulatory", SETTINGS.top_regulatory),
+        "INCLUDE_WORLD": form["include_world"],
         "TOP_WORLD": _int_form(form, "top_world", SETTINGS.top_world),
     }
     # Only update API key if it's not the masked "***" value

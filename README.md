@@ -17,6 +17,8 @@ your machine. The app has no account system and listens only on localhost.
   duplicate/promotion signals. Weak matches do not bypass the relevance gate.
 - Shows a web digest with concise summaries and feedback controls (`Must read`,
   `Relevant`, `Hmmm`, and `Not for me`).
+- Lets each reader independently include or hide Industry, AI tools & methods,
+  Clinical & Regulatory, and World news. Research remains the core section.
 - Uses free extractive summaries by default. An OpenAI-compatible API is an
   optional upgrade for richer summaries.
 - Keeps data local in SQLite, supports a dry-run HTML digest, and can send
@@ -33,11 +35,13 @@ Install [Docker Desktop](https://www.docker.com/products/docker-desktop/), then
 from a clone of this repository run:
 
 ```bash
+cp .env.example .env
 docker compose up --build
 ```
 
 Open <http://127.0.0.1:8765>. The Compose configuration deliberately exposes
-the service only to your computer.
+the service only to your computer. It mounts both `data/` and `.env`, so profile
+data and settings-page choices survive container rebuilds.
 
 ### Linux, macOS, or Windows through WSL2
 
@@ -75,7 +79,8 @@ NO_BROWSER=1 ./scripts/start.sh
 
    Higher weights gently break ties among already-qualified papers. They do not
    mean that a topic receives that percentage of the digest.
-3. Choose **Extractive** for a free, no-key first run, then brew the digest.
+3. Choose which optional news sections you want, then select **Extractive** for
+   a free, no-key first run and brew the digest.
 4. Vote as you read. Positive votes are especially useful: they give the local
    ranker evidence about what matters within your stated interests.
 
@@ -89,9 +94,10 @@ mv data data.previous
 
 ## Optional configuration
 
-Copy `.env.example` to `.env` only when you need non-default settings. The web
-setup page can also write the basic settings for a local installation. For
-Docker, edit the host `.env` and restart the container after changing settings.
+Copy `.env.example` to `.env` only when you need non-default settings (it is
+required by the Docker command above because Docker persists that file). The
+web setup page can also write the basic settings. With Docker, the page and the
+host edit the same mounted `.env` file.
 
 ```bash
 cp .env.example .env
@@ -100,6 +106,9 @@ cp .env.example .env
 - `LLM_BACKEND=extractive` is the default and needs no key.
 - For an OpenAI-compatible endpoint, set `LLM_BACKEND=api`, `LLM_BASE_URL`,
   `LLM_API_KEY`, and `LLM_MODEL`.
+- Optional digest sections are controlled by `INCLUDE_INDUSTRY`, `INCLUDE_AI`,
+  `INCLUDE_REGULATORY`, and `INCLUDE_WORLD`. The in-app settings switches are
+  the easiest way to change them.
 - For email delivery, configure `RESEND_API_KEY`, `DIGEST_FROM`, and
   `DIGEST_TO`; see [domain setup](docs/domain-setup.md).
 

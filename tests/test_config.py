@@ -5,10 +5,66 @@ Uses tmp_path to write tiny YAML fixtures so tests are fully isolated.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 import yaml
 
-from dailydigest.config import load_profile, load_sources
+from dailydigest.config import Settings, load_profile, load_sources, section_enabled
+
+
+def test_optional_sections_default_to_enabled(monkeypatch):
+    for name in (
+        "INCLUDE_INDUSTRY",
+        "INCLUDE_AI",
+        "INCLUDE_REGULATORY",
+        "INCLUDE_WORLD",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    settings = Settings(_env_file=None)
+
+    assert settings.include_industry is True
+    assert settings.include_ai is True
+    assert settings.include_regulatory is True
+    assert settings.include_world is True
+
+
+def test_optional_section_flags_parse_false(monkeypatch):
+    monkeypatch.setenv("INCLUDE_INDUSTRY", "false")
+    monkeypatch.setenv("INCLUDE_AI", "0")
+    monkeypatch.setenv("INCLUDE_REGULATORY", "no")
+    monkeypatch.setenv("INCLUDE_WORLD", "off")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.include_industry is False
+    assert settings.include_ai is False
+    assert settings.include_regulatory is False
+    assert settings.include_world is False
+
+
+def test_legacy_zero_research_cap_is_migrated_to_one(caplog):
+    settings = Settings(top_research=0, _env_file=None)
+
+    assert settings.top_research == 1
+    assert "TOP_RESEARCH=0 is no longer supported" in caplog.text
+
+
+def test_legacy_zero_cap_disables_optional_section():
+    settings = Settings(include_ai=True, top_ai=0, _env_file=None)
+
+    assert section_enabled(settings, "research") is True
+    assert section_enabled(settings, "ai") is False
+
+
+def test_docker_compose_persists_settings_file():
+    repo_root = Path(__file__).resolve().parents[1]
+    compose = yaml.safe_load((repo_root / "docker-compose.yml").read_text())
+    volumes = compose["services"]["dailydigest"]["volumes"]
+
+    assert "./data:/app/data" in volumes
+    assert "./.env:/app/.env" in volumes
 
 
 # ---------------------------------------------------------------------------

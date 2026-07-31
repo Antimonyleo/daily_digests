@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 
 from . import health
 from . import votes as votes_mod
-from .config import get_settings, load_profile, load_sources
+from .config import Settings, get_settings, load_profile, load_sources, section_enabled
 from .dedupe import (
     cap_near_duplicates,
     dedupe_by_url,
@@ -135,6 +135,12 @@ SECTION_LABEL_PREFIX: dict[str, str] = {
     "world": "W",
 }
 
+
+def _section_enabled(section: str, settings: Settings | None = None) -> bool:
+    """Return whether a source/digest section is enabled for this reader."""
+    return section_enabled(settings or get_settings(), section)
+
+
 # Type alias for the optional progress callback used by run_all().
 # Stages emitted (in order): "ingest_start", "ingest_done", "dedupe_done",
 # "rank_done", "summarize_start", "summarize_done", "render_done", "done".
@@ -154,6 +160,7 @@ def _emit(cb: ProgressCallback | None, stage: str, payload: dict[str, Any]) -> N
 def ingest_all(
     progress_callback: ProgressCallback | None = None,
     days: int = 2,
+    section_settings: Settings | None = None,
 ) -> int:
     """Fetch all sources, dedupe + langdetect filter, upsert. Returns rows inserted.
 
@@ -161,7 +168,13 @@ def ingest_all(
     gap can be backfilled (bounded by each API and the ranking recency window).
     """
     init_db()
-    specs = load_sources()
+    specs = [
+        spec
+        for spec in load_sources()
+        if _section_enabled(
+            getattr(spec, "section", "research") or "research", section_settings
+        )
+    ]
     _emit(progress_callback, "ingest_start", {"sources": len(specs)})
     all_items: list[Item] = []
     stats: list[IngestStats] = []
@@ -252,7 +265,9 @@ def _catch_up_window(digest_id: str, backfill_days: int | None) -> int:
     return max(2, min(gap + 1, cap))
 
 
-def _research_ceiling_for_window(window_days: int) -> int:
+def _research_ceiling_for_window(
+    window_days: int, settings: Settings | None = None
+) -> int:
     """Scale the research ceiling up on a catch-up run.
 
     After a gap, journals have accumulated a backlog of relevant papers, so the
@@ -260,7 +275,7 @@ def _research_ceiling_for_window(window_days: int) -> int:
     proportion to the days being covered. Normal daily runs (window <= 2) are
     unchanged. News sections are NOT scaled — stale week-old news isn't wanted.
     """
-    s = get_settings()
+    s = settings or get_settings()
     base = int(s.top_research)
     ceiling = int(getattr(s, "max_research_backlog", base))
     if window_days <= 2 or ceiling <= base:
@@ -269,14 +284,16 @@ def _research_ceiling_for_window(window_days: int) -> int:
     return max(base, min(grown, ceiling))
 
 
-def _section_caps(research_ceiling: int | None = None) -> dict[str, int]:
-    s = get_settings()
+def _section_caps(
+    research_ceiling: int | None = None, settings: Settings | None = None
+) -> dict[str, int]:
+    s = settings or get_settings()
     return {
         "research": s.top_research if research_ceiling is None else research_ceiling,
-        "industry": s.top_industry,
-        "ai": s.top_ai,
-        "regulatory": s.top_regulatory,
-        "world": s.top_world,
+        "industry": s.top_industry if _section_enabled("industry", s) else 0,
+        "ai": s.top_ai if _section_enabled("ai", s) else 0,
+        "regulatory": s.top_regulatory if _section_enabled("regulatory", s) else 0,
+        "world": s.top_world if _section_enabled("world", s) else 0,
     }
 
 
@@ -284,6 +301,7 @@ def _dynamic_section_caps(
     scored: list[tuple[ItemRow, float]],
     features: ScoreFeatureMap,
     research_ceiling: int | None = None,
+    settings: Settings | None = None,
 ) -> dict[str, int]:
     """Size each section to the day's supply of genuinely on-topic items.
 
@@ -300,8 +318,8 @@ def _dynamic_section_caps(
     rank score only when a per-item topic snapshot is missing, and to fixed
     ``top_*`` caps when adaptive sizing is disabled.
     """
-    s = get_settings()
-    maxima = _section_caps(research_ceiling=research_ceiling)
+    s = settings or get_settings()
+    maxima = _section_caps(research_ceiling=research_ceiling, settings=s)
     if not getattr(s, "adaptive_section_sizes", False):
         return maxima
 
@@ -658,13 +676,21 @@ def run_all(
                 )
                 return digest_id
 
+    # Keep section choices coherent for the entire brew even if the reader
+    # saves Settings in another browser tab while this run is in progress.
+    section_settings = get_settings()
+
     # Widen the look-back once, after any usage gap, and use it for BOTH the
     # ingest fetch window (so the backlog is actually retrieved) and the ranking
     # recency window below.
     window_days = _catch_up_window(digest_id, backfill_days)
     if window_days > 2:
         logger.info("catch-up: widening window to %d days after usage gap", window_days)
-    inserted = ingest_all(progress_callback=progress_callback, days=window_days)
+    inserted = ingest_all(
+        progress_callback=progress_callback,
+        days=window_days,
+        section_settings=section_settings,
+    )
     logger.info("upserted %d new items", inserted)
 
     # Auto-retrain LR when there are new/changed votes since the model was trained
@@ -741,7 +767,15 @@ def run_all(
     logger.info("ranker: profile_rows=%d votes=%d", len(profile_vec), _vote_count_now)
 
     days = window_days
-    recent_raw = recent_items(days=days)
+    # Do not score disabled sections from older stored rows. The zero selection
+    # caps below are a second line of defence against them reaching the digest.
+    recent_raw = [
+        row
+        for row in recent_items(days=days)
+        if _section_enabled(
+            (getattr(row, "section", "") or "").lower(), section_settings
+        )
+    ]
     after_reviewed = exclude_reviewed_items(recent_raw)
     after_shown = exclude_previously_shown(after_reviewed, exclude_digest_id=digest_id)
     deduped_candidates = dedupe_ranking_candidates(after_shown)   # within-set dedupe FIRST
@@ -974,10 +1008,17 @@ def run_all(
         score_features,
         digest_id=digest_id,
     )
-    research_ceiling = _research_ceiling_for_window(window_days)
+    research_ceiling = _research_ceiling_for_window(
+        window_days, settings=section_settings
+    )
     picked = pick_top_per_section(
         pickable,
-        _dynamic_section_caps(pickable, score_features, research_ceiling),
+        _dynamic_section_caps(
+            pickable,
+            score_features,
+            research_ceiling,
+            settings=section_settings,
+        ),
         catch_up=window_days > 2,
     )
 
@@ -1188,6 +1229,14 @@ def run_all(
     health_summary: list[dict] | None = None
     try:
         summary = health.weekly_summary()
+        enabled_sources = {
+            spec.name
+            for spec in load_sources()
+            if _section_enabled(spec.section or "research", section_settings)
+        }
+        summary = [
+            row for row in summary if str(row.get("source") or "") in enabled_sources
+        ]
         if summary and health.should_show(summary):
             health_summary = summary
     except Exception as e:  # noqa: BLE001

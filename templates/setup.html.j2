@@ -46,7 +46,36 @@
   .field-grid, .size-grid {
     display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px;
   }
-  .size-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .section-options { display: grid; gap: 10px; margin-top: 12px; }
+  .section-option {
+    display: grid; grid-template-columns: minmax(0, 1fr) 110px; gap: 16px;
+    align-items: center; padding: 12px; border: 1px solid var(--border);
+    border-radius: 8px; background: #fff;
+  }
+  .section-heading { display: flex; align-items: center; gap: 10px; }
+  .section-heading label, .section-heading .section-name { margin: 0; }
+  .section-desc { margin: 3px 0 0 48px; color: var(--muted); font-size: 11px; }
+  .count-field label { margin-top: 0; }
+  .switch {
+    position: relative; width: 42px; height: 24px; flex: 0 0 auto;
+  }
+  .switch input {
+    position: absolute; width: 1px; height: 1px; opacity: 0;
+  }
+  .switch-track {
+    display: block; width: 42px; height: 24px; border-radius: 12px;
+    background: #c9ced3; cursor: pointer; transition: background 120ms ease;
+  }
+  .switch-track::after {
+    content: ""; position: absolute; width: 18px; height: 18px;
+    left: 3px; top: 3px; border-radius: 50%; background: #fff;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.24); transition: transform 120ms ease;
+  }
+  .switch input:checked + .switch-track { background: var(--accent); }
+  .switch input:checked + .switch-track::after { transform: translateX(18px); }
+  .switch input:focus-visible + .switch-track {
+    outline: 3px solid #b9d2c3; outline-offset: 2px;
+  }
   .errors { background: var(--flash); color: var(--down); padding: 10px 12px;
             border-radius: 6px; font-size: 13px; margin-bottom: 16px; }
   button.brew {
@@ -56,7 +85,7 @@
   }
   button.brew:hover { background: var(--accent-strong); }
   @media (max-width: 720px) {
-    .field-grid, .size-grid { grid-template-columns: 1fr; }
+    .field-grid, .size-grid, .section-option { grid-template-columns: 1fr; }
   }
 {% endblock %}
 {% block body %}
@@ -128,26 +157,97 @@
     </div>
 
     <div class="step">
-      <h2>3 &middot; Digest size</h2>
+      <h2>3 &middot; Digest sections</h2>
+      <p class="hint">Research is always included. Choose which additional sections you want to read.</p>
       <div class="size-grid">
         <div>
           <label for="top_research">Research</label>
-          <input id="top_research" name="top_research" type="number" min="0" max="30" value="{{ form.top_research }}">
-        </div>
-        <div>
-          <label for="top_industry">Industry</label>
-          <input id="top_industry" name="top_industry" type="number" min="0" max="30" value="{{ form.top_industry }}">
-        </div>
-        <div>
-          <label for="top_regulatory">Regulatory</label>
-          <input id="top_regulatory" name="top_regulatory" type="number" min="0" max="30" value="{{ form.top_regulatory }}">
-        </div>
-        <div>
-          <label for="top_world">World</label>
-          <input id="top_world" name="top_world" type="number" min="0" max="30" value="{{ form.top_world }}">
+          <input id="top_research" name="top_research" type="number" min="1" max="30" required value="{{ form.top_research }}">
         </div>
       </div>
-      <div class="hint">Today has plenty of research candidates; this cap controls how many top ranked entries are shown.</div>
+      <div class="section-options">
+        <div class="section-option">
+          <div>
+            <div class="section-heading">
+              <span class="switch">
+                <input type="hidden" name="include_industry" value="false">
+                <input id="include_industry" name="include_industry" type="checkbox"
+                       value="true" role="switch" aria-label="Include Industry"
+                       {% if form.include_industry == "true" %}checked{% endif %}>
+                <label class="switch-track" for="include_industry" aria-hidden="true"></label>
+              </span>
+              <label class="section-name" for="include_industry">Industry</label>
+            </div>
+            <p class="section-desc">Biotechnology companies, deals, products, and sector developments.</p>
+          </div>
+          <div class="count-field">
+            <label for="top_industry">Maximum items</label>
+            <input id="top_industry" name="top_industry" type="number" min="0" max="30"
+                   value="{{ form.top_industry }}">
+          </div>
+        </div>
+        <div class="section-option">
+          <div>
+            <div class="section-heading">
+              <span class="switch">
+                <input type="hidden" name="include_ai" value="false">
+                <input id="include_ai" name="include_ai" type="checkbox"
+                       value="true" role="switch" aria-label="Include AI tools and methods"
+                       {% if form.include_ai == "true" %}checked{% endif %}>
+                <label class="switch-track" for="include_ai" aria-hidden="true"></label>
+              </span>
+              <label class="section-name" for="include_ai">AI tools &amp; methods</label>
+            </div>
+            <p class="section-desc">Useful models, software, benchmarks, and scientific workflows.</p>
+          </div>
+          <div class="count-field">
+            <label for="top_ai">Maximum items</label>
+            <input id="top_ai" name="top_ai" type="number" min="0" max="30"
+                   value="{{ form.top_ai }}">
+          </div>
+        </div>
+        <div class="section-option">
+          <div>
+            <div class="section-heading">
+              <span class="switch">
+                <input type="hidden" name="include_regulatory" value="false">
+                <input id="include_regulatory" name="include_regulatory" type="checkbox"
+                       value="true" role="switch" aria-label="Include Clinical and Regulatory"
+                       {% if form.include_regulatory == "true" %}checked{% endif %}>
+                <label class="switch-track" for="include_regulatory" aria-hidden="true"></label>
+              </span>
+              <label class="section-name" for="include_regulatory">Clinical &amp; Regulatory</label>
+            </div>
+            <p class="section-desc">Clinical trials, approvals, safety updates, and policy changes.</p>
+          </div>
+          <div class="count-field">
+            <label for="top_regulatory">Maximum items</label>
+            <input id="top_regulatory" name="top_regulatory" type="number" min="0" max="30"
+                   value="{{ form.top_regulatory }}">
+          </div>
+        </div>
+        <div class="section-option">
+          <div>
+            <div class="section-heading">
+              <span class="switch">
+                <input type="hidden" name="include_world" value="false">
+                <input id="include_world" name="include_world" type="checkbox"
+                       value="true" role="switch" aria-label="Include World news"
+                       {% if form.include_world == "true" %}checked{% endif %}>
+                <label class="switch-track" for="include_world" aria-hidden="true"></label>
+              </span>
+              <label class="section-name" for="include_world">World news</label>
+            </div>
+            <p class="section-desc">Major events outside the scientific and biotechnology sections.</p>
+          </div>
+          <div class="count-field">
+            <label for="top_world">Maximum items</label>
+            <input id="top_world" name="top_world" type="number" min="0" max="30"
+                   value="{{ form.top_world }}">
+          </div>
+        </div>
+      </div>
+      <div class="hint">Item counts are caps; DailyDigest will show fewer when there are not enough strong candidates.</div>
     </div>
 
     <button class="brew" type="submit">Brew my morning cup of tea</button>
@@ -219,6 +319,20 @@
   }
   radios.forEach((r) => r.addEventListener("change", refresh));
   refresh();
+
+  // An off section keeps its previous cap but removes the inactive control
+  // from keyboard navigation and form submission.
+  document.querySelectorAll('input[role="switch"]').forEach((toggle) => {
+    const count = document.getElementById(toggle.id.replace("include_", "top_"));
+    if (!count) return;
+    function refreshSection() {
+      count.disabled = !toggle.checked;
+      count.min = toggle.checked ? "1" : "0";
+      count.setAttribute("aria-disabled", String(!toggle.checked));
+    }
+    toggle.addEventListener("change", refreshSection);
+    refreshSection();
+  });
 })();
 </script>
 {% endblock %}

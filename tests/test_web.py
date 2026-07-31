@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import sqlite3
-from datetime import datetime, timezone
-from pathlib import Path
 import threading
 import time
+from datetime import datetime, timezone
+from pathlib import Path
 from urllib.parse import urlencode
 
 import pytest
@@ -134,6 +135,63 @@ def test_setup_defaults_replace_removed_backend_with_extractive(monkeypatch):
     assert web._load_existing_form_defaults()["llm_backend"] == "extractive"
 
 
+def test_setup_defaults_prepopulate_optional_sections_and_ai_count(monkeypatch):
+    from dailydigest import web
+
+    monkeypatch.setattr(
+        web,
+        "SETTINGS",
+        web.SETTINGS.model_copy(
+            update={
+                "include_industry": True,
+                "include_ai": False,
+                "include_regulatory": True,
+                "include_world": False,
+                "top_ai": 7,
+            }
+        ),
+    )
+
+    form = web._load_existing_form_defaults()
+
+    assert form["include_industry"] == "true"
+    assert form["include_ai"] == "false"
+    assert form["include_regulatory"] == "true"
+    assert form["include_world"] == "false"
+    assert form["top_ai"] == "7"
+
+
+def test_setup_page_renders_accessible_optional_section_switches(monkeypatch):
+    from dailydigest import web
+
+    monkeypatch.setattr(
+        web,
+        "SETTINGS",
+        web.SETTINGS.model_copy(
+            update={
+                "include_industry": True,
+                "include_ai": False,
+                "include_regulatory": True,
+                "include_world": False,
+            }
+        ),
+    )
+
+    response = web.setup_get(_request("GET", "/setup"))
+    html = _text_payload(response)
+
+    assert len(re.findall(r"<input[^>]+role=\"switch\"", html)) == 4
+    assert 'id="include_industry"' in html
+    assert 'id="include_ai"' in html
+    assert 'id="include_regulatory"' in html
+    assert 'id="include_world"' in html
+    assert 'id="top_ai"' in html
+    assert "AI tools &amp; methods" in html
+    assert "Clinical &amp; Regulatory" in html
+    assert 'id="top_research"' in html
+    assert 'name="include_research"' not in html
+
+
 def test_setup_post_requires_one_to_ten_weighted_topics(tmp_path, monkeypatch):
     from dailydigest import web
 
@@ -156,6 +214,188 @@ def test_setup_post_requires_one_to_ten_weighted_topics(tmp_path, monkeypatch):
     assert response.status_code == 400
     assert "duplicates" in _text_payload(response)
     assert not (tmp_path / "profile.yaml").exists()
+
+
+def test_setup_post_persists_checked_and_unchecked_optional_sections(
+    tmp_path, monkeypatch
+):
+    from dailydigest import web
+
+    monkeypatch.setattr(web, "_get_profile_path", lambda: tmp_path / "profile.yaml")
+    env_path = tmp_path / ".env"
+    monkeypatch.setattr(web, "_ENV_PATH", env_path)
+
+    response = asyncio.run(
+        web.setup_post(
+            _request(
+                "POST",
+                "/setup",
+                form={
+                    "_csrf_token": web._CSRF_TOKEN,
+                    "bio": "Researcher.",
+                    "topics": "RNA nanotechnology | 10",
+                    "llm_backend": "extractive",
+                    "include_industry": "true",
+                    "top_industry": "5",
+                    "include_ai": "false",
+                    "top_ai": "7",
+                    "include_regulatory": "true",
+                    "top_regulatory": "4",
+                    "include_world": "false",
+                    "top_world": "3",
+                },
+            )
+        )
+    )
+
+    assert response.status_code == 303
+    env = web._read_env_file(env_path)
+    assert env["INCLUDE_INDUSTRY"] == "true"
+    assert env["INCLUDE_AI"] == "false"
+    assert env["INCLUDE_REGULATORY"] == "true"
+    assert env["INCLUDE_WORLD"] == "false"
+    assert env["TOP_AI"] == "7"
+    assert web.SETTINGS.include_industry is True
+    assert web.SETTINGS.include_ai is False
+    assert web.SETTINGS.include_regulatory is True
+    assert web.SETTINGS.include_world is False
+    assert web.SETTINGS.top_ai == 7
+
+
+def test_legacy_setup_post_preserves_optional_section_settings(tmp_path, monkeypatch):
+    from dailydigest import web
+
+    current = web.SETTINGS.model_copy(
+        update={
+            "include_industry": True,
+            "include_ai": False,
+            "include_regulatory": True,
+            "include_world": False,
+        }
+    )
+    monkeypatch.setattr(web, "SETTINGS", current)
+    for name, value in (
+        ("INCLUDE_INDUSTRY", "true"),
+        ("INCLUDE_AI", "false"),
+        ("INCLUDE_REGULATORY", "true"),
+        ("INCLUDE_WORLD", "false"),
+    ):
+        monkeypatch.setenv(name, value)
+    monkeypatch.setattr(web, "_get_profile_path", lambda: tmp_path / "profile.yaml")
+    env_path = tmp_path / ".env"
+    monkeypatch.setattr(web, "_ENV_PATH", env_path)
+
+    response = asyncio.run(
+        web.setup_post(
+            _request(
+                "POST",
+                "/setup",
+                form={
+                    "_csrf_token": web._CSRF_TOKEN,
+                    "bio": "Researcher.",
+                    "topics": "RNA nanotechnology | 10",
+                    "llm_backend": "extractive",
+                },
+            )
+        )
+    )
+
+    assert response.status_code == 303
+    env = web._read_env_file(env_path)
+    assert env["INCLUDE_INDUSTRY"] == "true"
+    assert env["INCLUDE_AI"] == "false"
+    assert env["INCLUDE_REGULATORY"] == "true"
+    assert env["INCLUDE_WORLD"] == "false"
+
+
+def test_setup_rejects_enabled_section_with_zero_items(tmp_path, monkeypatch):
+    from dailydigest import web
+
+    monkeypatch.setattr(web, "_get_profile_path", lambda: tmp_path / "profile.yaml")
+    monkeypatch.setattr(web, "_ENV_PATH", tmp_path / ".env")
+
+    response = asyncio.run(
+        web.setup_post(
+            _request(
+                "POST",
+                "/setup",
+                form={
+                    "_csrf_token": web._CSRF_TOKEN,
+                    "bio": "Researcher.",
+                    "topics": "RNA nanotechnology | 10",
+                    "llm_backend": "extractive",
+                    "include_ai": "true",
+                    "top_ai": "0",
+                },
+            )
+        )
+    )
+
+    assert response.status_code == 400
+    assert "AI tools and methods items must be between 1 and 30" in _text_payload(
+        response
+    )
+
+
+def test_setup_validation_error_preserves_optional_section_switches(
+    tmp_path, monkeypatch
+):
+    from dailydigest import web
+
+    monkeypatch.setattr(web, "_get_profile_path", lambda: tmp_path / "profile.yaml")
+    monkeypatch.setattr(web, "_ENV_PATH", tmp_path / ".env")
+
+    response = asyncio.run(
+        web.setup_post(
+            _request(
+                "POST",
+                "/setup",
+                form={
+                    "_csrf_token": web._CSRF_TOKEN,
+                    "bio": "Researcher.",
+                    "topics": "missing a weight",
+                    "llm_backend": "extractive",
+                    "include_industry": "true",
+                    "include_ai": "false",
+                    "include_regulatory": "true",
+                    "include_world": "false",
+                },
+            )
+        )
+    )
+    html = _text_payload(response)
+
+    assert response.status_code == 400
+    assert re.search(r'id="include_industry"[^>]*checked', html)
+    assert not re.search(r'id="include_ai"[^>]*checked', html)
+    assert re.search(r'id="include_regulatory"[^>]*checked', html)
+    assert not re.search(r'id="include_world"[^>]*checked', html)
+
+
+def test_setup_post_requires_at_least_one_research_item(tmp_path, monkeypatch):
+    from dailydigest import web
+
+    monkeypatch.setattr(web, "_get_profile_path", lambda: tmp_path / "profile.yaml")
+    monkeypatch.setattr(web, "_ENV_PATH", tmp_path / ".env")
+
+    response = asyncio.run(
+        web.setup_post(
+            _request(
+                "POST",
+                "/setup",
+                form={
+                    "_csrf_token": web._CSRF_TOKEN,
+                    "bio": "Researcher.",
+                    "topics": "RNA | 10",
+                    "llm_backend": "extractive",
+                    "top_research": "0",
+                },
+            )
+        )
+    )
+
+    assert response.status_code == 400
+    assert "Research items must be between 1 and 30" in _text_payload(response)
 
 
 @pytest.mark.parametrize(
@@ -716,6 +956,57 @@ def test_load_today_uses_latest_vote_when_legacy_duplicates_exist(tmp_path, monk
 
     assert current_vote == {1: -1}
     assert sections[0]["entries"][0]["current_vote"] == -1
+
+
+def test_load_today_hides_disabled_stored_sections(tmp_path, monkeypatch):
+    from dailydigest import config as config_mod
+    from dailydigest import store as store_mod
+    from dailydigest import web
+
+    monkeypatch.setenv("DB_PATH", str(tmp_path / "digest.db"))
+    config_mod.reload_settings()
+    store_mod.SETTINGS = config_mod.SETTINGS
+    store_mod._ENGINE = None
+    store_mod._SessionLocal = None
+    store_mod._INITIALIZED = False
+    monkeypatch.setattr(
+        web,
+        "SETTINGS",
+        web.SETTINGS.model_copy(
+            update={"include_industry": False, "top_industry": 6}
+        ),
+    )
+
+    store_mod.init_db()
+    with store_mod.session_scope() as s:
+        s.add(store_mod.DigestRow(id="2026-05-13", item_count=2))
+        s.add_all(
+            [
+                store_mod.ItemRow(
+                    source="Nature",
+                    section="research",
+                    external_id="visible-research",
+                    url="https://example.com/research",
+                    title="Visible research",
+                    digest_id="2026-05-13",
+                    item_label="R1",
+                ),
+                store_mod.ItemRow(
+                    source="Industry",
+                    section="industry",
+                    external_id="hidden-industry",
+                    url="https://example.com/industry",
+                    title="Hidden industry",
+                    digest_id="2026-05-13",
+                    item_label="I1",
+                ),
+            ]
+        )
+
+    sections, _current_vote = web._load_today("2026-05-13")
+
+    assert [section["key"] for section in sections] == ["research"]
+    assert sections[0]["entries"][0]["title"] == "Visible research"
 
 
 def test_setup_post_rejects_missing_csrf_token(tmp_path, monkeypatch):
