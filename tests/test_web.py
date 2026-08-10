@@ -1692,6 +1692,121 @@ def test_run_page_asks_for_reading_depth_before_brewing(monkeypatch, tmp_path):
     assert body.index("How are we feeling today?") < body.index("Brew the morning tea")
 
 
+def test_main_page_exposes_one_click_reading_modes_and_settings_can_return(
+    monkeypatch, tmp_path
+):
+    from dailydigest import web
+
+    profile_path = tmp_path / "profile.yaml"
+    profile_path.write_text("name: Ada\nbio: Reader\nkeywords: []\ndownweight: []\n")
+    monkeypatch.setattr(web, "_get_profile_path", lambda: profile_path)
+    monkeypatch.setattr(web, "_load_today", lambda _digest_id: ([], {}))
+    monkeypatch.setattr(web, "_digest_exists", lambda _digest_id: False)
+    monkeypatch.setattr(web, "_time_salutation", lambda: "Good evening")
+
+    main = _text_payload(web.index(_request("GET", "/")))
+    settings = _text_payload(web.setup_get(_request("GET", "/setup")))
+
+    assert "Good evening, Ada" in main
+    assert "How are we feeling today?" in main
+    assert 'name="reading_mode"' in main
+    assert 'value="full"' in main
+    assert 'value="usual"' in main
+    assert 'value="minimal"' in main
+    assert 'window.location.href = `/run?reading_mode=${readingMode}&autostart=1`' in main
+    assert "Tea break" in main
+    assert "Summaries: Extractive (local, no AI)" in main
+    assert 'href="/"' in settings
+    assert "Back to today’s digest" in settings
+
+
+@pytest.mark.parametrize(
+    ("hour", "expected"),
+    [(2, "You’re up early"), (9, "Good morning"), (14, "Good afternoon"), (20, "Good evening")],
+)
+def test_salutation_tracks_local_time(monkeypatch, hour, expected):
+    from dailydigest import web
+
+    monkeypatch.setattr(
+        web,
+        "_reader_now",
+        lambda: datetime(2026, 8, 10, hour, 0, tzinfo=timezone.utc),
+    )
+
+    assert web._time_salutation() == expected
+
+
+def test_main_page_choice_arrives_at_run_page_and_starts_once(monkeypatch, tmp_path):
+    from dailydigest import web
+
+    profile_path = tmp_path / "profile.yaml"
+    profile_path.write_text("bio: Reader\nkeywords: []\ndownweight: []\n")
+    monkeypatch.setattr(web, "_get_profile_path", lambda: profile_path)
+
+    response = web.run_get(
+        _request("GET", "/run"), reading_mode="minimal", autostart=True
+    )
+    body = _text_payload(response)
+
+    assert 'value="minimal" checked' in body
+    assert "const AUTOSTART = true;" in body
+    assert "if (AUTOSTART) startBrew();" in body
+
+
+def test_settings_offer_native_api_and_signed_in_cli_summarizers(monkeypatch, tmp_path):
+    from dailydigest import web
+
+    profile_path = tmp_path / "profile.yaml"
+    profile_path.write_text("bio: Reader\nkeywords: [RNA]\ndownweight: []\n")
+    monkeypatch.setattr(web, "_get_profile_path", lambda: profile_path)
+
+    body = _text_payload(web.setup_get(_request("GET", "/setup")))
+
+    assert 'value="api"' in body
+    assert "OpenAI-compatible API" in body
+    assert 'value="anthropic"' in body
+    assert "Anthropic Claude API" in body
+    assert 'value="claude_cli"' in body
+    assert "Signed-in Claude Code" in body
+    assert 'value="codex_cli"' in body
+    assert "Signed-in Codex" in body
+    assert "API billing" in body
+    assert "chat subscription" in body.lower()
+
+
+def test_setup_saves_signed_in_cli_backend_without_api_credentials(tmp_path, monkeypatch):
+    from dailydigest import web
+
+    profile_path = tmp_path / "profile.yaml"
+    env_path = tmp_path / ".env"
+    monkeypatch.setattr(web, "_get_profile_path", lambda: profile_path)
+    monkeypatch.setattr(web, "_ENV_PATH", env_path)
+
+    response = asyncio.run(
+        web.setup_post(
+            _request(
+                "POST",
+                "/setup",
+                form={
+                    "_csrf_token": web._CSRF_TOKEN,
+                    "bio": "RNA nanotechnology researcher.",
+                    "topics": "RNA nanotechnology | 10",
+                    "llm_backend": "claude_cli",
+                    "llm_base_url": "",
+                    "llm_api_key": "",
+                    "llm_model": "haiku",
+                },
+            )
+        )
+    )
+
+    assert response.status_code == 303
+    saved = env_path.read_text()
+    assert "LLM_BACKEND=claude_cli" in saved
+    assert "LLM_MODEL=haiku" in saved
+    assert "LLM_API_KEY" not in saved
+
+
 def test_theme_controls_and_safe_pwa_assets_are_exposed(monkeypatch, tmp_path):
     from dailydigest import web
 

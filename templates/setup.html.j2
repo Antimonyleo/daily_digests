@@ -3,6 +3,7 @@
 {% block extra_styles %}
   .wrap { max-width: 860px; }
   .card { padding: 28px; }
+  .settings-nav { display: flex; justify-content: flex-start; margin-bottom: 18px; }
   h1 { font-size: 30px; line-height: 1.1; margin: 0 0 8px 0; letter-spacing: 0; }
   .lede { color: var(--muted); margin: 0 0 24px 0; font-size: 14px; line-height: 1.5; }
   .step { margin-bottom: 30px; padding-top: 4px; }
@@ -102,6 +103,9 @@
 {% endblock %}
 {% block body %}
 <div class="card">
+  <nav class="settings-nav" aria-label="Settings navigation">
+    <a class="btn" href="/">← Back to today’s digest</a>
+  </nav>
   <h1>DailyDigest settings</h1>
   <p class="lede">Tune the profile, summarizer, and section sizes used when brewing a new digest.</p>
 
@@ -151,20 +155,44 @@
           <input type="radio" name="llm_backend" value="api"
                  {% if form.llm_backend == "api" %}checked{% endif %}>
           <strong>OpenAI-compatible API</strong> — optional richer summaries.
-          <div class="desc">Use an API key, or a local Ollama/vLLM endpoint. Chat subscriptions alone are not API keys.</div>
+          <div class="desc">OpenAI, OpenRouter, Ollama, vLLM, or another compatible endpoint. Online providers use separate API billing.</div>
+        </label>
+
+        <label class="backend-opt" data-value="anthropic">
+          <input type="radio" name="llm_backend" value="anthropic"
+                 {% if form.llm_backend == "anthropic" %}checked{% endif %}>
+          <strong>Anthropic Claude API</strong> — native Messages API.
+          <div class="desc">Uses an Anthropic Console API key and API billing; a Claude chat subscription is not an API key.</div>
+        </label>
+
+        <label class="backend-opt" data-value="claude_cli">
+          <input type="radio" name="llm_backend" value="claude_cli"
+                 {% if form.llm_backend == "claude_cli" %}checked{% endif %}>
+          <strong>Signed-in Claude Code</strong> — use your local Claude login.
+          <div class="desc">Requires the <code>claude</code> command to be installed and signed in. Tools and session persistence are disabled for summaries.</div>
+        </label>
+
+        <label class="backend-opt" data-value="codex_cli">
+          <input type="radio" name="llm_backend" value="codex_cli"
+                 {% if form.llm_backend == "codex_cli" %}checked{% endif %}>
+          <strong>Signed-in Codex</strong> — use your local ChatGPT/Codex login.
+          <div class="desc">Requires the <code>codex</code> command to be installed and signed in. Runs ephemerally, read-only, with agent tools disabled.</div>
         </label>
       </div>
 
       <div class="api-fields" id="api-fields" hidden>
-        <label for="llm_base_url">Base URL</label>
-        <input type="url" id="llm_base_url" name="llm_base_url"
-               placeholder="https://api.openai.com/v1" value="{{ form.llm_base_url }}">
-        <label for="llm_api_key">API key</label>
-        <input type="password" id="llm_api_key" name="llm_api_key"
-               placeholder="sk-..." value="{{ form.llm_api_key }}">
+        <div id="api-auth-fields">
+          <label for="llm_base_url">Base URL</label>
+          <input type="url" id="llm_base_url" name="llm_base_url"
+                 placeholder="https://api.openai.com/v1" value="{{ form.llm_base_url }}">
+          <label for="llm_api_key">API key</label>
+          <input type="password" id="llm_api_key" name="llm_api_key"
+                 placeholder="Provider API key" value="{{ form.llm_api_key }}">
+        </div>
         <label for="llm_model">Model</label>
         <input type="text" id="llm_model" name="llm_model"
                placeholder="gpt-4o-mini" value="{{ form.llm_model }}">
+        <div class="hint" id="provider-hint"></div>
       </div>
     </div>
 
@@ -427,17 +455,58 @@
 
   // Backend reveal logic.
   const apiFields = document.getElementById("api-fields");
+  const apiAuthFields = document.getElementById("api-auth-fields");
+  const baseUrlInput = document.getElementById("llm_base_url");
+  const modelInput = document.getElementById("llm_model");
+  const providerHint = document.getElementById("provider-hint");
   const radios = document.querySelectorAll('input[name="llm_backend"]');
+  const providerDefaults = {
+    extractive: { base: "https://api.openai.com/v1", model: "gpt-4o-mini" },
+    api: { base: "https://api.openai.com/v1", model: "gpt-4o-mini" },
+    anthropic: { base: "https://api.anthropic.com/v1", model: "claude-haiku-4-5-20251001" },
+    claude_cli: { base: "", model: "haiku" },
+    codex_cli: { base: "", model: "" },
+  };
+  let activeBackend = (document.querySelector('input[name="llm_backend"]:checked') || {}).value || "extractive";
 
   function refresh() {
     const sel = document.querySelector('input[name="llm_backend"]:checked');
     const v = sel ? sel.value : "extractive";
-    apiFields.hidden = v !== "api";
+    const isApi = v === "api" || v === "anthropic";
+    const isCli = v === "claude_cli" || v === "codex_cli";
+    apiFields.hidden = !(isApi || isCli);
+    apiAuthFields.hidden = !isApi;
+    if (v === "anthropic") {
+      baseUrlInput.placeholder = "https://api.anthropic.com/v1";
+      modelInput.placeholder = "claude-haiku-4-5-20251001";
+      providerHint.textContent = "Recommended economical model: Claude Haiku 4.5.";
+    } else if (v === "claude_cli") {
+      modelInput.placeholder = "haiku (optional; blank uses your Claude default)";
+      providerHint.textContent = "Run claude once in a terminal to install/sign in before brewing.";
+    } else if (v === "codex_cli") {
+      modelInput.placeholder = "optional; blank uses your Codex default";
+      providerHint.textContent = "Run codex login status in a terminal to confirm sign-in before brewing.";
+    } else {
+      baseUrlInput.placeholder = "https://api.openai.com/v1";
+      modelInput.placeholder = "gpt-4o-mini";
+      providerHint.textContent = "Online API accounts are billed separately from chat subscriptions.";
+    }
     document.querySelectorAll(".backend-opt").forEach((opt) => {
       opt.classList.toggle("selected", opt.dataset.value === v);
     });
   }
-  radios.forEach((r) => r.addEventListener("change", refresh));
+  radios.forEach((radio) => radio.addEventListener("change", () => {
+    const previous = providerDefaults[activeBackend] || providerDefaults.extractive;
+    const next = providerDefaults[radio.value] || providerDefaults.extractive;
+    if (!modelInput.value.trim() || modelInput.value.trim() === previous.model) {
+      modelInput.value = next.model;
+    }
+    if (!baseUrlInput.value.trim() || baseUrlInput.value.trim() === previous.base) {
+      baseUrlInput.value = next.base;
+    }
+    activeBackend = radio.value;
+    refresh();
+  }));
   refresh();
 
   // An off section keeps its previous cap but removes the inactive control

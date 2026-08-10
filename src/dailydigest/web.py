@@ -36,10 +36,11 @@ import secrets
 import threading
 import uuid
 from collections import Counter
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import yaml
 from fastapi import FastAPI, HTTPException, Request
@@ -481,6 +482,56 @@ def _saved_date(value: date | None) -> str:
     return value.strftime("%b %d, %Y").replace(" 0", " ")
 
 
+_DAILY_NOTES = (
+    "RNA can store information and catalyze reactions — biology rarely stays in one job description.",
+    "A careful negative result can save a lab more time than a flashy positive one.",
+    "The best experiments are reproducible. The best tea is refillable.",
+    "Peer review improves papers; a short walk often improves the reviewer.",
+    "Nanometres are tiny, but they still manage to create very large to-do lists.",
+    "Today’s scientific unit of progress: one useful question answered clearly.",
+    "A good model simplifies reality. A good cup of tea simplifies the morning.",
+)
+
+
+def _reader_now() -> datetime:
+    if SETTINGS.user_tz:
+        try:
+            return datetime.now(ZoneInfo(SETTINGS.user_tz))
+        except (ZoneInfoNotFoundError, ValueError):
+            logger.warning("invalid USER_TZ=%r; using the system timezone", SETTINGS.user_tz)
+    return datetime.now().astimezone()
+
+
+def _time_salutation() -> str:
+    hour = _reader_now().hour
+    if hour < 5:
+        return "You’re up early"
+    if hour < 12:
+        return "Good morning"
+    if hour < 17:
+        return "Good afternoon"
+    return "Good evening"
+
+
+def _daily_note() -> str:
+    return _DAILY_NOTES[_reader_now().date().toordinal() % len(_DAILY_NOTES)]
+
+
+def _summarizer_label() -> str:
+    backend = (SETTINGS.llm_backend or "extractive").lower()
+    if backend == "extractive":
+        return "Extractive (local, no AI)"
+    names = {
+        "api": "OpenAI-compatible API",
+        "anthropic": "Anthropic API",
+        "claude_cli": "Claude Code",
+        "codex_cli": "Codex",
+    }
+    name = names.get(backend, "Extractive (local, no AI)")
+    model = (SETTINGS.llm_model or "").strip()
+    return f"{name} · {model}" if model else name
+
+
 def _host_name(host_header: str | None) -> str:
     host = (host_header or "").strip()
     if host.startswith("["):
@@ -651,7 +702,13 @@ def _parse_ranked_topics(value: str | None) -> tuple[list[tuple[str, float]], li
 def _load_existing_form_defaults() -> dict[str, str]:
     """Pre-populate the form from any existing profile.yaml + .env values."""
     backend = (SETTINGS.llm_backend or "extractive").lower()
-    if backend not in {"api", "extractive"}:
+    if backend not in {
+        "api",
+        "anthropic",
+        "claude_cli",
+        "codex_cli",
+        "extractive",
+    }:
         backend = "extractive"
     out: dict[str, str] = {
         "name": "",
@@ -818,13 +875,22 @@ def _env_value_has_control_chars(value: str | None) -> bool:
 def _validate_setup(form: dict[str, str]) -> list[str]:
     errors: list[str] = []
     backend = form.get("llm_backend", "extractive")
-    if backend not in ("extractive", "api"):
+    if backend not in (
+        "extractive",
+        "api",
+        "anthropic",
+        "claude_cli",
+        "codex_cli",
+    ):
         errors.append(f"Unknown backend: {backend}")
     _topics, topic_errors = _parse_ranked_topics(form.get("topics"))
     errors.extend(topic_errors)
-    if backend == "api":
+    if backend in {"api", "anthropic"}:
         if not (form.get("llm_base_url") or "").strip():
             errors.append("API backend requires a base URL.")
+        entered_key = (form.get("llm_api_key") or "").strip()
+        if not entered_key and not SETTINGS.llm_api_key:
+            errors.append("API backend requires an API key.")
         if not (form.get("llm_model") or "").strip():
             errors.append("API backend requires a model name.")
     for key, label in (
@@ -950,6 +1016,9 @@ def index(request: Request) -> Response:
         {
             "digest_id": digest_id,
             "profile_name": _profile_name(),
+            "salutation": _time_salutation(),
+            "daily_note": _daily_note(),
+            "summarizer_label": _summarizer_label(),
             "sections": sections,
             "overview": overview,
             "top_journal_audit": top_journal_audit,
@@ -1439,11 +1508,21 @@ async def setup_post(request: Request) -> Response:
         )
 
     # Write/update .env.
+    default_base_url = (
+        "https://api.anthropic.com/v1"
+        if form["llm_backend"] == "anthropic"
+        else "https://api.openai.com/v1"
+    )
+    default_model = (
+        "claude-haiku-4-5-20251001"
+        if form["llm_backend"] == "anthropic"
+        else ("" if form["llm_backend"] in {"claude_cli", "codex_cli"} else "gpt-4o-mini")
+    )
     env_updates: dict[str, str] = {
         "LLM_BACKEND": form["llm_backend"],
         "LLM_BASE_URL": form["llm_base_url"].strip()
-        or (SETTINGS.llm_base_url or "https://api.openai.com/v1"),
-        "LLM_MODEL": form["llm_model"].strip() or "gpt-4o-mini",
+        or default_base_url,
+        "LLM_MODEL": form["llm_model"].strip() or default_model,
         "TOP_RESEARCH": _int_form(form, "top_research", SETTINGS.top_research),
         "INCLUDE_INDUSTRY": form["include_industry"],
         "TOP_INDUSTRY": _int_form(form, "top_industry", SETTINGS.top_industry),
@@ -1561,14 +1640,25 @@ def _kick_off_run(run_id: str, reading_mode: str) -> None:
 
 
 @app.get("/run", response_class=HTMLResponse)
-def run_get(request: Request) -> Response:
+def run_get(
+    request: Request, reading_mode: str = "usual", autostart: bool = False
+) -> Response:
     if not _profile_exists():
         return RedirectResponse(url="/setup", status_code=302)
+    try:
+        selected_mode = normalize_reading_mode(reading_mode)
+    except ValueError:
+        selected_mode = "usual"
     run_id = uuid.uuid4().hex[:12]
     response = templates.TemplateResponse(
         request,
         "run.html.j2",
-        {"run_id": run_id, "csrf_token": _CSRF_TOKEN},
+        {
+            "run_id": run_id,
+            "csrf_token": _CSRF_TOKEN,
+            "reading_mode": selected_mode,
+            "autostart": bool(autostart),
+        },
     )
     response.headers["Cache-Control"] = "no-store"
     return response

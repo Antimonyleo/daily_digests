@@ -156,23 +156,28 @@ The default browser experience needs no login after the software is downloaded.
 | --- | --- | --- |
 | Research/news collection and recommendation | None | Included |
 | Default extractive summaries | None | Included and recommended for first use |
-| Richer AI summaries | Optional OpenAI-compatible API key | Keep Extractive, or run a local [Ollama](https://docs.ollama.com/api/openai-compatibility) model |
+| Richer AI summaries | OpenAI-compatible API, Anthropic API, or a signed-in Claude Code/Codex CLI | Keep Extractive, or run a local [Ollama](https://docs.ollama.com/api/openai-compatibility) model |
 | Email delivery | Optional [Resend](https://resend.com/docs/api-reference/api-keys/create-api-key) account and API key | Read the digest in the browser |
 | Installation | Free `uv` toolchain; Git only if cloning | Download the repository ZIP, or use Docker Desktop |
 
-DailyDigest does **not** require Claude, Claude Code, Codex, ChatGPT, ChatGPT
-Plus/Pro, or another AI chat subscription. Those products are not runtime
-dependencies.
+DailyDigest does **not** require Claude, Codex, ChatGPT, or another AI service.
+Extractive summaries remain the private, free default. If Claude Code or Codex
+is already installed and signed in, Settings can use that local login for
+summaries; DailyDigest disables agent tools, uses an isolated temporary working
+directory, and falls back to Extractive if the command fails.
 
 If you choose an online model, you need developer API access from that provider:
 
 - OpenAI API billing is separate from ChatGPT subscriptions. Configure an API
   key, base URL, and model in Settings. See the official
   [OpenAI billing explanation](https://help.openai.com/en/articles/8156019-how-can-i-move-my-chatgpt-subscription-to-the-api).
-- A Claude Pro/Max/Team subscription does not provide a Claude API key, and
-  DailyDigest does not call Anthropic's native API directly. Anthropic documents
-  the separate products in its
-  [Claude API billing explanation](https://support.claude.com/en/articles/9876003-i-have-a-paid-claude-subscription-pro-max-team-or-enterprise-plans-why-do-i-have-to-pay-separately-to-use-the-claude-api-and-console).
+- Anthropic's native API option uses a Console API key and separate API billing.
+  Alternatively, the Claude Code option uses a locally installed, signed-in
+  `claude` command; Claude Code supports eligible Claude plans as documented in
+  its [setup guide](https://code.claude.com/docs/en/getting-started).
+- The Codex option uses a locally installed, signed-in `codex` command. Codex
+  supports ChatGPT subscription login or API-key login; see the official
+  [authentication guide](https://developers.openai.com/codex/auth/).
 - Ollama is the simplest no-subscription option for richer local summaries. Use
   base URL `http://localhost:11434/v1`, API key `ollama` (required by the client
   but ignored by Ollama), and the name of a model you already pulled.

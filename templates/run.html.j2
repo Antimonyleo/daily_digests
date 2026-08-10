@@ -151,7 +151,7 @@
         <legend>Choose today’s reading depth</legend>
         <div class="mode-grid">
           <div class="mode-option">
-            <input id="mode-full" name="reading_mode" type="radio" value="full">
+            <input id="mode-full" name="reading_mode" type="radio" value="full"{% if reading_mode == "full" %} checked{% endif %}>
             <label class="mode-card" for="mode-full">
               <span class="mode-icon" aria-hidden="true">☀️</span>
               <span class="mode-title">Energetic</span>
@@ -160,7 +160,7 @@
             </label>
           </div>
           <div class="mode-option">
-            <input id="mode-usual" name="reading_mode" type="radio" value="usual" checked>
+            <input id="mode-usual" name="reading_mode" type="radio" value="usual"{% if reading_mode == "usual" %} checked{% endif %}>
             <label class="mode-card" for="mode-usual">
               <span class="mode-icon" aria-hidden="true">🍵</span>
               <span class="mode-title">Usual</span>
@@ -169,7 +169,7 @@
             </label>
           </div>
           <div class="mode-option">
-            <input id="mode-minimal" name="reading_mode" type="radio" value="minimal">
+            <input id="mode-minimal" name="reading_mode" type="radio" value="minimal"{% if reading_mode == "minimal" %} checked{% endif %}>
             <label class="mode-card" for="mode-minimal">
               <span class="mode-icon" aria-hidden="true">🌙</span>
               <span class="mode-title">Tired</span>
@@ -216,6 +216,7 @@
 (function () {
   const RUN_ID = {{ run_id|tojson }};
   const CSRF_TOKEN = {{ csrf_token|tojson }};
+  const AUTOSTART = {{ autostart|tojson }};
   const form = document.getElementById("brew-form");
   const brewButton = document.getElementById("brew-button");
   const choicePanel = document.getElementById("choice-panel");
@@ -326,8 +327,8 @@
     };
   }
 
-  form.addEventListener("submit", async (event) => {
-    event.preventDefault();
+  async function startBrew() {
+    if (brewButton.disabled) return;
     const readingMode = new FormData(form).get("reading_mode") || "usual";
     brewButton.disabled = true;
     choicePanel.hidden = true;
@@ -343,8 +344,13 @@
     } catch (error) {
       showError("Could not start pipeline: " + error.message);
     }
+  }
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    startBrew();
   });
   retryButton.addEventListener("click", () => window.location.reload());
+  if (AUTOSTART) startBrew();
 })();
 </script>
 {% endblock %}

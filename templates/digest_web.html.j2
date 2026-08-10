@@ -18,6 +18,30 @@
     font-size: 15px; line-height: 1.55;
   }
   .actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+  .tea-note { color: var(--copy-secondary); font-size: 12px; margin: 8px 0 0; }
+  .brew-choice {
+    display: grid; grid-template-columns: minmax(150px, 0.65fr) minmax(0, 2fr) auto;
+    align-items: center; gap: 14px; margin: 0 0 16px; padding: 14px 16px;
+    border: 1px solid var(--border); border-radius: 12px; background: var(--card);
+    box-shadow: 0 8px 24px rgba(21, 34, 27, 0.04);
+  }
+  .brew-choice-title { font-size: 14px; font-weight: 810; }
+  .brew-choice-hint { color: var(--muted); font-size: 11px; margin-top: 3px; }
+  .density-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
+  .density-option { position: relative; }
+  .density-option input { position: absolute; opacity: 0; pointer-events: none; }
+  .density-card {
+    display: grid; gap: 2px; min-height: 54px; padding: 8px 10px;
+    border: 1px solid var(--border); border-radius: 9px; background: var(--panel);
+    cursor: pointer;
+  }
+  .density-card strong { font-size: 12px; }
+  .density-card span { color: var(--muted); font-size: 10px; line-height: 1.3; }
+  .density-option input:checked + .density-card {
+    border-color: var(--accent); background: var(--accent-soft);
+    box-shadow: 0 0 0 1px var(--accent);
+  }
+  .density-option input:focus-visible + .density-card { outline: 2px solid var(--accent); outline-offset: 2px; }
   .name-prompt {
     display: grid; grid-template-columns: 1fr auto; gap: 10px;
     padding: 14px; margin-bottom: 16px; border: 1px solid #d6e6db;
@@ -344,21 +368,45 @@
     .vote-panel { width: 100%; }
     .name-prompt { grid-template-columns: 1fr; }
     .today-cup { grid-template-columns: 1fr; }
+    .brew-choice { grid-template-columns: 1fr; }
+    .density-options { grid-template-columns: 1fr; }
   }
 {% endblock %}
 {% block body %}
   <header class="topbar">
     <div>
       <div class="eyebrow">DailyDigest</div>
-      <h1>Good morning{% if profile_name %}, {{ profile_name }}{% endif %}</h1>
+      <h1>{{ salutation }}{% if profile_name %}, {{ profile_name }}{% endif %}</h1>
       <p class="subhead">Fresh research, biotech, regulatory, and world signals ranked against your profile.</p>
+      <p class="tea-note"><strong>Tea break:</strong> {{ daily_note }}</p>
     </div>
     <div class="actions">
-      <button class="btn primary" id="refresh-btn" type="button">Brew my morning cup of tea</button>
       <a class="btn" href="/saved">Saved reading</a>
       <button class="btn" onclick="window.location.href='/setup'" type="button">Settings</button>
     </div>
   </header>
+
+  <section class="brew-choice" aria-labelledby="brew-choice-title">
+    <div>
+      <div class="brew-choice-title" id="brew-choice-title">How are we feeling today?</div>
+      <div class="brew-choice-hint">Choose today’s serving size. Source collection stays the same.<br>Summaries: {{ summarizer_label }}</div>
+    </div>
+    <div class="density-options" role="radiogroup" aria-label="Reading density">
+      <label class="density-option">
+        <input name="reading_mode" type="radio" value="full">
+        <span class="density-card"><strong>Energetic</strong><span>All qualified entries</span></span>
+      </label>
+      <label class="density-option">
+        <input name="reading_mode" type="radio" value="usual" checked>
+        <span class="density-card"><strong>Usual</strong><span>Up to 15 entries</span></span>
+      </label>
+      <label class="density-option">
+        <input name="reading_mode" type="radio" value="minimal">
+        <span class="density-card"><strong>Tired</strong><span>5 research + 1 per other section</span></span>
+      </label>
+    </div>
+    <button class="btn primary" id="refresh-btn" type="button">Brew my morning cup of tea</button>
+  </section>
 
   {% if not profile_name %}
 	  <form class="name-prompt" method="post" action="/profile/name">
@@ -1017,7 +1065,9 @@
 
   const refreshBtn = document.getElementById("refresh-btn");
   refreshBtn.addEventListener("click", () => {
-    window.location.href = "/run";
+    const selected = document.querySelector('input[name="reading_mode"]:checked');
+    const readingMode = selected ? selected.value : "usual";
+    window.location.href = `/run?reading_mode=${readingMode}&autostart=1`;
   });
 })();
 </script>
