@@ -75,6 +75,12 @@ except ImportError:
 logger = logging.getLogger(__name__)
 _ORIGINAL_SCORE_ITEMS = score_items
 
+READING_MODE_LIMITS: dict[str, int | None] = {
+    "full": None,
+    "usual": 15,
+    "minimal": 5,
+}
+
 _TITLE_BLOCKLIST = re.compile(
     r"^(?:volume\s+\d|issue\s+\d|editorial\b|correspondence\b|correction\b|"
     r"erratum\b|in\s+this\s+issue|table\s+of\s+contents|show\s+hn:|ask\s+hn:|"
@@ -159,6 +165,31 @@ def _emit(cb: ProgressCallback | None, stage: str, payload: dict[str, Any]) -> N
         cb(stage, payload)
     except Exception as e:  # noqa: BLE001
         logger.warning("progress_callback failed at stage=%s: %s", stage, e)
+
+
+def normalize_reading_mode(value: str | None, *, default: str = "full") -> str:
+    """Return a supported per-brew reading mode or raise for invalid input."""
+    mode = str(value or default).strip().lower()
+    if mode not in READING_MODE_LIMITS:
+        choices = ", ".join(READING_MODE_LIMITS)
+        raise ValueError(f"unknown reading mode {mode!r}; choose one of: {choices}")
+    return mode
+
+
+def apply_reading_mode(
+    picked: list[tuple[ItemRow, float]], reading_mode: str
+) -> list[tuple[ItemRow, float]]:
+    """Limit an already-qualified slate to today's requested reading depth.
+
+    This runs after normal relevance gates, section caps, source balancing, and
+    exploration. It can remove lower-ranked picks but never adds a candidate or
+    changes a score. ``full`` preserves the existing configured digest.
+    """
+    mode = normalize_reading_mode(reading_mode)
+    limit = READING_MODE_LIMITS[mode]
+    if limit is None or len(picked) <= limit:
+        return picked
+    return sorted(picked, key=lambda pair: pair[1], reverse=True)[:limit]
 
 
 def ingest_all(
@@ -761,6 +792,7 @@ def run_all(
     dry_run: bool = False,
     backfill_days: int | None = None,
     progress_callback: ProgressCallback | None = None,
+    reading_mode: str = "full",
 ) -> str:
     """Run ingest + rank + summarize + render + send. Returns the digest id.
 
@@ -768,7 +800,12 @@ def run_all(
     the window is set automatically: if the last sent digest was N days ago,
     ``days = N + 1`` (capped at 7), so no recent day's content is missed.
     Pass an explicit value to override.
+
+    ``reading_mode`` changes only the size of the final qualified slate:
+    ``full`` keeps the configured section limits, ``usual`` keeps the best 15,
+    and ``minimal`` keeps the best 5.
     """
+    reading_mode = normalize_reading_mode(reading_mode)
     init_db()
 
     # Idempotency check: if today's digest has already been sent and this is
@@ -1168,12 +1205,17 @@ def run_all(
         except Exception as _e:  # noqa: BLE001
             logger.warning("exploration slot failed: %s", _e)
 
+    picked = apply_reading_mode(picked, reading_mode)
     top_journal_audit = _build_top_journal_audit(scored, picked, score_features)
     labeled = _assign_labels(picked)
     _emit(
         progress_callback,
         "rank_done",
-        {"candidates": len(items), "picked": len(labeled)},
+        {
+            "candidates": len(items),
+            "picked": len(labeled),
+            "reading_mode": reading_mode,
+        },
     )
 
     selected_rows = [row for row, _, _ in labeled]

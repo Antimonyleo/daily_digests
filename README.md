@@ -103,7 +103,12 @@ The app opens <http://127.0.0.1:8765>. On the setup page:
 
    The structured fields are used to reject clearly incompatible calls. Unknown
    eligibility is shown as “needs verification,” never as confirmed eligibility.
-5. Select **Brew my morning cup of tea**.
+
+5. Select **Brew my morning cup of tea** to save the setup.
+6. Choose how much you feel like reading today: **Energetic** keeps every
+   qualified pick up to your section limits, **Usual** keeps the best 15, and
+   **Tired** keeps the best 5. This changes only the final serving size; every
+   enabled source is still scanned and filtered.
 
 Keep the launcher or terminal window open while using DailyDigest. Press
 `Ctrl+C` in that window to stop the server.

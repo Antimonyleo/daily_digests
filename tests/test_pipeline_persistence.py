@@ -183,6 +183,25 @@ def test_topic_selection_preferences_are_soft_and_keep_raw_scores(monkeypatch):
     assert "selection_order_bonus" not in features[4]
 
 
+def test_reading_mode_caps_only_the_final_ranked_slate():
+    """Daily reading depth changes quantity without admitting new candidates."""
+    from dailydigest import pipeline as pipeline_mod
+
+    rows = [SimpleNamespace(id=idx, section="research") for idx in range(20)]
+    # Deliberately reverse the input so limited modes must retain the best scores.
+    picked = [(row, float(20 - row.id)) for row in reversed(rows)]
+
+    assert pipeline_mod.apply_reading_mode(picked, "full") == picked
+    assert [row.id for row, _score in pipeline_mod.apply_reading_mode(picked, "usual")] == list(
+        range(15)
+    )
+    assert [row.id for row, _score in pipeline_mod.apply_reading_mode(picked, "minimal")] == list(
+        range(5)
+    )
+    with pytest.raises(ValueError, match="reading mode"):
+        pipeline_mod.apply_reading_mode(picked, "bottomless")
+
+
 def _reset_store(tmp_path, monkeypatch):
     from dailydigest import config as config_mod
     from dailydigest import store as store_mod
@@ -781,6 +800,8 @@ def test_run_all_empty_digest_emits_done_with_zero_items(monkeypatch, tmp_path):
     store_mod = _reset_store(tmp_path, monkeypatch)
     digest_id = "2026-05-05"
     events = []
+    applied_modes = []
+    real_apply_reading_mode = pipeline_mod.apply_reading_mode
 
     monkeypatch.setattr(pipeline_mod, "_digest_id", lambda: digest_id)
     monkeypatch.setattr(
@@ -795,9 +816,21 @@ def test_run_all_empty_digest_emits_done_with_zero_items(monkeypatch, tmp_path):
     monkeypatch.setattr(pipeline_mod, "pick_top_per_section", lambda scored, _caps, catch_up=False: [])
     monkeypatch.setattr(pipeline_mod, "summarize_items", lambda rows, profile=None: {})
     monkeypatch.setattr(pipeline_mod, "send_digest", lambda html, subject, dry_run=False: False)
+    monkeypatch.setattr(
+        pipeline_mod,
+        "apply_reading_mode",
+        lambda picked, mode: (
+            applied_modes.append(mode) or real_apply_reading_mode(picked, mode)
+        ),
+    )
 
-    pipeline_mod.run_all(dry_run=True, progress_callback=lambda stage, payload: events.append((stage, payload)))
+    pipeline_mod.run_all(
+        dry_run=True,
+        reading_mode="minimal",
+        progress_callback=lambda stage, payload: events.append((stage, payload)),
+    )
 
+    assert applied_modes == ["minimal"]
     assert events[-1] == ("done", {"digest_id": digest_id, "total_items": 0, "dry_run": True})
     with store_mod.session_scope() as s:
         digest = s.get(store_mod.DigestRow, digest_id)

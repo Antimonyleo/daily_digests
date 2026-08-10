@@ -1,39 +1,101 @@
 {% extends "_base.html.j2" %}
-{% block title %}Brewing your morning tea…{% endblock %}
+{% block title %}Choose your morning cup · DailyDigest{% endblock %}
 {% block extra_styles %}
-  .wrap { max-width: 760px; }
-  .card { padding: 34px 28px; text-align: center; }
-  h1 { font-size: 32px; line-height: 1.1; margin: 10px 0 8px 0; letter-spacing: 0; }
-  .lede { color: var(--muted); font-size: 14px; margin: 0 auto 24px; max-width: 500px; line-height: 1.55; }
-  .cup {
-    position: relative; width: 80px; height: 80px; margin: 0 auto 18px;
+  .wrap { max-width: 820px; padding-top: 44px; }
+  .brew-card {
+    position: relative;
+    padding: 38px 32px;
+    text-align: center;
+    overflow: hidden;
   }
+  .brew-card::before {
+    content: "";
+    position: absolute;
+    width: 260px;
+    height: 260px;
+    top: -150px;
+    right: -90px;
+    border-radius: 50%;
+    background: radial-gradient(circle, rgba(184, 121, 24, 0.14), transparent 68%);
+    pointer-events: none;
+  }
+  .eyebrow {
+    color: var(--accent);
+    font-size: 12px;
+    font-weight: 750;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+  }
+  h1 { font-size: clamp(30px, 5vw, 42px); line-height: 1.08; margin: 10px 0 10px; }
+  .lede { color: var(--muted); font-size: 15px; margin: 0 auto 26px; max-width: 560px; line-height: 1.6; }
+  .mode-fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
+  .mode-fieldset legend { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  .mode-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 12px;
+    margin: 0 auto 18px;
+    text-align: left;
+  }
+  .mode-option { position: relative; }
+  .mode-option input {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    opacity: 0;
+  }
+  .mode-card {
+    display: flex;
+    min-height: 174px;
+    height: 100%;
+    padding: 18px;
+    flex-direction: column;
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    background: var(--panel);
+    cursor: pointer;
+    transition: transform 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease, background 0.16s ease;
+  }
+  .mode-card:hover { transform: translateY(-2px); border-color: #abc2b4; box-shadow: 0 10px 24px rgba(21, 34, 27, 0.07); }
+  .mode-option input:focus-visible + .mode-card { outline: 3px solid rgba(37, 111, 82, 0.25); outline-offset: 2px; }
+  .mode-option input:checked + .mode-card {
+    border-color: var(--accent);
+    background: linear-gradient(160deg, #f4faf6, var(--accent-soft));
+    box-shadow: inset 0 0 0 1px var(--accent), 0 10px 25px rgba(37, 111, 82, 0.10);
+  }
+  .mode-icon { font-size: 24px; line-height: 1; margin-bottom: 18px; }
+  .mode-title { font-size: 17px; font-weight: 760; }
+  .mode-voice { color: var(--text); font-size: 13px; line-height: 1.4; margin-top: 5px; }
+  .mode-count { color: var(--accent-strong); font-size: 12px; font-weight: 720; margin-top: auto; padding-top: 14px; }
+  .serving-note { color: var(--muted); font-size: 12px; margin: 0 0 20px; }
+  .brew-button { min-width: 210px; min-height: 46px; font-size: 14px; border-radius: 12px; }
+  .brew-button:disabled { cursor: wait; opacity: 0.72; }
+  .cup { position: relative; width: 80px; height: 80px; margin: 0 auto 18px; }
   .cup .body {
     position: absolute; bottom: 0; left: 10px; width: 60px; height: 50px;
     background: #fff; border: 3px solid var(--accent); border-radius: 0 0 14px 14px;
   }
   .cup .handle {
     position: absolute; right: 0; top: 30px; width: 18px; height: 24px;
-    border: 3px solid var(--accent); border-radius: 0 12px 12px 0;
-    border-left: none;
+    border: 3px solid var(--accent); border-radius: 0 12px 12px 0; border-left: none;
   }
   .cup .steam {
     position: absolute; top: -2px; width: 4px; height: 18px;
     background: var(--accent); opacity: 0.45; border-radius: 4px;
     animation: steam 2.4s ease-in-out infinite;
   }
-  .cup .steam.s1 { left: 28px; animation-delay: 0s; }
+  .cup .steam.s1 { left: 28px; }
   .cup .steam.s2 { left: 38px; animation-delay: 0.5s; }
   .cup .steam.s3 { left: 48px; animation-delay: 1s; }
   @keyframes steam {
-    0%   { transform: translateY(0) scaleY(0.6); opacity: 0; }
-    35%  { opacity: 0.45; }
+    0% { transform: translateY(0) scaleY(0.6); opacity: 0; }
+    35% { opacity: 0.45; }
     100% { transform: translateY(-22px) scaleY(1); opacity: 0; }
   }
-	  .progress-shell {
-	    margin: 0 auto 20px; max-width: 420px; height: 10px;
-	    background: #e5ebe5; border-radius: 999px; overflow: hidden;
-	  }
+  .progress-shell {
+    margin: 0 auto 20px; max-width: 420px; height: 10px;
+    background: #e5ebe5; border-radius: 999px; overflow: hidden;
+  }
   .progress-bar {
     height: 100%; width: 6%; border-radius: 999px;
     background: linear-gradient(90deg, var(--accent), var(--gold));
@@ -43,10 +105,7 @@
     min-height: 22px; margin: -4px 0 14px; color: var(--accent-strong);
     font-size: 13px; font-weight: 650;
   }
-  ul.stages {
-    list-style: none; padding: 0; margin: 0 auto; max-width: 460px;
-    text-align: left;
-  }
+  ul.stages { list-style: none; padding: 0; margin: 0 auto; max-width: 460px; text-align: left; }
   ul.stages li {
     padding: 11px 14px; border: 1px solid #edf1ec; border-bottom: none;
     font-size: 14px; display: flex; align-items: center; gap: 10px;
@@ -56,189 +115,232 @@
   ul.stages li:last-child { border-bottom: 1px solid #edf1ec; border-radius: 0 0 8px 8px; }
   ul.stages li.active { color: var(--text); font-weight: 650; background: var(--gold-soft); }
   ul.stages li.done { color: var(--up); background: #f5faf6; }
-  ul.stages li .marker {
-    display: inline-block; width: 18px; text-align: center; font-weight: 700;
-  }
+  ul.stages li .marker { display: inline-block; width: 18px; text-align: center; font-weight: 700; }
   ul.stages li.done .marker::before { content: "✓"; color: var(--up); }
-  ul.stages li.active .marker::before { content: "•"; color: var(--accent);
-    animation: pulse 1.2s ease-in-out infinite; }
+  ul.stages li.active .marker::before { content: "•"; color: var(--accent); animation: pulse 1.2s ease-in-out infinite; }
   ul.stages li:not(.active):not(.done) .marker::before { content: "·"; }
-  @keyframes pulse { 0%,100% { opacity: 0.3; } 50% { opacity: 1; } }
-	  .err { color: var(--down); margin-top: 16px; font-size: 13px; }
+  @keyframes pulse { 0%, 100% { opacity: 0.3; } 50% { opacity: 1; } }
+  .err { color: var(--down); margin-top: 16px; font-size: 13px; }
+  .retry { margin-top: 12px; }
+  [hidden] { display: none !important; }
+  @media (max-width: 680px) {
+    .wrap { padding-top: 18px; }
+    .brew-card { padding: 30px 18px; }
+    .mode-grid { grid-template-columns: 1fr; }
+    .mode-card { min-height: 0; }
+    .mode-icon { margin-bottom: 10px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .mode-card, .progress-bar { transition: none; }
+    .cup .steam, ul.stages li.active .marker::before { animation: none; }
+  }
 {% endblock %}
 {% block body %}
-<div class="card">
-  <div class="cup">
-    <div class="steam s1"></div>
-    <div class="steam s2"></div>
-    <div class="steam s3"></div>
-    <div class="body"></div>
-    <div class="handle"></div>
-  </div>
-	  <h1>Brewing your morning tea</h1>
-	  <p class="lede">Fetching fresh sources, ranking them against your profile, and preparing the digest view.</p>
+<div class="card brew-card">
+  <section id="choice-panel">
+    <div class="eyebrow">Your daily reading ritual</div>
+    <h1>How are we feeling today?</h1>
+    <p class="lede">Choose the size of today’s digest. We still scan and rank every enabled source, then serve only the amount you want.</p>
 
-	  <div class="progress-shell" id="progress-shell" role="progressbar" aria-label="Brewing progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="6">
-	    <div class="progress-bar" id="progress-bar"></div>
-	  </div>
-	  <div class="detail" id="detail" aria-live="polite">Starting the kettle...</div>
+    <form id="brew-form">
+      <fieldset class="mode-fieldset">
+        <legend>Choose today’s reading depth</legend>
+        <div class="mode-grid">
+          <div class="mode-option">
+            <input id="mode-full" name="reading_mode" type="radio" value="full">
+            <label class="mode-card" for="mode-full">
+              <span class="mode-icon" aria-hidden="true">☀️</span>
+              <span class="mode-title">Energetic</span>
+              <span class="mode-voice">I want to read more!</span>
+              <span class="mode-count">All qualified picks</span>
+            </label>
+          </div>
+          <div class="mode-option">
+            <input id="mode-usual" name="reading_mode" type="radio" value="usual" checked>
+            <label class="mode-card" for="mode-usual">
+              <span class="mode-icon" aria-hidden="true">🍵</span>
+              <span class="mode-title">Usual</span>
+              <span class="mode-voice">Same usual day—what’s new today?</span>
+              <span class="mode-count">Up to 15 best matches</span>
+            </label>
+          </div>
+          <div class="mode-option">
+            <input id="mode-minimal" name="reading_mode" type="radio" value="minimal">
+            <label class="mode-card" for="mode-minimal">
+              <span class="mode-icon" aria-hidden="true">🌙</span>
+              <span class="mode-title">Tired</span>
+              <span class="mode-voice">Just show me the essentials.</span>
+              <span class="mode-count">Up to 5 best matches</span>
+            </label>
+          </div>
+        </div>
+      </fieldset>
+      <p class="serving-note">Serving size changes only the final slate—not source coverage, quality checks, or your recommendation profile.</p>
+      <button class="btn primary brew-button" id="brew-button" type="submit">Brew the morning tea</button>
+    </form>
+  </section>
 
-	  <ul class="stages" id="stages" aria-live="polite">
-    <li data-stage="ingest"><span class="marker"></span><span class="text">Fetching from sources…</span></li>
-    <li data-stage="dedupe"><span class="marker"></span><span class="text">Deduplicating…</span></li>
-    <li data-stage="rank"><span class="marker"></span><span class="text">Ranking against your interests…</span></li>
-    <li data-stage="summarize"><span class="marker"></span><span class="text">Summarizing top picks…</span></li>
-    <li data-stage="render"><span class="marker"></span><span class="text">Rendering digest…</span></li>
-    <li data-stage="done"><span class="marker"></span><span class="text">Done!</span></li>
-  </ul>
+  <section id="progress-panel" hidden>
+    <div class="cup" aria-hidden="true">
+      <div class="steam s1"></div><div class="steam s2"></div><div class="steam s3"></div>
+      <div class="body"></div><div class="handle"></div>
+    </div>
+    <h1>Brewing your morning tea</h1>
+    <p class="lede">Fetching fresh sources, ranking them against your profile, and preparing your chosen serving.</p>
 
-	  <div class="err" id="err" role="alert" hidden></div>
+    <div class="progress-shell" id="progress-shell" role="progressbar" aria-label="Brewing progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="6">
+      <div class="progress-bar" id="progress-bar"></div>
+    </div>
+    <div class="detail" id="detail" aria-live="polite">Starting the kettle...</div>
+
+    <ul class="stages" id="stages" aria-live="polite">
+      <li data-stage="ingest"><span class="marker"></span><span class="text">Fetching from sources…</span></li>
+      <li data-stage="dedupe"><span class="marker"></span><span class="text">Deduplicating…</span></li>
+      <li data-stage="rank"><span class="marker"></span><span class="text">Ranking against your interests…</span></li>
+      <li data-stage="summarize"><span class="marker"></span><span class="text">Summarizing top picks…</span></li>
+      <li data-stage="render"><span class="marker"></span><span class="text">Rendering digest…</span></li>
+      <li data-stage="done"><span class="marker"></span><span class="text">Done!</span></li>
+    </ul>
+
+    <div class="err" id="err" role="alert" hidden></div>
+    <button class="btn retry" id="retry-button" type="button" hidden>Try again</button>
+  </section>
 </div>
 {% endblock %}
 {% block scripts %}
 <script>
 (function () {
-	  const RUN_ID = {{ run_id|tojson }};
-	  const CSRF_TOKEN = {{ csrf_token|tojson }};
+  const RUN_ID = {{ run_id|tojson }};
+  const CSRF_TOKEN = {{ csrf_token|tojson }};
+  const form = document.getElementById("brew-form");
+  const brewButton = document.getElementById("brew-button");
+  const choicePanel = document.getElementById("choice-panel");
+  const progressPanel = document.getElementById("progress-panel");
   const stagesEl = document.getElementById("stages");
-	  const errEl = document.getElementById("err");
-	  const detailEl = document.getElementById("detail");
-	  const progressBar = document.getElementById("progress-bar");
-	  const progressShell = document.getElementById("progress-shell");
+  const errEl = document.getElementById("err");
+  const retryButton = document.getElementById("retry-button");
+  const detailEl = document.getElementById("detail");
+  const progressBar = document.getElementById("progress-bar");
+  const progressShell = document.getElementById("progress-shell");
 
-  // Order; "ingest" stage covers ingest_start + ingest_done.
-  const order = ["ingest", "dedupe", "rank", "summarize", "render", "done"];
-  // Map backend stage -> UI stage key.
   const STAGE_MAP = {
-    ingest_start: "ingest",
-    ingest_done: "ingest",
-    dedupe_done: "dedupe",
-    rank_done: "rank",
-    summarize_start: "summarize",
-    summarize_done: "summarize",
-    render_done: "render",
-    done: "done",
-    error: "error",
+    ingest_start: "ingest", ingest_done: "ingest", dedupe_done: "dedupe",
+    rank_done: "rank", summarize_start: "summarize", summarize_done: "summarize",
+    render_done: "render", done: "done", error: "error",
   };
-  // Stages whose arrival means the *previous* UI stage completed.
   const COMPLETES_PREV = {
-    dedupe_done: "ingest",
-    rank_done: "dedupe",
-    summarize_start: "rank",
-    summarize_done: "summarize",
-    render_done: "summarize",
-    done: "render",
+    dedupe_done: "ingest", rank_done: "dedupe", summarize_start: "rank",
+    summarize_done: "summarize", render_done: "summarize", done: "render",
   };
   const PROGRESS = {
-    connected: 6,
-    ingest_start: 12,
-    ingest_done: 36,
-    dedupe_done: 46,
-    rank_done: 62,
-    summarize_start: 70,
-    summarize_done: 84,
-    render_done: 94,
-    done: 100,
+    connected: 6, ingest_start: 12, ingest_done: 36, dedupe_done: 46,
+    rank_done: 62, summarize_start: 70, summarize_done: 84, render_done: 94, done: 100,
   };
 
-	  function setProgress(stage, text) {
-	    if (PROGRESS[stage]) {
-	      if (progressBar) progressBar.style.width = PROGRESS[stage] + "%";
-	      if (progressShell) progressShell.setAttribute("aria-valuenow", String(PROGRESS[stage]));
-	    }
-	    if (detailEl && text) detailEl.textContent = text;
-	  }
-
-  function setStage(uiKey, cls) {
-    const li = stagesEl.querySelector(`li[data-stage="${uiKey}"]`);
-    if (!li) return;
-    li.classList.remove("active", "done");
-    if (cls) li.classList.add(cls);
+  function setProgress(stage, text) {
+    if (PROGRESS[stage]) {
+      progressBar.style.width = PROGRESS[stage] + "%";
+      progressShell.setAttribute("aria-valuenow", String(PROGRESS[stage]));
+    }
+    if (text) detailEl.textContent = text;
   }
-  function markActive(uiKey) {
-    // Remove active from all then set this one active.
-    stagesEl.querySelectorAll("li.active").forEach((l) => l.classList.remove("active"));
-    setStage(uiKey, "active");
+  function setStage(key, className) {
+    const item = stagesEl.querySelector(`li[data-stage="${key}"]`);
+    if (!item) return;
+    item.classList.remove("active", "done");
+    if (className) item.classList.add(className);
   }
-  function markDone(uiKey) {
-    setStage(uiKey, "done");
+  function markActive(key) {
+    stagesEl.querySelectorAll("li.active").forEach((item) => item.classList.remove("active"));
+    setStage(key, "active");
   }
-  function annotateText(uiKey, text) {
-    const li = stagesEl.querySelector(`li[data-stage="${uiKey}"]`);
-    if (li) li.querySelector(".text").textContent = text;
+  function annotateText(key, text) {
+    const item = stagesEl.querySelector(`li[data-stage="${key}"] .text`);
+    if (item) item.textContent = text;
   }
-
-  // Kick off the run, then connect SSE.
-  fetch("/run/start", {
-	    method: "POST",
-	    headers: { "Content-Type": "application/json", "X-CSRF-Token": CSRF_TOKEN },
-    body: JSON.stringify({ run_id: RUN_ID }),
-  }).then((r) => {
-    if (!r.ok) throw new Error("HTTP " + r.status);
-  }).catch((e) => {
+  function showError(message) {
     errEl.hidden = false;
-    errEl.textContent = "Could not start pipeline: " + e.message;
+    errEl.textContent = message;
+    retryButton.hidden = false;
+  }
+
+  function connectStream() {
+    const es = new EventSource(`/run/stream?run_id=${encodeURIComponent(RUN_ID)}`);
+    es.onmessage = (event) => {
+      let data;
+      try { data = JSON.parse(event.data); } catch (_) { return; }
+      const stage = data.stage;
+      const payload = data.payload || {};
+      if (stage === "error") {
+        es.close();
+        showError("Pipeline failed: " + (payload.message || "unknown error"));
+        return;
+      }
+      const uiKey = STAGE_MAP[stage];
+      if (!uiKey) return;
+      setProgress(stage);
+      const previous = COMPLETES_PREV[stage];
+      if (previous) setStage(previous, "done");
+
+      if (stage === "ingest_start") {
+        annotateText("ingest", `Fetching from ${payload.sources || "?"} sources…`);
+        setProgress(stage, `Contacting ${payload.sources || "?"} sources`);
+        markActive("ingest");
+      } else if (stage === "ingest_done") {
+        annotateText("ingest", `Fetched ${payload.raw_items || 0} items from ${payload.sources || "?"} sources.`);
+        setProgress(stage, `Fetched ${payload.raw_items || 0} raw items`);
+      } else if (stage === "dedupe_done") {
+        annotateText("dedupe", `Deduplicated to ${payload.english || payload.deduped || 0} items.`);
+        setProgress(stage, `Kept ${payload.english || payload.deduped || 0} English items`);
+        markActive("rank");
+      } else if (stage === "rank_done") {
+        annotateText("rank", `Picked ${payload.picked || 0} top items.`);
+        setProgress(stage, `Selected ${payload.picked || 0} top entries`);
+        markActive("summarize");
+      } else if (stage === "summarize_start") {
+        annotateText("summarize", `Summarizing ${payload.items || 0} items via ${payload.backend || "extractive"}…`);
+        setProgress(stage, `Summarizing with ${payload.backend || "extractive"}`);
+        markActive("summarize");
+      } else if (stage === "summarize_done") {
+        annotateText("summarize", `Summarized ${payload.items || 0} items.`);
+        setProgress(stage, `Summarized ${payload.items || 0} entries`);
+        markActive("render");
+      } else if (stage === "render_done") {
+        annotateText("render", `Rendered ${(payload.html_bytes || 0).toLocaleString()} bytes.`);
+        setProgress(stage, "Rendering the final page");
+        markActive("done");
+      } else if (stage === "done") {
+        setProgress(stage, "Ready");
+        setStage("done", "done");
+        es.close();
+        const digestId = encodeURIComponent(payload.digest_id || "");
+        const count = payload.total_items || 0;
+        setTimeout(() => {
+          window.location.href = `/done?digest_id=${digestId}&n=${count}`;
+        }, 600);
+      }
+    };
+  }
+
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const readingMode = new FormData(form).get("reading_mode") || "usual";
+    brewButton.disabled = true;
+    choicePanel.hidden = true;
+    progressPanel.hidden = false;
+    try {
+      const response = await fetch("/run/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-CSRF-Token": CSRF_TOKEN },
+        body: JSON.stringify({ run_id: RUN_ID, reading_mode: readingMode }),
+      });
+      if (!response.ok) throw new Error("HTTP " + response.status);
+      connectStream();
+    } catch (error) {
+      showError("Could not start pipeline: " + error.message);
+    }
   });
-
-  const es = new EventSource(`/run/stream?run_id=${encodeURIComponent(RUN_ID)}`);
-  es.onmessage = (ev) => {
-    let data;
-    try { data = JSON.parse(ev.data); } catch (_) { return; }
-    const stage = data.stage;
-    const payload = data.payload || {};
-    if (stage === "error") {
-      es.close();
-      errEl.hidden = false;
-      errEl.textContent = "Pipeline failed: " + (payload.message || "unknown error");
-      return;
-    }
-    const uiKey = STAGE_MAP[stage];
-    if (!uiKey) return;
-    setProgress(stage);
-
-    const prev = COMPLETES_PREV[stage];
-    if (prev) markDone(prev);
-
-    // Live text for ingest progress.
-    if (stage === "ingest_start") {
-      annotateText("ingest", `Fetching from ${payload.sources || "?"} sources…`);
-      setProgress(stage, `Contacting ${payload.sources || "?"} sources`);
-      markActive("ingest");
-    } else if (stage === "ingest_done") {
-      annotateText("ingest", `Fetched ${payload.raw_items || 0} items from ${payload.sources || "?"} sources.`);
-      setProgress(stage, `Fetched ${payload.raw_items || 0} raw items`);
-    } else if (stage === "dedupe_done") {
-      annotateText("dedupe", `Deduplicated to ${payload.english || payload.deduped || 0} items.`);
-      setProgress(stage, `Kept ${payload.english || payload.deduped || 0} English items`);
-      markActive("rank");
-    } else if (stage === "rank_done") {
-      annotateText("rank", `Picked ${payload.picked || 0} top items.`);
-      setProgress(stage, `Selected ${payload.picked || 0} top entries`);
-      markActive("summarize");
-    } else if (stage === "summarize_start") {
-      annotateText("summarize", `Summarizing ${payload.items || 0} items via ${payload.backend || "extractive"}…`);
-      setProgress(stage, `Summarizing with ${payload.backend || "extractive"}`);
-      markActive("summarize");
-    } else if (stage === "summarize_done") {
-      annotateText("summarize", `Summarized ${payload.items || 0} items.`);
-      setProgress(stage, `Summarized ${payload.items || 0} entries`);
-      markActive("render");
-    } else if (stage === "render_done") {
-      annotateText("render", `Rendered ${(payload.html_bytes || 0).toLocaleString()} bytes.`);
-      setProgress(stage, "Rendering the final page");
-      markActive("done");
-    } else if (stage === "done") {
-      setProgress(stage, "Ready");
-      markDone("done");
-      es.close();
-      const did = encodeURIComponent(payload.digest_id || "");
-      const n = payload.total_items || 0;
-      setTimeout(() => {
-        window.location.href = `/done?digest_id=${did}&n=${n}`;
-      }, 600);
-    }
-  };
-  es.onerror = () => { /* leave stream; auto-reconnects */ };
+  retryButton.addEventListener("click", () => window.location.reload());
 })();
 </script>
 {% endblock %}

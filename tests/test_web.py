@@ -1467,8 +1467,12 @@ def test_ranking_train_thread_clears_running_after_exception(tmp_path, monkeypat
 def test_run_start_rejects_foreign_origin_and_detects_duplicate(monkeypatch):
     from dailydigest import web
 
-    run_ids = []
-    monkeypatch.setattr(web, "_kick_off_run", lambda run_id: run_ids.append(run_id))
+    runs = []
+    monkeypatch.setattr(
+        web,
+        "_kick_off_run",
+        lambda run_id, reading_mode: runs.append((run_id, reading_mode)),
+    )
     web._RUN_QUEUES.clear()
     web._RUN_STARTED.clear()
 
@@ -1489,21 +1493,88 @@ def test_run_start_rejects_foreign_origin_and_detects_duplicate(monkeypatch):
 
     first = asyncio.run(
         web.run_start(
-            _request("POST", "/run/start", json_body={"run_id": "abc"}, headers=headers)
+            _request(
+                "POST",
+                "/run/start",
+                json_body={"run_id": "abc", "reading_mode": "minimal"},
+                headers=headers,
+            )
         )
     )
     second = asyncio.run(
         web.run_start(
-            _request("POST", "/run/start", json_body={"run_id": "abc"}, headers=headers)
+            _request(
+                "POST",
+                "/run/start",
+                json_body={"run_id": "abc", "reading_mode": "minimal"},
+                headers=headers,
+            )
         )
     )
 
     assert _json_payload(first) == {"ok": True, "run_id": "abc"}
     assert _json_payload(second) == {"ok": True, "run_id": "abc", "already_started": True}
-    assert run_ids == ["abc"]
+    assert runs == [("abc", "minimal")]
 
     web._RUN_QUEUES.clear()
     web._RUN_STARTED.clear()
+
+
+def test_run_start_defaults_to_usual_and_rejects_unknown_reading_mode(monkeypatch):
+    from dailydigest import web
+
+    runs = []
+    monkeypatch.setattr(
+        web,
+        "_kick_off_run",
+        lambda run_id, reading_mode: runs.append((run_id, reading_mode)),
+    )
+    web._RUN_QUEUES.clear()
+    web._RUN_STARTED.clear()
+    headers = {"X-CSRF-Token": web._CSRF_TOKEN}
+
+    response = asyncio.run(
+        web.run_start(
+            _request("POST", "/run/start", json_body={"run_id": "usual"}, headers=headers)
+        )
+    )
+    assert _json_payload(response) == {"ok": True, "run_id": "usual"}
+    assert runs == [("usual", "usual")]
+
+    with pytest.raises(HTTPException) as excinfo:
+        asyncio.run(
+            web.run_start(
+                _request(
+                    "POST",
+                    "/run/start",
+                    json_body={"run_id": "bad", "reading_mode": "bottomless"},
+                    headers=headers,
+                )
+            )
+        )
+    assert excinfo.value.status_code == 400
+    assert runs == [("usual", "usual")]
+
+    web._RUN_QUEUES.clear()
+    web._RUN_STARTED.clear()
+
+
+def test_run_page_asks_for_reading_depth_before_brewing(monkeypatch, tmp_path):
+    from dailydigest import web
+
+    profile_path = tmp_path / "profile.yaml"
+    profile_path.write_text("bio: Reader\nkeywords: []\ndownweight: []\n")
+    monkeypatch.setattr(web, "_get_profile_path", lambda: profile_path)
+
+    response = web.run_get(_request("GET", "/run"))
+    body = _text_payload(response)
+
+    assert "How are we feeling today?" in body
+    assert 'name="reading_mode"' in body
+    assert 'value="full"' in body
+    assert 'value="usual"' in body
+    assert 'value="minimal"' in body
+    assert body.index("How are we feeling today?") < body.index("Brew the morning tea")
 
 
 def test_opportunity_calendar_export_uses_structured_dates(tmp_path, monkeypatch):

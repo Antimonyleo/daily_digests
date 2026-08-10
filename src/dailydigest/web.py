@@ -67,7 +67,7 @@ from .opportunities import (
     load_opportunity_profile,
     opportunity_display,
 )
-from .pipeline import _digest_id, run_all
+from .pipeline import _digest_id, normalize_reading_mode, run_all
 from .rank.source_quality import display_breakdown, source_bucket
 from .store import (
     DigestRow,
@@ -1333,7 +1333,7 @@ def _ensure_run(run_id: str) -> std_queue.Queue[dict[str, Any]]:
         return q
 
 
-def _kick_off_run(run_id: str) -> None:
+def _kick_off_run(run_id: str, reading_mode: str) -> None:
     """Run pipeline.run_all in a background thread; always emits a terminal event."""
 
     def _push(evt: dict[str, Any]) -> None:
@@ -1363,7 +1363,11 @@ def _kick_off_run(run_id: str) -> None:
             _push({"stage": stage, "payload": payload})
 
         try:
-            run_all(dry_run=True, progress_callback=cb)
+            run_all(
+                dry_run=True,
+                progress_callback=cb,
+                reading_mode=reading_mode,
+            )
         except Exception as e:  # noqa: BLE001
             logger.exception("pipeline failed in run %s", run_id)
             _push({"stage": "error", "payload": {"message": f"{type(e).__name__}: {e}"}})
@@ -1402,12 +1406,18 @@ async def run_start(request: Request) -> JSONResponse:
     except Exception:  # noqa: BLE001
         body = {}
     run_id = str(body.get("run_id") or uuid.uuid4().hex[:12])
+    try:
+        reading_mode = normalize_reading_mode(
+            str(body.get("reading_mode") or "usual")
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     _ensure_run(run_id)
     with _RUN_LOCK:
         if run_id in _RUN_STARTED:
             return JSONResponse({"ok": True, "run_id": run_id, "already_started": True})
         _RUN_STARTED.add(run_id)
-    _kick_off_run(run_id)
+    _kick_off_run(run_id, reading_mode)
     return JSONResponse({"ok": True, "run_id": run_id})
 
 
