@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 import typer
+from typer.testing import CliRunner
 
 
 def test_web_cli_binds_loopback_only():
@@ -36,3 +37,48 @@ def test_require_loopback_bind_allows_remote_via_env(monkeypatch):
 
     monkeypatch.setenv("DD_ALLOW_REMOTE_BIND", "1")
     _require_loopback_bind("0.0.0.0")
+
+
+def test_brew_defaults_to_safe_local_preview(monkeypatch):
+    from dailydigest import cli
+
+    calls = []
+    monkeypatch.setattr(
+        cli,
+        "run_all",
+        lambda dry_run, backfill_days: calls.append((dry_run, backfill_days))
+        or "2026-08-10",
+    )
+
+    result = CliRunner().invoke(cli.app, ["brew"])
+
+    assert result.exit_code == 0
+    assert calls == [(True, None)]
+    assert "brewed digest 2026-08-10 (local preview)" in result.stdout
+
+
+def test_brew_send_and_backfill_are_explicit(monkeypatch):
+    from dailydigest import cli
+
+    calls = []
+    monkeypatch.setattr(
+        cli,
+        "run_all",
+        lambda dry_run, backfill_days: calls.append((dry_run, backfill_days))
+        or "2026-08-10",
+    )
+
+    result = CliRunner().invoke(cli.app, ["brew", "--send", "--backfill", "5"])
+
+    assert result.exit_code == 0
+    assert calls == [(False, 5)]
+    assert "email requested; local fallback enabled" in result.stdout
+
+
+def test_brew_rejects_negative_backfill():
+    from dailydigest import cli
+
+    result = CliRunner().invoke(cli.app, ["brew", "--backfill", "-1"])
+
+    assert result.exit_code == 2
+    assert "x>=0" in result.stderr

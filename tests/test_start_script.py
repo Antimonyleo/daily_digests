@@ -4,9 +4,13 @@ import os
 import subprocess
 from pathlib import Path
 
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "start.sh"
+pytestmark = pytest.mark.skipif(
+    os.name == "nt", reason="Bash launcher tests run on Linux/macOS; Windows has PowerShell tests."
+)
 
 
 def test_start_script_fails_clearly_when_uv_missing(tmp_path):

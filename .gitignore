@@ -6,8 +6,16 @@ __pycache__/
 data/
 config/profile.yaml
 # Local AI-tool configuration is private and never part of a release.
+.agents/
 .claude/
 .codex/
+AGENTS.md
+CLAUDE.md
+CODEX.md
+GEMINI.md
+.cursor/
+.continue/
+.aider*
 *.db
 *.db-journal
 .ruff_cache/

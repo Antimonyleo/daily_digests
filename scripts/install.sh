@@ -2,8 +2,9 @@
 # One-command setup + launch for DailyDigest.
 #
 # Installs uv (the Python toolchain manager) if it is missing, then starts the
-# local web app and opens it in your browser. Works on Linux, macOS, and
-# Windows via WSL. After the first run you can just use ./scripts/start.sh.
+# local web app and opens it in your browser. Works on Linux and macOS. After
+# the first run you can use ./scripts/start.sh. Native Windows uses
+# scripts/install.ps1 instead.
 #
 #   bash scripts/install.sh
 set -euo pipefail

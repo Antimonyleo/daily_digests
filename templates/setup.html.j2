@@ -131,15 +131,15 @@
         <label class="backend-opt" data-value="extractive">
           <input type="radio" name="llm_backend" value="extractive"
                  {% if form.llm_backend == "extractive" %}checked{% endif %}>
-          <strong>Extractive</strong> — no setup, first 2 sentences.
-          <div class="desc">Free. No external service. Works offline.</div>
+          <strong>Extractive</strong> — recommended for the first run.
+          <div class="desc">Free. No account, API key, or paid AI subscription.</div>
         </label>
 
         <label class="backend-opt" data-value="api">
           <input type="radio" name="llm_backend" value="api"
                  {% if form.llm_backend == "api" %}checked{% endif %}>
-          <strong>OpenAI-compatible API</strong> — any provider.
-          <div class="desc">NanoGPT, OpenAI, Ollama, vLLM, etc.</div>
+          <strong>OpenAI-compatible API</strong> — optional richer summaries.
+          <div class="desc">Use an API key, or a local Ollama/vLLM endpoint. Chat subscriptions alone are not API keys.</div>
         </label>
       </div>
 

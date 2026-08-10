@@ -125,6 +125,26 @@ def run_all_cmd(
 
 
 @app.command()
+def brew(
+    send: bool = typer.Option(
+        False,
+        "--send",
+        help="Send by email when configured; otherwise create a local preview.",
+    ),
+    backfill: int = typer.Option(
+        0,
+        "--backfill",
+        help="Look back this many days (0 = choose automatically).",
+        min=0,
+    ),
+) -> None:
+    """Brew today's digest from the command line."""
+    digest_id = run_all(dry_run=not send, backfill_days=backfill or None)
+    destination = "email requested; local fallback enabled" if send else "local preview"
+    typer.echo(f"brewed digest {digest_id} ({destination})")
+
+
+@app.command()
 def vote(
     line: str = typer.Argument(
         "",

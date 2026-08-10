@@ -1,8 +1,38 @@
+import subprocess
 from pathlib import Path
 
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_private_agent_files_are_ignored_and_not_present_in_release_tree():
+    gitignore = (ROOT / ".gitignore").read_text().splitlines()
+    tracked = set(
+        subprocess.run(
+            ["git", "ls-files"],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=True,
+        ).stdout.splitlines()
+    )
+
+    for private_path in (
+        "AGENTS.md",
+        "CLAUDE.md",
+        "CODEX.md",
+        "GEMINI.md",
+        ".agents/",
+        ".claude/",
+        ".codex/",
+    ):
+        assert private_path in gitignore
+        prefix = private_path.rstrip("/")
+        assert not any(path == prefix or path.startswith(f"{prefix}/") for path in tracked)
+
+    assert not (ROOT / "docs" / "code-review-2026-05-18.md").exists()
+    assert not (ROOT / "docs" / "ranking-research-2026-05-18.md").exists()
 
 
 def test_manual_digest_workflow_uses_tracked_example_profile():
