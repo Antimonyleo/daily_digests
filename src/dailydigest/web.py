@@ -6,6 +6,8 @@ The app binds to 127.0.0.1 by default — no remote access, no auth.
 Routes:
 - ``GET /``                — render today's digest (or redirect to /setup if no profile)
 - ``POST /vote/{id}/{v}``  — record a +1/0/-1 vote for an item
+- ``POST|DELETE /bookmark/{id}`` — save or remove an item from the reading archive
+- ``GET /saved``           — search the local saved-reading archive
 - ``POST /vote/{id}/reason/{reason}`` — record qualitative feedback reason
 - ``DELETE /vote/{id}/reason/{reason}`` — remove qualitative feedback reason
 - ``GET /ranking/status``  — return vote counts and LR ranker status
@@ -18,6 +20,7 @@ Routes:
 - ``POST /run/start``      — kick off pipeline.run_all in a background thread
 - ``GET /run/stream``      — Server-Sent Events stream of pipeline progress
 - ``GET /done``            — celebration page after a successful brew
+- ``GET /manifest.webmanifest|/sw.js`` — local installable-app shell
 """
 
 from __future__ import annotations
@@ -73,18 +76,26 @@ from .store import (
     DigestRow,
     ItemRow,
     VoteRow,
+    bookmarked_item_ids,
     init_db,
     item_metadata,
     load_digest_audit,
     load_digest_features,
     mark_impressions_viewed,
+    search_bookmarks,
+    set_bookmark,
     session_scope,
 )
 
 logger = logging.getLogger(__name__)
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-_TEMPLATE_DIR = _REPO_ROOT / "templates"
+_PACKAGED_TEMPLATE_DIR = Path(__file__).resolve().parent / "templates"
+_TEMPLATE_DIR = (
+    _PACKAGED_TEMPLATE_DIR
+    if _PACKAGED_TEMPLATE_DIR.is_dir()
+    else _REPO_ROOT / "templates"
+)
 _ENV_PATH = _REPO_ROOT / ".env"
 
 
@@ -250,6 +261,20 @@ def _digest_overview(sections: list[dict]) -> dict:
         source = entry.get("source") or "Unknown"
         source_counts[source] = source_counts.get(source, 0) + 1
     source_mix = sorted(source_counts.items(), key=lambda kv: (-kv[1], kv[0].lower()))[:6]
+    topic_counts = Counter(
+        str(entry.get("ranking", {}).get("primary_facet") or "").strip()
+        for entry in entries
+        if str(entry.get("ranking", {}).get("primary_facet") or "").strip()
+    )
+    digest_words = sum(
+        len(re.findall(r"\b\w+\b", f"{entry.get('title', '')} {entry.get('summary', '')}"))
+        for entry in entries
+    )
+    reading_minutes = (
+        max(1, (digest_words + 25 * len(entries) + 219) // 220) if entries else 0
+    )
+    spotlight = sorted(entries, key=_entry_confidence, reverse=True)[:3]
+    must_read = [entry for entry in spotlight if _entry_confidence(entry) >= 0.65]
     latest = health.latest_snapshot()
     scanned = sum(int(row.get("items") or 0) for row in latest)
     return {
@@ -263,11 +288,13 @@ def _digest_overview(sections: list[dict]) -> dict:
             if s.get("entries")
         ],
         "source_mix": source_mix,
-        "must_read": sorted(
-            [entry for entry in entries if _entry_confidence(entry) >= 0.65],
-            key=_entry_confidence,
-            reverse=True,
-        )[:5],
+        "topic_mix": [
+            {"title": topic, "count": count}
+            for topic, count in topic_counts.most_common(4)
+        ],
+        "reading_minutes": reading_minutes,
+        "spotlight": spotlight,
+        "must_read": must_read,
         "top_journals_shown": sum(
             1
             for entry in entries
@@ -330,6 +357,7 @@ def _load_today(digest_id: str) -> tuple[list[dict], dict[int, int]]:
             return [], {}
 
         item_ids = [r.id for r in rows]
+        saved_item_ids = bookmarked_item_ids(int(item_id) for item_id in item_ids)
         vote_rows = s.execute(
             select(VoteRow.item_id, VoteRow.value, VoteRow.grade)
             .where(VoteRow.item_id.in_(item_ids))
@@ -414,6 +442,7 @@ def _load_today(digest_id: str) -> tuple[list[dict], dict[int, int]]:
                     "current_vote": current_vote.get(int(row.id)),
                     "current_grade": current_grade.get(int(row.id)),
                     "current_reasons": current_reasons.get(int(row.id), []),
+                    "bookmarked": int(row.id) in saved_item_ids,
                 }
             )
 
@@ -444,6 +473,12 @@ def _digest_exists(digest_id: str) -> bool:
     init_db()
     with session_scope() as s:
         return s.get(DigestRow, digest_id) is not None
+
+
+def _saved_date(value: date | None) -> str:
+    if value is None:
+        return ""
+    return value.strftime("%b %d, %Y").replace(" 0", " ")
 
 
 def _host_name(host_header: str | None) -> str:
@@ -932,6 +967,39 @@ def index(request: Request) -> Response:
     return response
 
 
+@app.get("/saved", response_class=HTMLResponse)
+def saved_items(request: Request, q: str = "") -> Response:
+    if not _profile_exists():
+        return RedirectResponse(url="/setup", status_code=302)
+    query = str(q or "").strip()[:200]
+    items = [
+        {
+            "id": row.item_id,
+            "title": row.title,
+            "url": safe_url(row.url),
+            "source": row.source,
+            "section": SECTION_META.get(
+                row.section, {"title": row.section.title() or "Other"}
+            )["title"],
+            "summary": row.summary,
+            "published": _saved_date(row.published_at),
+            "saved": _saved_date(row.saved_at),
+        }
+        for row in search_bookmarks(query)
+    ]
+    response = templates.TemplateResponse(
+        request,
+        "saved.html.j2",
+        {
+            "items": items,
+            "query": query,
+            "csrf_token": _CSRF_TOKEN,
+        },
+    )
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
 @app.post("/vote/{item_id}/{grade}")
 def vote(request: Request, item_id: int, grade: int) -> JSONResponse:
     _require_csrf(request)
@@ -957,6 +1025,22 @@ def vote(request: Request, item_id: int, grade: int) -> JSONResponse:
             "ranking_status": votes_mod.lr_training_status(),
         }
     )
+
+
+@app.post("/bookmark/{item_id}")
+def bookmark_add(request: Request, item_id: int) -> JSONResponse:
+    _require_csrf(request)
+    if not set_bookmark(item_id, True):
+        raise HTTPException(status_code=404, detail=f"item {item_id} not found")
+    return JSONResponse({"ok": True, "item_id": item_id, "saved": True})
+
+
+@app.delete("/bookmark/{item_id}")
+def bookmark_remove(request: Request, item_id: int) -> JSONResponse:
+    _require_csrf(request)
+    if not set_bookmark(item_id, False):
+        raise HTTPException(status_code=404, detail=f"item {item_id} not found")
+    return JSONResponse({"ok": True, "item_id": item_id, "saved": False})
 
 
 @app.post("/vote/{item_id}/reason/{reason}")
@@ -1113,6 +1197,99 @@ def refresh(request: Request) -> JSONResponse:
 @app.get("/healthz")
 def healthz() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/manifest.webmanifest")
+def web_manifest(request: Request) -> Response:
+    _require_local_origin(request)
+    return Response(
+        json.dumps(
+            {
+                "name": "DailyDigest",
+                "short_name": "DailyDigest",
+                "description": "A private, personalized research and news digest.",
+                "start_url": "/",
+                "scope": "/",
+                "display": "standalone",
+                "background_color": "#f6f7f4",
+                "theme_color": "#256f52",
+                "icons": [
+                    {
+                        "src": "/app-icon.svg",
+                        "sizes": "192x192",
+                        "type": "image/svg+xml",
+                        "purpose": "any",
+                    },
+                    {
+                        "src": "/app-icon.svg",
+                        "sizes": "512x512",
+                        "type": "image/svg+xml",
+                        "purpose": "any maskable",
+                    },
+                    {
+                        "src": "/app-icon.svg",
+                        "sizes": "any",
+                        "type": "image/svg+xml",
+                        "purpose": "any",
+                    },
+                ],
+                "prefer_related_applications": False,
+            }
+        ),
+        media_type="application/manifest+json",
+        headers={"Cache-Control": "no-cache"},
+    )
+
+
+@app.get("/app-icon.svg")
+def app_icon(request: Request) -> Response:
+    _require_local_origin(request)
+    svg = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+<rect width="512" height="512" rx="112" fill="#256f52"/>
+<path d="M135 194h220v102c0 70-50 116-110 116s-110-46-110-116V194z" fill="#fff"/>
+<path d="M355 225h27c44 0 66 27 66 59s-22 59-66 59h-33" fill="none" stroke="#fff" stroke-width="28" stroke-linecap="round"/>
+<path d="M196 153c-24-31 20-43 0-75M256 153c-24-31 20-43 0-75M316 153c-24-31 20-43 0-75" fill="none" stroke="#f0c779" stroke-width="18" stroke-linecap="round"/>
+</svg>"""
+    return Response(
+        svg,
+        media_type="image/svg+xml",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
+@app.get("/sw.js")
+def service_worker(request: Request) -> Response:
+    _require_local_origin(request)
+    script = """const CACHE_PREFIX = "dailydigest-shell-";
+const CACHE_NAME = `${CACHE_PREFIX}v1`;
+const SAFE_ASSETS = ["/manifest.webmanifest", "/app-icon.svg"];
+self.addEventListener("install", (event) => {
+  event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(SAFE_ASSETS)));
+  self.skipWaiting();
+});
+self.addEventListener("activate", (event) => {
+  event.waitUntil(caches.keys().then((keys) => Promise.all(
+    keys.filter((key) => key.startsWith(CACHE_PREFIX) && key !== CACHE_NAME)
+      .map((key) => caches.delete(key))
+  )).then(() => self.clients.claim()));
+});
+self.addEventListener("fetch", (event) => {
+  const url = new URL(event.request.url);
+  if (url.origin !== self.location.origin || !SAFE_ASSETS.includes(url.pathname)) return;
+  event.respondWith(caches.open(CACHE_NAME).then(async (cache) => {
+    const cached = await cache.match(url.pathname);
+    if (cached) return cached;
+    const response = await fetch(event.request);
+    if (response.ok) cache.put(url.pathname, response.clone());
+    return response;
+  }));
+});
+"""
+    return Response(
+        script,
+        media_type="application/javascript",
+        headers={"Cache-Control": "no-cache", "Service-Worker-Allowed": "/"},
+    )
 
 
 # --- Onboarding -------------------------------------------------------------

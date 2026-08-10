@@ -78,8 +78,9 @@ _ORIGINAL_SCORE_ITEMS = score_items
 READING_MODE_LIMITS: dict[str, int | None] = {
     "full": None,
     "usual": 15,
-    "minimal": 5,
+    "minimal": None,
 }
+MINIMAL_RESEARCH_LIMIT = 5
 
 _TITLE_BLOCKLIST = re.compile(
     r"^(?:volume\s+\d|issue\s+\d|editorial\b|correspondence\b|correction\b|"
@@ -186,6 +187,17 @@ def apply_reading_mode(
     changes a score. ``full`` preserves the existing configured digest.
     """
     mode = normalize_reading_mode(reading_mode)
+    if mode == "minimal":
+        ranked = sorted(picked, key=lambda pair: pair[1], reverse=True)
+        research = [pair for pair in ranked if (pair[0].section or "") == "research"]
+        other_sections: dict[str, tuple[ItemRow, float]] = {}
+        for pair in ranked:
+            section = pair[0].section or ""
+            if section and section != "research" and section not in other_sections:
+                other_sections[section] = pair
+        selected = research[:MINIMAL_RESEARCH_LIMIT] + list(other_sections.values())
+        return sorted(selected, key=lambda pair: pair[1], reverse=True)
+
     limit = READING_MODE_LIMITS[mode]
     if limit is None or len(picked) <= limit:
         return picked
@@ -803,7 +815,8 @@ def run_all(
 
     ``reading_mode`` changes only the size of the final qualified slate:
     ``full`` keeps the configured section limits, ``usual`` keeps the best 15,
-    and ``minimal`` keeps the best 5.
+    and ``minimal`` keeps up to 5 research picks plus the best pick from every
+    other non-empty section.
     """
     reading_mode = normalize_reading_mode(reading_mode)
     init_db()

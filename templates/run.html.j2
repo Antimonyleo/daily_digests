@@ -73,7 +73,7 @@
   .cup { position: relative; width: 80px; height: 80px; margin: 0 auto 18px; }
   .cup .body {
     position: absolute; bottom: 0; left: 10px; width: 60px; height: 50px;
-    background: #fff; border: 3px solid var(--accent); border-radius: 0 0 14px 14px;
+    background: var(--card); border: 3px solid var(--accent); border-radius: 0 0 14px 14px;
   }
   .cup .handle {
     position: absolute; right: 0; top: 30px; width: 18px; height: 24px;
@@ -94,7 +94,7 @@
   }
   .progress-shell {
     margin: 0 auto 20px; max-width: 420px; height: 10px;
-    background: #e5ebe5; border-radius: 999px; overflow: hidden;
+    background: var(--surface-muted); border-radius: 999px; overflow: hidden;
   }
   .progress-bar {
     height: 100%; width: 6%; border-radius: 999px;
@@ -107,12 +107,12 @@
   }
   ul.stages { list-style: none; padding: 0; margin: 0 auto; max-width: 460px; text-align: left; }
   ul.stages li {
-    padding: 11px 14px; border: 1px solid #edf1ec; border-bottom: none;
+    padding: 11px 14px; border: 1px solid var(--border-soft); border-bottom: none;
     font-size: 14px; display: flex; align-items: center; gap: 10px;
-    color: var(--muted); background: #fff;
+    color: var(--muted); background: var(--card);
   }
   ul.stages li:first-child { border-radius: 8px 8px 0 0; }
-  ul.stages li:last-child { border-bottom: 1px solid #edf1ec; border-radius: 0 0 8px 8px; }
+  ul.stages li:last-child { border-bottom: 1px solid var(--border-soft); border-radius: 0 0 8px 8px; }
   ul.stages li.active { color: var(--text); font-weight: 650; background: var(--gold-soft); }
   ul.stages li.done { color: var(--up); background: #f5faf6; }
   ul.stages li .marker { display: inline-block; width: 18px; text-align: center; font-weight: 700; }
@@ -134,6 +134,10 @@
     .mode-card, .progress-bar { transition: none; }
     .cup .steam, ul.stages li.active .marker::before { animation: none; }
   }
+  html[data-theme="dark"] .mode-option input:checked + .mode-card {
+    background: linear-gradient(160deg, var(--panel), var(--accent-soft));
+  }
+  html[data-theme="dark"] ul.stages li.done { background: var(--accent-soft); }
 {% endblock %}
 {% block body %}
 <div class="card brew-card">
@@ -170,7 +174,7 @@
               <span class="mode-icon" aria-hidden="true">🌙</span>
               <span class="mode-title">Tired</span>
               <span class="mode-voice">Just show me the essentials.</span>
-              <span class="mode-count">Up to 5 best matches</span>
+              <span class="mode-count">5 research picks + 1 per other section</span>
             </label>
           </div>
         </div>

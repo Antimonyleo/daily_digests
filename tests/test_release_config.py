@@ -1,4 +1,5 @@
 import subprocess
+import tomllib
 from pathlib import Path
 
 import yaml
@@ -58,6 +59,14 @@ def test_example_profile_respects_ten_core_topic_limit():
     profile = yaml.safe_load((ROOT / "config" / "profile.example.yaml").read_text())
 
     assert 1 <= len(profile["keywords"]) <= 10
+
+
+def test_release_wheel_includes_browser_templates():
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text())
+    forced = project["tool"]["hatch"]["build"]["targets"]["wheel"]["force-include"]
+
+    assert forced["templates"] == "dailydigest/templates"
+    assert (ROOT / "templates" / "saved.html.j2").is_file()
 
 
 def test_acs_sources_use_openalex_without_blocked_native_feeds():

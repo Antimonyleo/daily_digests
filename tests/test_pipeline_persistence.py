@@ -188,16 +188,27 @@ def test_reading_mode_caps_only_the_final_ranked_slate():
     from dailydigest import pipeline as pipeline_mod
 
     rows = [SimpleNamespace(id=idx, section="research") for idx in range(20)]
+    other_rows = [
+        SimpleNamespace(id=100, section="industry"),
+        SimpleNamespace(id=101, section="industry"),
+        SimpleNamespace(id=200, section="ai"),
+        SimpleNamespace(id=201, section="ai"),
+    ]
     # Deliberately reverse the input so limited modes must retain the best scores.
-    picked = [(row, float(20 - row.id)) for row in reversed(rows)]
+    picked = [(row, float(20 - row.id)) for row in reversed(rows)] + [
+        (other_rows[1], 0.4),
+        (other_rows[0], 0.8),
+        (other_rows[1], 0.5),
+        (other_rows[3], 0.3),
+        (other_rows[2], 0.7),
+    ]
 
     assert pipeline_mod.apply_reading_mode(picked, "full") == picked
-    assert [row.id for row, _score in pipeline_mod.apply_reading_mode(picked, "usual")] == list(
-        range(15)
-    )
-    assert [row.id for row, _score in pipeline_mod.apply_reading_mode(picked, "minimal")] == list(
-        range(5)
-    )
+    assert len(pipeline_mod.apply_reading_mode(picked, "usual")) == 15
+    minimal = pipeline_mod.apply_reading_mode(picked, "minimal")
+    assert [row.id for row, _score in minimal if row.section == "research"] == list(range(5))
+    assert [row.id for row, _score in minimal if row.section == "industry"] == [100]
+    assert [row.id for row, _score in minimal if row.section == "ai"] == [200]
     with pytest.raises(ValueError, match="reading mode"):
         pipeline_mod.apply_reading_mode(picked, "bottomless")
 

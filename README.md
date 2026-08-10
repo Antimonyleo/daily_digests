@@ -20,7 +20,8 @@ It works in four steps:
    clinical/regulatory news, and world news.
 2. Compares each item with 1–10 interests that you choose and weight.
 3. Builds a short digest using topic fit, source quality, freshness, novelty,
-   and duplicate filtering. Optional sections can be switched off.
+   and duplicate filtering. Optional sections can be switched off, and each
+   brew can be served as a full, usual, or minimal reading session.
 4. Learns from your `Must read`, `Relevant`, `Hmmm`, and `Not for me` feedback.
 
 Your profiles, votes, reading history, database, and embedding cache stay in the
@@ -107,8 +108,9 @@ The app opens <http://127.0.0.1:8765>. On the setup page:
 5. Select **Brew my morning cup of tea** to save the setup.
 6. Choose how much you feel like reading today: **Energetic** keeps every
    qualified pick up to your section limits, **Usual** keeps the best 15, and
-   **Tired** keeps the best 5. This changes only the final serving size; every
-   enabled source is still scanned and filtered.
+   **Tired** keeps up to 5 research picks plus the best pick from each other
+   enabled section. This changes only the final serving size; every enabled
+   source is still scanned and filtered.
 
 Keep the launcher or terminal window open while using DailyDigest. Press
 `Ctrl+C` in that window to stop the server.
@@ -125,6 +127,18 @@ Keep the launcher or terminal window open while using DailyDigest. Press
 Then open <http://127.0.0.1:8765>. Use **Settings** in the app to change your
 interests, weights, digest sections, summarizer, or item counts. Vote on items
 as you read; positive and negative feedback both improve later ranking.
+
+The digest starts with an estimated reading time, its main topics, section
+counts, and three spotlight picks. Open the section headings for the full
+details. Use **Save for later** on any item, then open **Saved reading** to
+search your personal archive. Saved items are kept when old unsaved feed items
+are cleaned up.
+
+The display control in the lower-right corner switches between light and dark
+themes. Browsers that support local progressive-web-app installation also show
+an **Install app** button. Installation creates an app-like launcher; the local
+DailyDigest server still needs to be running because private digest pages are
+deliberately not stored in the browser's offline cache.
 
 Funding and event cards show the official source, current status, deadline,
 available amount when stated, location/date for events, and a conservative

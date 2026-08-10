@@ -5,6 +5,7 @@ import json
 import uuid
 from collections.abc import Iterable
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import Lock
@@ -40,6 +41,18 @@ from .models import Item
 
 class Base(DeclarativeBase):
     pass
+
+
+@dataclass(frozen=True)
+class SavedItem:
+    item_id: int
+    title: str
+    url: str
+    source: str
+    section: str
+    summary: str
+    published_at: datetime | None
+    saved_at: datetime
 
 
 class ItemRow(Base):
@@ -118,6 +131,25 @@ class VoteRow(Base):
         UniqueConstraint("item_id", name="uq_votes_item_id"),
         CheckConstraint("value IN (-1, 0, 1)", name="ck_vote_value"),
     )
+
+
+class BookmarkRow(Base):
+    __tablename__ = "bookmarks"
+
+    id = Column(Integer, primary_key=True)
+    item_id = Column(
+        Integer,
+        ForeignKey("items.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    created_at = Column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+
+    item = relationship("ItemRow")
+
+    __table_args__ = (UniqueConstraint("item_id", name="uq_bookmarks_item_id"),)
 
 
 class ItemEmbeddingRow(Base):
@@ -397,6 +429,76 @@ def session_scope():
 # ---------- repo helpers ----------
 
 
+def set_bookmark(item_id: int, saved: bool) -> bool:
+    """Idempotently save or remove an item. False means the item does not exist."""
+    init_db()
+    with session_scope() as s:
+        if s.get(ItemRow, int(item_id)) is None:
+            return False
+        if saved:
+            s.execute(
+                sqlite_insert(BookmarkRow)
+                .values(item_id=int(item_id))
+                .on_conflict_do_nothing(index_elements=["item_id"])
+            )
+        else:
+            s.execute(delete(BookmarkRow).where(BookmarkRow.item_id == int(item_id)))
+    return True
+
+
+def bookmarked_item_ids(item_ids: Iterable[int]) -> set[int]:
+    """Return the subset of item ids currently saved by the local reader."""
+    ids = {int(item_id) for item_id in item_ids}
+    if not ids:
+        return set()
+    init_db()
+    with session_scope() as s:
+        return {
+            int(item_id)
+            for item_id in s.execute(
+                select(BookmarkRow.item_id).where(BookmarkRow.item_id.in_(ids))
+            ).scalars()
+        }
+
+
+def search_bookmarks(query: str = "", limit: int = 200) -> list[SavedItem]:
+    """Return saved items newest-first, optionally matching their readable text."""
+    init_db()
+    term = str(query or "").strip()
+    with session_scope() as s:
+        stmt = select(BookmarkRow, ItemRow).join(
+            ItemRow, ItemRow.id == BookmarkRow.item_id
+        )
+        if term:
+            pattern = f"%{term}%"
+            stmt = stmt.where(
+                or_(
+                    ItemRow.title.ilike(pattern),
+                    ItemRow.source.ilike(pattern),
+                    ItemRow.abstract.ilike(pattern),
+                    ItemRow.summary.ilike(pattern),
+                )
+            )
+        rows = s.execute(
+            stmt.order_by(BookmarkRow.created_at.desc(), BookmarkRow.id.desc()).limit(
+                max(1, min(int(limit), 500))
+            )
+        ).all()
+        return [
+            SavedItem(
+                item_id=int(item.id),
+                title=item.title or "",
+                url=item.url or "",
+                source=item.source or "",
+                section=item.section or "",
+                summary=item.summary or "",
+                published_at=item.published_at,
+                saved_at=bookmark.created_at,
+            )
+            for bookmark, item in rows
+        ]
+
+
 def _opportunity_snapshot_json(metadata: dict) -> str:
     """Canonical material details, excluding per-fetch verification timestamps."""
     stable = {key: value for key, value in metadata.items() if key != "verified_at"}
@@ -646,20 +748,21 @@ def exclude_previously_shown(
 
 
 def prune(days: int) -> int:
-    """Delete items older than ``days``, but preserve voted items.
+    """Delete items older than ``days``, but preserve voted or saved items.
 
-    Voted items are kept indefinitely so the LR ranker always has training
-    data even after 30-day rotation.  Without this guard, CASCADE deletion
-    via ``ON DELETE CASCADE`` on ``votes`` would silently erase all training
-    signal accumulated over months.
+    Voted items are kept so the LR ranker retains its training signal; saved
+    items are kept so the reading archive remains durable after normal
+    rotation. Without these guards, cascade deletion would erase both.
     """
     init_db()
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     with session_scope() as s:
         voted_subq = select(VoteRow.item_id).distinct().scalar_subquery()
+        bookmarked_subq = select(BookmarkRow.item_id).distinct().scalar_subquery()
         stmt = delete(ItemRow).where(
             ItemRow.fetched_at < cutoff,
             ItemRow.id.not_in(voted_subq),
+            ItemRow.id.not_in(bookmarked_subq),
         )
         result = s.execute(stmt)
         return result.rowcount or 0

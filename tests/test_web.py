@@ -691,6 +691,7 @@ def test_index_renders_reader_card_hierarchy_and_feedback_controls(tmp_path, mon
                     "content_type": "article",
                     "source_bucket": "published_journal",
                     "selection_reason": "protected published-journal slot",
+                    "primary_facet": "RNA nanotechnology",
                     "topic": 0.82,
                     "source": 0.95,
                     "novelty": 0.55,
@@ -732,7 +733,13 @@ def test_index_renders_reader_card_hierarchy_and_feedback_controls(tmp_path, mon
     text = _text_payload(response)
 
     assert response.status_code == 200
+    assert "Today’s spotlight" in text
     assert "Must read first" in text
+    assert "Today’s cup" in text
+    assert "minute digest" in text
+    assert "RNA nanotechnology" in text
+    assert '<details class="section-block"' in text
+    assert 'class="section-toggle"' in text
     assert "Today’s source mix" in text
     assert "Not shown today" in text
     assert "Missed journal article" in text
@@ -767,6 +774,113 @@ def test_index_renders_reader_card_hierarchy_and_feedback_controls(tmp_path, mon
     assert "Too promotional" in text
     assert "Update my ranking" in text
     assert "Learned" not in text
+
+
+def test_reader_can_save_and_remove_an_item_from_the_digest(tmp_path, monkeypatch):
+    from dailydigest import config as config_mod
+    from dailydigest import store as store_mod
+    from dailydigest import web
+
+    monkeypatch.setenv("DB_PATH", str(tmp_path / "digest.db"))
+    config_mod.reload_settings()
+    store_mod.SETTINGS = config_mod.SETTINGS
+    store_mod._ENGINE = None
+    store_mod._SessionLocal = None
+    store_mod._INITIALIZED = False
+    profile_path = tmp_path / "profile.yaml"
+    profile_path.write_text("name: Ada\nbio: Researcher.\nkeywords: []\ndownweight: []\n")
+    monkeypatch.setattr(web, "_get_profile_path", lambda: profile_path)
+    monkeypatch.setattr(web, "_digest_id", lambda: "2026-05-05")
+
+    store_mod.init_db()
+    with store_mod.session_scope() as s:
+        s.add(store_mod.DigestRow(id="2026-05-05", item_count=1))
+        item = store_mod.ItemRow(
+            source="Nature",
+            section="research",
+            external_id="bookmark-web",
+            url="https://example.com/bookmark-web",
+            title="Save this RNA paper",
+            digest_id="2026-05-05",
+            item_label="R1",
+        )
+        s.add(item)
+        s.flush()
+        item_id = int(item.id)
+
+    before = _text_payload(web.index(_request("GET", "/")))
+    assert f'data-item-id="{item_id}"' in before
+    assert 'data-bookmarked="false"' in before
+    assert "Save for later" in before
+
+    headers = {"X-CSRF-Token": web._CSRF_TOKEN}
+    added = web.bookmark_add(
+        _request("POST", f"/bookmark/{item_id}", headers=headers), item_id
+    )
+    assert _json_payload(added) == {"ok": True, "item_id": item_id, "saved": True}
+    after_add = _text_payload(web.index(_request("GET", "/")))
+    assert 'data-bookmarked="true"' in after_add
+    assert "Saved for later" in after_add
+
+    removed = web.bookmark_remove(
+        _request("DELETE", f"/bookmark/{item_id}", headers=headers), item_id
+    )
+    assert _json_payload(removed) == {"ok": True, "item_id": item_id, "saved": False}
+    assert store_mod.bookmarked_item_ids([item_id]) == set()
+
+
+def test_saved_archive_is_searchable_and_escapes_item_content(tmp_path, monkeypatch):
+    from dailydigest import config as config_mod
+    from dailydigest import store as store_mod
+    from dailydigest import web
+
+    monkeypatch.setenv("DB_PATH", str(tmp_path / "digest.db"))
+    config_mod.reload_settings()
+    store_mod.SETTINGS = config_mod.SETTINGS
+    store_mod._ENGINE = None
+    store_mod._SessionLocal = None
+    store_mod._INITIALIZED = False
+    profile_path = tmp_path / "profile.yaml"
+    profile_path.write_text("name: Ada\nbio: Researcher.\nkeywords: []\ndownweight: []\n")
+    monkeypatch.setattr(web, "_get_profile_path", lambda: profile_path)
+
+    store_mod.init_db()
+    with store_mod.session_scope() as s:
+        rna = store_mod.ItemRow(
+            source="Nature Nanotechnology",
+            section="research",
+            external_id="archive-rna",
+            url="https://example.com/archive-rna",
+            title="RNA origami archive paper",
+            summary="A programmable nanostructure.",
+        )
+        unsafe = store_mod.ItemRow(
+            source="Unsafe",
+            section="industry",
+            external_id="archive-unsafe",
+            url="javascript:alert(1)",
+            title="<script>alert(1)</script>",
+        )
+        s.add_all([rna, unsafe])
+        s.flush()
+        rna_id, unsafe_id = int(rna.id), int(unsafe.id)
+    store_mod.set_bookmark(rna_id, True)
+    store_mod.set_bookmark(unsafe_id, True)
+
+    response = web.saved_items(_request("GET", "/saved"), q="RNA")
+    text = _text_payload(response)
+
+    assert response.status_code == 200
+    assert "Saved reading" in text
+    assert "RNA origami archive paper" in text
+    assert "&lt;script&gt;" not in text
+    assert 'name="q"' in text
+    assert "1 saved item" in text
+
+    all_items = _text_payload(web.saved_items(_request("GET", "/saved"), q=""))
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in all_items
+    assert 'href="javascript:alert(1)"' not in all_items
+    assert 'href="#"' in all_items
 
 
 def test_index_renders_reason_line_and_content_type_label(tmp_path, monkeypatch):
@@ -1574,7 +1688,45 @@ def test_run_page_asks_for_reading_depth_before_brewing(monkeypatch, tmp_path):
     assert 'value="full"' in body
     assert 'value="usual"' in body
     assert 'value="minimal"' in body
+    assert "5 research picks + 1 per other section" in body
     assert body.index("How are we feeling today?") < body.index("Brew the morning tea")
+
+
+def test_theme_controls_and_safe_pwa_assets_are_exposed(monkeypatch, tmp_path):
+    from dailydigest import web
+
+    profile_path = tmp_path / "profile.yaml"
+    profile_path.write_text("bio: Reader\nkeywords: []\ndownweight: []\n")
+    monkeypatch.setattr(web, "_get_profile_path", lambda: profile_path)
+
+    page = _text_payload(web.run_get(_request("GET", "/run")))
+    assert 'rel="manifest" href="/manifest.webmanifest"' in page
+    assert 'id="theme-toggle"' in page
+    assert 'id="install-app"' in page
+    assert "navigator.serviceWorker.register" in page
+    assert 'data-theme="light"' in page
+
+    manifest_response = web.web_manifest(_request("GET", "/manifest.webmanifest"))
+    assert manifest_response.media_type == "application/manifest+json"
+    manifest = _json_payload(manifest_response)
+    assert manifest["name"] == "DailyDigest"
+    assert manifest["display"] == "standalone"
+    assert manifest["start_url"] == "/"
+    assert manifest["icons"][0]["src"] == "/app-icon.svg"
+    assert {icon["sizes"] for icon in manifest["icons"]} >= {"192x192", "512x512"}
+
+    icon = web.app_icon(_request("GET", "/app-icon.svg"))
+    assert icon.media_type == "image/svg+xml"
+    assert "<svg" in _text_payload(icon)
+
+    worker = web.service_worker(_request("GET", "/sw.js"))
+    worker_text = _text_payload(worker)
+    assert worker.media_type == "application/javascript"
+    assert "/manifest.webmanifest" in worker_text
+    assert "/app-icon.svg" in worker_text
+    assert "SAFE_ASSETS.includes(url.pathname)" in worker_text
+    assert 'key.startsWith(CACHE_PREFIX)' in worker_text
+    assert 'caches.match(event.request)' not in worker_text
 
 
 def test_opportunity_calendar_export_uses_structured_dates(tmp_path, monkeypatch):

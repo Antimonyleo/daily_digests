@@ -12,7 +12,12 @@ from .opportunities import load_opportunity_profile, opportunity_display
 from .rank.source_quality import display_breakdown, source_bucket
 from .store import ItemRow, item_metadata, load_digest_features
 
-_TEMPLATE_DIR = Path(__file__).resolve().parents[2] / "templates"
+_PACKAGE_TEMPLATE_DIR = Path(__file__).resolve().parent / "templates"
+_TEMPLATE_DIR = (
+    _PACKAGE_TEMPLATE_DIR
+    if _PACKAGE_TEMPLATE_DIR.is_dir()
+    else Path(__file__).resolve().parents[2] / "templates"
+)
 _ALLOWED_LINK_SCHEMES = {"http", "https"}
 
 # Content types that are NOT primary research get a visible badge so a Nature

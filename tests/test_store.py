@@ -118,6 +118,77 @@ def _add_item(store_mod, external_id: str, section: str = "research") -> int:
         return int(row.id)
 
 
+def test_bookmarks_are_idempotent_and_searchable(monkeypatch, tmp_path):
+    store_mod = _reset_store(tmp_path, monkeypatch)
+    with store_mod.session_scope() as s:
+        rna = store_mod.ItemRow(
+            source="Nature Nanotechnology",
+            section="research",
+            external_id="saved-rna",
+            url="https://example.com/saved-rna",
+            title="Programmable RNA nanostructures",
+            abstract="A modular RNA assembly method.",
+            summary="RNA tiles assemble into defined particles.",
+        )
+        colloid = store_mod.ItemRow(
+            source="Science",
+            section="research",
+            external_id="saved-colloid",
+            url="https://example.com/saved-colloid",
+            title="Colloidal crystal assembly",
+        )
+        s.add_all([rna, colloid])
+        s.flush()
+        rna_id, colloid_id = int(rna.id), int(colloid.id)
+
+    assert store_mod.set_bookmark(rna_id, True) is True
+    assert store_mod.set_bookmark(rna_id, True) is True
+    assert store_mod.set_bookmark(colloid_id, True) is True
+    assert store_mod.bookmarked_item_ids([rna_id, colloid_id, 999]) == {
+        rna_id,
+        colloid_id,
+    }
+
+    matches = store_mod.search_bookmarks("RNA")
+    assert [row.item_id for row in matches] == [rna_id]
+    assert matches[0].title == "Programmable RNA nanostructures"
+    assert matches[0].source == "Nature Nanotechnology"
+
+    assert store_mod.set_bookmark(rna_id, False) is True
+    assert store_mod.set_bookmark(rna_id, False) is True
+    assert store_mod.bookmarked_item_ids([rna_id, colloid_id]) == {colloid_id}
+    assert store_mod.set_bookmark(999, True) is False
+
+
+def test_prune_preserves_bookmarked_items(monkeypatch, tmp_path):
+    store_mod = _reset_store(tmp_path, monkeypatch)
+    old_time = datetime.now(timezone.utc) - timedelta(days=10)
+    with store_mod.session_scope() as s:
+        saved = store_mod.ItemRow(
+            source="Test",
+            section="research",
+            external_id="old-saved",
+            url="https://example.com/old-saved",
+            title="Old saved paper",
+            fetched_at=old_time,
+        )
+        disposable = store_mod.ItemRow(
+            source="Test",
+            section="research",
+            external_id="old-disposable",
+            url="https://example.com/old-disposable",
+            title="Old disposable paper",
+            fetched_at=old_time,
+        )
+        s.add_all([saved, disposable])
+        s.flush()
+        saved_id = int(saved.id)
+
+    assert store_mod.set_bookmark(saved_id, True) is True
+    assert store_mod.prune(5) == 1
+    assert [row.item_id for row in store_mod.search_bookmarks()] == [saved_id]
+
+
 def test_empty_rebrew_deletes_stale_feature_rows(monkeypatch, tmp_path):
     """A same-date rebrew with an EMPTY slate must clear prior feature rows.
 

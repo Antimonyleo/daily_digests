@@ -1,0 +1,118 @@
+{% extends "_base.html.j2" %}
+{% block title %}Saved reading · DailyDigest{% endblock %}
+{% block extra_styles %}
+  .wrap { max-width: 920px; }
+  .saved-header {
+    display: flex; align-items: end; justify-content: space-between; gap: 18px;
+    margin-bottom: 18px;
+  }
+  .eyebrow {
+    color: var(--accent); font-size: 12px; font-weight: 800;
+    letter-spacing: 0.09em; text-transform: uppercase; margin-bottom: 7px;
+  }
+  h1 { margin: 0; font-size: clamp(30px, 5vw, 44px); line-height: 1.05; }
+  .subhead { color: var(--muted); margin: 9px 0 0; line-height: 1.5; }
+  .saved-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+  .search-card {
+    display: grid; grid-template-columns: 1fr auto; gap: 8px;
+    padding: 14px; margin-bottom: 14px; border: 1px solid var(--border);
+    border-radius: 12px; background: var(--card); box-shadow: var(--shadow);
+  }
+  .search-card input {
+    width: 100%; min-height: 42px; padding: 9px 12px;
+    border: 1px solid var(--border); border-radius: 8px;
+    background: var(--panel); color: var(--text);
+  }
+  .archive-meta { color: var(--muted); font-size: 13px; margin: 0 0 12px; }
+  .saved-list { display: grid; gap: 10px; }
+  .saved-card {
+    display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 18px;
+    padding: 18px; border: 1px solid var(--border); border-radius: 12px;
+    background: var(--card); box-shadow: 0 8px 26px rgba(21, 34, 27, 0.05);
+  }
+  .saved-title {
+    color: var(--text); font-size: 17px; font-weight: 760;
+    line-height: 1.35; text-decoration: none;
+  }
+  .saved-title:hover { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
+  .saved-meta { color: var(--muted); font-size: 12px; margin-top: 7px; }
+  .saved-summary { color: var(--text); opacity: 0.82; font-size: 13px; line-height: 1.55; margin-top: 10px; }
+  .remove-saved { align-self: start; white-space: nowrap; }
+  .empty-archive {
+    padding: 48px 24px; text-align: center; border: 1px dashed var(--border);
+    border-radius: 12px; color: var(--muted); background: var(--panel);
+  }
+  @media (max-width: 680px) {
+    .saved-header { align-items: start; flex-direction: column; }
+    .search-card, .saved-card { grid-template-columns: 1fr; }
+  }
+{% endblock %}
+{% block body %}
+  <header class="saved-header">
+    <div>
+      <div class="eyebrow">Your personal library</div>
+      <h1>Saved reading</h1>
+      <p class="subhead">Keep useful papers, calls, and news within reach.</p>
+    </div>
+    <div class="saved-actions">
+      <a class="btn primary" href="/">Today’s digest</a>
+      <a class="btn" href="/run">Brew again</a>
+    </div>
+  </header>
+
+  <form class="search-card" action="/saved" method="get" role="search">
+    <input name="q" type="search" value="{{ query }}" placeholder="Search title, source, abstract, or summary" aria-label="Search saved reading">
+    <button class="btn primary" type="submit">Search</button>
+  </form>
+
+  <p class="archive-meta" id="archive-count">{{ items|length }} saved item{{ '' if items|length == 1 else 's' }}{% if query %} matching “{{ query }}”{% endif %}</p>
+  {% if items %}
+  <main class="saved-list" id="saved-list">
+    {% for item in items %}
+    <article class="saved-card" data-item-id="{{ item.id }}">
+      <div>
+        <a class="saved-title" href="{{ item.url }}" target="_blank" rel="noopener">{{ item.title }}</a>
+        <div class="saved-meta">
+          {{ item.section }} · {{ item.source }}{% if item.published %} · Published {{ item.published }}{% endif %}{% if item.saved %} · Saved {{ item.saved }}{% endif %}
+        </div>
+        {% if item.summary %}<div class="saved-summary">{{ item.summary }}</div>{% endif %}
+      </div>
+      <button class="btn remove-saved" type="button">Remove</button>
+    </article>
+    {% endfor %}
+  </main>
+  {% else %}
+  <div class="empty-archive">
+    {% if query %}No saved items match “{{ query }}”.{% else %}Nothing saved yet. Use “Save for later” on any digest item.{% endif %}
+  </div>
+  {% endif %}
+{% endblock %}
+{% block scripts %}
+<script>
+(function () {
+  const CSRF_TOKEN = {{ csrf_token|tojson }};
+  const countEl = document.getElementById("archive-count");
+  document.querySelectorAll(".remove-saved").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const card = button.closest(".saved-card");
+      const itemId = card.dataset.itemId;
+      button.disabled = true;
+      try {
+        const response = await fetch(`/bookmark/${itemId}`, {
+          method: "DELETE",
+          headers: { "X-CSRF-Token": CSRF_TOKEN },
+        });
+        if (!response.ok) throw new Error("HTTP " + response.status);
+        card.remove();
+        const remaining = document.querySelectorAll(".saved-card").length;
+        if (countEl) countEl.textContent = `${remaining} saved item${remaining === 1 ? "" : "s"}`;
+        if (remaining === 0) window.location.reload();
+      } catch (error) {
+        button.disabled = false;
+        button.textContent = "Try again";
+      }
+    });
+  });
+})();
+</script>
+{% endblock %}

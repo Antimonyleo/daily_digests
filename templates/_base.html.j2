@@ -1,8 +1,18 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="light">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" id="theme-color" content="#256f52">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/app-icon.svg" type="image/svg+xml">
+<script>
+  try {
+    const savedTheme = localStorage.getItem("dailydigest-theme");
+    const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+    document.documentElement.dataset.theme = savedTheme || (prefersDark ? "dark" : "light");
+  } catch (_) {}
+</script>
 <title>{% block title %}DailyDigest{% endblock %}</title>
 <style>
   :root {
@@ -22,17 +32,47 @@
     --down: #b4493d;
     --flash: #fff1ed;
     --shadow: 0 18px 50px rgba(21, 34, 27, 0.08);
+    --bg-top: #eef5f0;
+    --surface-muted: #eef1ed;
+    --surface-hover: #f8faf7;
+    --border-soft: #edf1ec;
+    --copy-secondary: #334238;
+  }
+  html[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #0e1511;
+    --card: #151f19;
+    --panel: #111a15;
+    --border: #314038;
+    --muted: #9caaa1;
+    --text: #edf4ef;
+    --accent: #66b58d;
+    --accent-strong: #92d2ac;
+    --accent-soft: #1b3426;
+    --gold: #d5a552;
+    --gold-soft: #3a2d16;
+    --up: #77c69a;
+    --neutral: #a8b2ac;
+    --down: #ef8b7f;
+    --flash: #3d211f;
+    --shadow: 0 18px 50px rgba(0, 0, 0, 0.28);
+    --bg-top: #17231c;
+    --surface-muted: #202c25;
+    --surface-hover: #1a2720;
+    --border-soft: #28362e;
+    --copy-secondary: #c5d0c9;
   }
   * { box-sizing: border-box; }
   body {
     margin: 0;
     background:
-      linear-gradient(180deg, #eef5f0 0%, var(--bg) 260px);
+      linear-gradient(180deg, var(--bg-top) 0%, var(--bg) 260px);
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     color: var(--text);
     -webkit-font-smoothing: antialiased;
+    transition: background-color 0.18s ease, color 0.18s ease;
   }
-  .wrap { max-width: 1100px; margin: 0 auto; padding: 28px 16px 48px; }
+  .wrap { max-width: 1100px; margin: 0 auto; padding: 28px 16px 78px; }
   .card {
     background: var(--card);
     border: 1px solid var(--border);
@@ -47,21 +87,35 @@
   .header .title { font-size: 12px; color: var(--muted); letter-spacing: 0.08em; text-transform: uppercase; }
   .header .digest-id { font-size: 20px; font-weight: 600; margin-top: 2px; }
   .footer { padding: 14px 24px; border-top: 1px solid #efeff4; font-size: 11px; color: var(--muted); }
-  code { background: #edf1ec; padding: 1px 4px; border-radius: 3px; font-size: 12px; }
+  code { background: var(--surface-muted); padding: 1px 4px; border-radius: 3px; font-size: 12px; }
   a { color: var(--accent); }
   button, input, textarea, select { font: inherit; }
   .btn {
     display: inline-flex; align-items: center; justify-content: center; gap: 8px;
     min-height: 38px; padding: 8px 13px;
     border: 1px solid var(--border); border-radius: 8px;
-    background: #fff; color: var(--text); text-decoration: none;
+    background: var(--card); color: var(--text); text-decoration: none;
     cursor: pointer; font-weight: 650; font-size: 13px;
   }
-  .btn:hover { border-color: #b9c8bf; background: #f8faf7; }
+  .btn:hover { border-color: var(--accent); background: var(--surface-hover); }
   .btn.primary {
     background: var(--accent); border-color: var(--accent); color: #fff;
   }
   .btn.primary:hover { background: var(--accent-strong); border-color: var(--accent-strong); }
+  html[data-theme="dark"] .btn.primary { color: #0e1a13; }
+  .app-utilities {
+    position: fixed; right: 14px; bottom: 14px; z-index: 40;
+    display: flex; gap: 6px; align-items: center;
+  }
+  .app-utility {
+    min-height: 34px; padding: 6px 9px; border: 1px solid var(--border);
+    border-radius: 999px; background: var(--card); color: var(--muted);
+    box-shadow: 0 8px 24px rgba(0,0,0,0.12); cursor: pointer;
+    font-size: 12px; font-weight: 740;
+  }
+  .app-utility:hover { color: var(--text); border-color: var(--accent); }
+  [hidden] { display: none !important; }
+  @media (prefers-reduced-motion: reduce) { body { transition: none; } }
   {% block extra_styles %}{% endblock %}
 </style>
 </head>
@@ -69,6 +123,51 @@
 <div class="wrap">
   {% block body %}{% endblock %}
 </div>
+<div class="app-utilities" aria-label="Display and installation controls">
+  <button class="app-utility" id="install-app" type="button" hidden>Install app</button>
+  <button class="app-utility" id="theme-toggle" type="button" aria-pressed="false">Dark mode</button>
+</div>
+<script>
+(function () {
+  const root = document.documentElement;
+  const themeButton = document.getElementById("theme-toggle");
+  const themeColor = document.getElementById("theme-color");
+  function applyTheme(theme) {
+    const dark = theme === "dark";
+    root.dataset.theme = dark ? "dark" : "light";
+    themeButton.textContent = dark ? "Light mode" : "Dark mode";
+    themeButton.setAttribute("aria-pressed", dark ? "true" : "false");
+    if (themeColor) themeColor.content = dark ? "#151f19" : "#256f52";
+  }
+  applyTheme(root.dataset.theme || "light");
+  themeButton.addEventListener("click", () => {
+    const next = root.dataset.theme === "dark" ? "light" : "dark";
+    try { localStorage.setItem("dailydigest-theme", next); } catch (_) {}
+    applyTheme(next);
+  });
+
+  let installPrompt = null;
+  const installButton = document.getElementById("install-app");
+  window.addEventListener("beforeinstallprompt", (event) => {
+    event.preventDefault();
+    installPrompt = event;
+    installButton.hidden = false;
+  });
+  installButton.addEventListener("click", async () => {
+    if (!installPrompt) return;
+    installPrompt.prompt();
+    await installPrompt.userChoice;
+    installPrompt = null;
+    installButton.hidden = true;
+  });
+  window.addEventListener("appinstalled", () => { installButton.hidden = true; });
+  if ("serviceWorker" in navigator) {
+    window.addEventListener("load", () => {
+      navigator.serviceWorker.register("/sw.js").catch(() => {});
+    });
+  }
+})();
+</script>
 {% block scripts %}{% endblock %}
 </body>
 </html>

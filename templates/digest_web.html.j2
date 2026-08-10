@@ -26,31 +26,43 @@
   .name-prompt label { display: block; font-size: 12px; font-weight: 800; color: var(--accent-strong); margin-bottom: 5px; }
   .name-prompt input {
     width: 100%; min-height: 38px; padding: 8px 10px;
-    border: 1px solid #b9d2c3; border-radius: 8px; background: #fff;
+    border: 1px solid #b9d2c3; border-radius: 8px; background: var(--card);
   }
   .insight-grid {
     display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px;
     margin: 0 0 16px;
   }
-  .stat-strip {
-    display: flex; flex-wrap: wrap; gap: 6px 20px; align-items: baseline;
-    margin: 0 0 18px; padding: 11px 16px; background: #fff;
-    border: 1px solid var(--border); border-radius: 8px;
-    color: var(--muted); font-size: 13px;
+  .today-cup {
+    display: grid; grid-template-columns: minmax(150px, 0.7fr) minmax(0, 2fr);
+    gap: 20px; align-items: center; margin: 0 0 16px; padding: 18px 20px;
+    border: 1px solid #d6e6db; border-radius: 12px;
+    background: linear-gradient(135deg, #f7fbf8, var(--accent-soft));
   }
-  .stat-strip span { white-space: nowrap; }
-  .stat-strip strong { color: var(--text); font-size: 16px; font-weight: 820; margin-right: 4px; }
-  .stat-strip .strip-warn strong { color: var(--down); }
+  .cup-kicker {
+    color: var(--accent-strong); font-size: 11px; font-weight: 820;
+    letter-spacing: 0.09em; text-transform: uppercase;
+  }
+  .cup-time { margin-top: 4px; font-size: 27px; font-weight: 840; line-height: 1.1; }
+  .cup-label { color: var(--muted); font-size: 12px; margin-top: 4px; }
+  .cup-details { display: grid; gap: 9px; }
+  .cup-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+  .cup-row-label { color: var(--muted); font-size: 11px; font-weight: 800; min-width: 58px; text-transform: uppercase; letter-spacing: 0.05em; }
+  .cup-chip {
+    display: inline-flex; align-items: center; min-height: 25px; padding: 4px 8px;
+    border: 1px solid #cee0d4; border-radius: 999px; background: rgba(255,255,255,0.75);
+    color: var(--copy-secondary); font-size: 11px; font-weight: 720;
+  }
+  .cup-foot { color: var(--muted); font-size: 11px; }
   .catch-up {
     background: var(--accent-soft); border: 1px solid #cfe6d8; border-radius: 8px;
     padding: 14px 16px; margin: 0 0 18px;
   }
   .catch-up .panel-title { color: var(--accent-strong); }
-  .catch-up-body { white-space: pre-wrap; color: #274b39; font-size: 13.5px; line-height: 1.55; }
+  .catch-up-body { white-space: pre-wrap; color: var(--copy-secondary); font-size: 13.5px; line-height: 1.55; }
   .under-the-hood { margin-top: 18px; display: grid; gap: 12px; }
   .under-the-hood .source-mix, .under-the-hood .audit-panel { margin-bottom: 0; }
   .stat-tile {
-    background: #fff; border: 1px solid var(--border); border-radius: 8px;
+    background: var(--card); border: 1px solid var(--border); border-radius: 8px;
     padding: 12px; box-shadow: 0 1px 2px rgba(0,0,0,0.04);
   }
   .stat-label {
@@ -59,7 +71,7 @@
   }
   .stat-value { font-size: 24px; font-weight: 820; margin-top: 4px; }
   .source-mix, .must-read, .audit-panel {
-    background: #fff; border: 1px solid var(--border); border-radius: 8px;
+    background: var(--card); border: 1px solid var(--border); border-radius: 8px;
     padding: 14px; margin-bottom: 16px;
   }
   .panel-title {
@@ -71,14 +83,14 @@
     align-items: center; gap: 8px; margin: 7px 0; font-size: 12px;
   }
   .mix-track {
-    height: 8px; background: #eef1ed; border-radius: 999px; overflow: hidden;
+    height: 8px; background: var(--surface-muted); border-radius: 999px; overflow: hidden;
   }
   .mix-fill { height: 100%; background: #5b8f73; border-radius: 999px; }
   .must-list {
     display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px;
   }
   .must-card {
-    border: 1px solid #dfe6df; border-radius: 8px; padding: 10px; background: #fbfcf9;
+    border: 1px solid var(--border); border-radius: 8px; padding: 10px; background: var(--panel);
   }
   .must-card a {
     color: var(--text); text-decoration: none; font-size: 13px; line-height: 1.35;
@@ -103,7 +115,7 @@
   .audit-metrics { display: flex; flex-wrap: wrap; gap: 7px; margin: 0 0 10px; }
   .audit-metric {
     display: inline-flex; gap: 5px; align-items: baseline; padding: 6px 8px;
-    border: 1px solid #e1e8e2; border-radius: 999px; background: #fbfcf9;
+    border: 1px solid var(--border); border-radius: 999px; background: var(--panel);
     color: var(--muted); font-size: 12px;
   }
   .audit-metric strong { color: var(--text); font-size: 13px; }
@@ -116,7 +128,7 @@
 	  .feedback-note { color: var(--muted); font-size: 13px; line-height: 1.45; max-width: 620px; }
   .ranking-panel {
     display: grid; gap: 8px; min-width: 282px; padding: 12px;
-    border: 1px solid var(--border); border-radius: 8px; background: #fff;
+    border: 1px solid var(--border); border-radius: 8px; background: var(--card);
   }
   .ranking-kicker {
     color: var(--muted); font-size: 11px; font-weight: 800;
@@ -126,7 +138,7 @@
   .count-pill {
     display: inline-flex; align-items: center; gap: 4px;
     min-height: 26px; padding: 3px 8px; border-radius: 999px;
-    background: #eef1ed; color: var(--text); font-size: 12px; font-weight: 750;
+    background: var(--surface-muted); color: var(--text); font-size: 12px; font-weight: 750;
   }
   .count-pill.good { background: #e4f4eb; color: var(--up); }
   .count-pill.bad { background: #fdecea; color: var(--down); }
@@ -136,7 +148,7 @@
   .reader-tools {
     display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
     gap: 12px; padding: 14px 18px; border-bottom: 1px solid var(--border);
-    background: #fff;
+    background: var(--card);
   }
   .tool-group { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
   .tool-label {
@@ -144,7 +156,7 @@
     letter-spacing: 0.08em; text-transform: uppercase; margin-right: 2px;
   }
   .filter-chip {
-    border: 1px solid var(--border); border-radius: 999px; background: #fbfcf9;
+    border: 1px solid var(--border); border-radius: 999px; background: var(--panel);
     color: var(--text); min-height: 30px; padding: 5px 10px; font-size: 12px;
     font-weight: 720; cursor: pointer;
   }
@@ -153,28 +165,42 @@
     background: var(--accent-soft); border-color: #9fc2ae; color: var(--accent-strong);
   }
   .filter-count { color: var(--muted); font-size: 12px; }
-  .section-title {
+  .section-toggle {
     display: flex; align-items: center; justify-content: space-between; gap: 12px;
-    font-size: 17px; margin: 0; padding: 20px 22px 8px;
-    border-top: 1px solid #edf1ec; color: var(--text);
+    padding: 18px 22px; border-top: 1px solid var(--border-soft);
+    background: var(--card); cursor: pointer; list-style: none;
   }
-  .section-title:first-of-type { border-top: none; }
+  .section-toggle::-webkit-details-marker { display: none; }
+  .section-toggle:hover { background: var(--surface-hover); }
+  .section-heading { display: flex; align-items: center; gap: 7px; font-size: 17px; font-weight: 780; }
+  .section-toggle-side { display: flex; align-items: center; gap: 9px; }
+  .section-chevron { color: var(--muted); font-size: 16px; transition: transform 0.16s ease; }
+  .section-block[open] .section-chevron { transform: rotate(180deg); }
   .section-count {
     font-size: 12px; color: var(--muted); font-weight: 650;
-    background: #eef1ed; border-radius: 999px; padding: 4px 9px;
+    background: var(--surface-muted); border-radius: 999px; padding: 4px 9px;
   }
   .item {
     display: grid; grid-template-columns: minmax(0, 1fr) 140px; gap: 24px;
-    padding: 22px 24px; border-top: 1px solid #eef1ed;
+    padding: 22px 24px; border-top: 1px solid var(--border-soft);
   }
   .item[data-priority="spotlight"] { border-left: 4px solid var(--gold); }
   .item[data-priority="read"] { border-left: 4px solid var(--accent); }
   .item[data-priority="skim"] { border-left: 4px solid #c7d0c9; }
   .item:first-of-type { border-top: none; }
   .item-head { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; margin-bottom: 4px; }
+  .bookmark-btn {
+    display: inline-flex; align-items: center; gap: 5px; min-height: 26px;
+    margin-left: auto; padding: 3px 8px; border: 1px solid var(--border);
+    border-radius: 999px; background: var(--card); color: var(--muted);
+    font-size: 11px; font-weight: 760; cursor: pointer;
+  }
+  .bookmark-btn:hover { color: var(--accent-strong); border-color: #9fc2ae; }
+  .bookmark-btn.active { color: #7a4b00; border-color: #dcb86b; background: var(--gold-soft); }
+  .bookmark-btn:disabled { opacity: 0.65; cursor: progress; }
   .item .label-pill {
     display: inline-flex; align-items: center; font-weight: 760; color: var(--muted);
-    background: #f3f5f2; border: 1px solid #dfe6df; border-radius: 6px;
+    background: var(--surface-muted); border: 1px solid var(--border); border-radius: 6px;
     padding: 2px 7px; font-size: 11px;
   }
   .type-label {
@@ -192,7 +218,7 @@
   .priority-pill.read { color: var(--accent-strong); background: var(--accent-soft); border: 1px solid #d7e9dd; }
   .priority-pill.skim { color: #49554e; background: #f1f3f1; border: 1px solid #dfe6df; }
   .lane-pill {
-    color: #334238; background: #f6f8f5; border: 1px solid #e2e8e1;
+    color: var(--copy-secondary); background: var(--panel); border: 1px solid var(--border);
   }
   .item a.title-link {
     color: var(--text); text-decoration: none; font-weight: 720; font-size: 16px;
@@ -200,45 +226,45 @@
   }
   .item a.title-link:hover { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
 	  .item .meta { font-size: 12px; color: var(--muted); margin: 6px 0 0; overflow-wrap: anywhere; }
-	  .item .summary { font-size: 14px; line-height: 1.62; margin: 10px 0 0; color: #334238; overflow-wrap: anywhere; }
-    .opportunity-facts { margin-top: 9px; padding: 9px 11px; border-radius: 7px; background: #f3f7f2; color: #35483a; font-size: 12px; line-height: 1.55; }
+	  .item .summary { font-size: 14px; line-height: 1.62; margin: 10px 0 0; color: var(--copy-secondary); overflow-wrap: anywhere; }
+    .opportunity-facts { margin-top: 9px; padding: 9px 11px; border-radius: 7px; background: var(--panel); color: var(--copy-secondary); font-size: 12px; line-height: 1.55; }
     .opportunity-note { color: var(--muted); }
   .summary-fields {
     display: grid; gap: 7px; margin: 10px 0 0; padding: 10px;
-    border: 1px solid #e4ebe5; border-radius: 8px; background: #fbfcf9;
+    border: 1px solid var(--border); border-radius: 8px; background: var(--panel);
   }
   .summary-field { display: grid; grid-template-columns: 92px 1fr; gap: 8px; }
   .summary-label { color: var(--accent-strong); font-size: 11px; font-weight: 840; text-transform: uppercase; letter-spacing: 0.04em; }
-  .summary-text { color: #334238; font-size: 13px; line-height: 1.45; overflow-wrap: anywhere; }
+  .summary-text { color: var(--copy-secondary); font-size: 13px; line-height: 1.45; overflow-wrap: anywhere; }
   .reason-row { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
   .reason-badge {
     display: inline-flex; align-items: center; min-height: 22px; padding: 3px 7px;
-    border: 1px solid #dce6dd; border-radius: 999px; background: #f4f8f5;
-    color: #365343; font-size: 11px; font-weight: 700;
+    border: 1px solid var(--border); border-radius: 999px; background: var(--panel);
+    color: var(--copy-secondary); font-size: 11px; font-weight: 700;
   }
-  .ranking-sentence { color: #405047; font-size: 12px; line-height: 1.45; margin-top: 8px; }
+  .ranking-sentence { color: var(--copy-secondary); font-size: 12px; line-height: 1.45; margin-top: 8px; }
   .why-shown {
     margin-top: 10px; border: 1px solid #e1e8e2; border-radius: 8px;
-    background: #fbfcf9; overflow: hidden;
+    background: var(--panel); overflow: hidden;
   }
   .why-shown summary {
     cursor: pointer; padding: 8px 10px; font-size: 12px; font-weight: 820;
     color: var(--accent-strong);
   }
   .why-body { padding: 0 10px 10px; }
-  .why-copy { color: #405047; font-size: 12px; line-height: 1.45; margin-bottom: 8px; }
+  .why-copy { color: var(--copy-secondary); font-size: 12px; line-height: 1.45; margin-bottom: 8px; }
   .editorial-signals { display: flex; flex-wrap: wrap; gap: 6px; }
   .signal-chip {
     display: inline-flex; align-items: center; min-height: 24px; padding: 4px 8px;
-    border-radius: 999px; border: 1px solid #dde6df; background: #fff;
-    color: #334238; font-size: 11px; font-weight: 720;
+    border-radius: 999px; border: 1px solid var(--border); background: var(--card);
+    color: var(--copy-secondary); font-size: 11px; font-weight: 720;
   }
   .save-state { min-height: 18px; margin-top: 8px; color: var(--muted); font-size: 12px; }
   .save-state.saved { color: var(--up); }
   .save-state.error { color: var(--down); }
   .vote-panel {
     align-self: start; border: 1px solid var(--border); border-radius: 8px;
-    background: #fff; padding: 10px; min-width: 0;
+    background: var(--card); padding: 10px; min-width: 0;
   }
   .vote-title {
     font-size: 11px; color: var(--muted); font-weight: 800; text-transform: uppercase;
@@ -248,7 +274,7 @@
   .reason-prompt { margin-top: 9px; color: var(--muted); font-size: 11px; font-weight: 760; }
   .reason-chip-row { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
   .reason-chip {
-    border: 1px solid var(--border); border-radius: 999px; background: #fbfcf9;
+    border: 1px solid var(--border); border-radius: 999px; background: var(--panel);
     color: var(--muted); min-height: 25px; padding: 3px 8px; font-size: 11px;
     cursor: pointer;
   }
@@ -257,7 +283,7 @@
   .vote-btn {
     min-height: 33px; padding: 6px 10px; border: 1px solid var(--border);
     border-top-width: 0; cursor: pointer; color: var(--muted);
-    background: #fafbf9; font-size: 12px; font-weight: 750; text-align: center;
+    background: var(--panel); font-size: 12px; font-weight: 750; text-align: center;
   }
   .vote-btn:first-child { border-top-width: 1px; border-radius: 7px 7px 0 0; }
   .vote-btn:last-child { border-radius: 0 0 7px 7px; }
@@ -267,7 +293,7 @@
   .vote-btn.active { border-top-width: 1px; position: relative; z-index: 1; }
   .vote-btn.active.must { background: var(--gold-soft); border-color: var(--gold); color: #7a4b00; }
   .vote-btn.active.good { background: #e4f4eb; border-color: var(--up); color: var(--up); }
-  .vote-btn.active.neutral { background: #eef1ed; border-color: var(--neutral); color: var(--neutral); }
+  .vote-btn.active.neutral { background: var(--surface-muted); border-color: var(--neutral); color: var(--neutral); }
   .vote-btn.active.bad { background: #fdecea; border-color: var(--down); color: var(--down); }
   .vote-pct { display: block; margin-top: 1px; color: var(--muted); font-size: 10px; font-weight: 650; }
   .vote-btn.active .vote-pct { color: inherit; }
@@ -275,17 +301,33 @@
   .item.flash { background: var(--flash); transition: background 0.4s; }
   .no-filter-results {
     display: none; padding: 30px 22px; color: var(--muted); text-align: center;
-    border-top: 1px solid #eef1ed; font-size: 14px;
+    border-top: 1px solid var(--border-soft); font-size: 14px;
   }
   .empty { padding: 44px 22px; text-align: center; color: var(--muted); font-size: 14px; line-height: 1.6; }
   .toast {
-    position: fixed; right: 18px; bottom: 18px; z-index: 20;
+    position: fixed; right: 18px; bottom: 62px; z-index: 20;
     background: #16231c; color: #fff; border-radius: 8px; padding: 11px 13px;
     box-shadow: 0 12px 30px rgba(0,0,0,0.18); font-size: 13px;
     transform: translateY(18px); opacity: 0; pointer-events: none;
     transition: transform 0.18s ease, opacity 0.18s ease;
   }
   .toast.show { transform: translateY(0); opacity: 1; }
+  html[data-theme="dark"] .today-cup {
+    background: linear-gradient(135deg, var(--panel), var(--accent-soft));
+    border-color: var(--border);
+  }
+  html[data-theme="dark"] .cup-chip { background: var(--card); border-color: var(--border); }
+  html[data-theme="dark"] .bookmark-btn.active,
+  html[data-theme="dark"] .priority-pill.spotlight,
+  html[data-theme="dark"] .vote-btn.active.must { color: var(--gold); }
+  html[data-theme="dark"] .type-label,
+  html[data-theme="dark"] .priority-pill.skim { color: var(--copy-secondary); background: var(--surface-muted); border-color: var(--border); }
+  html[data-theme="dark"] .count-pill.good,
+  html[data-theme="dark"] .vote-btn.active.good { background: var(--accent-soft); color: var(--up); }
+  html[data-theme="dark"] .count-pill.bad,
+  html[data-theme="dark"] .vote-btn.active.bad { background: var(--flash); color: var(--down); }
+  html[data-theme="dark"] .filter-chip:hover,
+  html[data-theme="dark"] .vote-btn:hover { background: var(--surface-hover); border-color: var(--accent); }
   @media (max-width: 760px) {
     .topbar { grid-template-columns: 1fr; align-items: start; }
     .actions { justify-content: flex-start; }
@@ -301,6 +343,7 @@
     .audit-list li { grid-template-columns: 1fr; }
     .vote-panel { width: 100%; }
     .name-prompt { grid-template-columns: 1fr; }
+    .today-cup { grid-template-columns: 1fr; }
   }
 {% endblock %}
 {% block body %}
@@ -312,6 +355,7 @@
     </div>
     <div class="actions">
       <button class="btn primary" id="refresh-btn" type="button">Brew my morning cup of tea</button>
+      <a class="btn" href="/saved">Saved reading</a>
       <button class="btn" onclick="window.location.href='/setup'" type="button">Settings</button>
     </div>
   </header>
@@ -327,12 +371,28 @@
   </form>
   {% endif %}
 
-  <div class="stat-strip" aria-label="Digest summary">
-    <span><strong>{{ overview.selected }}</strong> selected</span>
-    <span><strong>{{ overview.scanned or 0 }}</strong> scanned</span>
-    <span><strong>{{ overview.sources or 0 }}</strong> sources</span>
-    <span class="{% if overview.failures %}strip-warn{% endif %}"><strong>{{ overview.failures or 0 }}</strong> source issues</span>
-  </div>
+  {% if not empty %}
+  <section class="today-cup" aria-label="Today’s cup">
+    <div>
+      <div class="cup-kicker">Today’s cup</div>
+      <div class="cup-time">≈ {{ overview.reading_minutes }} minute digest</div>
+      <div class="cup-label">{{ overview.selected }} carefully selected entries</div>
+    </div>
+    <div class="cup-details">
+      {% if overview.topic_mix %}
+      <div class="cup-row">
+        <span class="cup-row-label">Themes</span>
+        {% for topic in overview.topic_mix %}<span class="cup-chip">{{ topic.title }} · {{ topic.count }}</span>{% endfor %}
+      </div>
+      {% endif %}
+      <div class="cup-row">
+        <span class="cup-row-label">Sections</span>
+        {% for section in overview.section_mix %}<span class="cup-chip">{{ section.title }} · {{ section.count }}</span>{% endfor %}
+      </div>
+      <div class="cup-foot">Selected from {{ overview.scanned or 0 }} scanned items across {{ overview.sources or 0 }} sources{% if overview.failures %} · {{ overview.failures }} source issue{{ '' if overview.failures == 1 else 's' }}{% endif %}</div>
+    </div>
+  </section>
+  {% endif %}
 
   {% if catch_up_synthesis %}
   <section class="catch-up" aria-label="Catch-up briefing">
@@ -341,11 +401,11 @@
   </section>
   {% endif %}
 
-  {% if overview.must_read %}
+  {% if overview.spotlight %}
   <section class="must-read">
-    <h2 class="panel-title">Must read first</h2>
+    <h2 class="panel-title">Today’s spotlight{% if overview.must_read %} · Must read first{% endif %}</h2>
     <div class="must-list">
-      {% for item in overview.must_read[:3] %}
+      {% for item in overview.spotlight %}
       <div class="must-card">
         <a href="{{ item.url }}" target="_blank" rel="noopener">{{ item.title }}</a>
         <div class="must-meta">{{ item.source }}{% if item.ranking.tags %} &middot; {{ item.ranking.tags[0] }}{% endif %}</div>
@@ -422,16 +482,16 @@
 	    </div>
     {% else %}
       {% for section in sections %}
-      <section class="section-block" data-section="{{ section.key }}">
-      <h2 class="section-title">
-        <span><span style="margin-right:6px;">{{ section.emoji }}</span>{{ section.title }}</span>
-        <span class="section-count">{{ section.entries|length }}</span>
-      </h2>
+      <details class="section-block" data-section="{{ section.key }}">
+      <summary class="section-toggle">
+        <span class="section-heading"><span aria-hidden="true">{{ section.emoji }}</span>{{ section.title }}</span>
+        <span class="section-toggle-side"><span class="section-count">{{ section.entries|length }}</span><span class="section-chevron" aria-hidden="true">⌄</span></span>
+      </summary>
       {% for item in section.entries %}
       {% set priority_score = item.confidence_score | default(item.score_raw) %}
       {% set priority = 'spotlight' if priority_score >= 0.85 else ('read' if priority_score >= 0.65 else 'skim') %}
       {% set priority_label = 'Lead story' if priority == 'spotlight' else ('Worth reading' if priority == 'read' else 'Quick skim') %}
-      <div class="item" data-item-id="{{ item.id }}" data-section="{{ section.key }}" data-priority="{{ priority }}" data-source-bucket="{{ item.ranking.source_bucket }}" data-reviewed="{{ 'true' if item.current_grade is not none else 'false' }}" data-current-grade="{{ item.current_grade if item.current_grade is not none else '' }}">
+      <div class="item" data-item-id="{{ item.id }}" data-section="{{ section.key }}" data-priority="{{ priority }}" data-source-bucket="{{ item.ranking.source_bucket }}" data-reviewed="{{ 'true' if item.current_grade is not none else 'false' }}" data-current-grade="{{ item.current_grade if item.current_grade is not none else '' }}" data-bookmarked="{{ 'true' if item.bookmarked else 'false' }}">
         <div class="item-main">
           <div class="item-head">
             <span class="label-pill">{{ item.label }}</span>
@@ -439,6 +499,10 @@
             <span class="type-label">{{ item.type_label }}</span>
             {% endif %}
             <span class="priority-pill {{ priority }}">{{ priority_label }}</span>
+            <button class="bookmark-btn{% if item.bookmarked %} active{% endif %}" type="button" aria-pressed="{{ 'true' if item.bookmarked else 'false' }}">
+              <span aria-hidden="true">{{ '★' if item.bookmarked else '☆' }}</span>
+              <span class="bookmark-label">{{ 'Saved for later' if item.bookmarked else 'Save for later' }}</span>
+            </button>
           </div>
           <div>
             <a class="title-link" href="{{ item.url }}" target="_blank" rel="noopener">{{ item.title }}</a>
@@ -567,7 +631,7 @@
         </div>
       </div>
       {% endfor %}
-      </section>
+      </details>
       {% endfor %}
       <div class="no-filter-results" id="no-filter-results">No items match this view.</div>
     {% endif %}
@@ -805,6 +869,9 @@
     document.querySelectorAll(".section-block").forEach((sectionEl) => {
       const hasVisibleItem = Array.from(sectionEl.querySelectorAll(".item")).some((itemEl) => !itemEl.hidden);
       sectionEl.hidden = !hasVisibleItem;
+      if (hasVisibleItem && (state.priorityOnly || state.unreadOnly || state.activeSections.size > 0 || state.activeSourceTypes.size > 0)) {
+        sectionEl.open = true;
+      }
     });
 
     const countEl = document.getElementById("filter-count");
@@ -831,6 +898,32 @@
 
   document.querySelectorAll(".item").forEach((itemEl) => {
     syncReasonChips(itemEl);
+    const bookmarkBtn = itemEl.querySelector(".bookmark-btn");
+    if (bookmarkBtn) {
+      bookmarkBtn.addEventListener("click", async () => {
+        const id = itemEl.dataset.itemId;
+        const wasSaved = itemEl.dataset.bookmarked === "true";
+        bookmarkBtn.disabled = true;
+        try {
+          const response = await fetch(`/bookmark/${id}`, {
+            method: wasSaved ? "DELETE" : "POST",
+            headers: { "X-CSRF-Token": CSRF_TOKEN },
+          });
+          if (!response.ok) throw new Error("HTTP " + response.status);
+          const nowSaved = !wasSaved;
+          itemEl.dataset.bookmarked = nowSaved ? "true" : "false";
+          bookmarkBtn.classList.toggle("active", nowSaved);
+          bookmarkBtn.setAttribute("aria-pressed", nowSaved ? "true" : "false");
+          bookmarkBtn.querySelector("span[aria-hidden]").textContent = nowSaved ? "★" : "☆";
+          bookmarkBtn.querySelector(".bookmark-label").textContent = nowSaved ? "Saved for later" : "Save for later";
+          showToast(nowSaved ? "Saved for later" : "Removed from saved items");
+        } catch (error) {
+          showToast("Saved-item change failed");
+        } finally {
+          bookmarkBtn.disabled = false;
+        }
+      });
+    }
     itemEl.querySelectorAll(".vote-btn").forEach((btn) => {
       btn.addEventListener("click", async () => {
         const id = itemEl.dataset.itemId;
