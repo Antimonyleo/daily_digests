@@ -1,10 +1,19 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 
-_VALID_SECTIONS = {"research", "industry", "ai", "regulatory", "world"}
+_VALID_SECTIONS = {
+    "research",
+    "industry",
+    "ai",
+    "regulatory",
+    "world",
+    "opportunities",
+    "events",
+}
 
 
 class Item(BaseModel):
@@ -18,6 +27,7 @@ class Item(BaseModel):
     abstract: str = ""
     authors: str = ""
     published_at: datetime | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
     score: float | None = None
     digest_id: str | None = None
@@ -128,6 +138,7 @@ class SourceSpec(BaseModel):
     condition: str | None = None
     endpoint: str | None = None
     polite_email: str | None = None
+    lookahead_days: int = Field(default=180, ge=1, le=730)
     # OpenAlex source (venue) ids for the ``openalex_venues`` kind — a retrieval
     # channel that pulls recent articles directly from specific high-value
     # journals (e.g. ACS Nano, JACS) whose native RSS is Cloudflare-blocked.

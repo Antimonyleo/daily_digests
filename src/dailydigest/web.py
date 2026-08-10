@@ -33,6 +33,7 @@ import secrets
 import threading
 import uuid
 from collections import Counter
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
@@ -61,6 +62,11 @@ from .email_render import (
     reason_line,
     safe_url,
 )
+from .opportunities import (
+    OpportunityProfile,
+    load_opportunity_profile,
+    opportunity_display,
+)
 from .pipeline import _digest_id, run_all
 from .rank.source_quality import display_breakdown, source_bucket
 from .store import (
@@ -68,6 +74,7 @@ from .store import (
     ItemRow,
     VoteRow,
     init_db,
+    item_metadata,
     load_digest_audit,
     load_digest_features,
     mark_impressions_viewed,
@@ -88,6 +95,19 @@ def _get_profile_path() -> Path:
         candidate.relative_to(_REPO_ROOT)
     except ValueError:
         raise ValueError(f"PROFILE_PATH escapes repo root: {candidate}") from None
+    return candidate
+
+
+def _get_opportunity_profile_path() -> Path:
+    from .config import get_settings
+
+    candidate = (_REPO_ROOT / get_settings().opportunity_profile_path).resolve()
+    try:
+        candidate.relative_to(_REPO_ROOT)
+    except ValueError:
+        raise ValueError(
+            f"OPPORTUNITY_PROFILE_PATH escapes repo root: {candidate}"
+        ) from None
     return candidate
 
 app = FastAPI(title="DailyDigest")
@@ -329,6 +349,14 @@ def _load_today(digest_id: str) -> tuple[list[dict], dict[int, int]]:
             for item_id in item_ids
         }
         persisted_features = load_digest_features(digest_id)
+        opportunity_profile = None
+        if any((row.section or "") in {"opportunities", "events"} for row in rows):
+            try:
+                opportunity_profile = load_opportunity_profile(
+                    get_settings().opportunity_profile_path
+                )
+            except Exception:  # noqa: BLE001
+                pass
 
         rows.sort(
             key=lambda r: (
@@ -359,6 +387,13 @@ def _load_today(digest_id: str) -> tuple[list[dict], dict[int, int]]:
             if key not in by_section:
                 by_section[key] = []
                 seen_keys.append(key)
+            opportunity = (
+                opportunity_display(item_metadata(row), opportunity_profile)
+                if key in {"opportunities", "events"}
+                else None
+            )
+            if opportunity is not None:
+                opportunity["calendar_url"] = f"/calendar/{int(row.id)}.ics"
             by_section[key].append(
                 {
                     "id": row.id,
@@ -375,6 +410,7 @@ def _load_today(digest_id: str) -> tuple[list[dict], dict[int, int]]:
                     "ranking_sentence": _ranking_sentence(ranking),
                     "reason_line": reason,
                     "type_label": type_label,
+                    "opportunity": opportunity,
                     "current_vote": current_vote.get(int(row.id)),
                     "current_grade": current_grade.get(int(row.id)),
                     "current_reasons": current_reasons.get(int(row.id), []),
@@ -433,6 +469,63 @@ def _require_local_origin(request: Request) -> None:
     origin_host = _host_name(urlsplit(origin).netloc)
     if origin_host != host or not _is_local_host(origin_host):
         raise HTTPException(status_code=403, detail="cross-origin writes are not allowed")
+
+
+def _ics_text(value: object) -> str:
+    return (
+        str(value or "")
+        .replace("\\", "\\\\")
+        .replace("\n", "\\n")
+        .replace(",", "\\,")
+        .replace(";", "\\;")
+    )
+
+
+@app.get("/calendar/{item_id}.ics")
+def calendar_item(request: Request, item_id: int) -> Response:
+    """Export an opportunity deadline or event as a portable calendar file."""
+    _require_local_origin(request)
+    init_db()
+    with session_scope() as s:
+        row = s.get(ItemRow, item_id)
+        if row is None or (row.section or "") not in {"opportunities", "events"}:
+            raise HTTPException(status_code=404, detail="opportunity or event not found")
+        metadata = item_metadata(row)
+        raw_start = metadata.get("event_start") or metadata.get("deadline")
+        raw_end = metadata.get("event_end") or raw_start
+        try:
+            start = date.fromisoformat(str(raw_start)[:10])
+            end = date.fromisoformat(str(raw_end)[:10])
+        except ValueError:
+            raise HTTPException(status_code=422, detail="this item has no usable date") from None
+        title = row.title or "DailyDigest opportunity"
+        url = safe_url(row.url)
+        description = row.abstract or ""
+    # DATE-valued DTEND is exclusive under RFC 5545.
+    exclusive_end = max(start, end) + timedelta(days=1)
+    body = "\r\n".join(
+        [
+            "BEGIN:VCALENDAR",
+            "VERSION:2.0",
+            "PRODID:-//DailyDigest//Opportunity Calendar//EN",
+            "CALSCALE:GREGORIAN",
+            "BEGIN:VEVENT",
+            f"UID:dailydigest-{item_id}@localhost",
+            f"DTSTART;VALUE=DATE:{start:%Y%m%d}",
+            f"DTEND;VALUE=DATE:{exclusive_end:%Y%m%d}",
+            f"SUMMARY:{_ics_text(title)}",
+            f"DESCRIPTION:{_ics_text(description[:1000])}",
+            f"URL:{_ics_text(url)}",
+            "END:VEVENT",
+            "END:VCALENDAR",
+            "",
+        ]
+    )
+    return Response(
+        body,
+        media_type="text/calendar",
+        headers={"Content-Disposition": f'attachment; filename="dailydigest-{item_id}.ics"'},
+    )
 
 
 def _require_csrf(request: Request, form: dict[str, str] | None = None) -> None:
@@ -543,6 +636,24 @@ def _load_existing_form_defaults() -> dict[str, str]:
         "top_regulatory": str(SETTINGS.top_regulatory),
         "include_world": str(section_enabled(SETTINGS, "world")).lower(),
         "top_world": str(SETTINGS.top_world),
+        "include_opportunities": str(
+            section_enabled(SETTINGS, "opportunities")
+        ).lower(),
+        "top_opportunities": str(SETTINGS.top_opportunities),
+        "include_events": str(section_enabled(SETTINGS, "events")).lower(),
+        "top_events": str(SETTINGS.top_events),
+        "opportunity_description": "",
+        "opportunity_career_stage": "",
+        "opportunity_institution_type": "",
+        "opportunity_country": "",
+        "opportunity_applicant_role": "",
+        "opportunity_citizenship_or_residency": "",
+        "opportunity_types": "",
+        "event_types": "",
+        "event_regions": "",
+        "event_formats": "",
+        "requires_travel_support": "false",
+        "minimum_lead_days": "7",
     }
     if _get_profile_path().exists():
         try:
@@ -567,6 +678,37 @@ def _load_existing_form_defaults() -> dict[str, str]:
             out["downweight"] = ", ".join(data.get("downweight") or [])
         except Exception as e:  # noqa: BLE001
             logger.warning("could not parse existing profile.yaml: %s", e)
+    if _get_opportunity_profile_path().exists():
+        try:
+            data = yaml.safe_load(_get_opportunity_profile_path().read_text()) or {}
+            out.update(
+                {
+                    "opportunity_description": str(data.get("description") or ""),
+                    "opportunity_career_stage": str(data.get("career_stage") or ""),
+                    "opportunity_institution_type": str(
+                        data.get("institution_type") or ""
+                    ),
+                    "opportunity_country": str(data.get("country") or ""),
+                    "opportunity_applicant_role": str(
+                        data.get("applicant_role") or ""
+                    ),
+                    "opportunity_citizenship_or_residency": str(
+                        data.get("citizenship_or_residency") or ""
+                    ),
+                    "opportunity_types": ",".join(
+                        data.get("opportunity_types") or []
+                    ),
+                    "event_types": ",".join(data.get("event_types") or []),
+                    "event_regions": ",".join(data.get("event_regions") or []),
+                    "event_formats": ",".join(data.get("event_formats") or []),
+                    "requires_travel_support": str(
+                        bool(data.get("requires_travel_support", False))
+                    ).lower(),
+                    "minimum_lead_days": str(data.get("minimum_lead_days", 7)),
+                }
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("could not parse existing opportunities.yaml: %s", e)
     return out
 
 
@@ -663,6 +805,8 @@ def _validate_setup(form: dict[str, str]) -> list[str]:
         ("top_ai", "AI tools and methods items", "include_ai"),
         ("top_regulatory", "Clinical and regulatory items", "include_regulatory"),
         ("top_world", "World news items", "include_world"),
+        ("top_opportunities", "Funding and opportunities items", "include_opportunities"),
+        ("top_events", "Events and calls items", "include_events"),
     ):
         minimum = 1 if enabled_key is None or form.get(enabled_key) == "true" else 0
         raw = (form.get(key) or "").strip()
@@ -673,7 +817,46 @@ def _validate_setup(form: dict[str, str]) -> list[str]:
             continue
         if value < minimum or value > 30:
             errors.append(f"{label} must be between {minimum} and 30.")
+    if form.get("include_opportunities") == "true" or form.get("include_events") == "true":
+        required = (
+            ("opportunity_description", "Opportunity-matching description"),
+            ("opportunity_career_stage", "Career stage"),
+            ("opportunity_institution_type", "Institution type"),
+            ("opportunity_country", "Current country"),
+            ("opportunity_applicant_role", "Applicant role"),
+        )
+        for key, label in required:
+            if not (form.get(key) or "").strip():
+                errors.append(f"{label} is required when opportunities or events are enabled.")
+        description = (form.get("opportunity_description") or "").strip()
+        if description and len(description) < 40:
+            errors.append("Opportunity-matching description must be at least 40 characters.")
+        try:
+            lead_days = int((form.get("minimum_lead_days") or "7").strip())
+            if not 0 <= lead_days <= 365:
+                raise ValueError
+        except ValueError:
+            errors.append("Minimum preparation time must be between 0 and 365 days.")
     return errors
+
+
+def _opportunity_profile_from_form(form: dict[str, str]) -> OpportunityProfile:
+    return OpportunityProfile(
+        description=form["opportunity_description"],
+        career_stage=form["opportunity_career_stage"],
+        institution_type=form["opportunity_institution_type"],
+        country=form["opportunity_country"],
+        applicant_role=form["opportunity_applicant_role"],
+        citizenship_or_residency=form.get(
+            "opportunity_citizenship_or_residency", ""
+        ),
+        opportunity_types=_parse_csv(form.get("opportunity_types")),
+        event_types=_parse_csv(form.get("event_types")),
+        event_regions=_parse_csv(form.get("event_regions")),
+        event_formats=_parse_csv(form.get("event_formats")),
+        requires_travel_support=form.get("requires_travel_support") == "true",
+        minimum_lead_days=int(form.get("minimum_lead_days") or 7),
+    )
 
 
 def _int_form(form: dict[str, str], key: str, default: int) -> str:
@@ -979,6 +1162,44 @@ async def setup_post(request: Request) -> Response:
             raw, "include_world", section_enabled(SETTINGS, "world")
         ),
         "top_world": str(raw.get("top_world", SETTINGS.top_world)),
+        "include_opportunities": _bool_form(
+            raw,
+            "include_opportunities",
+            section_enabled(SETTINGS, "opportunities")
+            and _get_opportunity_profile_path().exists(),
+        ),
+        "top_opportunities": str(
+            raw.get("top_opportunities", SETTINGS.top_opportunities)
+        ),
+        "include_events": _bool_form(
+            raw,
+            "include_events",
+            section_enabled(SETTINGS, "events")
+            and _get_opportunity_profile_path().exists(),
+        ),
+        "top_events": str(raw.get("top_events", SETTINGS.top_events)),
+        "opportunity_description": str(raw.get("opportunity_description", "")),
+        "opportunity_career_stage": str(
+            raw.get("opportunity_career_stage", "")
+        ),
+        "opportunity_institution_type": str(
+            raw.get("opportunity_institution_type", "")
+        ),
+        "opportunity_country": str(raw.get("opportunity_country", "")),
+        "opportunity_applicant_role": str(
+            raw.get("opportunity_applicant_role", "")
+        ),
+        "opportunity_citizenship_or_residency": str(
+            raw.get("opportunity_citizenship_or_residency", "")
+        ),
+        "opportunity_types": str(raw.get("opportunity_types", "")),
+        "event_types": str(raw.get("event_types", "")),
+        "event_regions": str(raw.get("event_regions", "")),
+        "event_formats": str(raw.get("event_formats", "")),
+        "requires_travel_support": _bool_form(
+            raw, "requires_travel_support", False
+        ),
+        "minimum_lead_days": str(raw.get("minimum_lead_days", "7")),
     }
 
     errors = _validate_setup(form)
@@ -1030,6 +1251,16 @@ async def setup_post(request: Request) -> Response:
     _get_profile_path().parent.mkdir(parents=True, exist_ok=True)
     _get_profile_path().write_text(yaml.safe_dump(profile, sort_keys=False))
 
+    if (
+        form["include_opportunities"] == "true"
+        or form["include_events"] == "true"
+    ):
+        opportunity_profile = _opportunity_profile_from_form(form)
+        _get_opportunity_profile_path().parent.mkdir(parents=True, exist_ok=True)
+        _get_opportunity_profile_path().write_text(
+            yaml.safe_dump(opportunity_profile.model_dump(), sort_keys=False)
+        )
+
     # Write/update .env.
     env_updates: dict[str, str] = {
         "LLM_BACKEND": form["llm_backend"],
@@ -1045,6 +1276,12 @@ async def setup_post(request: Request) -> Response:
         "TOP_REGULATORY": _int_form(form, "top_regulatory", SETTINGS.top_regulatory),
         "INCLUDE_WORLD": form["include_world"],
         "TOP_WORLD": _int_form(form, "top_world", SETTINGS.top_world),
+        "INCLUDE_OPPORTUNITIES": form["include_opportunities"],
+        "TOP_OPPORTUNITIES": _int_form(
+            form, "top_opportunities", SETTINGS.top_opportunities
+        ),
+        "INCLUDE_EVENTS": form["include_events"],
+        "TOP_EVENTS": _int_form(form, "top_events", SETTINGS.top_events),
     }
     # Only update API key if it's not the masked "***" value
     api_key = form.get("llm_api_key", "").strip()

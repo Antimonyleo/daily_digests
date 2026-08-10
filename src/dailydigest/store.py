@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import uuid
 from collections.abc import Iterable
@@ -59,8 +60,34 @@ class ItemRow(Base):
     score = Column(Float)
     digest_id = Column(String, index=True)
     item_label = Column(String)  # e.g., "R3"
+    metadata_json = Column(Text, nullable=False, default="{}")
 
     __table_args__ = (UniqueConstraint("source", "external_id", name="uq_source_external"),)
+
+
+class OpportunitySnapshotRow(Base):
+    """Immutable material versions of structured opportunity/event details."""
+
+    __tablename__ = "opportunity_snapshots"
+
+    id = Column(Integer, primary_key=True)
+    item_id = Column(
+        Integer,
+        ForeignKey("items.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    details_hash = Column(String, nullable=False)
+    details_json = Column(Text, nullable=False)
+    observed_at = Column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+
+    item = relationship("ItemRow")
+
+    __table_args__ = (
+        UniqueConstraint("item_id", "details_hash", name="uq_opportunity_snapshot"),
+    )
 
 
 class VoteRow(Base):
@@ -308,6 +335,7 @@ def _migrate_sqlite_schema(eng) -> None:
             "score": "FLOAT",
             "digest_id": "VARCHAR",
             "item_label": "VARCHAR",
+            "metadata_json": "TEXT NOT NULL DEFAULT '{}'",
         },
         "digests": {
             "created_at": "DATETIME",
@@ -368,6 +396,12 @@ def session_scope():
 
 # ---------- repo helpers ----------
 
+
+def _opportunity_snapshot_json(metadata: dict) -> str:
+    """Canonical material details, excluding per-fetch verification timestamps."""
+    stable = {key: value for key, value in metadata.items() if key != "verified_at"}
+    return json.dumps(stable, sort_keys=True, separators=(",", ":"), default=str)
+
 def upsert_items(items: Iterable[Item]) -> int:
     """Insert items, skipping duplicates on (source, external_id). Returns count inserted."""
     init_db()
@@ -379,6 +413,9 @@ def upsert_items(items: Iterable[Item]) -> int:
             if key in seen_keys:
                 continue
             seen_keys.add(key)
+            metadata_json = json.dumps(
+                it.metadata or {}, sort_keys=True, separators=(",", ":"), default=str
+            )
             stmt = (
                 sqlite_insert(ItemRow)
                 .values(
@@ -390,13 +427,77 @@ def upsert_items(items: Iterable[Item]) -> int:
                     abstract=it.abstract,
                     authors=it.authors,
                     published_at=it.published_at,
+                    metadata_json=metadata_json,
                 )
                 .on_conflict_do_nothing(index_elements=["source", "external_id"])
             )
             result = s.execute(stmt)
             if result.rowcount:
                 inserted += 1
+            if it.section in {"opportunities", "events"}:
+                row = s.execute(
+                    select(ItemRow).where(
+                        ItemRow.source == it.source,
+                        ItemRow.external_id == it.external_id,
+                    )
+                ).scalar_one()
+                if not result.rowcount:
+                    row.url = it.url
+                    row.title = it.title
+                    row.abstract = it.abstract
+                    row.authors = it.authors
+                    row.published_at = it.published_at
+                    row.metadata_json = metadata_json
+                    # Verification keeps open records in the candidate window;
+                    # immutable snapshots below distinguish material changes.
+                    row.fetched_at = datetime.now(timezone.utc)
+                snapshot_json = _opportunity_snapshot_json(it.metadata or {})
+                details_hash = hashlib.sha256(snapshot_json.encode("utf-8")).hexdigest()
+                snapshot_stmt = (
+                    sqlite_insert(OpportunitySnapshotRow)
+                    .values(
+                        item_id=int(row.id),
+                        details_hash=details_hash,
+                        details_json=snapshot_json,
+                    )
+                    .on_conflict_do_nothing(
+                        index_elements=["item_id", "details_hash"]
+                    )
+                )
+                s.execute(snapshot_stmt)
     return inserted
+
+
+def item_metadata(row: ItemRow) -> dict:
+    try:
+        value = json.loads(row.metadata_json or "{}")
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def opportunity_history(item_id: int) -> list[dict]:
+    """Return immutable structured versions for one opportunity, oldest first."""
+    init_db()
+    with session_scope() as s:
+        rows = (
+            s.execute(
+                select(OpportunitySnapshotRow)
+                .where(OpportunitySnapshotRow.item_id == int(item_id))
+                .order_by(OpportunitySnapshotRow.id.asc())
+            )
+            .scalars()
+            .all()
+        )
+    history: list[dict] = []
+    for row in rows:
+        try:
+            value = json.loads(row.details_json or "{}")
+        except (TypeError, json.JSONDecodeError):
+            continue
+        if isinstance(value, dict):
+            history.append(value)
+    return history
 
 
 def recent_items(days: int = 2) -> list[ItemRow]:
@@ -413,6 +514,10 @@ def recent_items(days: int = 2) -> list[ItemRow]:
                 select(ItemRow)
                 .where(
                     or_(
+                        and_(
+                            ItemRow.section.in_(("opportunities", "events")),
+                            ItemRow.fetched_at >= cutoff,
+                        ),
                         and_(
                             ItemRow.published_at >= cutoff,
                             ItemRow.published_at <= future_cutoff,
@@ -503,6 +608,38 @@ def exclude_previously_shown(
         if exclude_digest_id is not None:
             stmt = stmt.where(DigestItemRow.digest_id != exclude_digest_id)
         shown_ids = {int(item_id) for item_id in s.execute(stmt).scalars()}
+        opportunity_ids = {
+            int(row.id)
+            for row in rows
+            if row.id is not None
+            and (row.section or "") in {"opportunities", "events"}
+            and int(row.id) in shown_ids
+        }
+        if opportunity_ids:
+            shown_at = dict(
+                s.execute(
+                    select(DigestItemRow.item_id, func.max(DigestItemRow.created_at))
+                    .where(DigestItemRow.item_id.in_(opportunity_ids))
+                    .group_by(DigestItemRow.item_id)
+                ).all()
+            )
+            changed_at = dict(
+                s.execute(
+                    select(
+                        OpportunitySnapshotRow.item_id,
+                        func.max(OpportunitySnapshotRow.observed_at),
+                    )
+                    .where(OpportunitySnapshotRow.item_id.in_(opportunity_ids))
+                    .group_by(OpportunitySnapshotRow.item_id)
+                ).all()
+            )
+            shown_ids -= {
+                item_id
+                for item_id in opportunity_ids
+                if changed_at.get(item_id) is not None
+                and shown_at.get(item_id) is not None
+                and changed_at[item_id] > shown_at[item_id]
+            }
     if not shown_ids:
         return rows
     return [r for r in rows if r.id is None or int(r.id) not in shown_ids]

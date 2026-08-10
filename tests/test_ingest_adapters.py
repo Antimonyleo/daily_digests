@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 import pytest
 
@@ -296,6 +296,220 @@ def test_openalex_profile_driven_upgrades_recognized_venue(monkeypatch):
     by_title = {i.title: i.source for i in items}
     assert by_title["Self-assembled photonic crystal"] == "Journal of the American Chemical Society"
     assert by_title["Something niche"] == "OpenAlex (your topics)"
+
+
+# ---------------------------------------------------------------------------
+# Grants.gov — official structured opportunities
+# ---------------------------------------------------------------------------
+
+
+def test_grants_gov_fetches_official_details_and_amounts(monkeypatch):
+    from dailydigest.ingest.grants_gov import GrantsGovSource
+
+    search_payload = {
+        "data": {
+            "oppHits": [
+                {
+                    "id": 123,
+                    "number": "RFA-RNA-26-001",
+                    "title": "RNA delivery research programme",
+                    "agencyName": "National Institutes of Health",
+                    "openDate": "08/01/2026",
+                    "closeDate": "10/01/2026",
+                    "oppStatus": "posted",
+                }
+            ]
+        }
+    }
+    detail_payload = {
+        "data": {
+            "id": 123,
+            "opportunityNumber": "RFA-RNA-26-001",
+            "opportunityTitle": "RNA delivery research programme",
+            "synopsis": {
+                "agencyName": "National Institutes of Health",
+                "synopsisDesc": "<p>Supports new RNA delivery systems.</p>",
+                "postingDate": "Aug 1, 2026 12:00:00 AM EDT",
+                "responseDateDesc": "October 1, 2026 at 11:59 PM ET",
+                "awardFloor": "100000",
+                "awardCeiling": "500000",
+                "costSharing": False,
+                "applicantTypes": [
+                    {"description": "Private institutions of higher education"}
+                ],
+                "fundingInstruments": [{"description": "Grant"}],
+            },
+        }
+    }
+    calls = []
+
+    def fake_post(url, payload):
+        calls.append((url, payload))
+        return search_payload if url.endswith("/search2") else detail_payload
+
+    monkeypatch.setattr("dailydigest.ingest.grants_gov._post_json", fake_post)
+    monkeypatch.setattr(
+        "dailydigest.ingest.grants_gov._today", lambda: date(2026, 8, 10)
+    )
+    monkeypatch.setattr(
+        "dailydigest.ingest.grants_gov.profile_search_terms",
+        lambda limit: ["RNA nanotechnology"],
+    )
+
+    items = GrantsGovSource().fetch(
+        _spec(
+            name="Grants.gov",
+            kind="grants_gov",
+            section="opportunities",
+            profile_driven=True,
+            lookahead_days=180,
+        )
+    )
+
+    assert len(items) == 1
+    item = items[0]
+    assert item.external_id == "RFA-RNA-26-001"
+    assert item.metadata["official"] is True
+    assert item.metadata["status"] == "open"
+    assert item.metadata["deadline"] == "2026-10-01"
+    assert item.metadata["amount_min"] == 100000
+    assert item.metadata["amount_max"] == 500000
+    assert item.metadata["currency"] == "USD"
+    assert "Private institutions" in item.metadata["eligibility"]
+    assert len(calls) == 2
+
+
+def test_event_rss_keeps_only_upcoming_open_events(monkeypatch):
+    from dailydigest.ingest.events_rss import EventsRSSSource
+
+    feed = b"""<?xml version="1.0" encoding="UTF-8"?>
+    <rss version="2.0"><channel><title>Official events</title>
+      <item>
+        <guid>event-1</guid><title>RNA nanotechnology workshop</title>
+        <link>https://example.org/events/rna</link>
+        <description><![CDATA[
+          Date: 17 - 25 Aug 2026<br/>
+          Location: EMBL Heidelberg<br/>
+          Deadline(s): Application: 12 Aug 2026<br/>
+          A practical workshop for RNA designers.
+        ]]></description>
+        <pubDate>Mon, 10 Aug 2026 08:00:00 GMT</pubDate>
+      </item>
+      <item>
+        <guid>event-2</guid><title>Closed course</title>
+        <link>https://example.org/events/closed</link>
+        <description><![CDATA[
+          Date: 20 - 22 Aug 2026<br/>
+          Location: Online<br/>
+          Deadline(s): Application: Closed
+        ]]></description>
+      </item>
+    </channel></rss>"""
+    detail_pages = {
+        "https://example.org/events/rna": b"""
+          <main><p>Date: <span>17 - 25 Aug 2026</span></p>
+          <p>Location: <span>EMBL Heidelberg</span></p>
+          <p>Deadline(s):</p><p>Application: <span>12 Aug 2026</span></p></main>
+        """,
+        "https://example.org/events/closed": b"""
+          <main><p>Date: <span>20 - 22 Aug 2026</span></p>
+          <p>Location: <span>Online</span></p>
+          <p>Deadline(s):</p><p>Application: <span>Closed</span></p></main>
+        """,
+    }
+
+    def fake_get(url):
+        return feed if url == "https://example.org/feed" else detail_pages[url]
+
+    monkeypatch.setattr("dailydigest.ingest.events_rss._http_get_bytes", fake_get)
+    monkeypatch.setattr(
+        "dailydigest.ingest.events_rss._today", lambda: date(2026, 8, 10)
+    )
+
+    items = EventsRSSSource().fetch(
+        SourceSpec(
+            name="EMBL Events",
+            kind="events_rss",
+            section="events",
+            url="https://example.org/feed",
+            lookahead_days=365,
+        )
+    )
+
+    assert len(items) == 1
+    assert items[0].title == "RNA nanotechnology workshop"
+    assert items[0].metadata["official"] is True
+    assert items[0].metadata["status"] == "open"
+    assert items[0].metadata["event_start"] == "2026-08-17"
+    assert items[0].metadata["event_end"] == "2026-08-25"
+    assert items[0].metadata["deadline"] == "2026-08-12"
+    assert items[0].metadata["location"] == "EMBL Heidelberg"
+    assert items[0].metadata["format"] == "in_person"
+
+
+def test_grants_gov_supports_forecast_schema(monkeypatch):
+    from dailydigest.ingest.grants_gov import GrantsGovSource
+
+    def fake_post(url, payload):
+        if url.endswith("/search2"):
+            return {
+                "data": {
+                    "oppHits": [
+                        {
+                            "id": "363474",
+                            "number": "RFA-RM-28-006",
+                            "title": "Transformative RNA technologies",
+                            "agency": "National Institutes of Health",
+                            "openDate": "08/05/2026",
+                            "closeDate": "",
+                            "oppStatus": "forecasted",
+                        }
+                    ]
+                }
+            }
+        return {
+            "data": {
+                "opportunityNumber": "RFA-RM-28-006",
+                "opportunityTitle": "Transformative RNA technologies",
+                "agencyDetails": {"agencyName": "National Institutes of Health"},
+                "forecast": {
+                    "forecastDesc": "Forthcoming support for new RNA technologies.",
+                    "postingDate": "Aug 05, 2026 12:00:00 AM EDT",
+                    "estApplicationResponseDate": "Feb 15, 2027 12:00:00 AM EST",
+                    "awardCeiling": "500000",
+                    "costSharing": False,
+                    "applicantTypes": [
+                        {"description": "Private institutions of higher education"}
+                    ],
+                    "fundingInstruments": [{"description": "Cooperative Agreement"}],
+                },
+            }
+        }
+
+    monkeypatch.setattr("dailydigest.ingest.grants_gov._post_json", fake_post)
+    monkeypatch.setattr(
+        "dailydigest.ingest.grants_gov._today", lambda: date(2026, 8, 10)
+    )
+    monkeypatch.setattr(
+        "dailydigest.ingest.grants_gov.profile_search_terms", lambda limit: ["RNA"]
+    )
+
+    items = GrantsGovSource().fetch(
+        SourceSpec(
+            name="Grants.gov",
+            kind="grants_gov",
+            section="opportunities",
+            profile_driven=True,
+            lookahead_days=365,
+        )
+    )
+
+    assert len(items) == 1
+    assert items[0].metadata["status"] == "forthcoming"
+    assert items[0].metadata["deadline"] == "2027-02-15"
+    assert items[0].metadata["amount_max"] == 500000
+    assert items[0].authors == "National Institutes of Health"
+    assert "forthcoming support" in items[0].abstract.casefold()
 
 
 # ---------------------------------------------------------------------------

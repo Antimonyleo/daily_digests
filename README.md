@@ -15,16 +15,18 @@ hand.
 
 It works in four steps:
 
-1. Collects recent papers, preprints, industry updates, AI tools, clinical and
-   regulatory news, and world news from configured public sources.
+1. Collects recent papers and preprints plus any optional streams you enable:
+   funding opportunities, scientific events, industry updates, AI tools,
+   clinical/regulatory news, and world news.
 2. Compares each item with 1–10 interests that you choose and weight.
 3. Builds a short digest using topic fit, source quality, freshness, novelty,
    and duplicate filtering. Optional sections can be switched off.
 4. Learns from your `Must read`, `Relevant`, `Hmmm`, and `Not for me` feedback.
 
-Your profile, votes, reading history, database, and embedding cache stay in the
-local `data/` directory. DailyDigest has no user-account system and listens only
-on your computer by default. Fetching new publications requires internet access.
+Your profiles, votes, reading history, database, and embedding cache stay in the
+local `data/` directory. This includes the private opportunity-matching profile
+when that feature is enabled. DailyDigest has no user-account system and listens
+only on your computer by default. Fetching new publications requires internet access.
 The default Extractive summarizer does not send article text to an AI provider;
 an optional online API summarizer does.
 
@@ -85,9 +87,23 @@ The app opens <http://127.0.0.1:8765>. On the setup page:
    Weights are priorities, not quotas. A weight of 10 does not mean exactly 10%
    of the digest.
 2. Keep **Extractive** selected for the easiest free setup.
-3. Choose whether to include Industry, AI tools & methods, Clinical &
-   Regulatory, and World news. Research is always included.
-4. Select **Brew my morning cup of tea**.
+3. Choose whether to include Funding & Opportunities, Events & Calls, Industry,
+   AI tools & methods, Clinical & Regulatory, and World news. Research is always
+   included.
+4. If Funding or Events is enabled, add a short description of your career
+   stage, institution, country, role, research area, preferred opportunity/event
+   types, and practical constraints. For example:
+
+   ```text
+   I am a postdoctoral researcher at a US university working on RNA
+   nanotechnology and colloidal self-assembly. I can apply as a fellow or
+   co-investigator and am interested in fellowships, research grants,
+   conferences, and workshops in North America or online.
+   ```
+
+   The structured fields are used to reject clearly incompatible calls. Unknown
+   eligibility is shown as “needs verification,” never as confirmed eligibility.
+5. Select **Brew my morning cup of tea**.
 
 Keep the launcher or terminal window open while using DailyDigest. Press
 `Ctrl+C` in that window to stop the server.
@@ -104,6 +120,14 @@ Keep the launcher or terminal window open while using DailyDigest. Press
 Then open <http://127.0.0.1:8765>. Use **Settings** in the app to change your
 interests, weights, digest sections, summarizer, or item counts. Vote on items
 as you read; positive and negative feedback both improve later ranking.
+
+Funding and event cards show the official source, current status, deadline,
+available amount when stated, location/date for events, and a conservative
+eligibility assessment. Use **Add to calendar** to download a standard `.ics`
+file for the deadline or event. DailyDigest currently verifies US federal calls through
+Grants.gov and scientific courses/conferences through EMBL's official event
+pages. These sections are discovery aids: always read the linked official call
+before spending time on an application.
 
 ## Accounts, subscriptions, and optional services
 
@@ -191,6 +215,10 @@ votes, database, and settings as the browser app.
 - **Few or no items appear:** check your internet connection, broaden the date
   window, and review source health in the app. Some publishers occasionally
   block or delay their feeds.
+- **No funding or events appear:** confirm the section is enabled and complete
+  its profile in Settings. A zero-result section means no official record passed
+  status, deadline, eligibility, and topic checks; DailyDigest does not pad it
+  with unrelated or closed calls.
 - **An API key does not work:** a chat subscription is not necessarily API
   access. Use Extractive mode while checking the provider's API account.
 

@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     profile_path: str = "data/profile.yaml"
+    opportunity_profile_path: str = "data/opportunities.yaml"
     sources_path: str = "config/sources.yaml"
 
     llm_base_url: str = "https://api.openai.com/v1"
@@ -127,6 +128,10 @@ class Settings(BaseSettings):
     include_ai: bool = True
     include_regulatory: bool = True
     include_world: bool = True
+    # Opportunity streams are opt-in because useful filtering requires the
+    # reader to provide an eligibility profile during setup.
+    include_opportunities: bool = False
+    include_events: bool = False
 
     # Per-section size. When adaptive_section_sizes is on, top_* is the CEILING
     # and min_* is the floor; the actual count for a section flexes between them
@@ -137,6 +142,8 @@ class Settings(BaseSettings):
     top_ai: int = Field(default=4, ge=0, le=100)
     top_regulatory: int = Field(default=3, ge=0, le=100)
     top_world: int = Field(default=3, ge=0, le=100)
+    top_opportunities: int = Field(default=5, ge=0, le=100)
+    top_events: int = Field(default=5, ge=0, le=100)
 
     # Adaptive section sizing: size each section to the number of items that
     # clear `min_topic_relevance` (the absolute topic-cosine floor below),
@@ -152,6 +159,8 @@ class Settings(BaseSettings):
     min_ai: int = Field(default=2, ge=0, le=100)
     min_regulatory: int = Field(default=2, ge=0, le=100)
     min_world: int = Field(default=2, ge=0, le=100)
+    min_opportunities: int = Field(default=0, ge=0, le=100)
+    min_events: int = Field(default=0, ge=0, le=100)
     # Minimum topic relevance (true profile cosine, 0..1) an item must clear to
     # earn a slot. A section shows as many items as clear this bar, clamped to
     # [min_*, top_*] — so off-topic-but-prestigious items are excluded outright
@@ -191,6 +200,10 @@ class Settings(BaseSettings):
     # items rather than padding to the cap with filler. Regulatory (FDA/EMA) is
     # exempt — those are wanted regardless. Raise for stricter news curation.
     min_news_quality: float = Field(default=0.45, ge=0.0, le=1.0)
+    # Opportunity/event records use the same semantic profile, but official
+    # notices are often written in broad program language. Keep a distinct,
+    # slightly more permissive floor while still excluding unrelated calls.
+    min_opportunity_relevance: float = Field(default=0.58, ge=0.0, le=1.0)
 
     # Catch-up after a usage gap. When the last digest was N days ago, both the
     # ingest fetch window and the ranking window widen to cover the gap (capped at
@@ -262,6 +275,8 @@ _OPTIONAL_SECTION_FLAGS: dict[str, str] = {
     "ai": "include_ai",
     "regulatory": "include_regulatory",
     "world": "include_world",
+    "opportunities": "include_opportunities",
+    "events": "include_events",
 }
 
 

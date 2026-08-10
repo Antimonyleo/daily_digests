@@ -56,6 +56,15 @@
   .section-heading label, .section-heading .section-name { margin: 0; }
   .section-desc { margin: 3px 0 0 48px; color: var(--muted); font-size: 11px; }
   .count-field label { margin-top: 0; }
+  .opportunity-profile {
+    margin-top: 14px; padding: 16px; border: 1px dashed var(--border);
+    border-radius: 8px; background: var(--panel);
+  }
+  .opportunity-profile[hidden] { display: none; }
+  .example-copy {
+    margin: 8px 0 0; padding: 10px 12px; border-left: 3px solid var(--accent);
+    background: #fff; color: var(--muted); font-size: 12px; line-height: 1.5;
+  }
   .switch {
     position: relative; width: 42px; height: 24px; flex: 0 0 auto;
   }
@@ -246,6 +255,114 @@
                    value="{{ form.top_world }}">
           </div>
         </div>
+        <div class="section-option">
+          <div>
+            <div class="section-heading">
+              <span class="switch">
+                <input type="hidden" name="include_opportunities" value="false">
+                <input id="include_opportunities" name="include_opportunities" type="checkbox"
+                       value="true" role="switch" aria-label="Include Funding and Opportunities"
+                       {% if form.include_opportunities == "true" %}checked{% endif %}>
+                <label class="switch-track" for="include_opportunities" aria-hidden="true"></label>
+              </span>
+              <label class="section-name" for="include_opportunities">Funding &amp; Opportunities</label>
+            </div>
+            <p class="section-desc">Grants, fellowships, awards, scholarships, and research support.</p>
+          </div>
+          <div class="count-field">
+            <label for="top_opportunities">Maximum items</label>
+            <input id="top_opportunities" name="top_opportunities" type="number" min="0" max="30"
+                   value="{{ form.top_opportunities }}">
+          </div>
+        </div>
+        <div class="section-option">
+          <div>
+            <div class="section-heading">
+              <span class="switch">
+                <input type="hidden" name="include_events" value="false">
+                <input id="include_events" name="include_events" type="checkbox"
+                       value="true" role="switch" aria-label="Include Events and Calls"
+                       {% if form.include_events == "true" %}checked{% endif %}>
+                <label class="switch-track" for="include_events" aria-hidden="true"></label>
+              </span>
+              <label class="section-name" for="include_events">Events &amp; Calls</label>
+            </div>
+            <p class="section-desc">Conferences, workshops, courses, and calls for papers or abstracts.</p>
+          </div>
+          <div class="count-field">
+            <label for="top_events">Maximum items</label>
+            <input id="top_events" name="top_events" type="number" min="0" max="30"
+                   value="{{ form.top_events }}">
+          </div>
+        </div>
+      </div>
+      <div class="opportunity-profile" id="opportunity-profile"
+           {% if form.include_opportunities != "true" and form.include_events != "true" %}hidden{% endif %}>
+        <h3>About you for opportunity matching</h3>
+        <p class="hint">These details are stored only in your local <code>data/</code> folder. Provide only information you are comfortable keeping on this computer.</p>
+        <label for="opportunity-description">Eligibility and goals</label>
+        <textarea id="opportunity-description" name="opportunity_description" data-opportunity-required
+                  placeholder="Describe your career stage, institution, research, applicant role, opportunity goals, and travel constraints.">{{ form.opportunity_description }}</textarea>
+        <div class="hint">Required when either opportunity section is enabled; at least 40 characters.</div>
+        <div class="example-copy"><strong>Example:</strong> I am a postdoctoral researcher at a nonprofit university in the United States. I work on DNA/RNA nanotechnology and therapeutic delivery. I am interested in fellowships, seed grants, travel awards, workshops, and facility support. I can attend North American or online events and would consider international meetings when travel support is available.</div>
+        <div class="field-grid">
+          <div>
+            <label for="opportunity-career-stage">Career stage</label>
+            <input id="opportunity-career-stage" name="opportunity_career_stage" type="text"
+                   data-opportunity-required placeholder="Postdoctoral researcher" value="{{ form.opportunity_career_stage }}">
+          </div>
+          <div>
+            <label for="opportunity-institution-type">Institution type</label>
+            <input id="opportunity-institution-type" name="opportunity_institution_type" type="text"
+                   data-opportunity-required placeholder="Nonprofit university" value="{{ form.opportunity_institution_type }}">
+          </div>
+          <div>
+            <label for="opportunity-country">Current country</label>
+            <input id="opportunity-country" name="opportunity_country" type="text"
+                   data-opportunity-required autocomplete="country-name" placeholder="United States" value="{{ form.opportunity_country }}">
+          </div>
+          <div>
+            <label for="opportunity-applicant-role">Applicant role</label>
+            <input id="opportunity-applicant-role" name="opportunity_applicant_role" type="text"
+                   data-opportunity-required placeholder="Fellow or co-investigator" value="{{ form.opportunity_applicant_role }}">
+          </div>
+        </div>
+        <label for="opportunity-citizenship">Citizenship or residency restrictions (optional)</label>
+        <input id="opportunity-citizenship" name="opportunity_citizenship_or_residency" type="text"
+               placeholder="Only if relevant to matching" value="{{ form.opportunity_citizenship_or_residency }}">
+        <div class="field-grid">
+          <div>
+            <label for="opportunity-types">Opportunity types</label>
+            <input id="opportunity-types" name="opportunity_types" type="text"
+                   placeholder="grant, fellowship, travel_support" value="{{ form.opportunity_types }}">
+          </div>
+          <div>
+            <label for="event-types">Event types</label>
+            <input id="event-types" name="event_types" type="text"
+                   placeholder="conference, workshop, course" value="{{ form.event_types }}">
+          </div>
+          <div>
+            <label for="event-regions">Event regions</label>
+            <input id="event-regions" name="event_regions" type="text"
+                   placeholder="North America, Europe, online" value="{{ form.event_regions }}">
+          </div>
+          <div>
+            <label for="event-formats">Event formats</label>
+            <input id="event-formats" name="event_formats" type="text"
+                   placeholder="in_person, online, hybrid" value="{{ form.event_formats }}">
+          </div>
+          <div>
+            <label for="minimum-lead-days">Minimum preparation time (days)</label>
+            <input id="minimum-lead-days" name="minimum_lead_days" type="number" min="0" max="365"
+                   value="{{ form.minimum_lead_days }}">
+          </div>
+          <div>
+            <label for="requires-travel-support">Travel support</label>
+            <input type="hidden" name="requires_travel_support" value="false">
+            <label><input id="requires-travel-support" name="requires_travel_support" type="checkbox" value="true"
+                          {% if form.requires_travel_support == "true" %}checked{% endif %}> Prefer events offering travel support</label>
+          </div>
+        </div>
       </div>
       <div class="hint">Item counts are caps; DailyDigest will show fewer when there are not enough strong candidates.</div>
     </div>
@@ -333,6 +450,26 @@
     toggle.addEventListener("change", refreshSection);
     refreshSection();
   });
+
+  const opportunityPanel = document.getElementById("opportunity-profile");
+  const opportunityToggles = [
+    document.getElementById("include_opportunities"),
+    document.getElementById("include_events")
+  ];
+  function refreshOpportunityProfile() {
+    const enabled = opportunityToggles.some((toggle) => toggle && toggle.checked);
+    opportunityPanel.hidden = !enabled;
+    opportunityPanel.querySelectorAll("input, textarea").forEach((field) => {
+      field.disabled = !enabled;
+    });
+    opportunityPanel.querySelectorAll("[data-opportunity-required]").forEach((field) => {
+      field.required = enabled;
+    });
+  }
+  opportunityToggles.forEach((toggle) => {
+    if (toggle) toggle.addEventListener("change", refreshOpportunityProfile);
+  });
+  refreshOpportunityProfile();
 })();
 </script>
 {% endblock %}

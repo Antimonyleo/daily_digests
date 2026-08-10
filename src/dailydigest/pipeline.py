@@ -24,6 +24,7 @@ from .email_send import send_digest
 from .health import IngestStats
 from .ingest import dispatch_source
 from .models import Item
+from .opportunities import assess_opportunity, load_opportunity_profile
 from .rank.profile import build_profile_matrix
 from .rank.ranker import (
     ScoreFeatureMap,
@@ -47,6 +48,7 @@ from .store import (
     exclude_previously_shown,
     exclude_reviewed_items,
     init_db,
+    item_metadata,
     mark_sent,
     recent_items,
     recent_viewed_facet_dates,
@@ -133,6 +135,8 @@ SECTION_LABEL_PREFIX: dict[str, str] = {
     "ai": "A",
     "regulatory": "G",
     "world": "W",
+    "opportunities": "F",
+    "events": "E",
 }
 
 
@@ -294,6 +298,10 @@ def _section_caps(
         "ai": s.top_ai if _section_enabled("ai", s) else 0,
         "regulatory": s.top_regulatory if _section_enabled("regulatory", s) else 0,
         "world": s.top_world if _section_enabled("world", s) else 0,
+        "opportunities": (
+            s.top_opportunities if _section_enabled("opportunities", s) else 0
+        ),
+        "events": s.top_events if _section_enabled("events", s) else 0,
     }
 
 
@@ -329,9 +337,12 @@ def _dynamic_section_caps(
         "ai": int(getattr(s, "min_ai", 0)),
         "regulatory": int(getattr(s, "min_regulatory", 0)),
         "world": int(getattr(s, "min_world", 0)),
+        "opportunities": int(getattr(s, "min_opportunities", 0)),
+        "events": int(getattr(s, "min_events", 0)),
     }
     topic_floor = float(getattr(s, "min_topic_relevance", 0.65))
     news_floor = float(getattr(s, "min_news_quality", 0.45))
+    opportunity_floor = float(getattr(s, "min_opportunity_relevance", 0.58))
 
     # Count the items that clear each section's floor (research on topic cosine,
     # news on final confidence). Regulatory has no floor — it keeps its fixed cap.
@@ -350,6 +361,13 @@ def _dynamic_section_caps(
         elif section in ("industry", "world"):
             v = feat.get("confidence_score", fused)
             if v is not None and float(v) >= news_floor:
+                counts[section] += 1
+        elif section in ("opportunities", "events"):
+            v = max(
+                float(feat.get("topic_score", fused) or 0.0),
+                float(feat.get("opportunity_profile_score", 0.0) or 0.0),
+            )
+            if v is not None and float(v) >= opportunity_floor:
                 counts[section] += 1
 
     caps: dict[str, int] = {}
@@ -389,6 +407,7 @@ def _filter_off_topic(
         return scored
     topic_floor = float(getattr(s, "min_topic_relevance", 0.65))
     news_floor = float(getattr(s, "min_news_quality", 0.45))
+    opportunity_floor = float(getattr(s, "min_opportunity_relevance", 0.58))
     out: list[tuple[ItemRow, float]] = []
     for row, score in scored:
         section = row.section or ""
@@ -408,8 +427,99 @@ def _filter_off_topic(
             c = feat.get("confidence_score")
             if c is not None and float(c) < news_floor:
                 continue
+        elif section in ("opportunities", "events"):
+            topic = feat.get("topic_score")
+            profile_score = feat.get("opportunity_profile_score")
+            t = (
+                max(float(topic or 0.0), float(profile_score or 0.0))
+                if topic is not None or profile_score is not None
+                else None
+            )
+            if t is not None and float(t) < opportunity_floor:
+                continue
         out.append((row, score))
     return out
+
+
+def _filter_actionable_opportunities(
+    scored: list[tuple[ItemRow, float]],
+    opportunity_profile,
+) -> list[tuple[ItemRow, float]]:
+    """Drop explicitly closed, late, type-mismatched, or ineligible records."""
+    if opportunity_profile is None:
+        return scored
+    out: list[tuple[ItemRow, float]] = []
+    for row, score in scored:
+        if (row.section or "") not in {"opportunities", "events"}:
+            out.append((row, score))
+            continue
+        assessment = assess_opportunity(item_metadata(row), opportunity_profile)
+        if assessment.actionable:
+            out.append((row, score))
+        else:
+            logger.info(
+                "opportunity gate: dropped item_id=%s (%s)",
+                getattr(row, "id", "?"),
+                assessment.reason,
+            )
+    return out
+
+
+def _apply_opportunity_profile_relevance(
+    scored: list[tuple[ItemRow, float]],
+    features: ScoreFeatureMap,
+    opportunity_profile,
+) -> list[tuple[ItemRow, float]]:
+    """Add a small section-local relevance signal from the private profile text."""
+    if opportunity_profile is None:
+        return scored
+    indices = [
+        index
+        for index, (row, _score) in enumerate(scored)
+        if (row.section or "") in {"opportunities", "events"}
+    ]
+    if not indices:
+        return scored
+    try:
+        import numpy as np
+
+        from .rank.embed import embed_texts
+        from .rank.embedding_cache import embed_item_rows
+
+        rows = [scored[index][0] for index in indices]
+        context = " ".join(
+            part
+            for part in (
+                opportunity_profile.description,
+                opportunity_profile.career_stage,
+                opportunity_profile.institution_type,
+                opportunity_profile.applicant_role,
+                " ".join(opportunity_profile.opportunity_types),
+                " ".join(opportunity_profile.event_types),
+            )
+            if part
+        )
+        query = embed_texts([context], is_query=True)
+        vectors = embed_item_rows(rows)
+        if query.size == 0 or vectors.shape[0] != len(rows):
+            return scored
+        q = query[0] / (np.linalg.norm(query[0]) + 1e-9)
+        normalized = vectors / (np.linalg.norm(vectors, axis=1, keepdims=True) + 1e-9)
+        similarities = normalized @ q
+        adjusted = list(scored)
+        for index, similarity in zip(indices, similarities, strict=True):
+            row, score = adjusted[index]
+            similarity = max(0.0, min(1.0, float(similarity)))
+            features.setdefault(_row_feature_key(row), {})[
+                "opportunity_profile_score"
+            ] = similarity
+            # Section-local ordering nudge: enough to break close calls using
+            # career/context fit, too small to rescue a weak semantic match.
+            adjusted[index] = (row, min(1.0, float(score) + 0.10 * similarity))
+        return adjusted
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("opportunity profile relevance failed: %s", exc)
+        return scored
 
 
 def _apply_topic_selection_preferences(
@@ -679,6 +789,13 @@ def run_all(
     # Keep section choices coherent for the entire brew even if the reader
     # saves Settings in another browser tab while this run is in progress.
     section_settings = get_settings()
+    opportunity_profile = None
+    if _section_enabled("opportunities", section_settings) or _section_enabled(
+        "events", section_settings
+    ):
+        opportunity_profile = load_opportunity_profile(
+            section_settings.opportunity_profile_path
+        )
 
     # Widen the look-back once, after any usage gap, and use it for BOTH the
     # ingest fetch window (so the backlog is actually retrieved) and the ranking
@@ -816,6 +933,9 @@ def run_all(
         _attribution_ctx = None
     scored, score_features = _score_items_for_pipeline(
         items, profile_vec, profile.downweight, attribution=_attribution_ctx
+    )
+    scored = _apply_opportunity_profile_relevance(
+        scored, score_features, opportunity_profile
     )
 
     # Apply negative-interest penalty when the profile has configured negative interests
@@ -992,7 +1112,8 @@ def run_all(
     # `pick_top_per_section` already caps per-section, so summary cost is bounded.
     # Hard-gate off-topic research/industry first so prestige can't fill a slot an
     # item's topic relevance never earned, then size + pick from what remains.
-    pickable = _filter_off_topic(scored, score_features)
+    pickable = _filter_actionable_opportunities(scored, opportunity_profile)
+    pickable = _filter_off_topic(pickable, score_features)
     # Apply the within-day near-dup decision to the selection candidates only.
     if _wd_drop_research_ids:
         pickable = [

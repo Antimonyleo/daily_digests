@@ -1,6 +1,7 @@
 # Source feeds grouped by section. Sections drive the email template grouping.
 # `kind` selects the ingest adapter. Supported kinds:
-#   rss, biorxiv, arxiv, openalex, pubmed, fda_api, clinicaltrials.
+#   rss, biorxiv, arxiv, openalex, pubmed, fda_api, clinicaltrials,
+#   grants_gov, events_rss.
 # Optional ranking metadata:
 #   quality_tier, prestige_score, impact_floor, promo_risk.
 # These are coarse local ranking hints, not live impact-factor lookups.
@@ -363,3 +364,18 @@ ai:
     url: https://www.latent.space/feed
     quality_tier: news
     promo_risk: 0.1
+
+# Opt-in opportunity streams. These are fetched only when their corresponding
+# setup switch is enabled. Grants.gov detail pages and institutional event feeds
+# are authoritative; each item is rechecked for status/deadline before selection.
+opportunities:
+  - name: Grants.gov
+    kind: grants_gov
+    profile_driven: true
+    lookahead_days: 180
+
+events:
+  - name: EMBL Events
+    kind: events_rss
+    url: https://www.embl.org/about/info/course-and-conference-office/events/feed/
+    lookahead_days: 365

@@ -16,6 +16,8 @@ def test_ingest_all_skips_disabled_section_sources(monkeypatch):
         SimpleNamespace(name="AI", section="ai"),
         SimpleNamespace(name="Regulatory", section="regulatory"),
         SimpleNamespace(name="World", section="world"),
+        SimpleNamespace(name="Funding", section="opportunities"),
+        SimpleNamespace(name="Events", section="events"),
     ]
     fetched_names = []
 
@@ -29,10 +31,14 @@ def test_ingest_all_skips_disabled_section_sources(monkeypatch):
         include_ai=True,
         include_regulatory=False,
         include_world=True,
+        include_opportunities=False,
+        include_events=False,
         top_industry=6,
         top_ai=4,
         top_regulatory=3,
         top_world=0,
+        top_opportunities=5,
+        top_events=5,
     )
     monkeypatch.setattr(pipeline_mod, "get_settings", lambda: settings)
     monkeypatch.setattr(pipeline_mod, "init_db", lambda: None)

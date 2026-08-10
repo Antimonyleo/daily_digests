@@ -201,6 +201,8 @@
   .item a.title-link:hover { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
 	  .item .meta { font-size: 12px; color: var(--muted); margin: 6px 0 0; overflow-wrap: anywhere; }
 	  .item .summary { font-size: 14px; line-height: 1.62; margin: 10px 0 0; color: #334238; overflow-wrap: anywhere; }
+    .opportunity-facts { margin-top: 9px; padding: 9px 11px; border-radius: 7px; background: #f3f7f2; color: #35483a; font-size: 12px; line-height: 1.55; }
+    .opportunity-note { color: var(--muted); }
   .summary-fields {
     display: grid; gap: 7px; margin: 10px 0 0; padding: 10px;
     border: 1px solid #e4ebe5; border-radius: 8px; background: #fbfcf9;
@@ -444,6 +446,22 @@
           <div class="meta">
             {{ item.source }}{% if item.published %} &middot; {{ item.published }}{% endif %}
           </div>
+          {% if item.opportunity %}
+          <div class="opportunity-facts">
+            {% if section.key == "events" %}
+            <strong>Date:</strong> {{ item.opportunity.event_dates or "Not stated" }}
+            &middot; <strong>Location:</strong> {{ item.opportunity.location }}
+            {% if item.opportunity.format %}&middot; {{ item.opportunity.format }}{% endif %}<br>
+            {% else %}
+            <strong>Amount:</strong> {{ item.opportunity.amount }}<br>
+            {% endif %}
+            <strong>Deadline:</strong> {{ item.opportunity.deadline }}
+            &middot; {{ item.opportunity.status }}
+            &middot; {{ item.opportunity.eligibility }}<br>
+            <span class="opportunity-note">{{ item.opportunity.official }} &middot; {{ item.opportunity.eligibility_reason }}</span>
+            &middot; <a href="{{ item.opportunity.calendar_url }}">Add to calendar</a>
+          </div>
+          {% endif %}
           {% if item.reason_line %}
           <div class="reason-line">{{ item.reason_line }}</div>
           {% endif %}

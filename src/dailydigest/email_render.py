@@ -7,8 +7,10 @@ from urllib.parse import urlsplit
 
 from jinja2 import Environment, FileSystemLoader
 
+from .config import get_settings
+from .opportunities import load_opportunity_profile, opportunity_display
 from .rank.source_quality import display_breakdown, source_bucket
-from .store import ItemRow, load_digest_features
+from .store import ItemRow, item_metadata, load_digest_features
 
 _TEMPLATE_DIR = Path(__file__).resolve().parents[2] / "templates"
 _ALLOWED_LINK_SCHEMES = {"http", "https"}
@@ -77,9 +79,19 @@ SECTION_META: dict[str, dict[str, str]] = {
     "ai": {"title": "AI Tools & Methods", "emoji": "🤖"},
     "regulatory": {"title": "Clinical & Regulatory", "emoji": "📋"},
     "world": {"title": "World", "emoji": "🌍"},
+    "opportunities": {"title": "Funding & Opportunities", "emoji": "💰"},
+    "events": {"title": "Events & Calls", "emoji": "📅"},
 }
 
-SECTION_ORDER = ["research", "industry", "ai", "regulatory", "world"]
+SECTION_ORDER = [
+    "research",
+    "opportunities",
+    "events",
+    "industry",
+    "ai",
+    "regulatory",
+    "world",
+]
 
 
 def _env() -> Environment:
@@ -130,6 +142,14 @@ def render_digest(
         persisted_features = {}
 
     rendered_sections = []
+    opportunity_profile = None
+    if any(sections.get(key) for key in ("opportunities", "events")):
+        try:
+            opportunity_profile = load_opportunity_profile(
+                get_settings().opportunity_profile_path
+            )
+        except Exception:  # noqa: BLE001
+            pass
     for key in SECTION_ORDER:
         items = sections.get(key) or []
         if not items:
@@ -171,6 +191,11 @@ def render_digest(
                     "score": score,
                     "reason": reason,
                     "type_label": content_type_label(content_type),
+                    "opportunity": (
+                        opportunity_display(item_metadata(row), opportunity_profile)
+                        if key in {"opportunities", "events"}
+                        else None
+                    ),
                 }
             )
         rendered_sections.append(

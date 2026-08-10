@@ -55,4 +55,12 @@ def dispatch_source(spec: SourceSpec) -> Source:
         from .clinicaltrials import ClinicalTrialsSource
 
         return ClinicalTrialsSource()
+    if spec.kind == "grants_gov":
+        from .grants_gov import GrantsGovSource
+
+        return GrantsGovSource()
+    if spec.kind == "events_rss":
+        from .events_rss import EventsRSSSource
+
+        return EventsRSSSource()
     raise ValueError(f"Unknown source kind: {spec.kind}")

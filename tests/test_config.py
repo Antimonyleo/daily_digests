@@ -30,6 +30,28 @@ def test_optional_sections_default_to_enabled(monkeypatch):
     assert settings.include_world is True
 
 
+def test_opportunity_sections_default_to_disabled(monkeypatch):
+    monkeypatch.delenv("INCLUDE_OPPORTUNITIES", raising=False)
+    monkeypatch.delenv("INCLUDE_EVENTS", raising=False)
+
+    settings = Settings(_env_file=None)
+
+    assert settings.include_opportunities is False
+    assert settings.include_events is False
+    assert section_enabled(settings, "opportunities") is False
+    assert section_enabled(settings, "events") is False
+
+
+def test_opportunity_sections_can_be_enabled(monkeypatch):
+    monkeypatch.setenv("INCLUDE_OPPORTUNITIES", "true")
+    monkeypatch.setenv("INCLUDE_EVENTS", "true")
+
+    settings = Settings(_env_file=None)
+
+    assert section_enabled(settings, "opportunities") is True
+    assert section_enabled(settings, "events") is True
+
+
 def test_optional_section_flags_parse_false(monkeypatch):
     monkeypatch.setenv("INCLUDE_INDUSTRY", "false")
     monkeypatch.setenv("INCLUDE_AI", "0")

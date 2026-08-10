@@ -174,3 +174,25 @@ def test_render_digest_plain_research_has_no_type_badge_and_no_broken_reason(_st
     assert ">Clinical<" not in html
     # Empty facet + no fallback signals must never render a broken reason line.
     assert "Shown for ." not in html
+
+
+def test_render_digest_shows_structured_opportunity_facts(_stub_features):
+    row = _research_row(
+        source="Grants.gov",
+        section="opportunities",
+        item_label="F1",
+        metadata_json=(
+            '{"status":"open","deadline":"2026-10-01",'
+            '"amount_min":100000,"amount_max":500000,"currency":"USD",'
+            '"official":true,"eligibility_tags":[]}'
+        ),
+    )
+
+    html = render_digest(
+        "2026-06-15", {"opportunities": [(row, 0.9, "Official funding call.")]}
+    )
+
+    assert "Funding &amp; Opportunities" in html
+    assert "$100,000–$500,000" in html
+    assert "2026-10-01" in html
+    assert "Verified official source" in html

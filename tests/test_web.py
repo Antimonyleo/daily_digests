@@ -11,6 +11,7 @@ from pathlib import Path
 from urllib.parse import urlencode
 
 import pytest
+import yaml
 from fastapi import HTTPException
 from starlette.requests import Request
 
@@ -180,16 +181,109 @@ def test_setup_page_renders_accessible_optional_section_switches(monkeypatch):
     response = web.setup_get(_request("GET", "/setup"))
     html = _text_payload(response)
 
-    assert len(re.findall(r"<input[^>]+role=\"switch\"", html)) == 4
+    assert len(re.findall(r"<input[^>]+role=\"switch\"", html)) == 6
     assert 'id="include_industry"' in html
     assert 'id="include_ai"' in html
     assert 'id="include_regulatory"' in html
     assert 'id="include_world"' in html
+    assert 'id="include_opportunities"' in html
+    assert 'id="include_events"' in html
+    assert 'id="opportunity-description"' in html
+    assert "About you for opportunity matching" in html
     assert 'id="top_ai"' in html
     assert "AI tools &amp; methods" in html
     assert "Clinical &amp; Regulatory" in html
     assert 'id="top_research"' in html
     assert 'name="include_research"' not in html
+
+
+def test_setup_rejects_enabled_opportunity_section_without_profile(
+    tmp_path, monkeypatch
+):
+    from dailydigest import web
+
+    monkeypatch.setattr(web, "_get_profile_path", lambda: tmp_path / "profile.yaml")
+    monkeypatch.setattr(
+        web, "_get_opportunity_profile_path", lambda: tmp_path / "opportunities.yaml"
+    )
+    monkeypatch.setattr(web, "_ENV_PATH", tmp_path / ".env")
+
+    response = asyncio.run(
+        web.setup_post(
+            _request(
+                "POST",
+                "/setup",
+                form={
+                    "_csrf_token": web._CSRF_TOKEN,
+                    "bio": "Researcher.",
+                    "topics": "RNA nanotechnology | 10",
+                    "llm_backend": "extractive",
+                    "include_events": "true",
+                    "top_events": "4",
+                },
+            )
+        )
+    )
+
+    assert response.status_code == 400
+    assert "description is required" in _text_payload(response)
+    assert not (tmp_path / "opportunities.yaml").exists()
+
+
+def test_setup_persists_private_opportunity_profile_when_enabled(
+    tmp_path, monkeypatch
+):
+    from dailydigest import web
+
+    profile_path = tmp_path / "profile.yaml"
+    opportunity_path = tmp_path / "opportunities.yaml"
+    env_path = tmp_path / ".env"
+    monkeypatch.setattr(web, "_get_profile_path", lambda: profile_path)
+    monkeypatch.setattr(web, "_get_opportunity_profile_path", lambda: opportunity_path)
+    monkeypatch.setattr(web, "_ENV_PATH", env_path)
+
+    response = asyncio.run(
+        web.setup_post(
+            _request(
+                "POST",
+                "/setup",
+                form={
+                    "_csrf_token": web._CSRF_TOKEN,
+                    "bio": "Researcher.",
+                    "topics": "RNA nanotechnology | 10",
+                    "llm_backend": "extractive",
+                    "include_opportunities": "true",
+                    "top_opportunities": "5",
+                    "include_events": "true",
+                    "top_events": "4",
+                    "opportunity_description": (
+                        "I am a postdoctoral researcher at a nonprofit university "
+                        "working on RNA nanotechnology and therapeutic delivery."
+                    ),
+                    "opportunity_career_stage": "postdoctoral researcher",
+                    "opportunity_institution_type": "nonprofit university",
+                    "opportunity_country": "United States",
+                    "opportunity_applicant_role": "fellow or co-investigator",
+                    "opportunity_types": "fellowship,travel_support",
+                    "event_types": "conference,workshop",
+                    "event_regions": "North America,online",
+                    "event_formats": "in_person,online",
+                    "requires_travel_support": "true",
+                    "minimum_lead_days": "14",
+                },
+            )
+        )
+    )
+
+    assert response.status_code == 303
+    saved = yaml.safe_load(opportunity_path.read_text())
+    assert saved["career_stage"] == "postdoctoral researcher"
+    assert saved["opportunity_types"] == ["fellowship", "travel_support"]
+    assert saved["requires_travel_support"] is True
+    assert saved["minimum_lead_days"] == 14
+    env = web._read_env_file(env_path)
+    assert env["INCLUDE_OPPORTUNITIES"] == "true"
+    assert env["INCLUDE_EVENTS"] == "true"
 
 
 def test_setup_post_requires_one_to_ten_weighted_topics(tmp_path, monkeypatch):
@@ -1410,3 +1504,42 @@ def test_run_start_rejects_foreign_origin_and_detects_duplicate(monkeypatch):
 
     web._RUN_QUEUES.clear()
     web._RUN_STARTED.clear()
+
+
+def test_opportunity_calendar_export_uses_structured_dates(tmp_path, monkeypatch):
+    from dailydigest import config as config_mod
+    from dailydigest import store as store_mod
+    from dailydigest import web
+
+    monkeypatch.setenv("DB_PATH", str(tmp_path / "calendar.db"))
+    config_mod.reload_settings()
+    store_mod.SETTINGS = config_mod.SETTINGS
+    store_mod._ENGINE = None
+    store_mod._SessionLocal = None
+    store_mod._INITIALIZED = False
+    store_mod.init_db()
+    with store_mod.session_scope() as s:
+        row = store_mod.ItemRow(
+            source="EMBL Events",
+            section="events",
+            external_id="calendar-event",
+            url="https://example.org/event",
+            title="RNA design workshop, practical session",
+            abstract="A hands-on workshop.",
+            metadata_json=(
+                '{"event_start":"2026-09-10","event_end":"2026-09-12",'
+                '"deadline":"2026-08-20","official":true}'
+            ),
+        )
+        s.add(row)
+        s.flush()
+        item_id = int(row.id)
+
+    response = web.calendar_item(_request("GET", f"/calendar/{item_id}.ics"), item_id)
+    text = _text_payload(response)
+
+    assert response.status_code == 200
+    assert response.media_type == "text/calendar"
+    assert "DTSTART;VALUE=DATE:20260910" in text
+    assert "DTEND;VALUE=DATE:20260913" in text
+    assert "RNA design workshop\\, practical session" in text

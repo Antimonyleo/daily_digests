@@ -51,6 +51,8 @@ def test_disabled_sections_have_zero_caps_in_fixed_and_adaptive_modes(monkeypatc
         include_ai=False,
         include_regulatory=False,
         include_world=False,
+        include_opportunities=False,
+        include_events=False,
     )
 
     assert _section_caps() == {
@@ -59,6 +61,8 @@ def test_disabled_sections_have_zero_caps_in_fixed_and_adaptive_modes(monkeypatc
         "ai": 0,
         "regulatory": 0,
         "world": 0,
+        "opportunities": 0,
+        "events": 0,
     }
 
     scored = [
@@ -73,6 +77,8 @@ def test_disabled_sections_have_zero_caps_in_fixed_and_adaptive_modes(monkeypatc
         "ai": 0,
         "regulatory": 0,
         "world": 0,
+        "opportunities": 0,
+        "events": 0,
     }
     assert pick_top_per_section(scored, _section_caps()) == []
 
@@ -92,6 +98,10 @@ def test_enabled_sections_keep_configured_caps(monkeypatch):
         include_ai=True,
         include_regulatory=True,
         include_world=True,
+        include_opportunities=True,
+        include_events=True,
+        top_opportunities=5,
+        top_events=5,
     )
 
     assert _section_caps() == {
@@ -100,6 +110,8 @@ def test_enabled_sections_keep_configured_caps(monkeypatch):
         "ai": 4,
         "regulatory": 3,
         "world": 3,
+        "opportunities": 5,
+        "events": 5,
     }
 
 
