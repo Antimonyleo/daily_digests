@@ -1,26 +1,16 @@
-name: Tests
+name: Cross-platform tests
 
 on:
-  push:
-    branches: [main]
-    paths-ignore:
-      - "README.md"
-      - "docs/**"
-      - "LICENSE"
-  pull_request:
-    branches: [main]
-    paths-ignore:
-      - "README.md"
-      - "docs/**"
-      - "LICENSE"
-
-concurrency:
-  group: tests-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  workflow_dispatch:
 
 jobs:
   pytest:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+
+    runs-on: ${{ matrix.os }}
 
     steps:
       - name: Checkout repository

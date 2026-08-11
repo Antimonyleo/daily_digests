@@ -261,5 +261,6 @@ uv sync --frozen --group dev
 uv run pytest
 ```
 
-Continuous integration runs the suite on Windows, macOS, and Linux. DailyDigest
-is released under the [MIT License](LICENSE).
+Routine continuous integration runs the suite on Linux. Maintainers can start a
+manual workflow to check Windows and macOS before a release. DailyDigest is
+released under the [MIT License](LICENSE).
