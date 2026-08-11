@@ -733,13 +733,16 @@ def test_index_renders_reader_card_hierarchy_and_feedback_controls(tmp_path, mon
     text = _text_payload(response)
 
     assert response.status_code == 200
-    assert "Today’s spotlight" in text
-    assert "Must read first" in text
+    assert "Today’s spotlight" not in text
+    assert text.count("First-in-class RNA delivery study") == 1
     assert "Today’s cup" in text
     assert "minute digest" in text
     assert "RNA nanotechnology" in text
+    assert "Brew again" in text
+    assert 'id="reading-mode-select"' in text
     assert '<details class="section-block"' in text
     assert 'class="section-toggle"' in text
+    assert '<details class="about-brew"' in text
     assert "Today’s source mix" in text
     assert "Not shown today" in text
     assert "Missed journal article" in text
@@ -747,10 +750,10 @@ def test_index_renders_reader_card_hierarchy_and_feedback_controls(tmp_path, mon
     assert "thin abstract from non-protected source" in text
     assert "after dedupe" in text
     assert "Top-journal audit" not in text
-    assert "Lead story" in text
-    assert "Ranked for High-quality source, Fresh signal; selected via protected published-journal slot." in text
-    assert "Why shown?" in text
-    assert "editorial-signals" in text
+    assert "Lead story" not in text
+    assert "Ranked for High-quality source, Fresh signal; selected via protected published-journal slot." not in text
+    assert "Why this recommendation?" in text
+    assert "editorial-signals" not in text
     assert "score-bars" not in text
     assert "High-quality source" in text
     assert 'data-filter="priority"' in text
@@ -760,9 +763,11 @@ def test_index_renders_reader_card_hierarchy_and_feedback_controls(tmp_path, mon
     assert 'data-filter="ai-cs"' in text
     assert 'data-filter-group="status"' in text
     assert 'data-filter-group="source"' in text
-    assert 'data-filter-group="section"' in text
+    assert 'data-filter-group="section"' not in text
     assert 'bucket === "preprint_other"' in text
-    assert "summary-fields" in text
+    assert 'class="summary-primary"' in text
+    assert '<details class="item-details">' in text
+    assert "Why it matters, caveat and recommendation details" in text
     assert "Key finding" in text
     # 4-level graded feedback
     assert "Must read" in text
@@ -770,8 +775,11 @@ def test_index_renders_reader_card_hierarchy_and_feedback_controls(tmp_path, mon
     assert "Hmmm" in text
     assert "Not for me" in text
     assert 'data-grade="100"' in text and 'data-grade="10"' in text
-    assert "No response saved yet." in text
+    assert "No response saved yet." not in text
+    assert 'class="vote-pct"' not in text
     assert "Too promotional" in text
+    assert "Choose Seen or Not for me" not in text
+    assert "Choose Hmmm or Not for me" in text
     assert "Update my ranking" in text
     assert "Learned" not in text
 
@@ -1043,7 +1051,9 @@ def test_index_marks_latest_run_impressions_viewed(tmp_path, monkeypatch):
         assert all(r.viewed is True for r in rows)
 
 
-def test_index_uses_confidence_not_relative_rank_for_priority_labels(tmp_path, monkeypatch):
+def test_index_uses_confidence_not_relative_rank_for_priority_filtering(
+    tmp_path, monkeypatch
+):
     from dailydigest import config as config_mod
     from dailydigest import store as store_mod
     from dailydigest import web
@@ -1100,7 +1110,7 @@ def test_index_uses_confidence_not_relative_rank_for_priority_labels(tmp_path, m
     text = _text_payload(response)
 
     assert response.status_code == 200
-    assert "Quick skim" in text
+    assert 'data-priority="skim"' in text
     assert "Lead story" not in text
     assert "Must read first" not in text
 
@@ -1713,7 +1723,9 @@ def test_main_page_exposes_one_click_reading_modes_and_settings_can_return(
     assert 'value="full"' in main
     assert 'value="usual"' in main
     assert 'value="minimal"' in main
-    assert 'window.location.href = `/run?reading_mode=${readingMode}&autostart=1`' in main
+    assert 'action="/run"' in main
+    assert 'name="autostart" value="1"' in main
+    assert "window.location.href = `/run?reading_mode=" not in main
     assert "Tea break" in main
     assert "Summaries: Extractive (local, no AI)" in main
     assert 'href="/"' in settings

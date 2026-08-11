@@ -214,38 +214,6 @@ def _breakdown_payload(row: ItemRow, persisted: dict | None = None) -> dict:
     }
 
 
-def _ranking_phrase(value: str | None) -> str:
-    text = " ".join(str(value or "").replace("_", " ").split()).rstrip(".")
-    if not text:
-        return ""
-    if text[:1].islower() and any(ch.isupper() for ch in text[1:]):
-        return text
-    return text[:1].upper() + text[1:]
-
-
-def _ranking_reason(value: str | None) -> str:
-    return " ".join(str(value or "").replace("_", " ").split()).rstrip(".")
-
-
-def _ranking_sentence(ranking: dict) -> str:
-    signals: list[str] = []
-    for raw in list(ranking.get("tags") or []) + list(ranking.get("why_shown") or []):
-        phrase = _ranking_phrase(raw)
-        if phrase and phrase not in signals:
-            signals.append(phrase)
-        if len(signals) == 2:
-            break
-
-    reason = _ranking_reason(str(ranking.get("selection_reason") or ""))
-    if signals and reason:
-        return f"Ranked for {', '.join(signals)}; selected via {reason}."
-    if signals:
-        return f"Ranked for {', '.join(signals)}."
-    if reason:
-        return f"Selected via {reason}."
-    return "Ranked for profile fit and source signals."
-
-
 def _entry_confidence(entry: dict) -> float:
     ranking = entry.get("ranking") or {}
     value = ranking.get("confidence_score", entry.get("score_raw") or 0.0)
@@ -274,8 +242,6 @@ def _digest_overview(sections: list[dict]) -> dict:
     reading_minutes = (
         max(1, (digest_words + 25 * len(entries) + 219) // 220) if entries else 0
     )
-    spotlight = sorted(entries, key=_entry_confidence, reverse=True)[:3]
-    must_read = [entry for entry in spotlight if _entry_confidence(entry) >= 0.65]
     latest = health.latest_snapshot()
     scanned = sum(int(row.get("items") or 0) for row in latest)
     return {
@@ -283,19 +249,12 @@ def _digest_overview(sections: list[dict]) -> dict:
         "scanned": scanned,
         "sources": len(latest),
         "failures": sum(1 for row in latest if not row.get("ok", True)),
-        "section_mix": [
-            {"title": s["title"], "count": len(s["entries"])}
-            for s in sections
-            if s.get("entries")
-        ],
         "source_mix": source_mix,
         "topic_mix": [
             {"title": topic, "count": count}
             for topic, count in topic_counts.most_common(4)
         ],
         "reading_minutes": reading_minutes,
-        "spotlight": spotlight,
-        "must_read": must_read,
         "top_journals_shown": sum(
             1
             for entry in entries
@@ -436,7 +395,6 @@ def _load_today(digest_id: str) -> tuple[list[dict], dict[int, int]]:
                     "score_raw": float(row.score or 0.0),
                     "confidence_score": confidence_score,
                     "ranking": ranking,
-                    "ranking_sentence": _ranking_sentence(ranking),
                     "reason_line": reason,
                     "type_label": type_label,
                     "opportunity": opportunity,
