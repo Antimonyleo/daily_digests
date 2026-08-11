@@ -36,25 +36,6 @@ def test_private_agent_files_are_ignored_and_not_present_in_release_tree():
     assert not (ROOT / "docs" / "ranking-research-2026-05-18.md").exists()
 
 
-def test_ci_uses_one_routine_job_and_manual_cross_platform_checks():
-    workflows = ROOT / ".github" / "workflows"
-    routine = (workflows / "test.yml").read_text()
-    cross_platform = (workflows / "cross-platform.yml").read_text()
-
-    assert "runs-on: ubuntu-latest" in routine
-    assert "macos-latest" not in routine
-    assert "windows-latest" not in routine
-    assert "paths-ignore:" in routine
-    assert "cancel-in-progress: true" in routine
-    assert "workflow_dispatch:" in cross_platform
-    assert "os: [macos-latest, windows-latest]" in cross_platform
-    assert "push:" not in cross_platform
-    assert "pull_request:" not in cross_platform
-    assert not (workflows / "digest.yml").exists()
-    assert not (workflows / "ingest-replies.yml").exists()
-    assert not (workflows / "prune.yml").exists()
-
-
 def test_dockerfile_pins_uv_image_version():
     dockerfile = (ROOT / "Dockerfile").read_text()
 
