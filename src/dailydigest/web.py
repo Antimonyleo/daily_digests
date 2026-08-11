@@ -976,6 +976,7 @@ def index(request: Request) -> Response:
             "profile_name": _profile_name(),
             "salutation": _time_salutation(),
             "daily_note": _daily_note(),
+            "daily_notes": _DAILY_NOTES,
             "summarizer_label": _summarizer_label(),
             "sections": sections,
             "overview": overview,

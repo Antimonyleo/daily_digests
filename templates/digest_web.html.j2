@@ -28,7 +28,12 @@
     min-height: 27px; border: 0; border-radius: 6px; background: var(--panel);
     color: var(--text); font-size: 12px; font-weight: 720; cursor: pointer;
   }
-  .tea-note { color: var(--copy-secondary); font-size: 12px; margin: 8px 0 0; }
+  .tea-note { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; color: var(--copy-secondary); font-size: 12px; margin: 8px 0 0; }
+  .tea-another {
+    border: 0; padding: 0; background: transparent; color: var(--accent);
+    cursor: pointer; font-size: 11px; font-weight: 760;
+  }
+  .tea-another:hover { color: var(--accent-strong); text-decoration: underline; text-underline-offset: 3px; }
   .brew-choice {
     display: grid; grid-template-columns: minmax(150px, 0.65fr) minmax(0, 2fr) auto;
     align-items: center; gap: 14px; margin: 0 0 16px; padding: 14px 16px;
@@ -349,7 +354,10 @@
       <div class="eyebrow">DailyDigest</div>
       <h1>{{ salutation }}{% if profile_name %}, {{ profile_name }}{% endif %}</h1>
       <p class="subhead">Fresh research, biotech, regulatory, and world signals ranked against your profile.</p>
-      <p class="tea-note"><strong>Tea break:</strong> {{ daily_note }}</p>
+      <div class="tea-note">
+        <span><strong>Tea break:</strong> <span id="tea-note-text" aria-live="polite">{{ daily_note }}</span></span>
+        <button class="tea-another" id="tea-another" type="button" aria-label="Show another science fact or joke">Another one</button>
+      </div>
     </div>
     <div class="actions">
       {% if not empty %}
@@ -525,7 +533,7 @@
           <div class="summary">{{ item.summary }}</div>
           {% endif %}
           <details class="item-details">
-            <summary>Why it matters, caveat and recommendation details</summary>
+            <summary>Details</summary>
             <div class="item-details-body">
               {% if item.summary_fields %}
                 {% for label, text in item.summary_fields.items() %}
@@ -698,9 +706,20 @@
 	  const GRADE_LABEL = { "100": "Must read", "70": "Relevant", "40": "Hmmm", "10": "Not for me" };
 	  const NEGATIVE_GRADES = new Set(["40", "10"]);
 	  const CSRF_TOKEN = {{ csrf_token|tojson }};
+  const TEA_NOTES = {{ daily_notes|tojson }};
   const toastEl = document.getElementById("toast");
   const trainBtn = document.getElementById("train-ranker-btn");
   let toastTimer = null;
+
+  const teaText = document.getElementById("tea-note-text");
+  const teaButton = document.getElementById("tea-another");
+  let teaIndex = teaText ? TEA_NOTES.indexOf(teaText.textContent) : -1;
+  if (teaText && teaButton && TEA_NOTES.length > 1) {
+    teaButton.addEventListener("click", () => {
+      teaIndex = (teaIndex + 1) % TEA_NOTES.length;
+      teaText.textContent = TEA_NOTES[teaIndex];
+    });
+  }
 
   function setActive(itemEl, grade) {
     itemEl.dataset.currentGrade = String(grade);

@@ -767,7 +767,8 @@ def test_index_renders_reader_card_hierarchy_and_feedback_controls(tmp_path, mon
     assert 'bucket === "preprint_other"' in text
     assert 'class="summary-primary"' in text
     assert '<details class="item-details">' in text
-    assert "Why it matters, caveat and recommendation details" in text
+    assert ">Details</summary>" in text
+    assert "Why it matters, caveat and recommendation details" not in text
     assert "Key finding" in text
     # 4-level graded feedback
     assert "Must read" in text
@@ -1727,6 +1728,11 @@ def test_main_page_exposes_one_click_reading_modes_and_settings_can_return(
     assert 'name="autostart" value="1"' in main
     assert "window.location.href = `/run?reading_mode=" not in main
     assert "Tea break" in main
+    assert 'id="tea-note-text"' in main
+    assert 'id="tea-another"' in main
+    assert "Another one" in main
+    assert "Show another science fact or joke" in main
+    assert "teaIndex = (teaIndex + 1) % TEA_NOTES.length" in main
     assert "Summaries: Extractive (local, no AI)" in main
     assert 'href="/"' in settings
     assert "Back to today’s digest" in settings
