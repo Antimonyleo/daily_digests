@@ -74,7 +74,7 @@ def _make_synthetic_votes(n_per_class: int = 12, seed: int = 7):
     vec_by_id: dict[int, np.ndarray] = {}
 
     item_id = 1
-    for k in range(n_per_class):
+    for _k in range(n_per_class):
         for center, label, grade in ((_LIKE, 1, 100), (_DISLIKE, -1, 10)):
             jitter = rng.normal(0.0, 0.03, size=_DIM).astype(np.float32)
             vec = _unit(center + jitter)
@@ -105,7 +105,7 @@ def _install_fake_embeddings(monkeypatch, vec_by_id: dict[int, np.ndarray]):
         if not rows:
             return np.zeros((0, 0), dtype=np.float32)
         return np.array(
-            [vec_by_id[int(getattr(r, "id"))] for r in rows], dtype=np.float32
+            [vec_by_id[int(r.id)] for r in rows], dtype=np.float32
         )
 
     # The benchmark imports embed_item_rows locally from embedding_cache in

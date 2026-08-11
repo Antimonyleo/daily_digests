@@ -779,7 +779,7 @@ def test_run_all_explicit_backfill_days_overrides_auto(monkeypatch, tmp_path):
     """An explicit backfill_days= value is used as-is, ignoring auto-detection."""
     from dailydigest import pipeline as pipeline_mod
 
-    store_mod = _reset_store(tmp_path, monkeypatch)
+    _reset_store(tmp_path, monkeypatch)
     captured_days: list[int] = []
 
     def fake_recent_items(days=2):
@@ -857,8 +857,6 @@ def test_pipeline_funnel_audit_shows_dedupe_count_before_quality_gate(
     quality gate filters out thin-abstract items from non-protected sources.
     The dedupe count must be >= quality gate count.
     """
-    import datetime
-
     from dailydigest import config as config_mod
     from dailydigest import store as store_mod
     from dailydigest.dedupe import dedupe_by_url
@@ -870,8 +868,6 @@ def test_pipeline_funnel_audit_shows_dedupe_count_before_quality_gate(
     store_mod._ENGINE = None
     store_mod._SessionLocal = None
     store_mod.init_db()
-
-    now = datetime.datetime.now(datetime.timezone.utc)
 
     # Simulate three items arriving from ingest (as Item objects for dedupe)
     # 1. Full abstract (survives quality gate)

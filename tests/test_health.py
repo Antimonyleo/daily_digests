@@ -12,9 +12,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-import pytest
-
-from dailydigest.health import IngestStats, latest_snapshot, should_show, weekly_summary
+from dailydigest.health import latest_snapshot, should_show, weekly_summary
 
 
 # ---------------------------------------------------------------------------

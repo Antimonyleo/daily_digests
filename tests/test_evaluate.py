@@ -8,7 +8,6 @@ import pytest
 
 from dailydigest import store as store_mod
 from dailydigest import votes as votes_mod
-from dailydigest.rank import evaluate as eval_mod
 from dailydigest.rank.evaluate import (
     _average_precision,
     _ndcg_at_k,

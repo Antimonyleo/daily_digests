@@ -92,7 +92,7 @@ def _install_fakes(monkeypatch, exp, vec_by_id, facets):
         if not rows:
             return np.zeros((0, 0), dtype=np.float32)
         return np.array(
-            [vec_by_id[int(getattr(r, "id"))] for r in rows], dtype=np.float32
+            [vec_by_id[int(r.id)] for r in rows], dtype=np.float32
         )
 
     from dailydigest.rank import embedding_cache as cache_mod

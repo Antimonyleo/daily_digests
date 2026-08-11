@@ -6,8 +6,6 @@ Tokens without a sign default to '+'. Labels are upper-cased.
 
 from __future__ import annotations
 
-import pytest
-
 from dailydigest.votes import parse_vote_line
 
 

@@ -814,6 +814,8 @@ def _write_env_file(path: Path, updates: dict[str, str]) -> None:
             new_lines.append(f"{key}={_format_env_value(val)}")
 
     path.write_text("\n".join(new_lines) + "\n")
+    if os.name == "posix":
+        path.chmod(0o600)
 
 
 def _format_env_value(value: str) -> str:
@@ -1409,12 +1411,25 @@ async def setup_post(request: Request) -> Response:
 
     errors = _validate_setup(form)
     if errors:
+        # Never reflect a newly submitted secret into the response body. A
+        # previously saved key can remain masked/reusable; a new key must be
+        # entered again after the other validation errors are corrected.
+        render_form = dict(form)
+        display_errors = list(errors)
+        submitted_key = render_form.get("llm_api_key", "").strip()
+        if submitted_key:
+            render_form["llm_api_key"] = "***" if SETTINGS.llm_api_key else ""
+            if submitted_key != "***":
+                display_errors.append(
+                    "Re-enter the API key after correcting the form; "
+                    "submitted keys are not returned for security."
+                )
         response = templates.TemplateResponse(
             request,
             "setup.html.j2",
             {
-                "form": form,
-                "errors": errors,
+                "form": render_form,
+                "errors": display_errors,
                 "csrf_token": _CSRF_TOKEN,
             },
             status_code=400,

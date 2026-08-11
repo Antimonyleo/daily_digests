@@ -1,7 +1,7 @@
 [project]
 name = "dailydigest"
 version = "0.1.0"
-description = "Personalized morning research/news digest"
+description = "Personalized local research and news digest"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [

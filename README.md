@@ -28,8 +28,10 @@ Your profiles, votes, reading history, database, and embedding cache stay in the
 local `data/` directory. This includes the private opportunity-matching profile
 when that feature is enabled. DailyDigest has no user-account system and listens
 only on your computer by default. Fetching new publications requires internet access.
-The default Extractive summarizer does not send article text to an AI provider;
-an optional online API summarizer does.
+The default Extractive summarizer does not send article text or your profile to
+an AI provider. Online API and signed-in CLI summarizers send selected article
+metadata plus a short reader profile to the provider you choose. A local Ollama
+endpoint keeps that processing on your computer.
 
 ## Quick start: browser app
 
@@ -105,7 +107,7 @@ The app opens <http://127.0.0.1:8765>. On the setup page:
    The structured fields are used to reject clearly incompatible calls. Unknown
    eligibility is shown as “needs verification,” never as confirmed eligibility.
 
-5. Select **Brew my morning cup of tea** to save the setup.
+5. Select **Save settings and choose today’s digest** to save the setup.
 6. Choose how much you feel like reading today: **Energetic** keeps every
    qualified pick up to your section limits, **Usual** keeps the best 15, and
    **Tired** keeps up to 5 research picks plus the best pick from each other
@@ -128,14 +130,15 @@ Then open <http://127.0.0.1:8765>. Use **Settings** in the app to change your
 interests, weights, digest sections, summarizer, or item counts. Vote on items
 as you read; positive and negative feedback both improve later ranking.
 
-The digest starts with an estimated reading time, its main topics, section
-counts, and three spotlight picks. Open the section headings for the full
-details. Use **Save for later** on any item, then open **Saved reading** to
-search your personal archive. Saved items are kept when old unsaved feed items
-are cleaned up.
+The digest starts with an estimated reading time and its main topics. Each
+section opens to a compact list of picks; expand an item’s **Details** only when
+you want its recommendation explanation and caveat. Use **Save for later** on
+any item, then open **Saved reading** to search your personal archive. Saved
+items are kept when old unsaved feed items are cleaned up.
 
-The display control in the lower-right corner switches between light and dark
-themes. Browsers that support local progressive-web-app installation also show
+The display control switches between light and dark themes. It appears in the
+lower-right corner on larger screens and near the end of the page on smaller
+screens. Browsers that support local progressive-web-app installation also show
 an **Install app** button. Installation creates an app-like launcher; the local
 DailyDigest server still needs to be running because private digest pages are
 deliberately not stored in the browser's offline cache.

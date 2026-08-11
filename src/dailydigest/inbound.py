@@ -62,7 +62,7 @@ def load_inbound_config() -> InboundConfig:
 # Body parsing helpers
 
 # Match a vote token possibly with a leading sign. Word-boundary on both ends.
-_VOTE_TOKEN_RE = re.compile(r"(?<![A-Za-z0-9])[+-]?[RIGWriguw]\d+\b")
+_VOTE_TOKEN_RE = re.compile(r"(?<![A-Za-z0-9])[+-]?[RIAGWFEUriagwfeu]\d+\b")
 # Strip HTML tags as a last resort (only when no text/plain part exists).
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 # "On Mon, Jan 1, 2026 at 8:00 AM Foo <foo@bar> wrote:" style markers.

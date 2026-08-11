@@ -1,5 +1,5 @@
 {% extends "_base.html.j2" %}
-{% block title %}Choose your morning cup · DailyDigest{% endblock %}
+{% block title %}Choose today’s digest · DailyDigest{% endblock %}
 {% block extra_styles %}
   .wrap { max-width: 820px; padding-top: 44px; }
   .brew-card {
@@ -180,7 +180,7 @@
         </div>
       </fieldset>
       <p class="serving-note">Serving size changes only the final slate—not source coverage, quality checks, or your recommendation profile.</p>
-      <button class="btn primary brew-button" id="brew-button" type="submit">Brew the morning tea</button>
+      <button class="btn primary brew-button" id="brew-button" type="submit">Brew today’s digest</button>
     </form>
   </section>
 
@@ -189,7 +189,7 @@
       <div class="steam s1"></div><div class="steam s2"></div><div class="steam s3"></div>
       <div class="body"></div><div class="handle"></div>
     </div>
-    <h1>Brewing your morning tea</h1>
+    <h1>Brewing today’s digest</h1>
     <p class="lede">Fetching fresh sources, ranking them against your profile, and preparing your chosen serving.</p>
 
     <div class="progress-shell" id="progress-shell" role="progressbar" aria-label="Brewing progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="6">

@@ -809,8 +809,9 @@ def run_all(
     """Run ingest + rank + summarize + render + send. Returns the digest id.
 
     ``backfill_days`` widens the recency window used for ranking. When omitted,
-    the window is set automatically: if the last sent digest was N days ago,
-    ``days = N + 1`` (capped at 7), so no recent day's content is missed.
+    the window is set automatically: if the last digest was N days ago,
+    ``days = N + 1`` (capped by ``max_backfill_days``), so recent content is
+    not missed.
     Pass an explicit value to override.
 
     ``reading_mode`` changes only the size of the final qualified slate:

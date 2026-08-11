@@ -6,7 +6,6 @@ from datetime import datetime, timedelta, timezone
 
 from dailydigest import config as config_mod
 from dailydigest import store as store_mod
-from dailydigest.rank import enrich as enrich_mod
 from dailydigest.rank.enrich import (
     citation_score,
     derive_doi,

@@ -9,8 +9,6 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-import pytest
-
 import numpy as np
 
 from dailydigest.ingest.rss import canonicalize_url

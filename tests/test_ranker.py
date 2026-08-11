@@ -47,8 +47,6 @@ def fake_embed(monkeypatch):
         return np.stack(vecs) if vecs else np.zeros((0, 3), dtype=np.float32)
 
     monkeypatch.setattr(embed_mod, "embed_texts", _fake_embed)
-    # Also patch in ranker module's direct reference
-    from dailydigest.rank import ranker as ranker_mod
     from dailydigest.rank import embedding_cache as cache_mod
     monkeypatch.setattr(cache_mod, "embed_texts", _fake_embed)
 
@@ -105,7 +103,7 @@ class TestApplyDownweight:
         profile = _profile_vec(3)
         scored_pen = _cosine_score_items(items, profile, [])
         scored_norm = _cosine_score_items(items, profile, [])
-        for (_, s1), (_, s2) in zip(scored_pen, scored_norm):
+        for (_, s1), (_, s2) in zip(scored_pen, scored_norm, strict=True):
             assert s1 == pytest.approx(s2, abs=1e-6)
 
 
@@ -301,7 +299,6 @@ class TestCosineScoreItems:
     def test_downweight_reduces_score(self):
         # An item containing a downweight term should score lower than otherwise
         item_penalized = _make_row("CRISPR and cryptocurrency", "research")
-        item_normal = _make_row("CRISPR gene therapy", "research")
         profile = _profile_vec(3)
 
         # Score each individually
@@ -819,4 +816,3 @@ class TestFreshnessPenalty:
         pen_90d = _freshness_penalty(self._row("regulatory", 100))
         assert 0 <= pen_2d < pen_90d
         assert pen_90d == pytest.approx(0.10, abs=0.01)
-

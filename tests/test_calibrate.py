@@ -219,7 +219,7 @@ def test_multi_digest_score_selection_is_deterministic_latest_digest():
     votes_mod.record_vote_by_id(other, -1)
 
     scores, labels = calib_mod._calibration_dataset()
-    by_label = {int(lab): float(sc) for sc, lab in zip(scores, labels)}
+    by_label = {int(lab): float(sc) for sc, lab in zip(scores, labels, strict=True)}
     # The upvoted multi item (label 1) must carry the latest digest's score 0.90,
     # not the older 0.10 — proving deterministic latest-digest selection.
     assert by_label[1] == pytest.approx(0.90, abs=1e-5)

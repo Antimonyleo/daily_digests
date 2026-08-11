@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 import sqlite3
+import stat
 import threading
 import time
 from datetime import datetime, timezone
@@ -102,6 +104,21 @@ def test_setup_post_accepts_urlencoded_form_without_multipart(tmp_path, monkeypa
     assert "RNA nanotechnology" in saved_profile
     assert "priority: 17.0" in saved_profile
     assert "LLM_BACKEND=extractive" in env_path.read_text()
+
+
+def test_env_writer_restricts_existing_file_permissions_on_posix(tmp_path):
+    from dailydigest import web
+
+    env_path = tmp_path / ".env"
+    env_path.write_text("LLM_API_KEY=old-secret\n")
+    if os.name == "posix":
+        env_path.chmod(0o644)
+
+    web._write_env_file(env_path, {"LLM_API_KEY": "new-secret"})
+
+    assert "LLM_API_KEY=new-secret" in env_path.read_text()
+    if os.name == "posix":
+        assert stat.S_IMODE(env_path.stat().st_mode) == 0o600
 
 
 def test_setup_defaults_load_canonical_weights_and_handle_missing_priority(
@@ -464,6 +481,45 @@ def test_setup_validation_error_preserves_optional_section_switches(
     assert not re.search(r'id="include_ai"[^>]*checked', html)
     assert re.search(r'id="include_regulatory"[^>]*checked', html)
     assert not re.search(r'id="include_world"[^>]*checked', html)
+
+
+def test_setup_validation_error_does_not_echo_submitted_api_key(
+    tmp_path, monkeypatch
+):
+    from dailydigest import web
+
+    monkeypatch.setattr(web, "_get_profile_path", lambda: tmp_path / "profile.yaml")
+    monkeypatch.setattr(web, "_ENV_PATH", tmp_path / ".env")
+    monkeypatch.setattr(
+        web,
+        "SETTINGS",
+        web.SETTINGS.model_copy(update={"llm_api_key": ""}),
+    )
+
+    response = asyncio.run(
+        web.setup_post(
+            _request(
+                "POST",
+                "/setup",
+                form={
+                    "_csrf_token": web._CSRF_TOKEN,
+                    "bio": "Researcher.",
+                    "topics": "missing a weight",
+                    "llm_backend": "api",
+                    "llm_base_url": "https://api.example.test/v1",
+                    "llm_api_key": "super-secret-test-key",
+                    "llm_model": "example-model",
+                },
+            )
+        )
+    )
+    html = _text_payload(response)
+
+    assert response.status_code == 400
+    assert "super-secret-test-key" not in html
+    assert 'id="llm_api_key" name="llm_api_key"' in html
+    assert 'placeholder="Provider API key" value=""' in html
+    assert "Re-enter the API key after correcting the form" in html
 
 
 def test_setup_post_requires_at_least_one_research_item(tmp_path, monkeypatch):
@@ -1700,7 +1756,25 @@ def test_run_page_asks_for_reading_depth_before_brewing(monkeypatch, tmp_path):
     assert 'value="usual"' in body
     assert 'value="minimal"' in body
     assert "5 research picks + 1 per other section" in body
-    assert body.index("How are we feeling today?") < body.index("Brew the morning tea")
+    assert body.index("How are we feeling today?") < body.index("Brew today’s digest")
+    assert "morning tea" not in body.lower()
+
+
+def test_setup_and_completion_pages_use_time_neutral_copy(monkeypatch, tmp_path):
+    from dailydigest import web
+
+    profile_path = tmp_path / "profile.yaml"
+    profile_path.write_text("bio: Reader\nkeywords: []\ndownweight: []\n")
+    monkeypatch.setattr(web, "_get_profile_path", lambda: profile_path)
+
+    setup = _text_payload(web.setup_get(_request("GET", "/setup")))
+    complete = _text_payload(
+        web.done(_request("GET", "/done"), digest_id="2026-08-10", n=3)
+    )
+
+    assert "Save settings and choose today’s digest" in setup
+    assert "Your digest is ready" in complete
+    assert "morning cup" not in (setup + complete).lower()
 
 
 def test_main_page_exposes_one_click_reading_modes_and_settings_can_return(
@@ -1790,6 +1864,7 @@ def test_settings_offer_native_api_and_signed_in_cli_summarizers(monkeypatch, tm
     assert "Signed-in Codex" in body
     assert "API billing" in body
     assert "chat subscription" in body.lower()
+    assert "short reader profile" in body
 
 
 def test_setup_saves_signed_in_cli_backend_without_api_credentials(tmp_path, monkeypatch):
