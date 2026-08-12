@@ -93,29 +93,27 @@ The app opens <http://127.0.0.1:8765>. On the setup page:
 3. Choose whether to include Funding & Opportunities, Events & Calls, Industry,
    AI tools & methods, Clinical & Regulatory, and World news. Research is always
    included.
-4. If Funding or Events is enabled, add a short description of your career
-   stage, institution, country, role, research area, preferred opportunity/event
-   types, and practical constraints. For example:
-
-   ```text
-   I am a postdoctoral researcher at a US university working on RNA
-   nanotechnology and colloidal self-assembly. I can apply as a fellow or
-   co-investigator and am interested in fellowships, research grants,
-   conferences, and workshops in North America or online.
-   ```
-
-   The structured fields are used to reject clearly incompatible calls. Unknown
-   eligibility is shown as “needs verification,” never as confirmed eligibility.
+4. If Funding or Events is enabled, provide your career stage, institution type,
+   country, and applicant role. DailyDigest reuses your weighted research
+   interests for topical matching; optional preferences cover opportunity type,
+   event format and region, and preparation time. Structured fields reject only
+   clearly incompatible calls. Unknown eligibility is shown as “needs
+   verification,” never as confirmed eligibility.
 
 5. Select **Save settings and choose today’s digest** to save the setup.
 6. Choose how much you feel like reading today: **Energetic** keeps every
    qualified pick up to your section limits, **Usual** keeps the best 15, and
-   **Tired** keeps up to 5 research picks plus the best pick from each other
-   enabled section. This changes only the final serving size; every enabled
-   source is still scanned and filtered.
+   **Tired** keeps up to 5 research picks. Both **Usual** and **Tired** keep the
+   best pick from each other enabled section, so no section you switched on
+   disappears. This changes only the final serving size; every enabled source is
+   still scanned and filtered.
 
 Keep the launcher or terminal window open while using DailyDigest. Press
 `Ctrl+C` in that window to stop the server.
+
+Settings records the browser's local timezone so digest dates and schedules
+follow the reader on native and Docker installations. The greeting itself is
+also calculated in the browser and updates immediately for local time.
 
 ## Everyday use
 
@@ -136,7 +134,9 @@ you want its recommendation explanation and caveat. Use **Save for later** on
 any item, then open **Saved reading** to search your personal archive. Saved
 items are kept when old unsaved feed items are cleaned up.
 
-The display control switches between light and dark themes. It appears in the
+Use **Night theme** on any page to switch between light and dark colors. On the
+digest page, **Compact view** reduces card spacing when you want to scan more at
+once. Both choices are remembered by that browser. The controls appear in the
 lower-right corner on larger screens and near the end of the page on smaller
 screens. Browsers that support local progressive-web-app installation also show
 an **Install app** button. Installation creates an app-like launcher; the local

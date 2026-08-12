@@ -109,6 +109,10 @@ def embed_item_rows(rows: list[ItemRow]) -> np.ndarray:
                         updated_at=now,
                     )
                     s.add(cached)
+                    # Register it so a repeated item id later in this batch
+                    # updates this pending row instead of inserting a second one
+                    # (which violates UNIQUE(item_id, model) on commit).
+                    by_item_id[item_id] = cached
                 else:
                     cached.text_hash = hashes[idx]
                     cached.dim = int(vec.shape[0])

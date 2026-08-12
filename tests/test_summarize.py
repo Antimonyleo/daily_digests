@@ -131,15 +131,45 @@ def test_anthropic_backend_uses_native_messages_api(monkeypatch):
     assert body["messages"][0]["role"] == "user"
 
 
+class _FakePopen:
+    """Stand-in for ``subprocess.Popen`` recording the launch + communicate args."""
+
+    calls: list[tuple[list[str], dict, dict]] = []
+
+    stdout_text = ""
+
+    def __init__(self, command, **kwargs):
+        self.command = command
+        self.kwargs = kwargs
+        self.pid = 999
+        self.returncode = 0
+        self.stdin = self.stdout = self.stderr = None
+        self.killed = False
+
+    def communicate(self, prompt=None, timeout=None):
+        type(self).calls.append(
+            (self.command, self.kwargs, {"input": prompt, "timeout": timeout})
+        )
+        return type(self).stdout_text, ""
+
+    def kill(self):
+        self.killed = True
+
+    def wait(self, timeout=None):
+        return 0
+
+
+def _patch_popen(monkeypatch, stdout_text):
+    _FakePopen.calls = []
+    _FakePopen.stdout_text = stdout_text
+    monkeypatch.setattr(sm.subprocess, "Popen", _FakePopen)
+    return _FakePopen.calls
+
+
 def test_claude_cli_backend_disables_tools_and_session_persistence(monkeypatch):
     from dailydigest import config
 
     item = _row("RNA assembly", "A programmable RNA assembly was demonstrated.")
-    calls = []
-
-    def fake_run(command, **kwargs):
-        calls.append((command, kwargs))
-        return SimpleNamespace(returncode=0, stdout='{"1":"Claude CLI summary"}', stderr="")
 
     monkeypatch.setattr(
         config,
@@ -152,31 +182,60 @@ def test_claude_cli_backend_disables_tools_and_session_persistence(monkeypatch):
         ),
     )
     monkeypatch.setattr(sm.shutil, "which", lambda name: f"/tools/{name}")
-    monkeypatch.setattr(sm.subprocess, "run", fake_run)
+    calls = _patch_popen(monkeypatch, '{"1":"Claude CLI summary"}')
 
     summaries = sm.summarize_items([item])
 
     assert summaries == {1: "Claude CLI summary"}
-    command, kwargs = calls[0]
+    command, kwargs, comm = calls[0]
     assert command[0] == "/tools/claude"
     assert "--safe-mode" in command
     assert "--no-session-persistence" in command
     assert command[command.index("--tools") + 1] == ""
     assert command[command.index("--model") + 1] == "haiku"
     assert kwargs["cwd"] != str(Path.cwd())
-    assert kwargs["timeout"] > 0
-    assert "Summarize each" in kwargs["input"]
+    # Own process group so a hung CLI's whole tree can be killed (else the
+    # grandchildren hold the stdout pipe open and the brew hangs forever).
+    assert kwargs["start_new_session"] is True
+    assert comm["timeout"] > 0
+    assert "Summarize each" in comm["input"]
 
 
-def test_codex_cli_backend_is_ephemeral_read_only_and_disables_agent_tools(monkeypatch):
+def test_cli_timeout_kills_the_whole_process_group(monkeypatch):
+    """A timed-out CLI must be SIGKILLed as a group, not left holding the pipe."""
     from dailydigest import config
 
-    item = _row("DNA origami", "A new DNA origami method was demonstrated.")
-    calls = []
+    killed_groups = []
 
-    def fake_run(command, **kwargs):
-        calls.append((command, kwargs))
-        return SimpleNamespace(returncode=0, stdout='{"1":"Codex CLI summary"}', stderr="")
+    class _HangingPopen(_FakePopen):
+        def communicate(self, prompt=None, timeout=None):
+            raise sm.subprocess.TimeoutExpired(self.command, timeout or 0)
+
+    monkeypatch.setattr(
+        config,
+        "get_settings",
+        lambda: SimpleNamespace(
+            llm_backend="claude_cli",
+            llm_api_key="",
+            llm_base_url="",
+            llm_model="haiku",
+        ),
+    )
+    monkeypatch.setattr(sm.shutil, "which", lambda name: f"/tools/{name}")
+    monkeypatch.setattr(sm.subprocess, "Popen", _HangingPopen)
+    monkeypatch.setattr(sm.os, "getpgid", lambda pid: 4242)
+    monkeypatch.setattr(sm.os, "killpg", lambda pgid, sig: killed_groups.append(pgid))
+
+    summaries = sm.summarize_items(
+        [_row("RNA delivery", "The study reports a screen of 80 formulations.")]
+    )
+
+    assert killed_groups == [4242]
+    assert summaries[1].startswith("Key finding:")  # extractive fallback
+
+
+def test_cli_output_wrapped_in_a_markdown_fence_still_parses(monkeypatch):
+    from dailydigest import config
 
     monkeypatch.setattr(
         config,
@@ -189,12 +248,68 @@ def test_codex_cli_backend_is_ephemeral_read_only_and_disables_agent_tools(monke
         ),
     )
     monkeypatch.setattr(sm.shutil, "which", lambda name: f"/tools/{name}")
-    monkeypatch.setattr(sm.subprocess, "run", fake_run)
+    _patch_popen(
+        monkeypatch,
+        'Here you go:\n```json\n{"1": "Fenced CLI summary"}\n```\n',
+    )
+
+    summaries = sm.summarize_items([_row("DNA origami", "A new method.")])
+
+    assert summaries == {1: "Fenced CLI summary"}
+
+
+def test_cli_total_budget_limits_the_last_batch_timeout(monkeypatch):
+    now = [0.0]
+    timeouts = []
+
+    def fake_monotonic():
+        return now[0]
+
+    def fake_call_cli(batch, backend, *, timeout):
+        timeouts.append(timeout)
+        now[0] += timeout
+        raise sm.subprocess.TimeoutExpired(backend, timeout)
+
+    monkeypatch.setattr(sm, "_BATCH_SIZE", 1)
+    monkeypatch.setattr(sm, "_CLI_TIMEOUT", 8.0)
+    monkeypatch.setattr(sm, "_CLI_TOTAL_BUDGET", 10.0)
+    monkeypatch.setattr(sm.time, "monotonic", fake_monotonic)
+    monkeypatch.setattr(sm, "_call_cli", fake_call_cli)
+    items = [
+        _row(f"Paper {index}", "A sufficiently descriptive abstract for fallback.")
+        for index in range(1, 4)
+    ]
+    for index, item in enumerate(items, start=1):
+        item.id = index
+
+    summaries = sm._summarize_via_provider(items, "claude_cli")
+
+    assert timeouts == [8.0, 2.0]
+    assert set(summaries) == {1, 2, 3}
+
+
+def test_codex_cli_backend_is_ephemeral_read_only_and_disables_agent_tools(monkeypatch):
+    from dailydigest import config
+
+    item = _row("DNA origami", "A new DNA origami method was demonstrated.")
+
+    monkeypatch.setattr(
+        config,
+        "get_settings",
+        lambda: SimpleNamespace(
+            llm_backend="codex_cli",
+            llm_api_key="",
+            llm_base_url="",
+            llm_model="",
+        ),
+    )
+    monkeypatch.setattr(sm.shutil, "which", lambda name: f"/tools/{name}")
+    calls = _patch_popen(monkeypatch, '{"1":"Codex CLI summary"}')
 
     summaries = sm.summarize_items([item])
 
     assert summaries == {1: "Codex CLI summary"}
-    command, kwargs = calls[0]
+    command, kwargs, _comm = calls[0]
     assert command[:2] == ["/tools/codex", "exec"]
     assert command[command.index("--sandbox") + 1] == "read-only"
     assert "--ephemeral" in command

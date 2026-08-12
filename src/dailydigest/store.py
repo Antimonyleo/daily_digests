@@ -690,9 +690,11 @@ def exclude_previously_shown(
     the web UI and never marked ``sent_at``; nothing was ever suppressed, so
     yesterday's items reappeared today.
 
-    We now suppress on membership in ANY digest within ``days_lookback`` (matching
-    the 30-day item retention), excluding ``exclude_digest_id`` so re-brewing the
-    *current* day does not hide the items it is about to (re)assign.
+    We now suppress on membership in ANY current digest or a viewed, selected
+    browser impression within ``days_lookback`` (matching the 30-day item
+    retention). The append-only impression history matters after a same-day
+    rebrew replaces ``digest_items``. ``exclude_digest_id`` keeps re-brewing the
+    *current* day from hiding items already shown that day.
     """
     ids = [int(r.id) for r in rows if r.id is not None]
     if not ids:
@@ -710,6 +712,19 @@ def exclude_previously_shown(
         if exclude_digest_id is not None:
             stmt = stmt.where(DigestItemRow.digest_id != exclude_digest_id)
         shown_ids = {int(item_id) for item_id in s.execute(stmt).scalars()}
+        impression_stmt = select(ImpressionRow.item_id).where(
+            ImpressionRow.created_at >= cutoff,
+            ImpressionRow.selected.is_(True),
+            ImpressionRow.viewed.is_(True),
+            ImpressionRow.item_id.in_(ids),
+        )
+        if exclude_digest_id is not None:
+            impression_stmt = impression_stmt.where(
+                ImpressionRow.digest_id != exclude_digest_id
+            )
+        shown_ids.update(
+            int(item_id) for item_id in s.execute(impression_stmt).scalars()
+        )
         opportunity_ids = {
             int(row.id)
             for row in rows
@@ -718,13 +733,51 @@ def exclude_previously_shown(
             and int(row.id) in shown_ids
         }
         if opportunity_ids:
-            shown_at = dict(
-                s.execute(
-                    select(DigestItemRow.item_id, func.max(DigestItemRow.created_at))
-                    .where(DigestItemRow.item_id.in_(opportunity_ids))
-                    .group_by(DigestItemRow.item_id)
-                ).all()
+            digest_shown_stmt = (
+                select(DigestItemRow.item_id, func.max(DigestItemRow.created_at))
+                .join(DigestRow, DigestRow.id == DigestItemRow.digest_id)
+                .where(
+                    DigestItemRow.item_id.in_(opportunity_ids),
+                    DigestRow.created_at >= cutoff,
+                )
+                .group_by(DigestItemRow.item_id)
             )
+            impression_shown_stmt = (
+                select(ImpressionRow.item_id, func.max(ImpressionRow.created_at))
+                .where(
+                    ImpressionRow.item_id.in_(opportunity_ids),
+                    ImpressionRow.created_at >= cutoff,
+                    ImpressionRow.selected.is_(True),
+                    ImpressionRow.viewed.is_(True),
+                )
+                .group_by(ImpressionRow.item_id)
+            )
+            if exclude_digest_id is not None:
+                digest_shown_stmt = digest_shown_stmt.where(
+                    DigestItemRow.digest_id != exclude_digest_id
+                )
+                impression_shown_stmt = impression_shown_stmt.where(
+                    ImpressionRow.digest_id != exclude_digest_id
+                )
+            digest_shown_at = dict(
+                s.execute(digest_shown_stmt).all()
+            )
+            impression_shown_at = dict(
+                s.execute(impression_shown_stmt).all()
+            )
+            shown_at = {
+                item_id: max(
+                    timestamp
+                    for timestamp in (
+                        digest_shown_at.get(item_id),
+                        impression_shown_at.get(item_id),
+                    )
+                    if timestamp is not None
+                )
+                for item_id in opportunity_ids
+                if digest_shown_at.get(item_id) is not None
+                or impression_shown_at.get(item_id) is not None
+            }
             changed_at = dict(
                 s.execute(
                     select(
@@ -992,10 +1045,15 @@ def recent_viewed_facet_dates(
 ) -> dict[str, datetime]:
     """Return the latest viewed selection date for each recent research facet.
 
-    Only the newest brew run per sent digest and facets at or above
+    Only the newest brew run per digest and facets at or above
     ``min_primary_facet_score`` count. This prevents an earlier, viewed rebrew
     or a weak/broad attribution from suppressing coverage for a genuine niche
     match. The helper issues SELECTs only.
+
+    Recency is keyed on ``DigestRow.created_at``, NOT ``sent_at``: the browser
+    flow never marks a digest sent, so requiring ``sent_at`` made this return {}
+    for every local reader and silently disabled topic-coverage entirely. The
+    ``viewed`` impression flag is already the proof that the reader opened it.
     """
     if days <= 0:
         return {}
@@ -1010,7 +1068,7 @@ def recent_viewed_facet_dates(
             .subquery()
         )
         rows = s.execute(
-            select(ImpressionRow.primary_facet, DigestRow.sent_at)
+            select(ImpressionRow.primary_facet, DigestRow.created_at)
             .join(
                 latest,
                 (ImpressionRow.digest_id == latest.c.digest_id)
@@ -1026,23 +1084,23 @@ def recent_viewed_facet_dates(
                 ImpressionRow.primary_facet_score.is_not(None),
                 ImpressionRow.primary_facet_score >= float(min_primary_facet_score),
                 DigestRow.id != before_digest_id,
-                DigestRow.sent_at.is_not(None),
-                DigestRow.sent_at >= cutoff,
+                DigestRow.created_at.is_not(None),
+                DigestRow.created_at >= cutoff,
             )
         ).all()
     latest_by_facet: dict[str, datetime] = {}
-    for facet, sent_at in rows:
+    for facet, viewed_at in rows:
         key = str(facet or "").casefold()
-        if not key or not isinstance(sent_at, datetime):
+        if not key or not isinstance(viewed_at, datetime):
             continue
         # SQLite commonly round-trips timezone-aware timestamps as naive values.
-        # Digest sent times are written in UTC, so restore that contract before
+        # Digest timestamps are written in UTC, so restore that contract before
         # the pipeline computes a recency age against an aware UTC `now`.
-        if sent_at.tzinfo is None:
-            sent_at = sent_at.replace(tzinfo=timezone.utc)
+        if viewed_at.tzinfo is None:
+            viewed_at = viewed_at.replace(tzinfo=timezone.utc)
         previous = latest_by_facet.get(key)
-        if previous is None or sent_at > previous:
-            latest_by_facet[key] = sent_at
+        if previous is None or viewed_at > previous:
+            latest_by_facet[key] = viewed_at
     return latest_by_facet
 
 

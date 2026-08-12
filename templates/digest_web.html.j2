@@ -28,9 +28,15 @@
     min-height: 27px; border: 0; border-radius: 6px; background: var(--panel);
     color: var(--text); font-size: 12px; font-weight: 720; cursor: pointer;
   }
-  .tea-note { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; color: var(--copy-secondary); font-size: 12px; margin: 8px 0 0; }
+  .tea-break {
+    display: flex; align-items: center; gap: 10px; margin: 0 0 16px; padding: 11px 14px;
+    border: 1px solid var(--border); border-radius: 10px; background: var(--panel);
+    color: var(--copy-secondary); font-size: 13px; line-height: 1.45;
+  }
+  .tea-break-title { color: var(--accent-strong); font-size: 12px; font-weight: 820; white-space: nowrap; }
+  .tea-break-copy { max-width: 80ch; }
   .tea-another {
-    border: 0; padding: 0; background: transparent; color: var(--accent);
+    flex: 0 0 auto; margin-left: auto; border: 0; padding: 0; background: transparent; color: var(--accent);
     cursor: pointer; font-size: 11px; font-weight: 760;
   }
   .tea-another:hover { color: var(--accent-strong); text-decoration: underline; text-underline-offset: 3px; }
@@ -59,18 +65,18 @@
   .density-option input:focus-visible + .density-card { outline: 2px solid var(--accent); outline-offset: 2px; }
   .name-prompt {
     display: grid; grid-template-columns: 1fr auto; gap: 10px;
-    padding: 14px; margin-bottom: 16px; border: 1px solid #d6e6db;
+    padding: 14px; margin-bottom: 16px; border: 1px solid var(--border);
     border-radius: 8px; background: var(--accent-soft);
   }
   .name-prompt label { display: block; font-size: 12px; font-weight: 800; color: var(--accent-strong); margin-bottom: 5px; }
   .name-prompt input {
     width: 100%; min-height: 38px; padding: 8px 10px;
-    border: 1px solid #b9d2c3; border-radius: 8px; background: var(--card);
+    border: 1px solid var(--border); border-radius: 8px; background: var(--card);
   }
   .today-cup {
     display: grid; grid-template-columns: minmax(150px, 0.7fr) minmax(0, 2fr);
     gap: 20px; align-items: center; margin: 0 0 16px; padding: 18px 20px;
-    border: 1px solid #d6e6db; border-radius: 12px;
+    border: 1px solid var(--border); border-radius: 12px;
     background: linear-gradient(135deg, #f7fbf8, var(--accent-soft));
   }
   .cup-kicker {
@@ -84,11 +90,11 @@
   .cup-row-label { color: var(--muted); font-size: 11px; font-weight: 800; min-width: 58px; text-transform: uppercase; letter-spacing: 0.05em; }
   .cup-chip {
     display: inline-flex; align-items: center; min-height: 25px; padding: 4px 8px;
-    border: 1px solid #cee0d4; border-radius: 999px; background: rgba(255,255,255,0.75);
+    border: 1px solid var(--border); border-radius: 999px; background: rgba(255,255,255,0.75);
     color: var(--copy-secondary); font-size: 11px; font-weight: 720;
   }
   .catch-up {
-    border-top: 1px solid #cfe0d4; padding-top: 8px;
+    border-top: 1px solid var(--border); padding-top: 8px;
   }
   .catch-up summary { cursor: pointer; color: var(--accent-strong); font-size: 12px; font-weight: 780; }
   .catch-up-body { margin-top: 8px; white-space: pre-wrap; color: var(--copy-secondary); font-size: 13px; line-height: 1.55; }
@@ -196,9 +202,10 @@
   .item {
     padding: 22px 24px; border-top: 1px solid var(--border-soft);
   }
+  .item-main { max-width: 80ch; }
   .item[data-priority="spotlight"] { border-left: 4px solid var(--gold); }
   .item[data-priority="read"] { border-left: 4px solid var(--accent); }
-  .item[data-priority="skim"] { border-left: 4px solid #c7d0c9; }
+  .item[data-priority="skim"] { border-left: 4px solid var(--border); }
   .item:first-of-type { border-top: none; }
   .item-head { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; margin-bottom: 4px; }
   .bookmark-btn {
@@ -240,7 +247,7 @@
     color: var(--copy-secondary); font-size: 11px; font-weight: 700;
   }
   .item-details {
-    margin-top: 10px; border: 1px solid #e1e8e2; border-radius: 8px;
+    margin-top: 10px; border: 1px solid var(--border); border-radius: 8px;
     background: var(--panel); overflow: hidden;
   }
   .item-details summary {
@@ -314,6 +321,12 @@
   .about-brew[open] > summary::after { content: "−"; }
   .about-summary { margin-left: auto; color: var(--muted); font-size: 11px; font-weight: 650; }
   .about-body { display: grid; gap: 12px; padding: 0 14px 14px; }
+  html[data-display="compact"] .item { padding: 14px 18px; }
+  html[data-display="compact"] .item a.title-link { font-size: 15px; line-height: 1.3; }
+  html[data-display="compact"] .item .summary,
+  html[data-display="compact"] .summary-primary { margin-top: 7px; }
+  html[data-display="compact"] .vote-panel { margin-top: 10px; padding-top: 9px; }
+  html[data-display="compact"] .item-details { margin-top: 7px; }
   html[data-theme="dark"] .today-cup {
     background: linear-gradient(135deg, var(--panel), var(--accent-soft));
     border-color: var(--border);
@@ -345,19 +358,16 @@
     .today-cup { grid-template-columns: 1fr; }
     .brew-choice { grid-template-columns: 1fr; }
     .density-options { grid-template-columns: 1fr; }
-    .app-utilities { position: static; justify-content: center; margin: -58px 0 16px; padding: 0 16px; }
+    .tea-break { align-items: flex-start; flex-wrap: wrap; }
+    .tea-another { margin-left: 0; }
   }
 {% endblock %}
 {% block body %}
   <header class="topbar">
     <div>
       <div class="eyebrow">DailyDigest</div>
-      <h1>{{ salutation }}{% if profile_name %}, {{ profile_name }}{% endif %}</h1>
-      <p class="subhead">Fresh research, biotech, regulatory, and world signals ranked against your profile.</p>
-      <div class="tea-note">
-        <span><strong>Tea break:</strong> <span id="tea-note-text" aria-live="polite">{{ daily_note }}</span></span>
-        <button class="tea-another" id="tea-another" type="button" aria-label="Show another science fact or joke">Another one</button>
-      </div>
+      <h1 id="page-salutation" data-profile-name="{{ profile_name | default('', true) }}">{{ salutation }}{% if profile_name %}, {{ profile_name }}{% endif %}</h1>
+      <p class="subhead">Fresh research and the signals you chose, ranked against your profile.</p>
     </div>
     <div class="actions">
       {% if not empty %}
@@ -365,7 +375,7 @@
         <input type="hidden" name="autostart" value="1">
         <label class="compact-brew" for="reading-mode-select">
           <span>Today’s serving</span>
-          <select id="reading-mode-select" name="reading_mode" aria-label="Choose reading density">
+          <select id="reading-mode-select" name="reading_mode" aria-label="Choose serving size">
             <option value="full">Energetic</option>
             <option value="usual" selected>Usual</option>
             <option value="minimal">Tired</option>
@@ -386,7 +396,7 @@
       <div class="brew-choice-title" id="brew-choice-title">How are we feeling today?</div>
       <div class="brew-choice-hint">Choose today’s serving size. Source collection stays the same.<br>Summaries: {{ summarizer_label }}</div>
     </div>
-    <div class="density-options" role="radiogroup" aria-label="Reading density">
+    <div class="density-options" role="radiogroup" aria-label="Serving size">
       <label class="density-option">
         <input name="reading_mode" type="radio" value="full">
         <span class="density-card"><strong>Energetic</strong><span>All qualified entries</span></span>
@@ -438,6 +448,13 @@
     </div>
   </section>
   {% endif %}
+
+  <section class="tea-break" aria-labelledby="tea-break-title">
+    <span aria-hidden="true">☕</span>
+    <strong class="tea-break-title" id="tea-break-title">Tea break</strong>
+    <span class="tea-break-copy" id="tea-note-text" aria-live="polite">{{ daily_note }}</span>
+    <button class="tea-another" id="tea-another" type="button" aria-label="Show another science fact or joke">Another one</button>
+  </section>
 
   <main class="digest-card">
     <div class="digest-toolbar">
@@ -710,6 +727,17 @@
   const toastEl = document.getElementById("toast");
   const trainBtn = document.getElementById("train-ranker-btn");
   let toastTimer = null;
+
+  const displayButton = document.getElementById("display-toggle");
+  if (displayButton) displayButton.hidden = false;
+
+  const salutation = document.getElementById("page-salutation");
+  if (salutation) {
+    const hour = new Date().getHours();
+    const greeting = hour < 5 ? "You’re up early" : hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
+    const name = salutation.dataset.profileName || "";
+    salutation.textContent = greeting + (name ? `, ${name}` : "");
+  }
 
   const teaText = document.getElementById("tea-note-text");
   const teaButton = document.getElementById("tea-another");

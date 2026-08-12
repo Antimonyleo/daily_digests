@@ -77,6 +77,68 @@ def test_drops_recent_near_duplicate_from_other_source(monkeypatch):
     assert dropped[0]["max_similarity"] >= 0.93
 
 
+def test_drops_near_duplicate_shown_in_unsent_browser_digest(monkeypatch):
+    store_mod.init_db()
+    with store_mod.session_scope() as s:
+        shown = store_mod.ItemRow(
+            source="Nature",
+            section="research",
+            external_id="shown",
+            url="https://nature.com/articles/browser-shown",
+            title="A landmark CRISPR result",
+            abstract="abstract",
+            published_at=datetime.now(timezone.utc),
+        )
+        s.add(shown)
+        s.flush()
+        shown_id = int(shown.id)
+    digest_id = "2026-06-02"
+    store_mod.write_digest(digest_id, [("R1", shown_id, 0.9)])
+    store_mod.write_impressions(
+        digest_id,
+        [("research", shown_id, 0, 0.9, True, "genome editing", 0.8, 0.8)],
+    )
+    store_mod.mark_impressions_viewed(digest_id)
+    monkeypatch.setattr(near_dup_mod, "embed_item_rows", _fake_embed)
+
+    kept, dropped = exclude_recent_near_duplicates(
+        [_candidate("dup", 101)],
+        settings=_settings(cross_day_dedupe=True, cross_day_dedupe_threshold=0.93),
+    )
+
+    assert kept == []
+    assert [row["item_id"] for row in dropped] == [101]
+
+
+def test_unviewed_browser_candidate_pool_does_not_count_as_shown(monkeypatch):
+    store_mod.init_db()
+    with store_mod.session_scope() as s:
+        candidate_pool_row = store_mod.ItemRow(
+            source="Nature",
+            section="research",
+            external_id="shown",
+            url="https://nature.com/articles/not-shown",
+            title="A candidate that was never displayed",
+            abstract="abstract",
+            published_at=datetime.now(timezone.utc),
+        )
+        s.add(candidate_pool_row)
+        s.flush()
+        item_id = int(candidate_pool_row.id)
+    store_mod.write_impressions(
+        "2026-06-02",
+        [("research", item_id, 10, 0.4, False, "genome editing", 0.8, 0.8)],
+    )
+    monkeypatch.setattr(near_dup_mod, "embed_item_rows", _fake_embed)
+
+    kept, dropped = exclude_recent_near_duplicates(
+        [_candidate("dup", 101)], settings=_settings(cross_day_dedupe=True)
+    )
+
+    assert [row.id for row in kept] == [101]
+    assert dropped == []
+
+
 def test_disabled_returns_unchanged(monkeypatch):
     _insert_shown_item()
     monkeypatch.setattr(near_dup_mod, "embed_item_rows", _fake_embed)

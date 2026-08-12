@@ -15,7 +15,7 @@ from . import votes as votes_mod
 from .config import SETTINGS, load_profile, section_enabled
 from .dedupe import dedupe_ranking_candidates
 from .pipeline import ingest_all, run_all
-from .rank.profile import build_profile_vector
+from .rank.profile import build_profile_matrix_with_rocchio
 from .rank.ranker import LRRanker, reset_lr_cache, score_items
 from .store import exclude_reviewed_items, recent_items
 from .store import prune as store_prune
@@ -86,14 +86,22 @@ def ingest() -> None:
 def rank() -> None:
     """Re-rank recent items and print top 20."""
     profile = load_profile()
-    pv = build_profile_vector(profile)
+    # Use the SAME profile representation the pipeline ranks with (weighted
+    # facet matrix + Rocchio blend), not the legacy single centroid — otherwise
+    # this "inspect the current ranking" view disagrees with the real digest.
+    pv = build_profile_matrix_with_rocchio(profile, votes_mod.signed_vote_count())
     items = [
         item
         for item in exclude_reviewed_items(recent_items(days=2))
         if section_enabled(SETTINGS, item.section or "")
     ]
     items = dedupe_ranking_candidates(items)
-    scored = score_items(items, pv, profile.downweight)
+    scored = score_items(
+        items,
+        pv,
+        profile.downweight,
+        reason_penalty_map=votes_mod.reason_penalty_map(items),
+    )
     for row, s in scored[:20]:
         title = (row.title or "").strip().replace("\n", " ")
         if len(title) > 90:

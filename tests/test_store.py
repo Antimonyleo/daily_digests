@@ -515,6 +515,25 @@ def test_recent_viewed_facet_dates_uses_only_latest_brew(monkeypatch, tmp_path):
     assert seen["new facet"].tzinfo is not None
 
 
+def test_recent_viewed_facet_dates_counts_unsent_browser_digests(monkeypatch, tmp_path):
+    """The browser flow never sets sent_at; coverage must still see viewed brews."""
+    store_mod = _reset_store(tmp_path, monkeypatch)
+    item_id = _add_item(store_mod, "coverage-browser")
+    digest_id = "2026-06-06"
+
+    store_mod.write_digest(digest_id, [("R1", item_id)])
+    store_mod.write_impressions(
+        digest_id,
+        [("research", item_id, 0, 0.9, True, "browser facet", 0.8, 0.8)],
+    )
+    store_mod.mark_impressions_viewed(digest_id)
+
+    seen = store_mod.recent_viewed_facet_dates(
+        before_digest_id="2026-06-07", min_primary_facet_score=0.65
+    )
+    assert set(seen) == {"browser facet"}
+
+
 def test_write_impressions_keeps_legacy_seven_tuple_contract(monkeypatch, tmp_path):
     """The old (..., primary_facet, topic_score) tuple remains unambiguous."""
     store_mod = _reset_store(tmp_path, monkeypatch)
@@ -631,3 +650,29 @@ def test_review_filters_use_latest_legacy_vote_rows(monkeypatch, tmp_path):
     # exclude_previously_shown is membership-based: any item that appeared in a
     # prior digest is dropped regardless of vote; only never-shown survives.
     assert {row.external_id for row in shown_filtered} == {"never-shown"}
+
+
+def test_previously_viewed_item_stays_hidden_after_same_day_rebrew(
+    monkeypatch, tmp_path
+):
+    store_mod = _reset_store(tmp_path, monkeypatch)
+    old_item = _add_item(store_mod, "old-viewed-slate")
+    replacement = _add_item(store_mod, "replacement-slate")
+    digest_id = "2026-06-06"
+
+    store_mod.write_digest(digest_id, [("R1", old_item)])
+    store_mod.write_impressions(
+        digest_id, [("research", old_item, 0, 0.9, True)]
+    )
+    store_mod.mark_impressions_viewed(digest_id)
+    # A rebrew destructively replaces digest_items, but impressions are immutable.
+    store_mod.write_digest(digest_id, [("R1", replacement)])
+    with store_mod.session_scope() as s:
+        row = s.get(store_mod.ItemRow, old_item)
+        s.expunge(row)
+
+    filtered = store_mod.exclude_previously_shown(
+        [row], days_lookback=30, exclude_digest_id="2026-06-07"
+    )
+
+    assert filtered == []

@@ -87,6 +87,7 @@ def test_docker_compose_persists_settings_file():
 
     assert "./data:/app/data" in volumes
     assert "./.env:/app/.env" in volumes
+    assert "USER_TZ" not in compose["services"]["dailydigest"]["environment"]
 
 
 # ---------------------------------------------------------------------------

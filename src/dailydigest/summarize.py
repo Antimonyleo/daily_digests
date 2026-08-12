@@ -14,12 +14,16 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import shutil
+import signal
 import subprocess
 import tempfile
+import time
 
 import httpx
+
 from .rank.source_quality import (
     access_friction_score,
     infer_source_quality,
@@ -64,6 +68,10 @@ _SENT_SPLIT = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9])")
 _BATCH_SIZE = 6
 _TIMEOUT = 60.0
 _CLI_TIMEOUT = 180.0
+# Wall-clock ceiling across ALL CLI batches in one run. Without it a CLI that
+# times out on every batch adds _CLI_TIMEOUT seconds per batch to the brew; once
+# the budget is spent the remaining items are summarized extractively instead.
+_CLI_TOTAL_BUDGET = 600.0
 _TOKEN_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]+")
 _INFORMATIVE_TERMS = (
     "method",
@@ -216,6 +224,28 @@ def _build_prompt(batch: list[ItemRow]) -> tuple[str, str]:
     return sys, user
 
 
+_ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+_FENCE_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL | re.IGNORECASE)
+_JSON_OBJ_RE = re.compile(r"\{.*\}", re.DOTALL)
+
+
+def _extract_json_object(text: str) -> str:
+    """Pull the first JSON object out of free-form CLI output.
+
+    A signed-in CLI answers in prose mode: it may emit ANSI colour codes, wrap
+    the payload in a ```json fence, or add a sentence around it. Without this
+    the whole batch fails to parse and silently degrades to extractive.
+    """
+    cleaned = _ANSI_RE.sub("", text)
+    fence = _FENCE_RE.search(cleaned)
+    if fence:
+        return fence.group(1)
+    match = _JSON_OBJ_RE.search(cleaned)
+    if match:
+        return match.group(0)
+    return cleaned.strip()
+
+
 def _parse_id_summary_map(raw: str) -> dict[int, str]:
     parsed = json.loads(raw)
     if not isinstance(parsed, dict):
@@ -303,7 +333,71 @@ def _call_anthropic(batch: list[ItemRow]) -> dict[int, str]:
     return _filter_to_batch_ids(_parse_id_summary_map(content), batch)
 
 
-def _cli_text(system: str, user: str, backend: str) -> str:
+def _kill_process_group(proc: subprocess.Popen) -> None:
+    """SIGKILL the child's whole process group, then reap it (best effort).
+
+    Killing the group — not just ``proc`` — closes the stdout pipe that any
+    surviving grandchild would otherwise hold open.
+    """
+    try:
+        if hasattr(os, "killpg"):
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        else:  # Windows has no process groups here
+            proc.kill()
+    except (ProcessLookupError, PermissionError, OSError):
+        try:
+            proc.kill()
+        except OSError:
+            pass
+    try:
+        proc.wait(timeout=5)
+    except Exception:  # noqa: BLE001 - best effort reap
+        pass
+    for stream in (proc.stdin, proc.stdout, proc.stderr):
+        try:
+            if stream is not None:
+                stream.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _run_cli_process(
+    command: list[str], prompt: str, cwd: str, timeout: float
+) -> tuple[int, str, str]:
+    """Run a CLI with ``prompt`` on stdin; returns ``(returncode, stdout, stderr)``.
+
+    Deliberately NOT ``subprocess.run(timeout=...)``. The claude/codex CLIs are
+    Node processes that spawn their own children; ``run``'s timeout kills only the
+    direct child, and the surviving grandchildren keep the stdout pipe open, so
+    ``run``'s cleanup ``communicate()`` then blocks forever — the brew hangs at
+    summarization with the timeout never firing. Starting the CLI in its own
+    session makes it a process-group leader, so a timeout (or Ctrl-C) can SIGKILL
+    the whole tree and free the pipe.
+    """
+    proc = subprocess.Popen(  # noqa: S603 - command is built from fixed literals
+        command,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        cwd=cwd,
+        start_new_session=True,
+    )
+    try:
+        stdout, stderr = proc.communicate(prompt, timeout=timeout)
+    except BaseException:
+        _kill_process_group(proc)
+        raise
+    return proc.returncode, stdout or "", stderr or ""
+
+
+def _cli_text(
+    system: str,
+    user: str,
+    backend: str,
+    *,
+    timeout: float = _CLI_TIMEOUT,
+) -> str:
     from .config import get_settings
 
     cfg = get_settings()
@@ -366,25 +460,21 @@ def _cli_text(system: str, user: str, backend: str) -> str:
             command.append("-")
             prompt = f"{system}\n\n{user}"
 
-        result = subprocess.run(
-            command,
-            input=prompt,
-            text=True,
-            capture_output=True,
-            timeout=_CLI_TIMEOUT,
-            check=False,
-            cwd=workdir,
-        )
-    if result.returncode != 0:
-        detail = (result.stderr or result.stdout or "unknown CLI error").strip()[:300]
+        returncode, stdout, stderr = _run_cli_process(command, prompt, workdir, timeout)
+    if returncode != 0:
+        detail = (stderr or stdout or "unknown CLI error").strip()[:300]
         raise RuntimeError(f"{executable_name} CLI failed: {detail}")
-    return result.stdout.strip()
+    return stdout.strip()
 
 
-def _call_cli(batch: list[ItemRow], backend: str) -> dict[int, str]:
+def _call_cli(
+    batch: list[ItemRow], backend: str, *, timeout: float = _CLI_TIMEOUT
+) -> dict[int, str]:
     sys_prompt, user_prompt = _build_prompt(batch)
-    content = _cli_text(sys_prompt, user_prompt, backend)
-    return _filter_to_batch_ids(_parse_id_summary_map(content), batch)
+    content = _cli_text(sys_prompt, user_prompt, backend, timeout=timeout)
+    return _filter_to_batch_ids(
+        _parse_id_summary_map(_extract_json_object(content)), batch
+    )
 
 
 def _summarize_via_api(items: list[ItemRow]) -> dict[int, str]:
@@ -393,13 +483,32 @@ def _summarize_via_api(items: list[ItemRow]) -> dict[int, str]:
 
 def _summarize_via_provider(items: list[ItemRow], backend: str) -> dict[int, str]:
     out: dict[int, str] = {}
+    is_cli = backend in {"claude_cli", "codex_cli"}
+    started = time.monotonic()
+    budget_hit = False
     for i in range(0, len(items), _BATCH_SIZE):
         batch = items[i : i + _BATCH_SIZE]
+        cli_timeout = _CLI_TIMEOUT
+        # Wall-clock guard for the subprocess backends: one misbehaving CLI must
+        # not dominate the brew. Once the budget is gone the rest goes extractive.
+        if is_cli:
+            remaining = _CLI_TOTAL_BUDGET - (time.monotonic() - started)
+            if budget_hit or remaining <= 0:
+                if not budget_hit:
+                    logger.warning(
+                        "%s exceeded the total summarize budget (%.0fs); using "
+                        "extractive summaries for the remaining items",
+                        backend,
+                        _CLI_TOTAL_BUDGET,
+                    )
+                    budget_hit = True
+                continue
+            cli_timeout = min(_CLI_TIMEOUT, remaining)
         try:
             if backend == "anthropic":
                 out.update(_call_anthropic(batch))
             elif backend in {"claude_cli", "codex_cli"}:
-                out.update(_call_cli(batch, backend))
+                out.update(_call_cli(batch, backend, timeout=cli_timeout))
             else:
                 out.update(_call_llm(batch))
         except Exception as e:  # noqa: BLE001

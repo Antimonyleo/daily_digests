@@ -14,7 +14,9 @@ from pydantic import BaseModel, Field, field_validator
 class OpportunityProfile(BaseModel):
     """Private reader information used only for opportunity eligibility."""
 
-    description: str = Field(min_length=40, max_length=4000)
+    # Kept for compatibility with profiles created before structured setup
+    # replaced the duplicate free-form paragraph. New profiles leave this blank.
+    description: str = Field(default="", max_length=4000)
     career_stage: str = Field(min_length=2, max_length=120)
     institution_type: str = Field(min_length=2, max_length=120)
     country: str = Field(min_length=2, max_length=120)

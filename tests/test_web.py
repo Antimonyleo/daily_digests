@@ -92,6 +92,7 @@ def test_setup_post_accepts_urlencoded_form_without_multipart(tmp_path, monkeypa
                     "llm_base_url": "https://api.openai.com/v1",
                     "llm_api_key": "",
                     "llm_model": "gpt-4o-mini",
+                    "user_tz": "America/Phoenix",
                 },
             )
         )
@@ -104,6 +105,7 @@ def test_setup_post_accepts_urlencoded_form_without_multipart(tmp_path, monkeypa
     assert "RNA nanotechnology" in saved_profile
     assert "priority: 17.0" in saved_profile
     assert "LLM_BACKEND=extractive" in env_path.read_text()
+    assert "USER_TZ=America/Phoenix" in env_path.read_text()
 
 
 def test_env_writer_restricts_existing_file_permissions_on_posix(tmp_path):
@@ -119,6 +121,34 @@ def test_env_writer_restricts_existing_file_permissions_on_posix(tmp_path):
     assert "LLM_API_KEY=new-secret" in env_path.read_text()
     if os.name == "posix":
         assert stat.S_IMODE(env_path.stat().st_mode) == 0o600
+
+
+def test_setup_rejects_invalid_browser_timezone_before_writing(tmp_path, monkeypatch):
+    from dailydigest import web
+
+    profile_path = tmp_path / "profile.yaml"
+    monkeypatch.setattr(web, "_get_profile_path", lambda: profile_path)
+    monkeypatch.setattr(web, "_ENV_PATH", tmp_path / ".env")
+
+    response = asyncio.run(
+        web.setup_post(
+            _request(
+                "POST",
+                "/setup",
+                form={
+                    "_csrf_token": web._CSRF_TOKEN,
+                    "bio": "Researcher.",
+                    "topics": "RNA nanotechnology | 10",
+                    "llm_backend": "extractive",
+                    "user_tz": "not/a-timezone",
+                },
+            )
+        )
+    )
+
+    assert response.status_code == 400
+    assert "Browser timezone" in _text_payload(response)
+    assert not profile_path.exists()
 
 
 def test_setup_defaults_load_canonical_weights_and_handle_missing_priority(
@@ -205,7 +235,13 @@ def test_setup_page_renders_accessible_optional_section_switches(monkeypatch):
     assert 'id="include_world"' in html
     assert 'id="include_opportunities"' in html
     assert 'id="include_events"' in html
-    assert 'id="opportunity-description"' in html
+    assert 'id="opportunity-description"' not in html
+    assert 'id="opportunity-citizenship"' not in html
+    assert 'id="requires-travel-support"' not in html
+    assert 'id="user-timezone"' in html
+    assert "Intl.DateTimeFormat().resolvedOptions().timeZone" in html
+    assert "Optional matching preferences" in html
+    assert "weighted research interests above are reused" in html
     assert "About you for opportunity matching" in html
     assert 'id="top_ai"' in html
     assert "AI tools &amp; methods" in html
@@ -243,7 +279,7 @@ def test_setup_rejects_enabled_opportunity_section_without_profile(
     )
 
     assert response.status_code == 400
-    assert "description is required" in _text_payload(response)
+    assert "Career stage is required" in _text_payload(response)
     assert not (tmp_path / "opportunities.yaml").exists()
 
 
@@ -273,10 +309,6 @@ def test_setup_persists_private_opportunity_profile_when_enabled(
                     "top_opportunities": "5",
                     "include_events": "true",
                     "top_events": "4",
-                    "opportunity_description": (
-                        "I am a postdoctoral researcher at a nonprofit university "
-                        "working on RNA nanotechnology and therapeutic delivery."
-                    ),
                     "opportunity_career_stage": "postdoctoral researcher",
                     "opportunity_institution_type": "nonprofit university",
                     "opportunity_country": "United States",
@@ -285,7 +317,6 @@ def test_setup_persists_private_opportunity_profile_when_enabled(
                     "event_types": "conference,workshop",
                     "event_regions": "North America,online",
                     "event_formats": "in_person,online",
-                    "requires_travel_support": "true",
                     "minimum_lead_days": "14",
                 },
             )
@@ -296,11 +327,110 @@ def test_setup_persists_private_opportunity_profile_when_enabled(
     saved = yaml.safe_load(opportunity_path.read_text())
     assert saved["career_stage"] == "postdoctoral researcher"
     assert saved["opportunity_types"] == ["fellowship", "travel_support"]
-    assert saved["requires_travel_support"] is True
+    assert "description" not in saved
+    assert "requires_travel_support" not in saved
+    assert "citizenship_or_residency" not in saved
     assert saved["minimum_lead_days"] == 14
+    if os.name == "posix":
+        assert stat.S_IMODE(profile_path.stat().st_mode) == 0o600
+        assert stat.S_IMODE(opportunity_path.stat().st_mode) == 0o600
     env = web._read_env_file(env_path)
     assert env["INCLUDE_OPPORTUNITIES"] == "true"
     assert env["INCLUDE_EVENTS"] == "true"
+
+
+def test_setup_preserves_legacy_opportunity_values_not_shown_in_simplified_form(
+    tmp_path, monkeypatch
+):
+    from dailydigest import web
+
+    profile_path = tmp_path / "profile.yaml"
+    opportunity_path = tmp_path / "opportunities.yaml"
+    opportunity_path.write_text(
+        yaml.safe_dump(
+            {
+                "description": "A detailed legacy eligibility description that remains private.",
+                "career_stage": "postdoctoral researcher",
+                "institution_type": "nonprofit university",
+                "country": "United States",
+                "applicant_role": "fellow",
+                "citizenship_or_residency": "US permanent resident",
+                "requires_travel_support": True,
+            }
+        )
+    )
+    monkeypatch.setattr(web, "_get_profile_path", lambda: profile_path)
+    monkeypatch.setattr(
+        web, "_get_opportunity_profile_path", lambda: opportunity_path
+    )
+    monkeypatch.setattr(web, "_ENV_PATH", tmp_path / ".env")
+
+    response = asyncio.run(
+        web.setup_post(
+            _request(
+                "POST",
+                "/setup",
+                form={
+                    "_csrf_token": web._CSRF_TOKEN,
+                    "bio": "Researcher.",
+                    "topics": "RNA nanotechnology | 10",
+                    "llm_backend": "extractive",
+                    "include_opportunities": "true",
+                    "opportunity_career_stage": "assistant professor",
+                    "opportunity_institution_type": "nonprofit university",
+                    "opportunity_country": "United States",
+                    "opportunity_applicant_role": "principal investigator",
+                },
+            )
+        )
+    )
+
+    assert response.status_code == 303
+    saved = yaml.safe_load(opportunity_path.read_text())
+    assert saved["career_stage"] == "assistant professor"
+    assert saved["description"].startswith("A detailed legacy")
+    assert saved["citizenship_or_residency"] == "US permanent resident"
+    assert saved["requires_travel_support"] is True
+
+
+def test_setup_rejects_invalid_structured_opportunity_fields_before_writing(
+    tmp_path, monkeypatch
+):
+    from dailydigest import web
+
+    profile_path = tmp_path / "profile.yaml"
+    opportunity_path = tmp_path / "opportunities.yaml"
+    monkeypatch.setattr(web, "_get_profile_path", lambda: profile_path)
+    monkeypatch.setattr(
+        web, "_get_opportunity_profile_path", lambda: opportunity_path
+    )
+    monkeypatch.setattr(web, "_ENV_PATH", tmp_path / ".env")
+
+    response = asyncio.run(
+        web.setup_post(
+            _request(
+                "POST",
+                "/setup",
+                form={
+                    "_csrf_token": web._CSRF_TOKEN,
+                    "bio": "Researcher.",
+                    "topics": "RNA nanotechnology | 10",
+                    "llm_backend": "extractive",
+                    "include_opportunities": "true",
+                    "top_opportunities": "5",
+                    "opportunity_career_stage": "x",
+                    "opportunity_institution_type": "university",
+                    "opportunity_country": "United States",
+                    "opportunity_applicant_role": "principal investigator",
+                },
+            )
+        )
+    )
+
+    assert response.status_code == 400
+    assert "Career stage" in _text_payload(response)
+    assert not profile_path.exists()
+    assert not opportunity_path.exists()
 
 
 def test_setup_post_requires_one_to_ten_weighted_topics(tmp_path, monkeypatch):
@@ -601,7 +731,9 @@ def test_setup_post_preserves_profile_fields_it_does_not_edit(tmp_path, monkeypa
 
     assert response.status_code == 303
     saved = web.yaml.safe_load(profile_path.read_text())
-    assert saved["keywords"] == ["protein design"]
+    # Saving a weight-only facet edit must not replace a more specific active
+    # retrieval phrase that the simplified form does not display.
+    assert saved["keywords"] == ["old topic"]
     assert saved["canonical_facets"]["protein design"]["anchors"] == [
         "de novo protein design"
     ]
@@ -613,6 +745,21 @@ def test_setup_post_preserves_profile_fields_it_does_not_edit(tmp_path, monkeypa
     assert saved["context_keywords"] == ["biotech news"]
     assert saved["negative_interests"] == {"clinical pathology": 1.0}
     assert saved["authors_of_interest"] == ["Ada Lovelace"]
+
+
+def test_reordering_same_facets_preserves_specific_retrieval_keywords():
+    from dailydigest import web
+
+    profile = {
+        "keywords": ["specific alpha", "specific beta"],
+        "canonical_facets": {"Facet A": {}, "Facet B": {}},
+    }
+
+    keywords = web._keywords_after_topic_edit(
+        profile, [("Facet B", 8.0), ("Facet A", 10.0)]
+    )
+
+    assert keywords == ["specific alpha", "specific beta"]
 
 
 def test_profile_name_post_updates_existing_profile(tmp_path, monkeypatch):
@@ -1740,6 +1887,21 @@ def test_run_start_defaults_to_usual_and_rejects_unknown_reading_mode(monkeypatc
     web._RUN_STARTED.clear()
 
 
+def test_abandoned_run_queues_are_bounded():
+    from dailydigest import web
+
+    web._RUN_QUEUES.clear()
+    web._RUN_STARTED.clear()
+    for index in range(web._MAX_RETAINED_RUNS + 5):
+        web._ensure_run(f"abandoned-{index}")
+
+    assert len(web._RUN_QUEUES) == web._MAX_RETAINED_RUNS
+    assert "abandoned-0" not in web._RUN_QUEUES
+
+    web._RUN_QUEUES.clear()
+    web._RUN_STARTED.clear()
+
+
 def test_run_page_asks_for_reading_depth_before_brewing(monkeypatch, tmp_path):
     from dailydigest import web
 
@@ -1787,12 +1949,11 @@ def test_main_page_exposes_one_click_reading_modes_and_settings_can_return(
     monkeypatch.setattr(web, "_get_profile_path", lambda: profile_path)
     monkeypatch.setattr(web, "_load_today", lambda _digest_id: ([], {}))
     monkeypatch.setattr(web, "_digest_exists", lambda _digest_id: False)
-    monkeypatch.setattr(web, "_time_salutation", lambda: "Good evening")
-
     main = _text_payload(web.index(_request("GET", "/")))
     settings = _text_payload(web.setup_get(_request("GET", "/setup")))
 
-    assert "Good evening, Ada" in main
+    assert "Welcome back, Ada" in main
+    assert "new Date().getHours()" in main
     assert "How are we feeling today?" in main
     assert 'name="reading_mode"' in main
     assert 'value="full"' in main
@@ -1810,22 +1971,6 @@ def test_main_page_exposes_one_click_reading_modes_and_settings_can_return(
     assert "Summaries: Extractive (local, no AI)" in main
     assert 'href="/"' in settings
     assert "Back to today’s digest" in settings
-
-
-@pytest.mark.parametrize(
-    ("hour", "expected"),
-    [(2, "You’re up early"), (9, "Good morning"), (14, "Good afternoon"), (20, "Good evening")],
-)
-def test_salutation_tracks_local_time(monkeypatch, hour, expected):
-    from dailydigest import web
-
-    monkeypatch.setattr(
-        web,
-        "_reader_now",
-        lambda: datetime(2026, 8, 10, hour, 0, tzinfo=timezone.utc),
-    )
-
-    assert web._time_salutation() == expected
 
 
 def test_main_page_choice_arrives_at_run_page_and_starts_once(monkeypatch, tmp_path):
@@ -1910,6 +2055,17 @@ def test_theme_controls_and_safe_pwa_assets_are_exposed(monkeypatch, tmp_path):
     page = _text_payload(web.run_get(_request("GET", "/run")))
     assert 'rel="manifest" href="/manifest.webmanifest"' in page
     assert 'id="theme-toggle"' in page
+    assert '>Night theme</button>' in page
+    assert 'id="display-toggle"' in page
+    assert '>Compact view</button>' in page
+    assert "themeButton.textContent" not in page
+    assert "displayButton.textContent" not in page
+    assert "localStorage.getItem(\"dailydigest-theme\")" in page
+    assert "localStorage.getItem(\"dailydigest-display\")" in page
+    assert page.index("dailydigest-theme") < page.index("<style>")
+    assert "@media (max-width: 680px)" in page
+    assert ".app-utilities {" in page
+    assert "position: static; justify-content: center" in page
     assert 'id="install-app"' in page
     assert "navigator.serviceWorker.register" in page
     assert 'data-theme="light"' in page

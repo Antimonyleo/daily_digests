@@ -204,7 +204,13 @@ def test_reading_mode_caps_only_the_final_ranked_slate():
     ]
 
     assert pipeline_mod.apply_reading_mode(picked, "full") == picked
-    assert len(pipeline_mod.apply_reading_mode(picked, "usual")) == 15
+    usual = pipeline_mod.apply_reading_mode(picked, "usual")
+    assert len(usual) == 15
+    # Every enabled section keeps its best pick: research scores fuse far above
+    # news scores, so a plain global top-15 would have emptied industry and ai.
+    assert {row.section for row, _score in usual} == {"research", "industry", "ai"}
+    assert [row.id for row, _score in usual if row.section == "industry"] == [100]
+    assert [row.id for row, _score in usual if row.section == "ai"] == [200]
     minimal = pipeline_mod.apply_reading_mode(picked, "minimal")
     assert [row.id for row, _score in minimal if row.section == "research"] == list(range(5))
     assert [row.id for row, _score in minimal if row.section == "industry"] == [100]

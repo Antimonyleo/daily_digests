@@ -177,6 +177,18 @@ def normalize_reading_mode(value: str | None, *, default: str = "full") -> str:
     return mode
 
 
+def _best_per_other_section(
+    ranked: list[tuple[ItemRow, float]],
+) -> list[tuple[ItemRow, float]]:
+    """Top-scored pick of each non-research section, kept in score order."""
+    best: dict[str, tuple[ItemRow, float]] = {}
+    for pair in ranked:
+        section = pair[0].section or ""
+        if section and section != "research" and section not in best:
+            best[section] = pair
+    return list(best.values())
+
+
 def apply_reading_mode(
     picked: list[tuple[ItemRow, float]], reading_mode: str
 ) -> list[tuple[ItemRow, float]]:
@@ -187,21 +199,27 @@ def apply_reading_mode(
     changes a score. ``full`` preserves the existing configured digest.
     """
     mode = normalize_reading_mode(reading_mode)
+    ranked = sorted(picked, key=lambda pair: pair[1], reverse=True)
     if mode == "minimal":
-        ranked = sorted(picked, key=lambda pair: pair[1], reverse=True)
         research = [pair for pair in ranked if (pair[0].section or "") == "research"]
-        other_sections: dict[str, tuple[ItemRow, float]] = {}
-        for pair in ranked:
-            section = pair[0].section or ""
-            if section and section != "research" and section not in other_sections:
-                other_sections[section] = pair
-        selected = research[:MINIMAL_RESEARCH_LIMIT] + list(other_sections.values())
+        selected = research[:MINIMAL_RESEARCH_LIMIT] + _best_per_other_section(ranked)
         return sorted(selected, key=lambda pair: pair[1], reverse=True)
 
     limit = READING_MODE_LIMITS[mode]
     if limit is None or len(picked) <= limit:
         return picked
-    return sorted(picked, key=lambda pair: pair[1], reverse=True)[:limit]
+    # Scores are NOT comparable across sections: a research pick fuses to ~1.0
+    # while a strong news pick tops out near 0.5. A plain global top-N therefore
+    # kept only research and silently emptied every other section the reader had
+    # enabled. Seat the best pick of each other section first (the same guarantee
+    # ``minimal`` makes), then spend the remaining budget by score.
+    reserved = _best_per_other_section(ranked)[:limit]
+    reserved_keys = {_row_feature_key(row) for row, _score in reserved}
+    remaining = limit - len(reserved)
+    fill = [
+        pair for pair in ranked if _row_feature_key(pair[0]) not in reserved_keys
+    ][: max(0, remaining)]
+    return sorted(reserved + fill, key=lambda pair: pair[1], reverse=True)
 
 
 def ingest_all(
@@ -406,10 +424,9 @@ def _dynamic_section_caps(
             if v is not None and float(v) >= news_floor:
                 counts[section] += 1
         elif section in ("opportunities", "events"):
-            v = max(
-                float(feat.get("topic_score", fused) or 0.0),
-                float(feat.get("opportunity_profile_score", 0.0) or 0.0),
-            )
+            # Career/location fit can reorder qualified calls, but it must not
+            # rescue a grant or event unrelated to the reader's research.
+            v = feat.get("topic_score", fused)
             if v is not None and float(v) >= opportunity_floor:
                 counts[section] += 1
 
@@ -472,13 +489,7 @@ def _filter_off_topic(
                 continue
         elif section in ("opportunities", "events"):
             topic = feat.get("topic_score")
-            profile_score = feat.get("opportunity_profile_score")
-            t = (
-                max(float(topic or 0.0), float(profile_score or 0.0))
-                if topic is not None or profile_score is not None
-                else None
-            )
-            if t is not None and float(t) < opportunity_floor:
+            if topic is not None and float(topic) < opportunity_floor:
                 continue
         out.append((row, score))
     return out
@@ -533,12 +544,14 @@ def _apply_opportunity_profile_relevance(
         context = " ".join(
             part
             for part in (
-                opportunity_profile.description,
                 opportunity_profile.career_stage,
                 opportunity_profile.institution_type,
+                opportunity_profile.country,
                 opportunity_profile.applicant_role,
                 " ".join(opportunity_profile.opportunity_types),
                 " ".join(opportunity_profile.event_types),
+                " ".join(opportunity_profile.event_regions),
+                " ".join(opportunity_profile.event_formats),
             )
             if part
         )
@@ -972,7 +985,9 @@ def run_all(
     logger.info(
         "ranking %d recent items after quality gate (%d before, window=%d days)",
         len(items),
-        len(quality_rows) + len(quality_drops),
+        # `quality_drops` is capped for the audit payload, so it cannot stand in
+        # for the pre-gate count.
+        len(deduped_candidates) - len(near_dup_drops),
         days,
     )
     try:
@@ -1209,9 +1224,13 @@ def run_all(
                 if str(feat.get("scoring_mode", "")) == "hybrid_lr"
             }
             if uncertainty:
+                # Explore only among candidates that already cleared every gate
+                # (`pickable`), never the raw `scored` pool — otherwise an item the
+                # topic floor, opportunity gate, or within-day dedupe deliberately
+                # removed could be swapped straight back into the digest.
                 picked = apply_exploration(
                     picked,
-                    scored,
+                    pickable,
                     uncertainty,
                     slots=_explore,
                     eligible=is_high_quality_journal_source,

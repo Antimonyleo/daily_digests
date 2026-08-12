@@ -5,9 +5,9 @@ a single candidate set, but the same paper or story often re-surfaces days later
 through a *different* source (a journal RSS item later indexed by OpenAlex, a
 news story re-covered by another outlet) as a distinct row with no shared
 identifier. This module drops a candidate when its title+abstract embedding is
-near an item already shown in a recent sent digest — content-level dedupe across
-days. It deliberately ignores same-id matches (governed by the existing
-previously-shown policy) and targets only genuinely different rows.
+near an item already shown in a recent email or browser digest — content-level
+dedupe across days. It deliberately ignores same-id matches (governed by the
+existing previously-shown policy) and targets only genuinely different rows.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from typing import Any
 import numpy as np
 from sqlalchemy import select
 
-from ..store import DigestItemRow, DigestRow, ItemRow, session_scope
+from ..store import DigestItemRow, DigestRow, ImpressionRow, ItemRow, session_scope
 from .embedding_cache import embed_item_rows
 
 logger = logging.getLogger(__name__)
@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 def _recently_shown_rows(days_lookback: int, exclude_ids: set[int]) -> list[ItemRow]:
     cutoff = datetime.now(timezone.utc) - timedelta(days=days_lookback)
     with session_scope() as s:
-        shown_ids = {
+        emailed_ids = {
             int(item_id)
             for item_id in s.execute(
                 select(DigestItemRow.item_id)
@@ -36,6 +36,17 @@ def _recently_shown_rows(days_lookback: int, exclude_ids: set[int]) -> list[Item
                 .where(DigestRow.sent_at.isnot(None), DigestRow.sent_at >= cutoff)
             ).scalars()
         }
+        browser_ids = {
+            int(item_id)
+            for item_id in s.execute(
+                select(ImpressionRow.item_id).where(
+                    ImpressionRow.selected.is_(True),
+                    ImpressionRow.viewed.is_(True),
+                    ImpressionRow.created_at >= cutoff,
+                )
+            ).scalars()
+        }
+        shown_ids = emailed_ids | browser_ids
         shown_ids -= exclude_ids
         if not shown_ids:
             return []

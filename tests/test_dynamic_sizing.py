@@ -248,6 +248,36 @@ def test_industry_shrinks_to_quality_supply(monkeypatch):
     assert _dynamic_section_caps(scored, feats)["industry"] == 1
 
 
+def test_opportunity_profile_fit_cannot_rescue_off_topic_call(monkeypatch):
+    from dailydigest.pipeline import _filter_off_topic
+
+    _cfg(
+        monkeypatch,
+        include_opportunities=True,
+        top_opportunities=5,
+        min_opportunities=0,
+        min_opportunity_relevance=0.58,
+    )
+    unrelated = _Row(1, "opportunities")
+    relevant = _Row(2, "opportunities")
+    scored = [(unrelated, 0.95), (relevant, 0.70)]
+    feats = {
+        _row_feature_key(unrelated): {
+            "topic_score": 0.20,
+            "opportunity_profile_score": 0.90,
+        },
+        _row_feature_key(relevant): {
+            "topic_score": 0.70,
+            "opportunity_profile_score": 0.20,
+        },
+    }
+
+    kept = {row.id for row, _score in _filter_off_topic(scored, feats)}
+
+    assert kept == {2}
+    assert _dynamic_section_caps(scored, feats)["opportunities"] == 1
+
+
 def test_venue_credit_rescues_borderline_top_journal(monkeypatch):
     """A high-tier journal item just under the floor is rescued by venue credit;
     the same cosine from an unknown venue is not."""

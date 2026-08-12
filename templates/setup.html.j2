@@ -62,10 +62,18 @@
     border-radius: 8px; background: var(--panel);
   }
   .opportunity-profile[hidden] { display: none; }
-  .example-copy {
-    margin: 8px 0 0; padding: 10px 12px; border-left: 3px solid var(--accent);
-    background: var(--card); color: var(--muted); font-size: 12px; line-height: 1.5;
+  .opportunity-advanced {
+    margin-top: 16px; border-top: 1px solid var(--border); padding-top: 12px;
   }
+  .opportunity-advanced summary {
+    color: var(--accent-strong); cursor: pointer; font-size: 13px; font-weight: 600;
+    padding: 4px 0;
+  }
+  .opportunity-advanced summary:focus-visible {
+    outline: 3px solid #b9d2c3; outline-offset: 3px; border-radius: 3px;
+  }
+  .opportunity-advanced .hint { margin-bottom: 4px; }
+  .opportunity-advanced .field-grid { margin-top: 4px; }
   .switch {
     position: relative; width: 42px; height: 24px; flex: 0 0 auto;
   }
@@ -117,6 +125,7 @@
 
 	  <form method="post" action="/setup">
 	    <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" id="user-timezone" name="user_tz" value="{{ form.user_tz }}">
     <div class="step">
       <h2>1 &middot; About you</h2>
       <div class="field-grid">
@@ -332,12 +341,7 @@
       <div class="opportunity-profile" id="opportunity-profile"
            {% if form.include_opportunities != "true" and form.include_events != "true" %}hidden{% endif %}>
         <h3>About you for opportunity matching</h3>
-        <p class="hint">These details are stored only in your local <code>data/</code> folder. Provide only information you are comfortable keeping on this computer.</p>
-        <label for="opportunity-description">Eligibility and goals</label>
-        <textarea id="opportunity-description" name="opportunity_description" data-opportunity-required
-                  placeholder="Describe your career stage, institution, research, applicant role, opportunity goals, and travel constraints.">{{ form.opportunity_description }}</textarea>
-        <div class="hint">Required when either opportunity section is enabled; at least 40 characters.</div>
-        <div class="example-copy"><strong>Example:</strong> I am a postdoctoral researcher at a nonprofit university in the United States. I work on DNA/RNA nanotechnology and therapeutic delivery. I am interested in fellowships, seed grants, travel awards, workshops, and facility support. I can attend North American or online events and would consider international meetings when travel support is available.</div>
+        <p class="hint">These details are stored only in your local <code>data/</code> folder. Your weighted research interests above are reused for topical matching, so you do not need to describe your research again.</p>
         <div class="field-grid">
           <div>
             <label for="opportunity-career-stage">Career stage</label>
@@ -360,42 +364,37 @@
                    data-opportunity-required placeholder="Fellow or co-investigator" value="{{ form.opportunity_applicant_role }}">
           </div>
         </div>
-        <label for="opportunity-citizenship">Citizenship or residency restrictions (optional)</label>
-        <input id="opportunity-citizenship" name="opportunity_citizenship_or_residency" type="text"
-               placeholder="Only if relevant to matching" value="{{ form.opportunity_citizenship_or_residency }}">
-        <div class="field-grid">
-          <div>
-            <label for="opportunity-types">Opportunity types</label>
-            <input id="opportunity-types" name="opportunity_types" type="text"
-                   placeholder="grant, fellowship, travel_support" value="{{ form.opportunity_types }}">
+        <details class="opportunity-advanced">
+          <summary>Optional matching preferences</summary>
+          <p class="hint">Add only constraints or preferences that apply to you.</p>
+          <div class="field-grid">
+            <div>
+              <label for="opportunity-types">Opportunity types</label>
+              <input id="opportunity-types" name="opportunity_types" type="text"
+                     placeholder="grant, fellowship, travel support" value="{{ form.opportunity_types }}">
+            </div>
+            <div>
+              <label for="event-types">Event types</label>
+              <input id="event-types" name="event_types" type="text"
+                     placeholder="conference, workshop, course" value="{{ form.event_types }}">
+            </div>
+            <div>
+              <label for="event-regions">Event regions</label>
+              <input id="event-regions" name="event_regions" type="text"
+                     placeholder="North America, Europe, online" value="{{ form.event_regions }}">
+            </div>
+            <div>
+              <label for="event-formats">Event formats</label>
+              <input id="event-formats" name="event_formats" type="text"
+                     placeholder="in person, online, hybrid" value="{{ form.event_formats }}">
+            </div>
+            <div>
+              <label for="minimum-lead-days">Minimum preparation time (days)</label>
+              <input id="minimum-lead-days" name="minimum_lead_days" type="number" min="0" max="365"
+                     value="{{ form.minimum_lead_days }}">
+            </div>
           </div>
-          <div>
-            <label for="event-types">Event types</label>
-            <input id="event-types" name="event_types" type="text"
-                   placeholder="conference, workshop, course" value="{{ form.event_types }}">
-          </div>
-          <div>
-            <label for="event-regions">Event regions</label>
-            <input id="event-regions" name="event_regions" type="text"
-                   placeholder="North America, Europe, online" value="{{ form.event_regions }}">
-          </div>
-          <div>
-            <label for="event-formats">Event formats</label>
-            <input id="event-formats" name="event_formats" type="text"
-                   placeholder="in_person, online, hybrid" value="{{ form.event_formats }}">
-          </div>
-          <div>
-            <label for="minimum-lead-days">Minimum preparation time (days)</label>
-            <input id="minimum-lead-days" name="minimum_lead_days" type="number" min="0" max="365"
-                   value="{{ form.minimum_lead_days }}">
-          </div>
-          <div>
-            <label for="requires-travel-support">Travel support</label>
-            <input type="hidden" name="requires_travel_support" value="false">
-            <label><input id="requires-travel-support" name="requires_travel_support" type="checkbox" value="true"
-                          {% if form.requires_travel_support == "true" %}checked{% endif %}> Prefer events offering travel support</label>
-          </div>
-        </div>
+        </details>
       </div>
       <div class="hint">Item counts are caps; DailyDigest will show fewer when there are not enough strong candidates.</div>
     </div>
@@ -407,6 +406,12 @@
 {% block scripts %}
 <script>
 (function () {
+  const timezoneInput = document.getElementById("user-timezone");
+  try {
+    const browserTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    if (timezoneInput && browserTimezone) timezoneInput.value = browserTimezone;
+  } catch (_) {}
+
   function makeChipInput(wrapId, textId, hiddenId) {
     const wrap = document.getElementById(wrapId);
     const text = document.getElementById(textId);

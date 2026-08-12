@@ -53,6 +53,7 @@ from fastapi.responses import (
 )
 from fastapi.templating import Jinja2Templates
 from jinja2 import Environment, FileSystemLoader
+from pydantic import ValidationError
 from sqlalchemy import select
 
 from . import health
@@ -135,6 +136,7 @@ _SECTION_RANK = {name: idx for idx, name in enumerate(SECTION_ORDER)}
 # The SSE consumer drains via asyncio.to_thread so it never blocks the loop.
 _RUN_QUEUES: dict[str, std_queue.Queue[dict[str, Any]]] = {}
 _RUN_STARTED: set[str] = set()
+_MAX_RETAINED_RUNS = 32
 _RUN_LOCK = threading.Lock()
 _TRAIN_LOCK = threading.Lock()
 _TRAIN_JOB: dict[str, Any] = {"running": False, "last_result": None}
@@ -460,17 +462,6 @@ def _reader_now() -> datetime:
     return datetime.now().astimezone()
 
 
-def _time_salutation() -> str:
-    hour = _reader_now().hour
-    if hour < 5:
-        return "You’re up early"
-    if hour < 12:
-        return "Good morning"
-    if hour < 17:
-        return "Good afternoon"
-    return "Good evening"
-
-
 def _daily_note() -> str:
     return _DAILY_NOTES[_reader_now().date().toordinal() % len(_DAILY_NOTES)]
 
@@ -516,9 +507,13 @@ def _require_local_origin(request: Request) -> None:
 
 
 def _ics_text(value: object) -> str:
+    # A bare CR or LF inside a property value terminates the line and corrupts
+    # the file, so both newline forms must become the literal ``\n`` escape.
     return (
         str(value or "")
         .replace("\\", "\\\\")
+        .replace("\r\n", "\\n")
+        .replace("\r", "\\n")
         .replace("\n", "\\n")
         .replace(",", "\\,")
         .replace(";", "\\;")
@@ -657,6 +652,23 @@ def _parse_ranked_topics(value: str | None) -> tuple[list[tuple[str, float]], li
     return topics, errors
 
 
+def _keywords_after_topic_edit(
+    profile: dict[str, Any], topics: list[tuple[str, float]]
+) -> list[str]:
+    """Preserve specific retrieval phrases when visible facet names are unchanged."""
+    submitted = [topic for topic, _weight in topics]
+    canonical = profile.get("canonical_facets") or {}
+    existing_names = list(canonical) if isinstance(canonical, dict) else []
+    if {name.casefold() for name in submitted} == {
+        str(name).casefold() for name in existing_names
+    }:
+        existing = [str(value).strip() for value in profile.get("keywords") or []]
+        existing = list(dict.fromkeys(value for value in existing if value))
+        if existing:
+            return existing
+    return submitted
+
+
 def _load_existing_form_defaults() -> dict[str, str]:
     """Pre-populate the form from any existing profile.yaml + .env values."""
     backend = (SETTINGS.llm_backend or "extractive").lower()
@@ -677,6 +689,7 @@ def _load_existing_form_defaults() -> dict[str, str]:
         "llm_base_url": SETTINGS.llm_base_url,
         "llm_api_key": "***" if SETTINGS.llm_api_key else "",
         "llm_model": SETTINGS.llm_model,
+        "user_tz": SETTINGS.user_tz,
         "top_research": str(SETTINGS.top_research),
         "include_industry": str(section_enabled(SETTINGS, "industry")).lower(),
         "top_industry": str(SETTINGS.top_industry),
@@ -692,17 +705,14 @@ def _load_existing_form_defaults() -> dict[str, str]:
         "top_opportunities": str(SETTINGS.top_opportunities),
         "include_events": str(section_enabled(SETTINGS, "events")).lower(),
         "top_events": str(SETTINGS.top_events),
-        "opportunity_description": "",
         "opportunity_career_stage": "",
         "opportunity_institution_type": "",
         "opportunity_country": "",
         "opportunity_applicant_role": "",
-        "opportunity_citizenship_or_residency": "",
         "opportunity_types": "",
         "event_types": "",
         "event_regions": "",
         "event_formats": "",
-        "requires_travel_support": "false",
         "minimum_lead_days": "7",
     }
     if _get_profile_path().exists():
@@ -733,7 +743,6 @@ def _load_existing_form_defaults() -> dict[str, str]:
             data = yaml.safe_load(_get_opportunity_profile_path().read_text()) or {}
             out.update(
                 {
-                    "opportunity_description": str(data.get("description") or ""),
                     "opportunity_career_stage": str(data.get("career_stage") or ""),
                     "opportunity_institution_type": str(
                         data.get("institution_type") or ""
@@ -742,18 +751,12 @@ def _load_existing_form_defaults() -> dict[str, str]:
                     "opportunity_applicant_role": str(
                         data.get("applicant_role") or ""
                     ),
-                    "opportunity_citizenship_or_residency": str(
-                        data.get("citizenship_or_residency") or ""
-                    ),
                     "opportunity_types": ",".join(
                         data.get("opportunity_types") or []
                     ),
                     "event_types": ",".join(data.get("event_types") or []),
                     "event_regions": ",".join(data.get("event_regions") or []),
                     "event_formats": ",".join(data.get("event_formats") or []),
-                    "requires_travel_support": str(
-                        bool(data.get("requires_travel_support", False))
-                    ).lower(),
                     "minimum_lead_days": str(data.get("minimum_lead_days", 7)),
                 }
             )
@@ -818,6 +821,14 @@ def _write_env_file(path: Path, updates: dict[str, str]) -> None:
         path.chmod(0o600)
 
 
+def _write_private_yaml(path: Path, payload: dict[str, Any]) -> None:
+    """Write local profile data with owner-only permissions on POSIX."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+    if os.name == "posix":
+        path.chmod(0o600)
+
+
 def _format_env_value(value: str) -> str:
     val = str(value)
     if any(ch in val for ch in ("\r", "\n", "\0")):
@@ -878,9 +889,14 @@ def _validate_setup(form: dict[str, str]) -> list[str]:
             continue
         if value < minimum or value > 30:
             errors.append(f"{label} must be between {minimum} and 30.")
+    user_tz = (form.get("user_tz") or "").strip()
+    if user_tz:
+        try:
+            ZoneInfo(user_tz)
+        except (ZoneInfoNotFoundError, ValueError):
+            errors.append("Browser timezone is not a valid IANA timezone.")
     if form.get("include_opportunities") == "true" or form.get("include_events") == "true":
         required = (
-            ("opportunity_description", "Opportunity-matching description"),
             ("opportunity_career_stage", "Career stage"),
             ("opportunity_institution_type", "Institution type"),
             ("opportunity_country", "Current country"),
@@ -889,33 +905,43 @@ def _validate_setup(form: dict[str, str]) -> list[str]:
         for key, label in required:
             if not (form.get(key) or "").strip():
                 errors.append(f"{label} is required when opportunities or events are enabled.")
-        description = (form.get("opportunity_description") or "").strip()
-        if description and len(description) < 40:
-            errors.append("Opportunity-matching description must be at least 40 characters.")
+        lead_days_valid = True
         try:
             lead_days = int((form.get("minimum_lead_days") or "7").strip())
             if not 0 <= lead_days <= 365:
                 raise ValueError
         except ValueError:
+            lead_days_valid = False
             errors.append("Minimum preparation time must be between 0 and 365 days.")
+        if lead_days_valid and not any(
+            not (form.get(key) or "").strip() for key, _label in required
+        ):
+            try:
+                _opportunity_profile_from_form(form)
+            except ValidationError as exc:
+                labels = {
+                    "career_stage": "Career stage",
+                    "institution_type": "Institution type",
+                    "country": "Current country",
+                    "applicant_role": "Applicant role",
+                }
+                for issue in exc.errors():
+                    field = str(issue.get("loc", ("profile",))[-1])
+                    label = labels.get(field, field.replace("_", " ").capitalize())
+                    errors.append(f"{label}: {issue.get('msg', 'invalid value')}.")
     return errors
 
 
 def _opportunity_profile_from_form(form: dict[str, str]) -> OpportunityProfile:
     return OpportunityProfile(
-        description=form["opportunity_description"],
         career_stage=form["opportunity_career_stage"],
         institution_type=form["opportunity_institution_type"],
         country=form["opportunity_country"],
         applicant_role=form["opportunity_applicant_role"],
-        citizenship_or_residency=form.get(
-            "opportunity_citizenship_or_residency", ""
-        ),
         opportunity_types=_parse_csv(form.get("opportunity_types")),
         event_types=_parse_csv(form.get("event_types")),
         event_regions=_parse_csv(form.get("event_regions")),
         event_formats=_parse_csv(form.get("event_formats")),
-        requires_travel_support=form.get("requires_travel_support") == "true",
         minimum_lead_days=int(form.get("minimum_lead_days") or 7),
     )
 
@@ -976,7 +1002,7 @@ def index(request: Request) -> Response:
         {
             "digest_id": digest_id,
             "profile_name": _profile_name(),
-            "salutation": _time_salutation(),
+            "salutation": "Welcome back",
             "daily_note": _daily_note(),
             "daily_notes": _DAILY_NOTES,
             "summarizer_label": _summarizer_label(),
@@ -1354,6 +1380,7 @@ async def setup_post(request: Request) -> Response:
         "llm_base_url": str(raw.get("llm_base_url", "")),
         "llm_api_key": str(raw.get("llm_api_key", "")),
         "llm_model": str(raw.get("llm_model", "")),
+        "user_tz": str(raw.get("user_tz", SETTINGS.user_tz)),
         "top_research": str(raw.get("top_research", SETTINGS.top_research)),
         "include_industry": _bool_form(
             raw, "include_industry", section_enabled(SETTINGS, "industry")
@@ -1385,7 +1412,6 @@ async def setup_post(request: Request) -> Response:
             and _get_opportunity_profile_path().exists(),
         ),
         "top_events": str(raw.get("top_events", SETTINGS.top_events)),
-        "opportunity_description": str(raw.get("opportunity_description", "")),
         "opportunity_career_stage": str(
             raw.get("opportunity_career_stage", "")
         ),
@@ -1396,16 +1422,10 @@ async def setup_post(request: Request) -> Response:
         "opportunity_applicant_role": str(
             raw.get("opportunity_applicant_role", "")
         ),
-        "opportunity_citizenship_or_residency": str(
-            raw.get("opportunity_citizenship_or_residency", "")
-        ),
         "opportunity_types": str(raw.get("opportunity_types", "")),
         "event_types": str(raw.get("event_types", "")),
         "event_regions": str(raw.get("event_regions", "")),
         "event_formats": str(raw.get("event_formats", "")),
-        "requires_travel_support": _bool_form(
-            raw, "requires_travel_support", False
-        ),
         "minimum_lead_days": str(raw.get("minimum_lead_days", "7")),
     }
 
@@ -1438,8 +1458,9 @@ async def setup_post(request: Request) -> Response:
         return response
 
     topics, _topic_errors = _parse_ranked_topics(form["topics"])
-    # Write the private user profile. Keywords drive retrieval; the same named
-    # facets carry the user-entered relative priority for attribution/selection.
+    # Write the private user profile. Keywords drive retrieval; unchanged facet
+    # edits preserve any more-specific retrieval phrases already stored, while
+    # facets carry relative priority for attribution and selection.
     profile = _profile_data()
     existing_canonical = profile.get("canonical_facets") or {}
     existing_by_name = (
@@ -1463,23 +1484,43 @@ async def setup_post(request: Request) -> Response:
         {
             "name": form["name"].strip(),
             "bio": form["bio"].strip() or "General reader.",
-            "keywords": [topic for topic, _weight in topics],
+            "keywords": _keywords_after_topic_edit(profile, topics),
             "canonical_facets": canonical_facets,
             "downweight": _parse_csv(form["downweight"]),
         }
     )
-    _get_profile_path().parent.mkdir(parents=True, exist_ok=True)
-    _get_profile_path().write_text(yaml.safe_dump(profile, sort_keys=False))
+    _write_private_yaml(_get_profile_path(), profile)
 
     if (
         form["include_opportunities"] == "true"
         or form["include_events"] == "true"
     ):
         opportunity_profile = _opportunity_profile_from_form(form)
-        _get_opportunity_profile_path().parent.mkdir(parents=True, exist_ok=True)
-        _get_opportunity_profile_path().write_text(
-            yaml.safe_dump(opportunity_profile.model_dump(), sort_keys=False)
+        opportunity_path = _get_opportunity_profile_path()
+        payload = opportunity_profile.model_dump(
+            exclude={
+                "description",
+                "citizenship_or_residency",
+                "requires_travel_support",
+            }
         )
+        # The simplified form no longer asks for these legacy values, but an
+        # ordinary Settings save must not silently erase private profile data a
+        # prior version already stored.
+        if opportunity_path.exists():
+            try:
+                existing = yaml.safe_load(opportunity_path.read_text()) or {}
+            except (OSError, yaml.YAMLError):
+                existing = {}
+            if isinstance(existing, dict):
+                for key in (
+                    "description",
+                    "citizenship_or_residency",
+                    "requires_travel_support",
+                ):
+                    if key in existing:
+                        payload[key] = existing[key]
+        _write_private_yaml(opportunity_path, payload)
 
     # Write/update .env.
     default_base_url = (
@@ -1497,6 +1538,7 @@ async def setup_post(request: Request) -> Response:
         "LLM_BASE_URL": form["llm_base_url"].strip()
         or default_base_url,
         "LLM_MODEL": form["llm_model"].strip() or default_model,
+        "USER_TZ": form["user_tz"].strip() or SETTINGS.user_tz,
         "TOP_RESEARCH": _int_form(form, "top_research", SETTINGS.top_research),
         "INCLUDE_INDUSTRY": form["include_industry"],
         "TOP_INDUSTRY": _int_form(form, "top_industry", SETTINGS.top_industry),
@@ -1543,8 +1585,7 @@ async def profile_name_post(request: Request) -> Response:
         if not data:
             data = {"bio": "General reader.", "keywords": [], "downweight": []}
         data["name"] = name
-        _get_profile_path().parent.mkdir(parents=True, exist_ok=True)
-        _get_profile_path().write_text(yaml.safe_dump(data, sort_keys=False))
+        _write_private_yaml(_get_profile_path(), data)
     response = RedirectResponse(url="/", status_code=303)
     response.headers["Cache-Control"] = "no-store"
     return response
@@ -1558,6 +1599,16 @@ def _ensure_run(run_id: str) -> std_queue.Queue[dict[str, Any]]:
     with _RUN_LOCK:
         q = _RUN_QUEUES.get(run_id)
         if q is None:
+            active_run = _BREW_JOB.get("run_id")
+            while len(_RUN_QUEUES) >= _MAX_RETAINED_RUNS:
+                stale_id = next(
+                    (candidate for candidate in _RUN_QUEUES if candidate != active_run),
+                    None,
+                )
+                if stale_id is None:
+                    break
+                _RUN_QUEUES.pop(stale_id, None)
+                _RUN_STARTED.discard(stale_id)
             q = std_queue.Queue()
             _RUN_QUEUES[run_id] = q
         return q

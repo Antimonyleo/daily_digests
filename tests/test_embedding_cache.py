@@ -104,6 +104,31 @@ def test_embed_item_rows_recomputes_when_item_text_changes(monkeypatch, tmp_path
     assert vecs[0, 0] == 2.0
 
 
+def test_embed_item_rows_handles_repeated_item_in_one_batch(monkeypatch, tmp_path):
+    _reset_store(monkeypatch, tmp_path)
+    from dailydigest.rank import embedding_cache as cache_mod
+
+    store_mod.init_db()
+    with store_mod.session_scope() as s:
+        row = _row("Test", "repeated", "Repeated", "Same abstract")
+        s.add(row)
+        s.flush()
+        s.expunge(row)
+
+    monkeypatch.setattr(
+        cache_mod,
+        "embed_texts",
+        lambda texts: np.ones((len(texts), 3), dtype=np.float32),
+    )
+
+    vectors = cache_mod.embed_item_rows([row, row])
+
+    assert vectors.shape == (2, 3)
+    with store_mod.session_scope() as s:
+        cached = s.execute(select(store_mod.ItemEmbeddingRow)).scalars().all()
+        assert len(cached) == 1
+
+
 def test_prune_removes_cached_embeddings_for_deleted_items(monkeypatch, tmp_path):
     _reset_store(monkeypatch, tmp_path)
     from dailydigest.rank import embedding_cache as cache_mod

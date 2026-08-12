@@ -9,6 +9,7 @@ etc.) are listed in a comment since FreshRSS can only consume RSS feeds.
 from __future__ import annotations
 
 import xml.etree.ElementTree as ET
+from datetime import UTC, datetime
 from pathlib import Path
 
 from .config import load_sources
@@ -35,7 +36,7 @@ def export_opml(out_path: str = "data/sources.opml") -> int:
     title = ET.SubElement(head, "title")
     title.text = "DailyDigest Sources"
     date_created = ET.SubElement(head, "dateCreated")
-    date_created.text = ET.Element("dateCreated").text or "2025-01-01T00:00:00Z"
+    date_created.text = datetime.now(UTC).strftime("%a, %d %b %Y %H:%M:%S GMT")
 
     # Body: group by section
     body = ET.Element("body")

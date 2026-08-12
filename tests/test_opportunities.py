@@ -4,7 +4,6 @@ from datetime import date
 
 import pytest
 import yaml
-from pydantic import ValidationError
 
 from dailydigest.models import Item
 
@@ -41,14 +40,15 @@ def test_opportunity_profile_round_trips_from_private_yaml(tmp_path):
     assert profile.minimum_lead_days == 14
 
 
-def test_opportunity_profile_requires_a_useful_description():
+def test_opportunity_profile_accepts_structured_fields_without_legacy_description():
     from dailydigest.opportunities import OpportunityProfile
 
     payload = _profile_payload()
-    payload["description"] = "Postdoc."
+    payload.pop("description")
 
-    with pytest.raises(ValidationError):
-        OpportunityProfile(**payload)
+    profile = OpportunityProfile(**payload)
+
+    assert profile.description == ""
 
 
 def test_opportunity_metadata_updates_and_keeps_immutable_change_history():
@@ -217,7 +217,7 @@ def test_assessment_filters_ineligible_closed_and_too_soon_items():
     assert "location" in outside_region.reason
 
 
-def test_private_description_affects_only_opportunity_ordering(monkeypatch):
+def test_structured_profile_affects_only_opportunity_ordering(monkeypatch):
     import numpy as np
 
     from dailydigest.opportunities import OpportunityProfile
@@ -259,9 +259,15 @@ def test_private_description_affects_only_opportunity_ordering(monkeypatch):
         url="https://example.org/paper",
         title="Research paper",
     )
+    embedded_queries = []
+
+    def fake_embed_texts(texts, is_query=True):
+        embedded_queries.extend(texts)
+        return np.array([[1.0, 0.0]], dtype=np.float32)
+
     monkeypatch.setattr(
         "dailydigest.rank.embed.embed_texts",
-        lambda texts, is_query=True: np.array([[1.0, 0.0]], dtype=np.float32),
+        fake_embed_texts,
     )
     monkeypatch.setattr(
         "dailydigest.rank.embedding_cache.embed_item_rows",
@@ -277,3 +283,5 @@ def test_private_description_affects_only_opportunity_ordering(monkeypatch):
     assert adjusted[1][1] == pytest.approx(0.5)
     assert adjusted[2][1] == pytest.approx(0.5)
     assert features[_row_feature_key(matching)]["opportunity_profile_score"] == 1.0
+    assert "postdoctoral researcher" in embedded_queries[0]
+    assert "United States" in embedded_queries[0]
