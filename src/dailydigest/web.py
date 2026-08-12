@@ -88,6 +88,7 @@ from .store import (
     set_bookmark,
     session_scope,
 )
+from .tea_break import daily_tea_deck
 
 logger = logging.getLogger(__name__)
 
@@ -440,30 +441,6 @@ def _saved_date(value: date | None) -> str:
     if value is None:
         return ""
     return value.strftime("%b %d, %Y").replace(" 0", " ")
-
-
-_DAILY_NOTES = (
-    "RNA can store information and catalyze reactions — biology rarely stays in one job description.",
-    "A careful negative result can save a lab more time than a flashy positive one.",
-    "The best experiments are reproducible. The best tea is refillable.",
-    "Peer review improves papers; a short walk often improves the reviewer.",
-    "Nanometres are tiny, but they still manage to create very large to-do lists.",
-    "Today’s scientific unit of progress: one useful question answered clearly.",
-    "A good model simplifies reality. A good cup of tea simplifies the morning.",
-)
-
-
-def _reader_now() -> datetime:
-    if SETTINGS.user_tz:
-        try:
-            return datetime.now(ZoneInfo(SETTINGS.user_tz))
-        except (ZoneInfoNotFoundError, ValueError):
-            logger.warning("invalid USER_TZ=%r; using the system timezone", SETTINGS.user_tz)
-    return datetime.now().astimezone()
-
-
-def _daily_note() -> str:
-    return _DAILY_NOTES[_reader_now().date().toordinal() % len(_DAILY_NOTES)]
 
 
 def _summarizer_label() -> str:
@@ -969,6 +946,7 @@ def index(request: Request) -> Response:
     if not _profile_exists():
         return RedirectResponse(url="/setup", status_code=302)
     digest_id = _digest_id()
+    tea_notes = daily_tea_deck(date.fromisoformat(digest_id))
     sections, current_vote = _load_today(digest_id)
     brewed = bool(sections) or _digest_exists(digest_id)
     if brewed:
@@ -1003,8 +981,8 @@ def index(request: Request) -> Response:
             "digest_id": digest_id,
             "profile_name": _profile_name(),
             "salutation": "Welcome back",
-            "daily_note": _daily_note(),
-            "daily_notes": _DAILY_NOTES,
+            "daily_note": tea_notes[0],
+            "daily_notes": tea_notes,
             "summarizer_label": _summarizer_label(),
             "sections": sections,
             "overview": overview,

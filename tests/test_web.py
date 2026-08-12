@@ -8,7 +8,7 @@ import sqlite3
 import stat
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from urllib.parse import urlencode
 
@@ -1023,7 +1023,14 @@ def test_reader_can_save_and_remove_an_item_from_the_digest(tmp_path, monkeypatc
     before = _text_payload(web.index(_request("GET", "/")))
     assert f'data-item-id="{item_id}"' in before
     assert 'data-bookmarked="false"' in before
-    assert "Save for later" in before
+    assert re.search(
+        r'<div class="item-head">\s*<div class="item-heading">.*?'
+        r'<a class="title-link".*?>Save this RNA paper</a>\s*</div>\s*'
+        r'<button class="bookmark-btn"[^>]+aria-label="Save for later"',
+        before,
+        re.DOTALL,
+    )
+    assert '<span class="bookmark-label">Save</span>' in before
 
     headers = {"X-CSRF-Token": web._CSRF_TOKEN}
     added = web.bookmark_add(
@@ -1032,7 +1039,8 @@ def test_reader_can_save_and_remove_an_item_from_the_digest(tmp_path, monkeypatc
     assert _json_payload(added) == {"ok": True, "item_id": item_id, "saved": True}
     after_add = _text_payload(web.index(_request("GET", "/")))
     assert 'data-bookmarked="true"' in after_add
-    assert "Saved for later" in after_add
+    assert 'aria-label="Remove from saved items"' in after_add
+    assert '<span class="bookmark-label">Saved</span>' in after_add
 
     removed = web.bookmark_remove(
         _request("DELETE", f"/bookmark/{item_id}", headers=headers), item_id
@@ -1947,8 +1955,10 @@ def test_main_page_exposes_one_click_reading_modes_and_settings_can_return(
     profile_path = tmp_path / "profile.yaml"
     profile_path.write_text("name: Ada\nbio: Reader\nkeywords: []\ndownweight: []\n")
     monkeypatch.setattr(web, "_get_profile_path", lambda: profile_path)
+    monkeypatch.setattr(web, "_digest_id", lambda: "2031-02-03")
     monkeypatch.setattr(web, "_load_today", lambda _digest_id: ([], {}))
     monkeypatch.setattr(web, "_digest_exists", lambda _digest_id: False)
+    expected_tea_notes = web.daily_tea_deck(date(2031, 2, 3))
     main = _text_payload(web.index(_request("GET", "/")))
     settings = _text_payload(web.setup_get(_request("GET", "/setup")))
 
@@ -1968,6 +1978,16 @@ def test_main_page_exposes_one_click_reading_modes_and_settings_can_return(
     assert "Another one" in main
     assert "Show another science fact or joke" in main
     assert "teaIndex = (teaIndex + 1) % TEA_NOTES.length" in main
+    tea_notes_match = re.search(r"const TEA_NOTES = (\[.*?\]);", main)
+    assert tea_notes_match is not None
+    tea_notes = json.loads(tea_notes_match.group(1))
+    assert len(tea_notes) == 15
+    assert len(set(tea_notes)) == 15
+    assert tea_notes == list(expected_tea_notes)
+    assert (
+        '<span class="tea-break-copy" id="tea-note-text" aria-live="polite">'
+        f"{expected_tea_notes[0]}</span>"
+    ) in main
     assert "Summaries: Extractive (local, no AI)" in main
     assert 'href="/"' in settings
     assert "Back to today’s digest" in settings
