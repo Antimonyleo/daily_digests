@@ -12,6 +12,7 @@ Backends, selected by ``SETTINGS.llm_backend``:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -38,6 +39,7 @@ logger = logging.getLogger(__name__)
 # summarize_items; the prompt builders and the extractive fallback read it.
 _READER_CONTEXT: str = ""
 _READER_KEYWORDS: list[str] = []
+_SUMMARY_VERSION = "summary-v3"
 
 
 def _set_reader_context(profile: object | None) -> None:
@@ -481,8 +483,11 @@ def _summarize_via_api(items: list[ItemRow]) -> dict[int, str]:
     return _summarize_via_provider(items, "api")
 
 
-def _summarize_via_provider(items: list[ItemRow], backend: str) -> dict[int, str]:
+def _summarize_via_provider_with_provenance(
+    items: list[ItemRow], backend: str
+) -> tuple[dict[int, str], dict[int, str]]:
     out: dict[int, str] = {}
+    provenance: dict[int, str] = {}
     is_cli = backend in {"claude_cli", "codex_cli"}
     started = time.monotonic()
     budget_hit = False
@@ -506,11 +511,13 @@ def _summarize_via_provider(items: list[ItemRow], backend: str) -> dict[int, str
             cli_timeout = min(_CLI_TIMEOUT, remaining)
         try:
             if backend == "anthropic":
-                out.update(_call_anthropic(batch))
+                generated = _call_anthropic(batch)
             elif backend in {"claude_cli", "codex_cli"}:
-                out.update(_call_cli(batch, backend, timeout=cli_timeout))
+                generated = _call_cli(batch, backend, timeout=cli_timeout)
             else:
-                out.update(_call_llm(batch))
+                generated = _call_llm(batch)
+            out.update(generated)
+            provenance.update({item_id: backend for item_id in generated})
         except Exception as e:  # noqa: BLE001
             logger.warning(
                 "LLM summarize failed for batch %d: %s: %s; falling back",
@@ -518,15 +525,79 @@ def _summarize_via_provider(items: list[ItemRow], backend: str) -> dict[int, str
             )
             for row in batch:
                 if row.id is not None:
-                    out.setdefault(int(row.id), _extractive(row))
+                    item_id = int(row.id)
+                    out.setdefault(item_id, _extractive(row))
+                    provenance.setdefault(item_id, "extractive_fallback")
     for row in items:
         if row.id is not None and not out.get(int(row.id)):
-            out[int(row.id)] = _extractive(row)
-    return out
+            item_id = int(row.id)
+            out[item_id] = _extractive(row)
+            provenance[item_id] = "extractive_fallback"
+    return out, provenance
+
+
+def _summarize_via_provider(items: list[ItemRow], backend: str) -> dict[int, str]:
+    return _summarize_via_provider_with_provenance(items, backend)[0]
 
 
 def _summarize_extractive(items: list[ItemRow]) -> dict[int, str]:
     return {int(row.id): _extractive(row) for row in items if row.id is not None}
+
+
+def effective_summary_backend() -> str:
+    """Return the backend that a new summary attempt will actually use."""
+    from .config import get_settings
+
+    settings = get_settings()
+    backend = (settings.llm_backend or "extractive").lower()
+    if backend in {"api", "anthropic"} and not settings.llm_api_key:
+        return "extractive"
+    if backend not in {"api", "anthropic", "claude_cli", "codex_cli"}:
+        return "extractive"
+    return backend
+
+
+def summary_signature(
+    row: ItemRow, profile: object | None = None, *, backend: str | None = None
+) -> str:
+    """Fingerprint all inputs that can materially change a stored summary."""
+    from .config import get_settings
+
+    settings = get_settings()
+    selected_backend = backend or effective_summary_backend()
+    payload = {
+        "version": _SUMMARY_VERSION,
+        "backend": selected_backend,
+        "model": settings.llm_model if selected_backend != "extractive" else "",
+        "base_url": (
+            getattr(settings, "llm_base_url", "")
+            if selected_backend in {"api", "anthropic"}
+            else ""
+        ),
+        "title": row.title or "",
+        "abstract": row.abstract or "",
+        "source": row.source or "",
+        "section": row.section or "",
+        "bio": str(getattr(profile, "bio", "") or ""),
+        "keywords": list(getattr(profile, "keywords", []) or []),
+    }
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def summarize_items_with_provenance(
+    items: list[ItemRow], profile: object | None = None
+) -> tuple[dict[int, str], dict[int, str]]:
+    """Return summaries plus the actual backend used for every item."""
+    _set_reader_context(profile)
+    if not items:
+        return {}, {}
+
+    backend = effective_summary_backend()
+    if backend == "extractive":
+        summaries = _summarize_extractive(items)
+        return summaries, {item_id: "extractive" for item_id in summaries}
+    return _summarize_via_provider_with_provenance(items, backend)
 
 
 def summarize_items(items: list[ItemRow], profile: object | None = None) -> dict[int, str]:
@@ -539,23 +610,7 @@ def summarize_items(items: list[ItemRow], profile: object | None = None) -> dict
     ``profile`` (when given) personalizes the "Why read" field to the reader's
     stated interests, in both the LLM prompt and the extractive fallback.
     """
-    _set_reader_context(profile)
-    if not items:
-        return {}
-
-    from .config import get_settings
-    s = get_settings()
-    backend = (s.llm_backend or "extractive").lower()
-
-    if backend == "extractive":
-        return _summarize_extractive(items)
-    if backend in {"api", "anthropic"} and s.llm_api_key:
-        return _summarize_via_provider(items, backend)
-    if backend in {"claude_cli", "codex_cli"}:
-        return _summarize_via_provider(items, backend)
-    if backend not in {"api", "anthropic", "claude_cli", "codex_cli", "extractive"}:
-        logger.warning("Unknown LLM_BACKEND=%r; using extractive summaries", backend)
-    return _summarize_extractive(items)
+    return summarize_items_with_provenance(items, profile=profile)[0]
 
 
 def _llm_text(system: str, user: str) -> str:

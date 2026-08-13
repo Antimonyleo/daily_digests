@@ -271,6 +271,15 @@
 
   function connectStream() {
     const es = new EventSource(`/run/stream?run_id=${encodeURIComponent(RUN_ID)}`);
+    let streamFailures = 0;
+    es.onopen = () => { streamFailures = 0; };
+    es.onerror = () => {
+      streamFailures += 1;
+      if (es.readyState === EventSource.CLOSED || streamFailures >= 3) {
+        es.close();
+        showError("Lost the brew status. The server may have restarted; please try again.");
+      }
+    };
     es.onmessage = (event) => {
       let data;
       try { data = JSON.parse(event.data); } catch (_) { return; }

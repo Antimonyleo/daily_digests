@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import sqlite3
 
+import pytest
+from sqlalchemy.exc import IntegrityError
+
 from dailydigest import config as config_mod
 from dailydigest import store as store_mod
 
@@ -65,6 +68,67 @@ def test_write_digest_persists_rank_score(monkeypatch, tmp_path):
     with store_mod.session_scope() as s:
         item = s.get(store_mod.ItemRow, item_id)
         assert item.score == 0.82
+
+
+def test_publish_digest_rolls_back_the_entire_slate_on_failure(monkeypatch, tmp_path):
+    _reset_store(monkeypatch, tmp_path)
+    store_mod.init_db()
+    with store_mod.session_scope() as s:
+        first = _item("Test", "atomic-first", "First")
+        second = _item("Test", "atomic-second", "Second")
+        s.add_all([first, second])
+        s.flush()
+        first_id, second_id = int(first.id), int(second.id)
+
+    store_mod.write_digest("2026-05-05", [("R1", first_id, 0.8)])
+
+    with pytest.raises(IntegrityError):
+        store_mod.publish_digest(
+            "2026-05-05",
+            [("R1", second_id, 0.9)],
+            [("R1", second_id, 0.9, {"topic_score": 0.9})],
+            [("research", 999999, 0, 0.9, True)],
+        )
+
+    with store_mod.session_scope() as s:
+        rows = s.execute(
+            store_mod.select(store_mod.DigestItemRow).where(
+                store_mod.DigestItemRow.digest_id == "2026-05-05"
+            )
+        ).scalars().all()
+        assert [(row.item_id, row.item_label) for row in rows] == [(first_id, "R1")]
+        assert s.execute(
+            store_mod.select(store_mod.ImpressionRow).where(
+                store_mod.ImpressionRow.digest_id == "2026-05-05"
+            )
+        ).scalars().all() == []
+
+
+def test_publish_digest_can_clear_a_stale_catch_up_audit(monkeypatch, tmp_path):
+    _reset_store(monkeypatch, tmp_path)
+    store_mod.init_db()
+    with store_mod.session_scope() as s:
+        item = _item("Test", "audit-item", "Audit item")
+        s.add(item)
+        s.flush()
+        item_id = int(item.id)
+
+    digest_id = "2026-05-06"
+    store_mod.write_digest_audit(
+        digest_id,
+        "catch_up_synthesis",
+        [{"days": 7, "text": "Old catch-up briefing"}],
+    )
+
+    store_mod.publish_digest(
+        digest_id,
+        [("R1", item_id, 0.9)],
+        [("R1", item_id, 0.9, {})],
+        [("research", item_id, 0, 0.9, True)],
+        audits={"catch_up_synthesis": []},
+    )
+
+    assert store_mod.load_digest_audit(digest_id, "catch_up_synthesis") == []
 
 
 def test_write_and_load_digest_features(monkeypatch, tmp_path):

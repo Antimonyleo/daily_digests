@@ -123,6 +123,94 @@ def test_env_writer_restricts_existing_file_permissions_on_posix(tmp_path):
         assert stat.S_IMODE(env_path.stat().st_mode) == 0o600
 
 
+def test_setup_can_explicitly_remove_a_saved_api_key(tmp_path, monkeypatch):
+    from dailydigest import web
+
+    profile_path = tmp_path / "profile.yaml"
+    env_path = tmp_path / ".env"
+    env_path.write_text("LLM_API_KEY=old-secret\n")
+    monkeypatch.setattr(web, "_get_profile_path", lambda: profile_path)
+    monkeypatch.setattr(web, "_ENV_PATH", env_path)
+    monkeypatch.setattr(
+        web,
+        "SETTINGS",
+        web.SETTINGS.model_copy(update={"llm_api_key": "old-secret"}),
+    )
+
+    response = asyncio.run(
+        web.setup_post(
+            _request(
+                "POST",
+                "/setup",
+                form={
+                    "_csrf_token": web._CSRF_TOKEN,
+                    "bio": "Researcher.",
+                    "topics": "RNA nanotechnology | 10",
+                    "llm_backend": "extractive",
+                    "llm_api_key": "***",
+                    "remove_llm_api_key": "true",
+                },
+            )
+        )
+    )
+
+    assert response.status_code == 303
+    assert web._read_env_file(env_path)["LLM_API_KEY"] == ""
+
+
+def test_setup_cannot_remove_key_while_selecting_api_backend(monkeypatch):
+    from dailydigest import web
+
+    monkeypatch.setattr(
+        web,
+        "SETTINGS",
+        web.SETTINGS.model_copy(update={"llm_api_key": "old-secret"}),
+    )
+    form = web._load_existing_form_defaults()
+    form.update(
+        {
+            "topics": "RNA nanotechnology | 10",
+            "llm_backend": "api",
+            "llm_base_url": "https://api.example.com/v1",
+            "llm_model": "example-model",
+            "llm_api_key": "***",
+            "remove_llm_api_key": "true",
+        }
+    )
+
+    assert "API backend requires an API key." in web._validate_setup(form)
+
+
+def test_global_host_guard_rejects_non_loopback_requests():
+    from dailydigest import web
+
+    async def downstream(_request):
+        raise AssertionError("foreign-host request reached a route")
+
+    response = asyncio.run(
+        web._loopback_host_only(
+            _request("GET", "/healthz", headers={"host": "evil.example"}),
+            downstream,
+        )
+    )
+
+    assert response.status_code == 403
+
+
+def test_run_stream_rejects_unknown_run_instead_of_heartbeating_forever():
+    from dailydigest import web
+
+    web._RUN_QUEUES.clear()
+    with pytest.raises(HTTPException) as excinfo:
+        asyncio.run(
+            web.run_stream(
+                _request("GET", "/run/stream"), "abcdef123456"
+            )
+        )
+
+    assert excinfo.value.status_code == 404
+
+
 def test_setup_rejects_invalid_browser_timezone_before_writing(tmp_path, monkeypatch):
     from dailydigest import web
 
@@ -1783,6 +1871,8 @@ def test_ranking_train_thread_clears_running_after_exception(tmp_path, monkeypat
         raise RuntimeError("boom")
 
     monkeypatch.setattr(votes_mod, "train_lr_ranker", _raise_train)
+    released = threading.Event()
+    monkeypatch.setattr(web, "release_encoder", released.set)
     web._TRAIN_JOB["running"] = False
     web._TRAIN_JOB["last_result"] = None
 
@@ -1798,6 +1888,82 @@ def test_ranking_train_thread_clears_running_after_exception(tmp_path, monkeypat
     assert web._TRAIN_JOB["running"] is False
     assert web._TRAIN_JOB["last_result"]["ok"] is False
     assert web._TRAIN_JOB["last_result"]["reason"] == "training_error"
+    assert released.is_set()
+
+
+def test_ranking_train_does_not_overlap_another_embedding_job(monkeypatch):
+    from dailydigest import votes as votes_mod
+    from dailydigest import web
+
+    monkeypatch.setattr(
+        votes_mod,
+        "lr_training_status",
+        lambda: {
+            "can_train": True,
+            "remaining_votes_for_lr": 0,
+            "vote_counts": {"good": 3, "bad": 3, "neutral": 0, "signed": 6, "total": 6},
+            "min_votes_for_lr": 6,
+            "model_trained": False,
+            "training_status": "ready",
+            "ranking_status": "cosine_baseline",
+        },
+    )
+    web._TRAIN_JOB["running"] = False
+    web._TRAIN_JOB["last_result"] = None
+    assert web._COMPUTE_LOCK.acquire(blocking=False)
+    try:
+        response = web.ranking_train(
+            _request("POST", "/ranking/train", headers={"X-CSRF-Token": web._CSRF_TOKEN})
+        )
+    finally:
+        web._COMPUTE_LOCK.release()
+
+    payload = _json_payload(response)
+    assert payload["ok"] is False
+    assert payload["started"] is False
+    assert payload["running"] is True
+    assert "brew or ranking job" in payload["message"].lower()
+
+
+def test_brew_releases_embedding_runtime_after_failure(monkeypatch):
+    from dailydigest import web
+
+    released = threading.Event()
+
+    def fail_run_all(**_kwargs):
+        raise RuntimeError("expected failure")
+
+    monkeypatch.setattr(web, "run_all", fail_run_all)
+    monkeypatch.setattr(web, "release_encoder", released.set)
+    web._RUN_QUEUES.clear()
+    web._RUN_STARTED.clear()
+    web._ensure_run("cleanup-test")
+
+    web._kick_off_run("cleanup-test", "usual")
+
+    assert released.wait(2)
+    for _ in range(100):
+        if not web._BREW_JOB["running"]:
+            break
+        threading.Event().wait(0.01)
+    assert web._BREW_JOB["running"] is False
+    assert web._COMPUTE_LOCK.acquire(blocking=False)
+    web._COMPUTE_LOCK.release()
+
+
+def test_background_refresh_releases_embedding_runtime(monkeypatch):
+    from dailydigest import web
+
+    released = []
+    monkeypatch.setattr(web, "run_all", lambda **_kwargs: None)
+    monkeypatch.setattr(web, "release_encoder", lambda: released.append(True))
+
+    web._run_pipeline_dry_run()
+
+    assert released == [True]
+    assert web._BREW_JOB["running"] is False
+    assert web._COMPUTE_LOCK.acquire(blocking=False)
+    web._COMPUTE_LOCK.release()
 
 
 def test_run_start_rejects_foreign_origin_and_detects_duplicate(monkeypatch):
@@ -1820,7 +1986,7 @@ def test_run_start_rejects_foreign_origin_and_detects_duplicate(monkeypatch):
                 _request(
                     "POST",
                     "/run/start",
-                    json_body={"run_id": "abc"},
+                    json_body={"run_id": "abcdef123456"},
                     headers={**headers, "Origin": "https://evil.example"},
                 )
             )
@@ -1832,7 +1998,7 @@ def test_run_start_rejects_foreign_origin_and_detects_duplicate(monkeypatch):
             _request(
                 "POST",
                 "/run/start",
-                json_body={"run_id": "abc", "reading_mode": "minimal"},
+                json_body={"run_id": "abcdef123456", "reading_mode": "minimal"},
                 headers=headers,
             )
         )
@@ -1842,15 +2008,19 @@ def test_run_start_rejects_foreign_origin_and_detects_duplicate(monkeypatch):
             _request(
                 "POST",
                 "/run/start",
-                json_body={"run_id": "abc", "reading_mode": "minimal"},
+                json_body={"run_id": "abcdef123456", "reading_mode": "minimal"},
                 headers=headers,
             )
         )
     )
 
-    assert _json_payload(first) == {"ok": True, "run_id": "abc"}
-    assert _json_payload(second) == {"ok": True, "run_id": "abc", "already_started": True}
-    assert runs == [("abc", "minimal")]
+    assert _json_payload(first) == {"ok": True, "run_id": "abcdef123456"}
+    assert _json_payload(second) == {
+        "ok": True,
+        "run_id": "abcdef123456",
+        "already_started": True,
+    }
+    assert runs == [("abcdef123456", "minimal")]
 
     web._RUN_QUEUES.clear()
     web._RUN_STARTED.clear()
@@ -1871,11 +2041,16 @@ def test_run_start_defaults_to_usual_and_rejects_unknown_reading_mode(monkeypatc
 
     response = asyncio.run(
         web.run_start(
-            _request("POST", "/run/start", json_body={"run_id": "usual"}, headers=headers)
+            _request(
+                "POST",
+                "/run/start",
+                json_body={"run_id": "012345abcdef"},
+                headers=headers,
+            )
         )
     )
-    assert _json_payload(response) == {"ok": True, "run_id": "usual"}
-    assert runs == [("usual", "usual")]
+    assert _json_payload(response) == {"ok": True, "run_id": "012345abcdef"}
+    assert runs == [("012345abcdef", "usual")]
 
     with pytest.raises(HTTPException) as excinfo:
         asyncio.run(
@@ -1883,13 +2058,13 @@ def test_run_start_defaults_to_usual_and_rejects_unknown_reading_mode(monkeypatc
                 _request(
                     "POST",
                     "/run/start",
-                    json_body={"run_id": "bad", "reading_mode": "bottomless"},
+                    json_body={"run_id": "badcafe12345", "reading_mode": "bottomless"},
                     headers=headers,
                 )
             )
         )
     assert excinfo.value.status_code == 400
-    assert runs == [("usual", "usual")]
+    assert runs == [("012345abcdef", "usual")]
 
     web._RUN_QUEUES.clear()
     web._RUN_STARTED.clear()

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
@@ -136,6 +137,173 @@ def test_ingest_all_records_adapter_exceptions_as_failed_health(monkeypatch):
     assert len(recorded) == 1
     assert recorded[0].ok is False
     assert "network unavailable" in (recorded[0].error or "")
+
+
+def test_ingest_all_aborts_a_single_provider_partial_research_scan(monkeypatch):
+    """Five OpenAlex rows must not replace a digest when redundant sources fail."""
+    from dailydigest import pipeline as pipeline_mod
+
+    specs = [
+        SimpleNamespace(name="OpenAlex", kind="openalex", section="research"),
+        SimpleNamespace(name="bioRxiv", kind="biorxiv", section="research"),
+        SimpleNamespace(name="Journal feeds", kind="rss", section="research"),
+    ]
+
+    class Source:
+        def fetch(self, spec, days=2):
+            if spec.kind == "rss":
+                raise RuntimeError("publisher unavailable")
+            if spec.kind == "biorxiv":
+                return []
+            return [
+                SimpleNamespace(section="research", url=f"https://example.com/{i}")
+                for i in range(5)
+            ]
+
+    recorded = []
+    settings = SimpleNamespace(top_research=15)
+    monkeypatch.setattr(pipeline_mod, "init_db", lambda: None)
+    monkeypatch.setattr(pipeline_mod, "load_sources", lambda: specs)
+    monkeypatch.setattr(pipeline_mod, "dispatch_source", lambda _spec: Source())
+    monkeypatch.setattr(pipeline_mod.health, "record", lambda rows: recorded.extend(rows))
+
+    with pytest.raises(RuntimeError, match="Research source coverage is degraded"):
+        pipeline_mod.ingest_all(days=2, section_settings=settings)
+
+    assert len(recorded) == 3
+    assert any(not row.ok for row in recorded)
+
+
+def test_ingest_all_accepts_two_research_provider_families(monkeypatch):
+    from dailydigest import pipeline as pipeline_mod
+
+    specs = [
+        SimpleNamespace(name="OpenAlex", kind="openalex", section="research"),
+        SimpleNamespace(name="bioRxiv", kind="biorxiv", section="research"),
+    ]
+
+    class Source:
+        def fetch(self, spec, days=2):
+            prefix = "oa" if spec.kind == "openalex" else "bx"
+            return [
+                SimpleNamespace(
+                    section="research", url=f"https://example.com/{prefix}-{i}"
+                )
+                for i in range(6)
+            ]
+
+    monkeypatch.setattr(pipeline_mod, "init_db", lambda: None)
+    monkeypatch.setattr(pipeline_mod, "load_sources", lambda: specs)
+    monkeypatch.setattr(pipeline_mod, "dispatch_source", lambda _spec: Source())
+    monkeypatch.setattr(pipeline_mod.health, "record", lambda _rows: None)
+    monkeypatch.setattr(pipeline_mod, "dedupe_by_url", lambda rows: rows)
+    monkeypatch.setattr(pipeline_mod, "filter_english", lambda rows: rows)
+    monkeypatch.setattr(pipeline_mod, "upsert_items", lambda rows: len(rows))
+
+    assert pipeline_mod.ingest_all(
+        days=2, section_settings=SimpleNamespace(top_research=10)
+    ) == 12
+
+
+def test_ingest_all_counts_independent_publisher_hosts_separately(monkeypatch):
+    from dailydigest import pipeline as pipeline_mod
+
+    specs = [
+        SimpleNamespace(
+            name="Publisher A",
+            kind="rss",
+            section="research",
+            url="https://journals.example-a.org/feed",
+        ),
+        SimpleNamespace(
+            name="Publisher B",
+            kind="rss",
+            section="research",
+            url="https://feeds.example-b.org/research.xml",
+        ),
+    ]
+
+    class Source:
+        def fetch(self, spec, days=2):
+            del days
+            prefix = "a" if "example-a" in spec.url else "b"
+            return [
+                SimpleNamespace(
+                    section="research", url=f"https://example.com/{prefix}-{i}"
+                )
+                for i in range(5)
+            ]
+
+    monkeypatch.setattr(pipeline_mod, "init_db", lambda: None)
+    monkeypatch.setattr(pipeline_mod, "load_sources", lambda: specs)
+    monkeypatch.setattr(pipeline_mod, "dispatch_source", lambda _spec: Source())
+    monkeypatch.setattr(pipeline_mod.health, "record", lambda _rows: None)
+    monkeypatch.setattr(pipeline_mod, "dedupe_by_url", lambda rows: rows)
+    monkeypatch.setattr(pipeline_mod, "filter_english", lambda rows: rows)
+    monkeypatch.setattr(pipeline_mod, "upsert_items", lambda rows: len(rows))
+
+    assert pipeline_mod.ingest_all(
+        days=2, section_settings=SimpleNamespace(top_research=10)
+    ) == 10
+
+
+def test_ingest_fetches_independent_providers_concurrently_but_keeps_source_order(
+    monkeypatch,
+):
+    from dailydigest import pipeline as pipeline_mod
+
+    specs = [
+        SimpleNamespace(name="OpenAlex", kind="openalex", section="research"),
+        SimpleNamespace(name="bioRxiv", kind="biorxiv", section="research"),
+    ]
+    barrier = threading.Barrier(2)
+
+    class Source:
+        def fetch(self, spec, days=2):
+            barrier.wait(timeout=2)
+            prefix = "oa" if spec.kind == "openalex" else "bx"
+            return [
+                SimpleNamespace(
+                    section="research", url=f"https://example.com/{prefix}-{i}"
+                )
+                for i in range(6)
+            ]
+
+    persisted = []
+    monkeypatch.setattr(pipeline_mod, "init_db", lambda: None)
+    monkeypatch.setattr(pipeline_mod, "load_sources", lambda: specs)
+    monkeypatch.setattr(pipeline_mod, "dispatch_source", lambda _spec: Source())
+    monkeypatch.setattr(pipeline_mod.health, "record", lambda _rows: None)
+    monkeypatch.setattr(pipeline_mod, "dedupe_by_url", lambda rows: rows)
+    monkeypatch.setattr(pipeline_mod, "filter_english", lambda rows: rows)
+    monkeypatch.setattr(
+        pipeline_mod,
+        "upsert_items",
+        lambda rows: persisted.extend(rows) or len(rows),
+    )
+
+    assert pipeline_mod.ingest_all(
+        days=2, section_settings=SimpleNamespace(top_research=10)
+    ) == 12
+    assert [row.url for row in persisted[:2]] == [
+        "https://example.com/oa-0",
+        "https://example.com/oa-1",
+    ]
+    assert persisted[6].url == "https://example.com/bx-0"
+
+
+def test_feature_scoring_failure_is_not_mislabeled_as_topic_relevance(monkeypatch):
+    from dailydigest import pipeline as pipeline_mod
+
+    monkeypatch.setattr(pipeline_mod.votes_mod, "reason_penalty_map", lambda _rows: {})
+    monkeypatch.setattr(
+        pipeline_mod,
+        "score_items_with_features",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("bad features")),
+    )
+
+    with pytest.raises(RuntimeError, match="bad features"):
+        pipeline_mod._score_items_for_pipeline([], [], [])
 
 
 def test_topic_selection_preferences_are_soft_and_keep_raw_scores(monkeypatch):
@@ -746,6 +914,7 @@ def test_run_all_does_not_mark_sent_when_send_digest_returns_false(monkeypatch, 
 def test_run_all_auto_backfill_when_days_missed(monkeypatch, tmp_path):
     """When the last sent digest was several days ago, the window auto-widens."""
     from datetime import datetime, timedelta, timezone
+
     from dailydigest import pipeline as pipeline_mod
 
     store_mod = _reset_store(tmp_path, monkeypatch)

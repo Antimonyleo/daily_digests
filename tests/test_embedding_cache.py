@@ -104,6 +104,41 @@ def test_embed_item_rows_recomputes_when_item_text_changes(monkeypatch, tmp_path
     assert vecs[0, 0] == 2.0
 
 
+def test_embed_item_rows_recomputes_when_embedding_signature_changes(
+    monkeypatch, tmp_path
+):
+    _reset_store(monkeypatch, tmp_path)
+    from dailydigest.rank import embedding_cache as cache_mod
+
+    store_mod.init_db()
+    with store_mod.session_scope() as s:
+        row = _row("Test", "signature", "Signature", "Same text")
+        s.add(row)
+        s.flush()
+        s.expunge(row)
+
+    signature = ["model:doc-prefix-a"]
+    calls = 0
+
+    def fake_embed(texts):
+        nonlocal calls
+        calls += 1
+        return np.ones((len(texts), 3), dtype=np.float32) * calls
+
+    monkeypatch.setattr(cache_mod, "active_embedding_signature", lambda: signature[0])
+    monkeypatch.setattr(cache_mod, "embed_texts", fake_embed)
+
+    cache_mod.embed_item_rows([row])
+    signature[0] = "model:doc-prefix-b"
+    vectors = cache_mod.embed_item_rows([row])
+
+    assert calls == 2
+    assert vectors[0, 0] == 2.0
+    with store_mod.session_scope() as s:
+        cached = s.execute(select(store_mod.ItemEmbeddingRow)).scalars().all()
+        assert len(cached) == 1
+
+
 def test_embed_item_rows_handles_repeated_item_in_one_batch(monkeypatch, tmp_path):
     _reset_store(monkeypatch, tmp_path)
     from dailydigest.rank import embedding_cache as cache_mod

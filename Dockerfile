@@ -19,7 +19,7 @@ RUN uv sync --frozen --no-dev
 
 # Bake the embedding model into the image so the first brew is instant and works
 # fully offline (no HuggingFace download at runtime).
-RUN uv run python -c "from dailydigest.rank.embed import embed_texts; embed_texts(['warm up the embedding model'])"
+RUN uv run --no-sync python -c "from dailydigest.rank.embed import embed_texts; embed_texts(['warm up the embedding model'])"
 
 # All persistent state (SQLite DB, profile.yaml, learned models, calibrator)
 # lives under ./data. docker-compose maps a host folder here so it survives
@@ -31,4 +31,4 @@ VOLUME ["/app/data"]
 # mapped port themselves. --host 0.0.0.0 so the mapped port is reachable, with
 # --allow-remote to opt into the non-loopback bind. There is no auth, so
 # docker-compose maps the port to 127.0.0.1 only (keep it that way).
-CMD ["uv", "run", "dd", "start", "--host", "0.0.0.0", "--port", "8765", "--no-browser", "--allow-remote"]
+CMD ["uv", "run", "--no-sync", "dd", "start", "--host", "0.0.0.0", "--port", "8765", "--no-browser", "--allow-remote"]

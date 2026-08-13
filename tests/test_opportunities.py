@@ -53,9 +53,11 @@ def test_opportunity_profile_accepts_structured_fields_without_legacy_descriptio
 
 def test_opportunity_metadata_updates_and_keeps_immutable_change_history():
     from dailydigest.store import (
+        ItemRow,
         item_metadata,
         opportunity_history,
         recent_items,
+        session_scope,
         upsert_items,
     )
 
@@ -97,6 +99,21 @@ def test_opportunity_metadata_updates_and_keeps_immutable_change_history():
         "2026-10-01",
         "2026-10-15",
     ]
+
+    with session_scope() as session:
+        stored = session.get(ItemRow, int(row.id))
+        stored.summary = "Summary of the old opportunity text."
+        stored.summary_signature = "old-signature"
+        stored.summary_backend = "api"
+
+    renamed = changed.model_copy(
+        update={"title": "Updated RNA delivery research grant"}
+    )
+    assert upsert_items([renamed]) == 0
+    refreshed = next(r for r in recent_items(days=2) if r.external_id == "GRANT-1")
+    assert refreshed.summary == ""
+    assert refreshed.summary_signature is None
+    assert refreshed.summary_backend is None
 
 
 def test_material_change_can_resurface_a_previously_shown_opportunity():

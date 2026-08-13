@@ -54,7 +54,7 @@ def test_brew_defaults_to_safe_local_preview(monkeypatch):
 
     assert result.exit_code == 0
     assert calls == [(True, None)]
-    assert "brewed digest 2026-08-10 (local preview)" in result.stdout
+    assert "brewed digest 2026-08-10 (local preview saved)" in result.stdout
 
 
 def test_brew_send_and_backfill_are_explicit(monkeypatch):
@@ -72,7 +72,7 @@ def test_brew_send_and_backfill_are_explicit(monkeypatch):
 
     assert result.exit_code == 0
     assert calls == [(False, 5)]
-    assert "email requested; local fallback enabled" in result.stdout
+    assert "email not sent; local preview saved" in result.stdout
 
 
 def test_brew_rejects_negative_backfill():
@@ -82,3 +82,32 @@ def test_brew_rejects_negative_backfill():
 
     assert result.exit_code == 2
     assert "x>=0" in result.stderr
+
+
+def test_vote_training_stays_inside_the_compute_job(monkeypatch):
+    from dailydigest import cli
+
+    inside_compute_job = False
+
+    def run_compute_job(action):
+        nonlocal inside_compute_job
+        inside_compute_job = True
+        try:
+            return action()
+        finally:
+            inside_compute_job = False
+
+    class FakeRanker:
+        def fit(self, _features, _labels):
+            assert inside_compute_job is True
+
+    monkeypatch.setattr(cli, "_run_compute_job", run_compute_job)
+    monkeypatch.setattr(cli.votes_mod, "vote_dataset", lambda: ([[1.0]], [1]))
+    monkeypatch.setattr(cli, "LRRanker", FakeRanker)
+    monkeypatch.setattr(cli, "reset_lr_cache", lambda: None)
+
+    result = CliRunner().invoke(cli.app, ["vote", "--train"])
+
+    assert result.exit_code == 0
+    assert "trained on 1 votes" in result.stdout
+    assert inside_compute_job is False

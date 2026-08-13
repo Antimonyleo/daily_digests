@@ -6,8 +6,10 @@ import logging
 import re
 import time
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime, timezone
 from typing import Any
+from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
 from . import health
@@ -50,17 +52,20 @@ from .store import (
     init_db,
     item_metadata,
     mark_sent,
+    publish_digest,
     recent_items,
     recent_viewed_facet_dates,
     session_scope,
     upsert_items,
-    write_digest,
-    write_digest_audit,
-    write_digest_features,
-    write_impressions,
     write_summaries,
 )
-from .summarize import summarize_items, synthesize_catch_up
+from .summarize import (
+    effective_summary_backend,
+    summarize_items,
+    summarize_items_with_provenance,
+    summary_signature,
+    synthesize_catch_up,
+)
 
 try:
     from .rank.profile import build_profile_matrix_with_rocchio as _build_profile_with_rocchio
@@ -74,6 +79,7 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 _ORIGINAL_SCORE_ITEMS = score_items
+_ORIGINAL_SUMMARIZE_ITEMS = summarize_items
 
 READING_MODE_LIMITS: dict[str, int | None] = {
     "full": None,
@@ -243,34 +249,74 @@ def ingest_all(
     _emit(progress_callback, "ingest_start", {"sources": len(specs)})
     all_items: list[Item] = []
     stats: list[IngestStats] = []
-    for spec in specs:
-        t0 = time.monotonic()
-        try:
-            src = dispatch_source(spec)
-            fetched = src.fetch(spec, days=days)
-            duration_ms = int((time.monotonic() - t0) * 1000)
-            logger.info("ingest %s: %d items (%dms)", spec.name, len(fetched), duration_ms)
-            all_items.extend(fetched)
-            stats.append(
-                IngestStats(
+    configured_research_families = {
+        family
+        for spec in specs
+        if (getattr(spec, "section", "research") or "research") == "research"
+        if (family := _research_source_family(spec))
+    }
+    successful_research_families: set[str] = set()
+    raw_research_items = 0
+
+    groups: dict[str, list[tuple[int, Any]]] = {}
+    for index, spec in enumerate(specs):
+        groups.setdefault(_source_request_group(spec), []).append((index, spec))
+
+    def _fetch_group(group: list[tuple[int, Any]]):
+        results = []
+        # Calls to the same upstream are deliberately sequential so bounded
+        # concurrency does not become an accidental API rate-limit burst.
+        for index, spec in group:
+            t0 = time.monotonic()
+            try:
+                source = dispatch_source(spec)
+                fetched = source.fetch(spec, days=days)
+                duration_ms = int((time.monotonic() - t0) * 1000)
+                logger.info(
+                    "ingest %s: %d items (%dms)", spec.name, len(fetched), duration_ms
+                )
+                stat = IngestStats(
                     source=spec.name,
                     items=len(fetched),
                     ok=True,
                     duration_ms=duration_ms,
                 )
-            )
-        except Exception as e:  # noqa: BLE001
-            duration_ms = int((time.monotonic() - t0) * 1000)
-            logger.warning("ingest %s failed: %s", spec.name, e)
-            stats.append(
-                IngestStats(
+            except Exception as exc:  # noqa: BLE001
+                fetched = []
+                duration_ms = int((time.monotonic() - t0) * 1000)
+                logger.warning("ingest %s failed: %s", spec.name, exc)
+                stat = IngestStats(
                     source=spec.name,
                     items=0,
                     ok=False,
-                    error=f"{type(e).__name__}: {e}"[:200],
+                    error=f"{type(exc).__name__}: {exc}"[:200],
                     duration_ms=duration_ms,
                 )
-            )
+            results.append((index, spec, fetched, stat))
+        return results
+
+    fetched_by_index: dict[int, tuple[Any, list[Item], IngestStats]] = {}
+    with ThreadPoolExecutor(max_workers=min(4, max(1, len(groups)))) as executor:
+        futures = [executor.submit(_fetch_group, group) for group in groups.values()]
+        for future in as_completed(futures):
+            for index, spec, fetched, stat in future.result():
+                fetched_by_index[index] = (spec, fetched, stat)
+
+    # Restore configured order before dedupe. That keeps source precedence and
+    # outputs deterministic even though independent providers fetched in parallel.
+    for index in range(len(specs)):
+        spec, fetched, stat = fetched_by_index[index]
+        stats.append(stat)
+        all_items.extend(fetched)
+        fetched_research = sum(
+            1
+            for item in fetched
+            if (getattr(item, "section", "research") or "research") == "research"
+        )
+        raw_research_items += fetched_research
+        family = _research_source_family(spec)
+        if family and fetched_research:
+            successful_research_families.add(family)
 
     try:
         health.record(stats)
@@ -287,6 +333,24 @@ def ingest_all(
             "No items were retrieved from any configured source; brew stopped "
             "to avoid stale recommendations. Check network/source health and retry."
         )
+    # A handful of results from one surviving aggregator is not a healthy
+    # research scan. Require both adequate supply and two independent provider
+    # families when the configured source list offers that redundancy. Optional
+    # news/opportunity failures never trigger this gate.
+    if len(configured_research_families) >= 2:
+        minimum_research_supply = max(
+            10, min(int((section_settings or get_settings()).top_research), 15)
+        )
+        if raw_research_items < minimum_research_supply or len(
+            successful_research_families
+        ) < 2:
+            families = ", ".join(sorted(successful_research_families)) or "none"
+            raise RuntimeError(
+                "Research source coverage is degraded: "
+                f"received {raw_research_items} research items from {families}. "
+                "Brew stopped so a partial slate does not replace the current digest. "
+                "Check source health and retry."
+            )
     deduped = dedupe_by_url(all_items)
     en_only = filter_english(deduped)
     logger.info(
@@ -309,7 +373,53 @@ def ingest_all(
             "All retrieved items were removed during deduplication/language filtering; "
             "brew stopped to avoid stale recommendations."
         )
+    if len(configured_research_families) >= 2:
+        english_research_items = sum(
+            1
+            for item in en_only
+            if (getattr(item, "section", "research") or "research") == "research"
+        )
+        if english_research_items < minimum_research_supply:
+            raise RuntimeError(
+                "Research source coverage is degraded after deduplication: "
+                f"only {english_research_items} distinct English research items remain. "
+                "Brew stopped so a partial slate does not replace the current digest."
+            )
     return upsert_items(en_only)
+
+
+def _research_source_family(spec: Any) -> str | None:
+    """Map redundant research adapters to independent provider families."""
+    normalized = str(getattr(spec, "kind", "") or "").strip().lower()
+    if normalized.startswith("openalex"):
+        return "OpenAlex"
+    if normalized == "pubmed":
+        return "PubMed"
+    if normalized == "biorxiv":
+        return "bioRxiv/medRxiv"
+    if normalized == "arxiv":
+        return "arXiv"
+    if normalized in {"rss", "events_rss"}:
+        host = urlsplit(str(getattr(spec, "url", "") or "")).hostname
+        return f"publisher:{host.lower()}" if host else None
+    return None
+
+
+def _source_request_group(spec: Any) -> str:
+    """Group adapters that share an upstream provider/rate limit."""
+    kind = str(getattr(spec, "kind", "") or "").strip().lower()
+    if kind.startswith("openalex"):
+        return "api:openalex"
+    if kind == "pubmed":
+        return "api:ncbi"
+    if kind == "biorxiv":
+        return "api:biorxiv"
+    if kind == "arxiv":
+        return "api:arxiv"
+    if kind in {"rss", "events_rss"}:
+        host = urlsplit(str(getattr(spec, "url", "") or "")).hostname or "unknown"
+        return f"rss:{host.lower()}"
+    return f"adapter:{kind or 'unknown'}"
 
 
 def _catch_up_window(digest_id: str, backfill_days: int | None) -> int:
@@ -767,36 +877,13 @@ def _score_items_for_pipeline(
             for row, score in scored
         }
         return scored, features
-    try:
-        return score_items_with_features(
-            items,
-            profile_vec,
-            downweight,
-            reason_penalty_map=reason_penalties,
-            attribution=attribution,
-        )
-    except Exception as e:  # noqa: BLE001
-        logger.warning("feature-scoring path failed, falling back to legacy scorer: %s", e)
-        scored = score_items(
-            items,
-            profile_vec,
-            downweight,
-            reason_penalty_map=reason_penalties,
-        )
-        features = {
-            _row_feature_key(row): {
-                "topic_score": float(score),
-                "learned_score": 0.0,
-                "final_score": float(score),
-                "rank_score": float(score),
-                "confidence_score": float(score),
-                "reason_penalty": 0.0,
-                "source_bucket": source_bucket(row),
-                "scoring_mode": "legacy",
-            }
-            for row, score in scored
-        }
-        return scored, features
+    return score_items_with_features(
+        items,
+        profile_vec,
+        downweight,
+        reason_penalty_map=reason_penalties,
+        attribution=attribution,
+    )
 
 
 def _should_write_digest(digest_id: str) -> bool:
@@ -1261,20 +1348,53 @@ def run_all(
     # re-brew or a catch-up run doesn't re-spend the LLM budget on items already
     # summarized. Existing summaries are reused for rendering.
     selected_ids = {int(row.id) for row in selected_rows}
+    expected_summary_backend = effective_summary_backend()
+    expected_signatures = {
+        int(row.id): summary_signature(
+            row, profile, backend=expected_summary_backend
+        )
+        for row in selected_rows
+    }
     existing_summaries = {
-        int(row.id): (row.summary or "").strip() for row in selected_rows
+        int(row.id): (row.summary or "").strip()
+        if row.summary_signature == expected_signatures[int(row.id)]
+        else ""
+        for row in selected_rows
     }
     to_summarize = [row for row in selected_rows if not existing_summaries.get(int(row.id))]
+    if summarize_items is not _ORIGINAL_SUMMARIZE_ITEMS:
+        generated = summarize_items(to_summarize, profile=profile)
+        summary_backends = {
+            item_id: expected_summary_backend for item_id in generated
+        }
+    else:
+        generated, summary_backends = summarize_items_with_provenance(
+            to_summarize, profile=profile
+        )
     new_summaries = {
         item_id: summary
-        for item_id, summary in summarize_items(to_summarize, profile=profile).items()
+        for item_id, summary in generated.items()
         if item_id in selected_ids
     }
     summaries = {
         rid: (new_summaries.get(rid) or existing_summaries.get(rid) or "")
         for rid in selected_ids
     }
-    write_summaries({rid: s for rid, s in new_summaries.items() if s})
+    row_by_id = {int(row.id): row for row in to_summarize}
+    new_signatures = {
+        item_id: summary_signature(
+            row_by_id[item_id],
+            profile,
+            backend=summary_backends.get(item_id, expected_summary_backend),
+        )
+        for item_id in new_summaries
+        if item_id in row_by_id
+    }
+    write_summaries(
+        {rid: s for rid, s in new_summaries.items() if s},
+        signatures=new_signatures,
+        backends=summary_backends,
+    )
     _emit(progress_callback, "summarize_done", {"items": len(new_summaries)})
 
     sections: dict[str, list[tuple[ItemRow, float, str]]] = {k: [] for k in SECTION_ORDER}
@@ -1288,51 +1408,50 @@ def run_all(
         def _feature(row: ItemRow) -> dict[str, Any]:
             return score_features.get(_row_feature_key(row), {})
 
-        write_digest(digest_id, [(row.item_label, row.id, score) for row, score, _ in labeled])
-        write_digest_features(
-            digest_id,
-            [
-                (
-                    row.item_label or label,
-                    int(row.id),
-                    float(score),
-                    breakdown_payload(
-                        row,
-                        float(_feature(row).get("topic_score", score)),
-                        learned_score=float(_feature(row).get("learned_score", 0.0)),
-                        reason_penalty=float(_feature(row).get("reason_penalty", 0.0)),
-                        final_score=float(score),
-                        rank_score=float(score),
-                        confidence_score=float(
-                            _feature(row).get("confidence_score", score)
-                        ),
-                        negative_interest_penalty=float(
-                            _feature(row).get("negative_interest_penalty", 0.0)
-                        ),
-                        selection_reason=_selection_reason(row, _feature(row)),
-                        scoring_mode=str(_feature(row).get("scoring_mode", "cosine")),
-                        primary_facet=str(_feature(row).get("primary_facet", "")),
-                        secondary_facets=list(
-                            _feature(row).get("secondary_facets", []) or []
-                        ),
-                        primary_facet_score=float(
-                            _feature(row).get("primary_facet_score", 0.0)
-                        ),
-                        topic_priority=float(_feature(row).get("topic_priority", 0.0)),
-                        topic_priority_bonus=float(
-                            _feature(row).get("topic_priority_bonus", 0.0)
-                        ),
-                        topic_coverage_bonus=float(
-                            _feature(row).get("topic_coverage_bonus", 0.0)
-                        ),
-                        selection_order_bonus=float(
-                            _feature(row).get("selection_order_bonus", 0.0)
-                        ),
+        _labeled_rows = [
+            (row.item_label, row.id, score) for row, score, _ in labeled
+        ]
+        _feature_rows = [
+            (
+                row.item_label or label,
+                int(row.id),
+                float(score),
+                breakdown_payload(
+                    row,
+                    float(_feature(row).get("topic_score", score)),
+                    learned_score=float(_feature(row).get("learned_score", 0.0)),
+                    reason_penalty=float(_feature(row).get("reason_penalty", 0.0)),
+                    final_score=float(score),
+                    rank_score=float(score),
+                    confidence_score=float(
+                        _feature(row).get("confidence_score", score)
                     ),
-                )
-                for row, score, label in labeled
-            ],
-        )
+                    negative_interest_penalty=float(
+                        _feature(row).get("negative_interest_penalty", 0.0)
+                    ),
+                    selection_reason=_selection_reason(row, _feature(row)),
+                    scoring_mode=str(_feature(row).get("scoring_mode", "cosine")),
+                    primary_facet=str(_feature(row).get("primary_facet", "")),
+                    secondary_facets=list(
+                        _feature(row).get("secondary_facets", []) or []
+                    ),
+                    primary_facet_score=float(
+                        _feature(row).get("primary_facet_score", 0.0)
+                    ),
+                    topic_priority=float(_feature(row).get("topic_priority", 0.0)),
+                    topic_priority_bonus=float(
+                        _feature(row).get("topic_priority_bonus", 0.0)
+                    ),
+                    topic_coverage_bonus=float(
+                        _feature(row).get("topic_coverage_bonus", 0.0)
+                    ),
+                    selection_order_bonus=float(
+                        _feature(row).get("selection_order_bonus", 0.0)
+                    ),
+                ),
+            )
+            for row, score, label in labeled
+        ]
         # Immutable per-run impression log: APPEND this run's slate (never
         # overwrites prior runs, unlike write_digest). This is the A/B substrate,
         # so it records more than the final slate:
@@ -1402,20 +1521,31 @@ def run_all(
                     float(_feat.get("topic_score", score)),
                 )
             )
-        write_impressions(digest_id, _impressions, model_version=RANKER_VERSION)
-        write_digest_audit(digest_id, "missed_top_journals", top_journal_audit)
-        write_digest_audit(digest_id, "candidate_funnel", [funnel_audit])
+        _audits: dict[str, list[dict]] = {
+            "missed_top_journals": top_journal_audit,
+            "candidate_funnel": [funnel_audit],
+            # An ordinary same-day rebrew must clear a catch-up briefing that
+            # was created by an earlier explicit backfill.
+            "catch_up_synthesis": [],
+        }
         # Catch-up briefing: only on gap runs, grouping the backlog into themes.
         if window_days > 2:
             try:
                 _synth = synthesize_catch_up(selected_rows, window_days, profile=profile)
                 if _synth:
-                    write_digest_audit(
-                        digest_id, "catch_up_synthesis",
-                        [{"days": window_days, "text": _synth}],
-                    )
+                    _audits["catch_up_synthesis"] = [
+                        {"days": window_days, "text": _synth}
+                    ]
             except Exception as _e:  # noqa: BLE001
                 logger.warning("catch-up synthesis write failed: %s", _e)
+        publish_digest(
+            digest_id,
+            _labeled_rows,
+            _feature_rows,
+            _impressions,
+            model_version=RANKER_VERSION,
+            audits=_audits,
+        )
     else:
         logger.info(
             "digest %s already has a sent row; skipping write_digest to preserve sent_at",
@@ -1452,6 +1582,14 @@ def run_all(
         mark_sent(digest_id)
 
     total_items = sum(len(v) for v in sections.values())
+    try:
+        from .prune import run_maintenance
+
+        maintenance = run_maintenance()
+        if any(maintenance.values()):
+            logger.info("retention maintenance: %s", maintenance)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("retention maintenance failed: %s", e)
     _emit(
         progress_callback,
         "done",

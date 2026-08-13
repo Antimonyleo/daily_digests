@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 from functools import lru_cache
+from importlib.resources import files
 from pathlib import Path
 
 import yaml
@@ -40,11 +41,16 @@ class Settings(BaseSettings):
     # --- Embedding / ranking model configuration -------------------------- #
     # Swap in a stronger scientific encoder (e.g. "allenai/specter2_base",
     # "ncbi/MedCPT-Query-Encoder", "BAAI/bge-large-en-v1.5") without code
-    # changes. The item embedding cache keys on the model name, so changing
-    # this transparently re-embeds. Device defaults to CPU (the intended
+    # changes. The cache keys on model, backend, and text-prefix semantics, so
+    # changing them transparently re-embeds. Device defaults to CPU (the intended
     # local / CI mode); set "cuda" only on a supported GPU.
     embed_model: str = "BAAI/bge-small-en-v1.5"
     embed_device: str = "cpu"
+    # Conservative CPU defaults measured on real paper abstracts. FastEmbed
+    # pads each batch to its longest text, so larger batches were both slower
+    # and substantially more memory-hungry on the default model.
+    embed_batch_size: int = Field(default=8, ge=1, le=256)
+    embed_threads: int = Field(default=4, ge=1, le=64)
     embed_query_prefix: str = "Represent this sentence for searching relevant passages: "
     embed_doc_prefix: str = ""
     # Embedding backend: "" (auto: fastembed/ONNX, no torch), "fastembed", or
@@ -314,7 +320,13 @@ def load_profile(path: str | None = None) -> Profile:
 def load_sources(path: str | None = None) -> list[SourceSpec]:
     settings = get_settings()
     p = Path(path or settings.sources_path)
-    data = yaml.safe_load(p.read_text()) or {}
+    if p.exists():
+        raw = p.read_text()
+    elif path is None and settings.sources_path == "config/sources.yaml":
+        raw = files("dailydigest").joinpath("defaults/sources.yaml").read_text()
+    else:
+        raise FileNotFoundError(f"Sources file not found: {p}")
+    data = yaml.safe_load(raw) or {}
     if not isinstance(data, dict):
         raise ValueError(f"sources.yaml must be a YAML mapping, got {type(data).__name__}")
     out: list[SourceSpec] = []

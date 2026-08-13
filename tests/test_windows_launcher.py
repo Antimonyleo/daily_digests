@@ -15,9 +15,9 @@ def test_windows_launchers_use_frozen_sync_and_localhost():
     install = (ROOT / "scripts" / "install.ps1").read_text()
     batch = (ROOT / "DailyDigest-Windows.bat").read_text()
 
-    assert "sync --frozen" in start
+    assert "sync --frozen --no-dev --inexact" in start
     assert '"127.0.0.1"' in start
-    assert '"run", "dd", "start"' in start
+    assert '"run", "--no-sync", "dd", "start"' in start
     assert "https://astral.sh/uv/install.ps1" in install
     assert "scripts\\install.ps1" in batch
 

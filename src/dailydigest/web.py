@@ -33,10 +33,11 @@ import os
 import queue as std_queue
 import re
 import secrets
+import tempfile
 import threading
 import uuid
 from collections import Counter
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
@@ -54,7 +55,7 @@ from fastapi.responses import (
 from fastapi.templating import Jinja2Templates
 from jinja2 import Environment, FileSystemLoader
 from pydantic import ValidationError
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from . import health
 from . import votes as votes_mod
@@ -67,14 +68,17 @@ from .email_render import (
     reason_line,
     safe_url,
 )
+from .job_lock import ComputeBusyError, acquire_compute_lock
 from .opportunities import (
     OpportunityProfile,
     load_opportunity_profile,
     opportunity_display,
 )
 from .pipeline import _digest_id, normalize_reading_mode, run_all
+from .rank.embed import release_encoder
 from .rank.source_quality import display_breakdown, source_bucket
 from .store import (
+    DigestItemRow,
     DigestRow,
     ItemRow,
     VoteRow,
@@ -85,14 +89,14 @@ from .store import (
     load_digest_features,
     mark_impressions_viewed,
     search_bookmarks,
-    set_bookmark,
     session_scope,
+    set_bookmark,
 )
 from .tea_break import daily_tea_deck
 
 logger = logging.getLogger(__name__)
 
-_REPO_ROOT = Path(__file__).resolve().parents[2]
+_REPO_ROOT = Path(os.environ.get("DD_APP_ROOT") or Path.cwd()).resolve()
 _PACKAGED_TEMPLATE_DIR = Path(__file__).resolve().parent / "templates"
 _TEMPLATE_DIR = (
     _PACKAGED_TEMPLATE_DIR
@@ -143,8 +147,12 @@ _TRAIN_LOCK = threading.Lock()
 _TRAIN_JOB: dict[str, Any] = {"running": False, "last_result": None}
 _BREW_LOCK = threading.Lock()
 _BREW_JOB: dict[str, Any] = {"running": False, "run_id": None}
+# Brewing and manual ranker training both run local embeddings. Keeping one
+# compute job at a time prevents them from multiplying CPU and peak RAM.
+_COMPUTE_LOCK = threading.Lock()
 _CSRF_TOKEN = secrets.token_urlsafe(32)
 _ENV_SAFE_RE = re.compile(r"^[A-Za-z0-9_./:@+-]*$")
+_RUN_ID_RE = re.compile(r"^[0-9a-f]{12}$")
 
 
 # ---------------------------------------------------------------------------
@@ -443,7 +451,7 @@ def _saved_date(value: date | None) -> str:
     return value.strftime("%b %d, %Y").replace(" 0", " ")
 
 
-def _summarizer_label() -> str:
+def _summarizer_label(digest_id: str | None = None) -> str:
     backend = (SETTINGS.llm_backend or "extractive").lower()
     if backend == "extractive":
         return "Extractive (local, no AI)"
@@ -455,7 +463,23 @@ def _summarizer_label() -> str:
     }
     name = names.get(backend, "Extractive (local, no AI)")
     model = (SETTINGS.llm_model or "").strip()
-    return f"{name} · {model}" if model else name
+    label = f"{name} · {model}" if model else name
+    if digest_id and backend != "extractive":
+        init_db()
+        with session_scope() as s:
+            fallback_count = int(
+                s.execute(
+                    select(func.count(ItemRow.id))
+                    .join(DigestItemRow, DigestItemRow.item_id == ItemRow.id)
+                    .where(
+                        DigestItemRow.digest_id == digest_id,
+                        ItemRow.summary_backend == "extractive_fallback",
+                    )
+                ).scalar_one()
+            )
+        if fallback_count:
+            label += f" · {fallback_count} extractive fallback"
+    return label
 
 
 def _host_name(host_header: str | None) -> str:
@@ -481,6 +505,16 @@ def _require_local_origin(request: Request) -> None:
     origin_host = _host_name(urlsplit(origin).netloc)
     if origin_host != host or not _is_local_host(origin_host):
         raise HTTPException(status_code=403, detail="cross-origin writes are not allowed")
+
+
+@app.middleware("http")
+async def _loopback_host_only(request: Request, call_next):
+    """Reject non-loopback Host headers for every UI and asset route."""
+    if not _is_local_host(_host_name(request.headers.get("host"))):
+        return JSONResponse(
+            {"detail": "local UI only accepts loopback hosts"}, status_code=403
+        )
+    return await call_next(request)
 
 
 def _ics_text(value: object) -> str:
@@ -665,6 +699,7 @@ def _load_existing_form_defaults() -> dict[str, str]:
         "llm_backend": backend,
         "llm_base_url": SETTINGS.llm_base_url,
         "llm_api_key": "***" if SETTINGS.llm_api_key else "",
+        "remove_llm_api_key": "false",
         "llm_model": SETTINGS.llm_model,
         "user_tz": SETTINGS.user_tz,
         "top_research": str(SETTINGS.top_research),
@@ -793,17 +828,44 @@ def _write_env_file(path: Path, updates: dict[str, str]) -> None:
         if key not in seen:
             new_lines.append(f"{key}={_format_env_value(val)}")
 
-    path.write_text("\n".join(new_lines) + "\n")
-    if os.name == "posix":
-        path.chmod(0o600)
+    _atomic_private_write(path, "\n".join(new_lines) + "\n")
 
 
 def _write_private_yaml(path: Path, payload: dict[str, Any]) -> None:
     """Write local profile data with owner-only permissions on POSIX."""
+    _atomic_private_write(path, yaml.safe_dump(payload, sort_keys=False))
+
+
+def _atomic_private_write(path: Path, content: str) -> None:
+    """Replace a private text file atomically when the filesystem permits it."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
-    if os.name == "posix":
-        path.chmod(0o600)
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            delete=False,
+        ) as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+            temporary = Path(handle.name)
+        if os.name == "posix":
+            temporary.chmod(0o600)
+        try:
+            os.replace(temporary, path)
+            temporary = None
+        except OSError:
+            # Docker bind-mounted individual files may reject rename(2). Keep
+            # that supported, with the smallest possible non-atomic fallback.
+            path.write_text(content, encoding="utf-8")
+        if os.name == "posix":
+            path.chmod(0o600)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
 
 
 def _format_env_value(value: str) -> str:
@@ -837,7 +899,10 @@ def _validate_setup(form: dict[str, str]) -> list[str]:
         if not (form.get("llm_base_url") or "").strip():
             errors.append("API backend requires a base URL.")
         entered_key = (form.get("llm_api_key") or "").strip()
-        if not entered_key and not SETTINGS.llm_api_key:
+        removing_key = form.get("remove_llm_api_key") == "true"
+        has_submitted_key = bool(entered_key and entered_key != "***")
+        has_saved_key = bool(SETTINGS.llm_api_key and not removing_key)
+        if not has_submitted_key and not has_saved_key:
             errors.append("API backend requires an API key.")
         if not (form.get("llm_model") or "").strip():
             errors.append("API backend requires a model name.")
@@ -983,7 +1048,7 @@ def index(request: Request) -> Response:
             "salutation": "Welcome back",
             "daily_note": tea_notes[0],
             "daily_notes": tea_notes,
-            "summarizer_label": _summarizer_label(),
+            "summarizer_label": _summarizer_label(digest_id),
             "sections": sections,
             "overview": overview,
             "top_journal_audit": top_journal_audit,
@@ -1156,12 +1221,32 @@ def ranking_train(request: Request) -> JSONResponse:
                     "training_job": dict(_TRAIN_JOB),
                 }
             )
+        if not _COMPUTE_LOCK.acquire(blocking=False):
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "started": False,
+                    "running": True,
+                    "message": "Another brew or ranking job is already running.",
+                    "status": status,
+                }
+            )
         _TRAIN_JOB["running"] = True
         _TRAIN_JOB["last_result"] = None
 
     def _target() -> None:
+        process_lock = None
         try:
+            process_lock = acquire_compute_lock(SETTINGS.db_path)
             result = votes_mod.train_lr_ranker()
+        except ComputeBusyError as e:
+            result = {
+                "ok": False,
+                "trained": False,
+                "reason": "compute_busy",
+                "message": str(e),
+                "status": status,
+            }
         except Exception as e:  # noqa: BLE001
             logger.exception("ranking training failed")
             try:
@@ -1175,9 +1260,15 @@ def ranking_train(request: Request) -> JSONResponse:
                 "message": f"Ranking training failed: {type(e).__name__}: {e}",
                 "status": status_after_error,
             }
-        with _TRAIN_LOCK:
-            _TRAIN_JOB["running"] = False
-            _TRAIN_JOB["last_result"] = result
+        try:
+            release_encoder()
+        finally:
+            if process_lock is not None:
+                process_lock.release()
+            with _TRAIN_LOCK:
+                _TRAIN_JOB["running"] = False
+                _TRAIN_JOB["last_result"] = result
+            _COMPUTE_LOCK.release()
 
     threading.Thread(target=_target, daemon=True).start()
     return JSONResponse(
@@ -1196,7 +1287,13 @@ def _run_pipeline_dry_run() -> None:
     if not _BREW_LOCK.acquire(blocking=False):
         logger.info("background refresh skipped because another brew is running")
         return
+    if not _COMPUTE_LOCK.acquire(blocking=False):
+        _BREW_LOCK.release()
+        logger.info("background refresh skipped because another compute job is running")
+        return
+    process_lock = None
     try:
+        process_lock = acquire_compute_lock(SETTINGS.db_path)
         with _RUN_LOCK:
             _BREW_JOB["running"] = True
             _BREW_JOB["run_id"] = "refresh"
@@ -1204,11 +1301,19 @@ def _run_pipeline_dry_run() -> None:
             run_all(dry_run=True)
         except Exception as e:  # noqa: BLE001
             logger.warning("background refresh failed: %s", e)
+    except ComputeBusyError:
+        logger.info("background refresh skipped because another process is computing")
     finally:
-        with _RUN_LOCK:
-            _BREW_JOB["running"] = False
-            _BREW_JOB["run_id"] = None
-        _BREW_LOCK.release()
+        try:
+            release_encoder()
+        finally:
+            if process_lock is not None:
+                process_lock.release()
+            with _RUN_LOCK:
+                _BREW_JOB["running"] = False
+                _BREW_JOB["run_id"] = None
+            _COMPUTE_LOCK.release()
+            _BREW_LOCK.release()
 
 
 @app.post("/refresh")
@@ -1222,6 +1327,15 @@ def refresh(request: Request) -> JSONResponse:
                 "digest_id": digest_id,
                 "running": True,
                 "message": "A brew is already running.",
+            }
+        )
+    if _COMPUTE_LOCK.locked():
+        return JSONResponse(
+            {
+                "ok": False,
+                "digest_id": digest_id,
+                "running": True,
+                "message": "Another brew or ranking job is already running.",
             }
         )
     threading.Thread(target=_run_pipeline_dry_run, daemon=True).start()
@@ -1357,6 +1471,7 @@ async def setup_post(request: Request) -> Response:
         "llm_backend": str(raw.get("llm_backend", "extractive")),
         "llm_base_url": str(raw.get("llm_base_url", "")),
         "llm_api_key": str(raw.get("llm_api_key", "")),
+        "remove_llm_api_key": _bool_form(raw, "remove_llm_api_key", False),
         "llm_model": str(raw.get("llm_model", "")),
         "user_tz": str(raw.get("user_tz", SETTINGS.user_tz)),
         "top_research": str(raw.get("top_research", SETTINGS.top_research)),
@@ -1535,7 +1650,9 @@ async def setup_post(request: Request) -> Response:
     }
     # Only update API key if it's not the masked "***" value
     api_key = form.get("llm_api_key", "").strip()
-    if api_key and api_key != "***":
+    if form.get("remove_llm_api_key") == "true":
+        env_updates["LLM_API_KEY"] = ""
+    elif api_key and api_key != "***":
         env_updates["LLM_API_KEY"] = api_key
     _write_env_file(_ENV_PATH, env_updates)
     # Propagate changes to os.environ so pydantic-settings picks them up,
@@ -1602,12 +1719,25 @@ def _kick_off_run(run_id: str, reading_mode: str) -> None:
 
     def _target() -> None:
         terminal_sent = False
+        process_lock = None
         acquired = _BREW_LOCK.acquire(blocking=False)
         if not acquired:
             _push(
                 {
                     "stage": "error",
                     "payload": {"message": "Another brew is already running. Please wait for it to finish."},
+                }
+            )
+            return
+        compute_acquired = _COMPUTE_LOCK.acquire(blocking=False)
+        if not compute_acquired:
+            _BREW_LOCK.release()
+            _push(
+                {
+                    "stage": "error",
+                    "payload": {
+                        "message": "Another brew or ranking job is already running. Please wait for it to finish."
+                    },
                 }
             )
             return
@@ -1622,22 +1752,32 @@ def _kick_off_run(run_id: str, reading_mode: str) -> None:
             _push({"stage": stage, "payload": payload})
 
         try:
+            process_lock = acquire_compute_lock(SETTINGS.db_path)
             run_all(
                 dry_run=True,
                 progress_callback=cb,
                 reading_mode=reading_mode,
             )
+        except ComputeBusyError as e:
+            _push({"stage": "error", "payload": {"message": str(e)}})
+            terminal_sent = True
         except Exception as e:  # noqa: BLE001
             logger.exception("pipeline failed in run %s", run_id)
             _push({"stage": "error", "payload": {"message": f"{type(e).__name__}: {e}"}})
             terminal_sent = True
         finally:
-            with _RUN_LOCK:
-                _BREW_JOB["running"] = False
-                _BREW_JOB["run_id"] = None
-            _BREW_LOCK.release()
-            if not terminal_sent:
-                _push({"stage": "done", "payload": {"forced": True}})
+            try:
+                release_encoder()
+            finally:
+                if process_lock is not None:
+                    process_lock.release()
+                with _RUN_LOCK:
+                    _BREW_JOB["running"] = False
+                    _BREW_JOB["run_id"] = None
+                _COMPUTE_LOCK.release()
+                _BREW_LOCK.release()
+                if not terminal_sent:
+                    _push({"stage": "done", "payload": {"forced": True}})
 
     threading.Thread(target=_target, daemon=True).start()
 
@@ -1676,6 +1816,8 @@ async def run_start(request: Request) -> JSONResponse:
     except Exception:  # noqa: BLE001
         body = {}
     run_id = str(body.get("run_id") or uuid.uuid4().hex[:12])
+    if not _RUN_ID_RE.fullmatch(run_id):
+        raise HTTPException(status_code=400, detail="invalid run id")
     try:
         reading_mode = normalize_reading_mode(
             str(body.get("reading_mode") or "usual")
@@ -1692,10 +1834,19 @@ async def run_start(request: Request) -> JSONResponse:
 
 
 @app.get("/run/stream")
-async def run_stream(run_id: str) -> StreamingResponse:
-    q = _ensure_run(run_id)
+async def run_stream(request: Request, run_id: str) -> StreamingResponse:
+    if not _RUN_ID_RE.fullmatch(run_id):
+        raise HTTPException(status_code=400, detail="invalid run id")
+    with _RUN_LOCK:
+        q = _RUN_QUEUES.get(run_id)
+    if q is None:
+        raise HTTPException(
+            status_code=404,
+            detail="brew run not found; it may have ended or the server restarted",
+        )
 
     async def event_gen():
+        terminal_seen = False
         try:
             yield f"data: {json.dumps({'stage': 'connected', 'run_id': run_id})}\n\n"
             terminal = {"done", "error"}
@@ -1707,11 +1858,13 @@ async def run_stream(run_id: str) -> StreamingResponse:
                     continue
                 yield f"data: {json.dumps(evt)}\n\n"
                 if evt.get("stage") in terminal:
+                    terminal_seen = True
                     break
         finally:
-            with _RUN_LOCK:
-                _RUN_QUEUES.pop(run_id, None)
-                _RUN_STARTED.discard(run_id)
+            if terminal_seen:
+                with _RUN_LOCK:
+                    _RUN_QUEUES.pop(run_id, None)
+                    _RUN_STARTED.discard(run_id)
 
     return StreamingResponse(
         event_gen(),

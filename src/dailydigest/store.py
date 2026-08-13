@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sqlite3
 import uuid
 from collections.abc import Iterable
 from contextlib import contextmanager
@@ -70,6 +71,8 @@ class ItemRow(Base):
     fetched_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True)
 
     summary = Column(Text, default="")
+    summary_signature = Column(String)
+    summary_backend = Column(String)
     score = Column(Float)
     digest_id = Column(String, index=True)
     item_label = Column(String)  # e.g., "R3"
@@ -117,16 +120,9 @@ class VoteRow(Base):
 
     item = relationship("ItemRow")
 
-    # NOTE: UNIQUE on item_id enforces "latest vote wins" semantics in
-    # ``votes.record_votes`` (upsert). Migration note: SQLAlchemy's
-    # ``create_all`` only creates *missing* tables; it will NOT add this
-    # constraint to a pre-existing ``votes`` table. For the in-tree test
-    # fixtures this is a non-issue (they use ``tmp_path`` -> fresh DB). For
-    # the persistent ``data/digest.db``, the votes table is empty in
-    # practice and the GH Actions DB is artifact-restored (often fresh),
-    # so dropping/recreating votes is acceptable if duplicates already
-    # exist. If a future deployment hits a duplicate-row violation, the
-    # fix is to drop the votes table once and let ``init_db`` recreate it.
+    # UNIQUE on item_id enforces "latest vote wins" semantics in
+    # ``votes.record_votes``. ``init_db`` safely deduplicates legacy tables and
+    # creates the equivalent unique index before normal writes begin.
     __table_args__ = (
         UniqueConstraint("item_id", name="uq_votes_item_id"),
         CheckConstraint("value IN (-1, 0, 1)", name="ck_vote_value"),
@@ -299,6 +295,7 @@ class RunRow(Base):
 
 _ENGINE = None
 _ENGINE_LOCK = Lock()
+_INIT_LOCK = Lock()
 _INITIALIZED: bool = False
 _SessionLocal = None
 _SESSION_LOCK = Lock()
@@ -334,10 +331,13 @@ def init_db() -> None:
     global _INITIALIZED
     if _INITIALIZED:
         return
-    eng = _engine()
-    Base.metadata.create_all(eng)
-    _migrate_sqlite_schema(eng)
-    _INITIALIZED = True
+    with _INIT_LOCK:
+        if _INITIALIZED:
+            return
+        eng = _engine()
+        Base.metadata.create_all(eng)
+        _migrate_sqlite_schema(eng)
+        _INITIALIZED = True
 
 
 def _reset_init_for_testing() -> None:
@@ -364,6 +364,8 @@ def _migrate_sqlite_schema(eng) -> None:
             "published_at": "DATETIME",
             "fetched_at": "DATETIME",
             "summary": "TEXT DEFAULT ''",
+            "summary_signature": "VARCHAR",
+            "summary_backend": "VARCHAR",
             "score": "FLOAT",
             "digest_id": "VARCHAR",
             "item_label": "VARCHAR",
@@ -387,6 +389,32 @@ def _migrate_sqlite_schema(eng) -> None:
         },
     }
 
+    with eng.connect() as conn:
+        vote_table_exists = conn.execute(
+            text("SELECT 1 FROM sqlite_master WHERE type='table' AND name='votes'")
+        ).first()
+        duplicate_vote_groups = 0
+        if vote_table_exists is not None:
+            duplicate_vote_groups = int(
+                conn.execute(
+                    text(
+                        "SELECT COUNT(*) FROM ("
+                        "SELECT item_id FROM votes GROUP BY item_id HAVING COUNT(*) > 1"
+                        ")"
+                    )
+                ).scalar_one()
+            )
+
+    # Keep one recoverable pre-migration snapshot before deleting legacy
+    # duplicate vote rows. SQLite's backup API is safe with a WAL database.
+    if duplicate_vote_groups:
+        db_file = Path(str(eng.url.database or ""))
+        backup_file = db_file.parent / "backups" / "digest-pre-v1.db"
+        if db_file.exists() and not backup_file.exists():
+            backup_file.parent.mkdir(parents=True, exist_ok=True)
+            with sqlite3.connect(db_file) as source, sqlite3.connect(backup_file) as target:
+                source.backup(target)
+
     with eng.begin() as conn:
         for table_name, columns in required_columns.items():
             exists = conn.execute(
@@ -402,6 +430,41 @@ def _migrate_sqlite_schema(eng) -> None:
             for column, ddl in columns.items():
                 if column not in existing:
                     conn.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {column} {ddl}"))
+
+        if vote_table_exists is not None:
+            # Latest timestamp wins; id is the deterministic tie-breaker and
+            # handles legacy rows whose created_at is NULL.
+            conn.execute(
+                text(
+                    "DELETE FROM votes AS older WHERE EXISTS ("
+                    "SELECT 1 FROM votes AS newer "
+                    "WHERE newer.item_id = older.item_id AND ("
+                    "COALESCE(newer.created_at, '') > COALESCE(older.created_at, '') "
+                    "OR (COALESCE(newer.created_at, '') = COALESCE(older.created_at, '') "
+                    "AND newer.id > older.id)))"
+                )
+            )
+            unique_item_index = False
+            for index_row in conn.execute(text("PRAGMA index_list(votes)")).all():
+                if not bool(index_row[2]):
+                    continue
+                index_name = str(index_row[1]).replace('"', '""')
+                columns = [
+                    str(row[2])
+                    for row in conn.execute(
+                        text(f'PRAGMA index_info("{index_name}")')
+                    ).all()
+                ]
+                if columns == ["item_id"]:
+                    unique_item_index = True
+                    break
+            if not unique_item_index:
+                conn.execute(
+                    text("CREATE UNIQUE INDEX uq_votes_item_id ON votes(item_id)")
+                )
+        current_version = int(conn.execute(text("PRAGMA user_version")).scalar_one())
+        if current_version < 1:
+            conn.execute(text("PRAGMA user_version = 1"))
 
 
 def session_factory():
@@ -505,7 +568,7 @@ def _opportunity_snapshot_json(metadata: dict) -> str:
     return json.dumps(stable, sort_keys=True, separators=(",", ":"), default=str)
 
 def upsert_items(items: Iterable[Item]) -> int:
-    """Insert items, skipping duplicates on (source, external_id). Returns count inserted."""
+    """Insert items and conservatively refresh richer metadata on duplicates."""
     init_db()
     seen_keys: set[tuple[str, str]] = set()
     inserted = 0
@@ -536,14 +599,17 @@ def upsert_items(items: Iterable[Item]) -> int:
             result = s.execute(stmt)
             if result.rowcount:
                 inserted += 1
+            row = s.execute(
+                select(ItemRow).where(
+                    ItemRow.source == it.source,
+                    ItemRow.external_id == it.external_id,
+                )
+            ).scalar_one()
             if it.section in {"opportunities", "events"}:
-                row = s.execute(
-                    select(ItemRow).where(
-                        ItemRow.source == it.source,
-                        ItemRow.external_id == it.external_id,
-                    )
-                ).scalar_one()
                 if not result.rowcount:
+                    content_changed = (
+                        row.title != it.title or row.abstract != it.abstract
+                    )
                     row.url = it.url
                     row.title = it.title
                     row.abstract = it.abstract
@@ -553,6 +619,10 @@ def upsert_items(items: Iterable[Item]) -> int:
                     # Verification keeps open records in the candidate window;
                     # immutable snapshots below distinguish material changes.
                     row.fetched_at = datetime.now(timezone.utc)
+                    if content_changed:
+                        row.summary = ""
+                        row.summary_signature = None
+                        row.summary_backend = None
                 snapshot_json = _opportunity_snapshot_json(it.metadata or {})
                 details_hash = hashlib.sha256(snapshot_json.encode("utf-8")).hexdigest()
                 snapshot_stmt = (
@@ -567,6 +637,55 @@ def upsert_items(items: Iterable[Item]) -> int:
                     )
                 )
                 s.execute(snapshot_stmt)
+            elif not result.rowcount:
+                old_title = (row.title or "").strip()
+                old_abstract = (row.abstract or "").strip()
+                new_title = (it.title or "").strip()
+                new_abstract = (it.abstract or "").strip()
+                content_changed = False
+
+                # Prefer clearly richer text, including repaired titles whose
+                # word boundaries were collapsed by an upstream provider.
+                if new_title and (
+                    not old_title
+                    or len(new_title) > len(old_title) + 5
+                    or (
+                        len(new_title) >= int(len(old_title) * 0.8)
+                        and len(new_title.split()) > len(old_title.split())
+                    )
+                ):
+                    content_changed = new_title != old_title
+                    row.title = new_title
+                if new_abstract and (
+                    not old_abstract or len(new_abstract) > len(old_abstract) + 80
+                ):
+                    content_changed = content_changed or new_abstract != old_abstract
+                    row.abstract = new_abstract
+                if not (row.authors or "").strip() and (it.authors or "").strip():
+                    row.authors = it.authors
+                if row.published_at is None and it.published_at is not None:
+                    row.published_at = it.published_at
+                if (
+                    (not row.url or not str(row.url).startswith(("http://", "https://")))
+                    and str(it.url or "").startswith(("http://", "https://"))
+                ):
+                    row.url = it.url
+                old_metadata = item_metadata(row)
+                incoming_metadata = it.metadata or {}
+                merged_metadata = {**incoming_metadata, **old_metadata}
+                if merged_metadata != old_metadata:
+                    row.metadata_json = json.dumps(
+                        merged_metadata,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                        default=str,
+                    )
+                if content_changed:
+                    # A summary of superseded source text is more misleading
+                    # than an empty summary; it will regenerate if selected.
+                    row.summary = ""
+                    row.summary_signature = None
+                    row.summary_backend = None
     return inserted
 
 
@@ -812,10 +931,12 @@ def prune(days: int) -> int:
     with session_scope() as s:
         voted_subq = select(VoteRow.item_id).distinct().scalar_subquery()
         bookmarked_subq = select(BookmarkRow.item_id).distinct().scalar_subquery()
+        digest_item_subq = select(DigestItemRow.item_id).distinct().scalar_subquery()
         stmt = delete(ItemRow).where(
             ItemRow.fetched_at < cutoff,
             ItemRow.id.not_in(voted_subq),
             ItemRow.id.not_in(bookmarked_subq),
+            ItemRow.id.not_in(digest_item_subq),
         )
         result = s.execute(stmt)
         return result.rowcount or 0
@@ -1148,6 +1269,138 @@ def write_digest_audit(digest_id: str, audit_type: str, payloads: list[dict]) ->
             )
 
 
+def publish_digest(
+    digest_id: str,
+    labeled_items: list[tuple],
+    feature_rows: list[tuple[str, int, float, dict]],
+    impression_rows: list[tuple],
+    *,
+    model_version: str | None = None,
+    audits: dict[str, list[dict]] | None = None,
+    run_id: str | None = None,
+) -> str:
+    """Publish one complete slate and its measurement rows in one transaction."""
+    init_db()
+    run_id = run_id or uuid.uuid4().hex
+    now = datetime.now(timezone.utc)
+    with session_scope() as s:
+        digest = s.get(DigestRow, digest_id)
+        if digest is None:
+            digest = DigestRow(id=digest_id, item_count=len(labeled_items))
+            s.add(digest)
+        else:
+            digest.item_count = len(labeled_items)
+
+        previous = s.execute(
+            select(ItemRow).where(ItemRow.digest_id == digest_id)
+        ).scalars().all()
+        for row in previous:
+            row.digest_id = None
+            row.item_label = None
+        s.execute(delete(DigestItemRow).where(DigestItemRow.digest_id == digest_id))
+        for item in labeled_items:
+            label, item_id = item[0], int(item[1])
+            score = item[2] if len(item) >= 3 else None
+            row = s.get(ItemRow, item_id)
+            if row is None:
+                continue
+            row.digest_id = digest_id
+            row.item_label = str(label)
+            if score is not None:
+                row.score = float(score)
+            s.add(
+                DigestItemRow(
+                    digest_id=digest_id,
+                    item_id=item_id,
+                    item_label=str(label),
+                    score=float(score) if score is not None else None,
+                )
+            )
+
+        new_feature_ids = [int(item_id) for _, item_id, _, _ in feature_rows]
+        s.execute(
+            delete(DigestItemFeatureRow).where(
+                DigestItemFeatureRow.digest_id == digest_id,
+                DigestItemFeatureRow.item_id.notin_(new_feature_ids),
+            )
+        )
+        for label, item_id, final_score, features in feature_rows:
+            payload = json.dumps(features or {}, sort_keys=True)
+            s.execute(
+                sqlite_insert(DigestItemFeatureRow)
+                .values(
+                    digest_id=digest_id,
+                    item_id=int(item_id),
+                    item_label=label,
+                    final_score=float(final_score),
+                    features_json=payload,
+                    created_at=now,
+                )
+                .on_conflict_do_update(
+                    index_elements=["digest_id", "item_id"],
+                    set_={
+                        "item_label": label,
+                        "final_score": float(final_score),
+                        "features_json": payload,
+                        "created_at": now,
+                    },
+                )
+            )
+
+        for impression in impression_rows:
+            section, item_id, position, final_score = impression[:4]
+            selected = bool(impression[4]) if len(impression) >= 5 else True
+            primary_facet = str(impression[5]) if len(impression) >= 6 else ""
+            primary_facet_score = (
+                float(impression[6])
+                if len(impression) >= 8 and impression[6] is not None
+                else None
+            )
+            topic_score = (
+                float(impression[7])
+                if len(impression) >= 8 and impression[7] is not None
+                else float(impression[6])
+                if len(impression) == 7 and impression[6] is not None
+                else None
+            )
+            s.add(
+                ImpressionRow(
+                    run_id=run_id,
+                    digest_id=digest_id,
+                    item_id=int(item_id),
+                    section=str(section or ""),
+                    position=int(position),
+                    final_score=(
+                        float(final_score) if final_score is not None else None
+                    ),
+                    model_version=model_version,
+                    selected=selected,
+                    primary_facet=primary_facet,
+                    primary_facet_score=primary_facet_score,
+                    topic_score=topic_score,
+                    created_at=now,
+                )
+            )
+
+        for audit_type, payloads in (audits or {}).items():
+            s.execute(
+                delete(DigestAuditRow).where(
+                    DigestAuditRow.digest_id == digest_id,
+                    DigestAuditRow.audit_type == audit_type,
+                )
+            )
+            for payload in payloads:
+                s.add(
+                    DigestAuditRow(
+                        digest_id=digest_id,
+                        audit_type=audit_type,
+                        payload_json=json.dumps(payload or {}, sort_keys=True),
+                        created_at=now,
+                    )
+                )
+    return run_id
+
+
 def load_digest_audit(digest_id: str, audit_type: str) -> list[dict]:
     """Return persisted digest audit payloads."""
     init_db()
@@ -1175,7 +1428,12 @@ def load_digest_audit(digest_id: str, audit_type: str) -> list[dict]:
     return out
 
 
-def write_summaries(summaries: dict[int, str]) -> None:
+def write_summaries(
+    summaries: dict[int, str],
+    *,
+    signatures: dict[int, str] | None = None,
+    backends: dict[int, str] | None = None,
+) -> None:
     """Persist per-item summaries for the local web UI."""
     if not summaries:
         return
@@ -1185,6 +1443,10 @@ def write_summaries(summaries: dict[int, str]) -> None:
             row = s.get(ItemRow, int(item_id))
             if row is not None:
                 row.summary = summary
+                if signatures is not None:
+                    row.summary_signature = signatures.get(int(item_id))
+                if backends is not None:
+                    row.summary_backend = backends.get(int(item_id))
 
 
 def mark_sent(digest_id: str) -> None:
@@ -1193,6 +1455,14 @@ def mark_sent(digest_id: str) -> None:
         d = s.get(DigestRow, digest_id)
         if d is not None:
             d.sent_at = datetime.now(timezone.utc)
+
+
+def digest_was_sent(digest_id: str) -> bool:
+    """Return whether a digest has a confirmed email send timestamp."""
+    init_db()
+    with session_scope() as s:
+        row = s.get(DigestRow, digest_id)
+        return bool(row is not None and row.sent_at is not None)
 
 
 def days_since_last_sent(exclude_digest_id: str | None = None) -> int:

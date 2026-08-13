@@ -31,13 +31,13 @@ if ($null -eq $UvPath) {
 New-Item -ItemType Directory -Force -Path "data" | Out-Null
 
 Write-Host "Syncing DailyDigest dependencies..."
-& $UvPath sync --frozen
+& $UvPath sync --frozen --no-dev --inexact
 if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
 
 $StartArguments = @(
-    "run", "dd", "start",
+    "run", "--no-sync", "dd", "start",
     "--host", $HostAddress,
     "--port", $Port
 )

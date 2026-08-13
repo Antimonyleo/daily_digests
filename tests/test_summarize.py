@@ -345,3 +345,62 @@ def test_missing_signed_in_cli_falls_back_to_extractive(monkeypatch):
     )
 
     assert summaries[1].startswith("Key finding:")
+
+
+def test_provider_failure_reports_extractive_fallback_provenance(monkeypatch):
+    item = _row("RNA delivery", "A detailed RNA delivery result was reported.")
+    monkeypatch.setattr(
+        sm,
+        "_call_llm",
+        lambda _batch: (_ for _ in ()).throw(RuntimeError("provider down")),
+    )
+
+    summaries, provenance = sm._summarize_via_provider_with_provenance(
+        [item], "api"
+    )
+
+    assert summaries[1].startswith("Key finding:")
+    assert provenance == {1: "extractive_fallback"}
+
+
+def test_summary_signature_changes_with_profile_text_and_backend(monkeypatch):
+    from dailydigest import config
+
+    settings = SimpleNamespace(
+        llm_backend="extractive",
+        llm_api_key="",
+        llm_model="unused",
+        llm_base_url="https://api.example-a.test/v1",
+    )
+    monkeypatch.setattr(config, "get_settings", lambda: settings)
+    item = _row("RNA assembly", "Original abstract.")
+    profile = SimpleNamespace(bio="RNA researcher", keywords=["RNA assembly"])
+
+    original = sm.summary_signature(item, profile)
+    item.abstract = "Updated abstract."
+    changed_text = sm.summary_signature(item, profile)
+    changed_profile = sm.summary_signature(
+        item, SimpleNamespace(bio="Protein researcher", keywords=["protein design"])
+    )
+    changed_backend = sm.summary_signature(item, profile, backend="api")
+
+    assert len({original, changed_text, changed_profile, changed_backend}) == 4
+
+
+def test_api_summary_signature_changes_with_provider_endpoint(monkeypatch):
+    from dailydigest import config
+
+    settings = SimpleNamespace(
+        llm_backend="api",
+        llm_api_key="secret",
+        llm_model="shared-model-name",
+        llm_base_url="https://api.example-a.test/v1",
+    )
+    monkeypatch.setattr(config, "get_settings", lambda: settings)
+    item = _row("RNA assembly", "Original abstract.")
+
+    endpoint_a = sm.summary_signature(item, backend="api")
+    settings.llm_base_url = "https://api.example-b.test/v1"
+    endpoint_b = sm.summary_signature(item, backend="api")
+
+    assert endpoint_a != endpoint_b

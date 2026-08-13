@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from ..models import Profile
-from .embed import embed_texts
+from .embed import active_embedding_signature, embed_texts
 
 logger = logging.getLogger(__name__)
 
@@ -269,10 +269,12 @@ def build_profile_vector(profile: Profile) -> np.ndarray:
 # Facet attribution (P1) + topic-priority axis (P3)
 # --------------------------------------------------------------------------- #
 
-# Cache the facet matrix keyed by the canonical descriptions (or historical
-# keywords) so we don't re-embed on every scoring call.
+# This is a single-user application, so only the active profile needs to stay in
+# memory. Keeping older profile versions would grow without bound after settings
+# edits and could reuse vectors produced by a different embedding model.
 _CORE_FACET_CACHE: dict[
-    tuple[tuple[str, tuple[str, ...]], ...], tuple[np.ndarray, list[str]]
+    tuple[str, tuple[tuple[str, tuple[str, ...]], ...]],
+    tuple[np.ndarray, list[str]],
 ] = {}
 
 
@@ -330,7 +332,8 @@ def build_core_facet_matrix(profile: Profile) -> tuple[np.ndarray, list[str]]:
     definitions = _facet_definitions(profile)
     if not definitions:
         return np.zeros((0, 0), dtype=np.float32), []
-    key = tuple((label, tuple(texts)) for label, texts in definitions)
+    definitions_key = tuple((label, tuple(texts)) for label, texts in definitions)
+    key = (active_embedding_signature(is_query=True), definitions_key)
     cached = _CORE_FACET_CACHE.get(key)
     if cached is not None:
         return cached
@@ -349,6 +352,7 @@ def build_core_facet_matrix(profile: Profile) -> tuple[np.ndarray, list[str]]:
     matrix = np.asarray(rows, dtype=np.float32)
     labels = [label for label, _texts in definitions]
     result = (matrix, labels)
+    _CORE_FACET_CACHE.clear()
     _CORE_FACET_CACHE[key] = result
     return result
 

@@ -1,7 +1,7 @@
 """SQLite-backed item embedding cache.
 
-The expensive local sentence-transformer call is keyed by item id, model name,
-and the normalized title+abstract text hash. Repeated ranking runs only embed
+The expensive local encoder call is keyed by item id, embedding-semantics
+signature, and normalized title+abstract hash. Repeated ranking runs only embed
 new or changed items.
 """
 
@@ -11,10 +11,10 @@ import hashlib
 from datetime import datetime, timezone
 
 import numpy as np
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from ..store import ItemEmbeddingRow, ItemRow, init_db, session_scope
-from .embed import active_model_name, embed_texts
+from .embed import active_embedding_signature, embed_texts
 
 
 def item_text(row: ItemRow) -> str:
@@ -66,12 +66,21 @@ def embed_item_rows(rows: list[ItemRow]) -> np.ndarray:
     vectors: list[np.ndarray | None] = [None] * len(rows)
     missing_indexes: list[int] = []
 
-    model_name = active_model_name()
+    model_name = active_embedding_signature()
     init_db()
     with session_scope() as s:
+        item_ids = [item_id for item_id in ids if item_id is not None]
+        # Keep one active vector per item. Prefix/model changes should re-embed,
+        # not leave an unbounded trail of obsolete cache rows.
+        s.execute(
+            delete(ItemEmbeddingRow).where(
+                ItemEmbeddingRow.item_id.in_(item_ids),
+                ItemEmbeddingRow.model != model_name,
+            )
+        )
         cached_rows = s.execute(
             select(ItemEmbeddingRow).where(
-                ItemEmbeddingRow.item_id.in_([item_id for item_id in ids if item_id is not None]),
+                ItemEmbeddingRow.item_id.in_(item_ids),
                 ItemEmbeddingRow.model == model_name,
             )
         ).scalars().all()
@@ -91,7 +100,9 @@ def embed_item_rows(rows: list[ItemRow]) -> np.ndarray:
                 missing_indexes.append(idx)
 
         if missing_indexes:
-            new_vecs = embed_texts([texts[idx] for idx in missing_indexes]).astype(np.float32, copy=False)
+            new_vecs = embed_texts([texts[idx] for idx in missing_indexes]).astype(
+                np.float32, copy=False
+            )
             now = datetime.now(timezone.utc)
             for vec_offset, idx in enumerate(missing_indexes):
                 item_id = ids[idx]

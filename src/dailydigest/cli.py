@@ -14,11 +14,12 @@ from . import inbound as inbound_mod
 from . import votes as votes_mod
 from .config import SETTINGS, load_profile, section_enabled
 from .dedupe import dedupe_ranking_candidates
+from .job_lock import ComputeBusyError, acquire_compute_lock
 from .pipeline import ingest_all, run_all
+from .rank.embed import release_encoder
 from .rank.profile import build_profile_matrix_with_rocchio
 from .rank.ranker import LRRanker, reset_lr_cache, score_items
-from .store import exclude_reviewed_items, recent_items
-from .store import prune as store_prune
+from .store import digest_was_sent, exclude_reviewed_items, recent_items
 
 app = typer.Typer(add_completion=False, help="DailyDigest CLI")
 
@@ -26,6 +27,30 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
+
+
+def _run_compute_job(action):
+    """Run one memory-heavy CLI action without overlapping another process."""
+    try:
+        lock = acquire_compute_lock(SETTINGS.db_path)
+    except ComputeBusyError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+    try:
+        return action()
+    finally:
+        try:
+            release_encoder()
+        finally:
+            lock.release()
+
+
+def _delivery_text(digest_id: str, *, dry_run: bool) -> str:
+    if dry_run:
+        return "local preview saved"
+    if digest_was_sent(digest_id):
+        return "email sent"
+    return "email not sent; local preview saved"
 
 
 def _is_loopback_bind(host: str) -> bool:
@@ -78,30 +103,33 @@ def should_run_now() -> bool:
 @app.command()
 def ingest() -> None:
     """Run ingest stage only."""
-    n = ingest_all()
+    n = _run_compute_job(ingest_all)
     typer.echo(f"upserted {n} new items")
 
 
 @app.command()
 def rank() -> None:
     """Re-rank recent items and print top 20."""
-    profile = load_profile()
-    # Use the SAME profile representation the pipeline ranks with (weighted
-    # facet matrix + Rocchio blend), not the legacy single centroid — otherwise
-    # this "inspect the current ranking" view disagrees with the real digest.
-    pv = build_profile_matrix_with_rocchio(profile, votes_mod.signed_vote_count())
-    items = [
-        item
-        for item in exclude_reviewed_items(recent_items(days=2))
-        if section_enabled(SETTINGS, item.section or "")
-    ]
-    items = dedupe_ranking_candidates(items)
-    scored = score_items(
-        items,
-        pv,
-        profile.downweight,
-        reason_penalty_map=votes_mod.reason_penalty_map(items),
-    )
+
+    def _rank_rows() -> list[tuple]:
+        profile = load_profile()
+        # Use the same profile representation as the real digest, rather than
+        # the legacy single centroid, so this inspection view does not disagree.
+        pv = build_profile_matrix_with_rocchio(profile, votes_mod.signed_vote_count())
+        items = [
+            item
+            for item in exclude_reviewed_items(recent_items(days=2))
+            if section_enabled(SETTINGS, item.section or "")
+        ]
+        items = dedupe_ranking_candidates(items)
+        return score_items(
+            items,
+            pv,
+            profile.downweight,
+            reason_penalty_map=votes_mod.reason_penalty_map(items),
+        )
+
+    scored = _run_compute_job(_rank_rows)
     for row, s in scored[:20]:
         title = (row.title or "").strip().replace("\n", " ")
         if len(title) > 90:
@@ -112,8 +140,8 @@ def rank() -> None:
 @app.command()
 def send() -> None:
     """Run the full pipeline (ingest + rank + summarize + render + send)."""
-    digest_id = run_all(dry_run=False)
-    typer.echo(f"sent digest {digest_id}")
+    digest_id = _run_compute_job(lambda: run_all(dry_run=False))
+    typer.echo(f"digest {digest_id}: {_delivery_text(digest_id, dry_run=False)}")
 
 
 @app.command("run-all")
@@ -128,8 +156,10 @@ def run_all_cmd(
     if gate and not should_run_now():
         typer.echo("gate: not the digest hour; skipping.")
         raise typer.Exit(code=0)
-    digest_id = run_all(dry_run=dry_run, backfill_days=backfill or None)
-    typer.echo(f"digest {digest_id} {'(dry-run)' if dry_run else 'sent'}")
+    digest_id = _run_compute_job(
+        lambda: run_all(dry_run=dry_run, backfill_days=backfill or None)
+    )
+    typer.echo(f"digest {digest_id}: {_delivery_text(digest_id, dry_run=dry_run)}")
 
 
 @app.command()
@@ -147,9 +177,11 @@ def brew(
     ),
 ) -> None:
     """Brew today's digest from the command line."""
-    digest_id = run_all(dry_run=not send, backfill_days=backfill or None)
-    destination = "email requested; local fallback enabled" if send else "local preview"
-    typer.echo(f"brewed digest {digest_id} ({destination})")
+    dry_run = not send
+    digest_id = _run_compute_job(
+        lambda: run_all(dry_run=dry_run, backfill_days=backfill or None)
+    )
+    typer.echo(f"brewed digest {digest_id} ({_delivery_text(digest_id, dry_run=dry_run)})")
 
 
 @app.command()
@@ -171,21 +203,27 @@ def vote(
 ) -> None:
     """Record thumbs feedback or retrain the LR ranker."""
     if train:
-        dataset = votes_mod.vote_dataset()
-        if dataset is None:
+        def _train_ranker() -> int | None:
+            dataset = votes_mod.vote_dataset()
+            if dataset is None:
+                return None
+            X, y = dataset
+            ranker = LRRanker()
+            ranker.fit(X, y)
+            reset_lr_cache()
+            return len(y)
+
+        try:
+            trained_rows = _run_compute_job(_train_ranker)
+        except ValueError as e:
+            typer.echo(f"train aborted: {e}")
+            raise typer.Exit(code=1) from e
+        if trained_rows is None:
             typer.echo(
                 f"need at least {votes_mod.MIN_VOTES_FOR_LR} votes to train; skipping."
             )
             raise typer.Exit(code=0)
-        X, y = dataset
-        ranker = LRRanker()
-        try:
-            ranker.fit(X, y)
-        except ValueError as e:
-            typer.echo(f"train aborted: {e}")
-            raise typer.Exit(code=1) from e
-        reset_lr_cache()
-        typer.echo(f"trained on {len(y)} votes")
+        typer.echo(f"trained on {trained_rows} votes")
         return
 
     if not line.strip():
@@ -200,9 +238,15 @@ def vote(
 
 @app.command()
 def prune() -> None:
-    """Prune items older than retention_days."""
-    n = store_prune(SETTINGS.retention_days)
-    typer.echo(f"pruned {n} items")
+    """Prune expired digests, unreferenced items, and old previews."""
+    from .prune import run_maintenance
+
+    result = run_maintenance()
+    typer.echo(
+        "pruned "
+        f"{result['digests']} digests, {result['items']} items, "
+        f"{result['previews']} previews, and {result['vote_reasons']} stale vote reasons"
+    )
 
 
 @app.command("eval")

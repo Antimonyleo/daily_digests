@@ -222,6 +222,45 @@ def test_rss_transport_failure_is_reported_to_pipeline(monkeypatch):
         )
 
 
+def test_rss_download_rejects_an_oversized_stream(monkeypatch):
+    from dailydigest.ingest import rss as rss_mod
+
+    class Response:
+        headers = {}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def raise_for_status(self):
+            return None
+
+        def iter_bytes(self):
+            yield b"123"
+            yield b"456"
+
+    class Client:
+        def __init__(self, **_kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def stream(self, *_args, **_kwargs):
+            return Response()
+
+    monkeypatch.setattr(rss_mod, "_MAX_FEED_BYTES", 5)
+    monkeypatch.setattr(rss_mod.httpx, "Client", Client)
+
+    with pytest.raises(RuntimeError, match="safety limit"):
+        rss_mod._http_get_bytes("https://example.com/feed")
+
+
 def test_openalex_venues_tags_items_with_real_journal(monkeypatch):
     """openalex_venues attributes each item to its real journal (venue) name so it
     earns venue prestige, and filters by the configured venue ids."""

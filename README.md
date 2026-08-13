@@ -134,6 +134,12 @@ you want its recommendation explanation and caveat. Use **Save for later** on
 any item, then open **Saved reading** to search your personal archive. Saved
 items are kept when old unsaved feed items are cleaned up.
 
+After each successful brew, DailyDigest removes expired digest history, old
+HTML previews, and unreferenced feed items according to `RETENTION_DAYS`
+(30 days by default). Voted items, saved items, and anything still referenced by
+a retained digest are preserved. Embeddings stay on disk rather than in memory;
+only the active model is loaded during a compute job and released afterward.
+
 Use **Night theme** on any page to switch between light and dark colors. On the
 digest page, **Compact view** condenses the overview, filters, section headers,
 recommendation metadata, and feedback controls so substantially more entries fit
@@ -254,10 +260,15 @@ votes, database, and settings as the browser app.
   `./scripts/start.sh` with a different `PORT` on macOS/Linux. On Windows use
   `.\scripts\start.ps1 -Port 8766`.
 - **The first brew is slow:** the embedding model and article data are being
-  downloaded. Later runs use the cache.
-- **Few or no items appear:** check your internet connection, broaden the date
-  window, and review source health in the app. Some publishers occasionally
-  block or delay their feeds.
+  downloaded. Later runs use the SQLite embedding cache. Local embedding uses
+  bounded batches and four CPU threads by default; advanced users can lower
+  `EMBED_BATCH_SIZE` or `EMBED_THREADS` in `.env` on a small computer.
+- **A brew reports degraded research coverage:** DailyDigest received too few
+  distinct papers or only one research-provider family. It deliberately keeps
+  the existing digest instead of publishing a misleading partial result. Check
+  your connection and source health, then retry. Redundant OpenAlex, PubMed,
+  preprint, and journal channels mean one failed feed normally does not stop a
+  brew.
 - **No funding or events appear:** confirm the section is enabled and complete
   its profile in Settings. A zero-result section means no official record passed
   status, deadline, eligibility, and topic checks; DailyDigest does not pad it
@@ -275,6 +286,7 @@ Run the automated tests with:
 ```bash
 uv sync --frozen --group dev
 uv run pytest
+uv run ruff check --select F,B src tests
 ```
 
 DailyDigest is released under the [MIT License](LICENSE).

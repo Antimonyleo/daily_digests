@@ -25,7 +25,6 @@ from dailydigest.rank.profile import (
     build_attribution_context,
 )
 
-
 # --------------------------------------------------------------------------- #
 # Fake embedder: each keyword maps to a distinct one-hot-ish unit vector so we
 # can construct exact cosine similarities in tests.
@@ -133,6 +132,47 @@ class TestBuildContext:
         # Rows are unit vectors.
         norms = np.linalg.norm(ctx.matrix, axis=1)
         assert np.allclose(norms, 1.0, atol=1e-5)
+
+    def test_facet_cache_keeps_only_the_active_profile(self, monkeypatch):
+        monkeypatch.setattr(
+            profile_mod,
+            "active_embedding_signature",
+            lambda **_kwargs: "model-a",
+        )
+
+        for index in range(5):
+            profile_mod.build_core_facet_matrix(
+                Profile(bio="x", keywords=[f"changing-interest-{index}"])
+            )
+
+        assert len(profile_mod._CORE_FACET_CACHE) == 1
+
+    def test_facet_cache_is_invalidated_by_embedding_model_change(self, monkeypatch):
+        current_model = "model-a"
+        embedded: list[list[str]] = []
+
+        def fake_model_name():
+            return current_model
+
+        def tracked_embed(texts, is_query=False):
+            del is_query
+            embedded.append(list(texts))
+            return np.ones((len(texts), 4), dtype=np.float32)
+
+        monkeypatch.setattr(
+            profile_mod,
+            "active_embedding_signature",
+            lambda **_kwargs: fake_model_name(),
+        )
+        monkeypatch.setattr(profile_mod, "embed_texts", tracked_embed)
+        profile = Profile(bio="x", keywords=["alpha"])
+
+        profile_mod.build_core_facet_matrix(profile)
+        current_model = "model-b"
+        profile_mod.build_core_facet_matrix(profile)
+
+        assert len(embedded) == 2
+        assert len(profile_mod._CORE_FACET_CACHE) == 1
 
     def test_canonical_facets_replace_keyword_attribution_only(self):
         p = Profile(

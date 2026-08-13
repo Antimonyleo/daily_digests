@@ -19,6 +19,7 @@ from tenacity import (
 from ..models import Item, SourceSpec
 
 logger = logging.getLogger(__name__)
+_MAX_FEED_BYTES = 16 * 1024 * 1024
 
 
 # A browser-like UA + Accept headers. Several publishers (Wiley, some news
@@ -46,9 +47,23 @@ _RSS_HEADERS = {
 def _http_get_bytes(url: str) -> bytes:
     """Fetch a feed body via httpx so we get retry control over feedparser."""
     with httpx.Client(timeout=20.0, follow_redirects=True) as client:
-        resp = client.get(url, headers=_RSS_HEADERS)
-        resp.raise_for_status()
-        return resp.content
+        with client.stream("GET", url, headers=_RSS_HEADERS) as resp:
+            resp.raise_for_status()
+            content_length = resp.headers.get("content-length")
+            if content_length:
+                try:
+                    if int(content_length) > _MAX_FEED_BYTES:
+                        raise RuntimeError(
+                            "RSS response exceeds the 16 MiB safety limit"
+                        )
+                except ValueError:
+                    pass
+            body = bytearray()
+            for chunk in resp.iter_bytes():
+                body.extend(chunk)
+                if len(body) > _MAX_FEED_BYTES:
+                    raise RuntimeError("RSS response exceeds the 16 MiB safety limit")
+            return bytes(body)
 
 
 _BLOCK_NOISE_RE = re.compile(r"<(script|style)[^>]*>.*?</\1>", re.DOTALL | re.IGNORECASE)

@@ -199,6 +199,13 @@
           <label for="llm_api_key">API key</label>
           <input type="password" id="llm_api_key" name="llm_api_key"
                  placeholder="Provider API key" value="{{ form.llm_api_key }}">
+          {% if form.llm_api_key %}
+          <label class="hint" for="remove_llm_api_key">
+            <input type="checkbox" id="remove_llm_api_key" name="remove_llm_api_key"
+                   value="true" {% if form.remove_llm_api_key == "true" %}checked{% endif %}>
+            Remove the saved API key
+          </label>
+          {% endif %}
         </div>
         <label for="llm_model">Model</label>
         <input type="text" id="llm_model" name="llm_model"

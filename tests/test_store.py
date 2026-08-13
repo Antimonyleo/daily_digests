@@ -3,6 +3,8 @@ from __future__ import annotations
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 
 def _reset_store(tmp_path, monkeypatch):
     from dailydigest import config as config_mod
@@ -187,6 +189,140 @@ def test_prune_preserves_bookmarked_items(monkeypatch, tmp_path):
     assert store_mod.set_bookmark(saved_id, True) is True
     assert store_mod.prune(5) == 1
     assert [row.item_id for row in store_mod.search_bookmarks()] == [saved_id]
+
+
+def test_prune_preserves_items_referenced_by_retained_digest(monkeypatch, tmp_path):
+    store_mod = _reset_store(tmp_path, monkeypatch)
+    old_time = datetime.now(timezone.utc) - timedelta(days=10)
+    with store_mod.session_scope() as s:
+        row = store_mod.ItemRow(
+            source="Test",
+            section="research",
+            external_id="old-current-digest",
+            url="https://example.com/old-current-digest",
+            title="Old item still in a retained digest",
+            fetched_at=old_time,
+        )
+        s.add(row)
+        s.flush()
+        item_id = int(row.id)
+
+    store_mod.write_digest("2099-01-01", [("R1", item_id)])
+
+    assert store_mod.prune(5) == 0
+    with store_mod.session_scope() as s:
+        assert s.get(store_mod.ItemRow, item_id) is not None
+
+
+def test_duplicate_upsert_refreshes_richer_metadata_and_invalidates_summary(
+    monkeypatch, tmp_path
+):
+    from dailydigest.models import Item
+
+    store_mod = _reset_store(tmp_path, monkeypatch)
+    first = Item(
+        source="Journal",
+        section="research",
+        external_id="paper-1",
+        url="bad-url",
+        title="CollapsedTitleWords",
+        abstract="Short abstract.",
+    )
+    assert store_mod.upsert_items([first]) == 1
+    with store_mod.session_scope() as s:
+        row = s.execute(store_mod.select(store_mod.ItemRow)).scalar_one()
+        row.summary = "Summary of stale text"
+        row.summary_signature = "old-signature"
+        row.summary_backend = "extractive_fallback"
+
+    richer = Item(
+        source="Journal",
+        section="research",
+        external_id="paper-1",
+        url="https://example.com/paper-1",
+        title="Collapsed Title Words",
+        abstract=(
+            "A substantially richer abstract with methods, results, limitations, "
+            "and enough additional detail to cross the conservative refresh threshold."
+        ),
+        authors="Ada Example",
+        published_at=datetime.now(timezone.utc),
+        metadata={"doi": "10.1/example"},
+    )
+
+    assert store_mod.upsert_items([richer]) == 0
+    with store_mod.session_scope() as s:
+        row = s.execute(store_mod.select(store_mod.ItemRow)).scalar_one()
+        assert row.title == "Collapsed Title Words"
+        assert row.abstract == richer.abstract
+        assert row.authors == "Ada Example"
+        assert row.published_at is not None
+        assert row.url == "https://example.com/paper-1"
+        assert row.summary == ""
+        assert row.summary_signature is None
+        assert row.summary_backend is None
+        assert store_mod.item_metadata(row)["doi"] == "10.1/example"
+
+
+def test_legacy_vote_migration_keeps_latest_and_creates_backup(monkeypatch, tmp_path):
+    from dailydigest import config as config_mod
+    from dailydigest import store as store_mod
+
+    db_path = tmp_path / "legacy-votes.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE items (
+                id INTEGER PRIMARY KEY, source VARCHAR NOT NULL,
+                section VARCHAR NOT NULL, external_id VARCHAR NOT NULL,
+                url VARCHAR NOT NULL, title TEXT NOT NULL
+            );
+            CREATE TABLE votes (
+                id INTEGER PRIMARY KEY, item_id INTEGER NOT NULL,
+                value INTEGER NOT NULL, created_at DATETIME
+            );
+            INSERT INTO items VALUES
+                (1, 'Legacy', 'research', 'one', 'https://example.com/one', 'One');
+            INSERT INTO votes VALUES
+                (1, 1, 1, '2026-01-01 10:00:00'),
+                (2, 1, -1, '2026-01-01 11:00:00');
+            """
+        )
+
+    monkeypatch.setenv("DB_PATH", str(db_path))
+    config_mod.reload_settings()
+    store_mod.SETTINGS = config_mod.SETTINGS
+    store_mod._ENGINE = None
+    store_mod._SessionLocal = None
+    store_mod._INITIALIZED = False
+    store_mod.init_db()
+
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute("SELECT value FROM votes").fetchall() == [(-1,)]
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute("INSERT INTO votes (item_id, value) VALUES (1, 1)")
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 1
+    assert (tmp_path / "backups" / "digest-pre-v1.db").exists()
+
+
+def test_migration_does_not_downgrade_a_future_schema_version(monkeypatch, tmp_path):
+    from dailydigest import config as config_mod
+    from dailydigest import store as store_mod
+
+    db_path = tmp_path / "future-version.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("PRAGMA user_version = 7")
+
+    monkeypatch.setenv("DB_PATH", str(db_path))
+    config_mod.reload_settings()
+    store_mod.SETTINGS = config_mod.SETTINGS
+    store_mod._ENGINE = None
+    store_mod._SessionLocal = None
+    store_mod._INITIALIZED = False
+    store_mod.init_db()
+
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 7
 
 
 def test_empty_rebrew_deletes_stale_feature_rows(monkeypatch, tmp_path):
