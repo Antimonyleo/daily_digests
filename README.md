@@ -135,13 +135,29 @@ any item, then open **Saved reading** to search your personal archive. Saved
 items are kept when old unsaved feed items are cleaned up.
 
 Use **Night theme** on any page to switch between light and dark colors. On the
-digest page, **Compact view** reduces card spacing when you want to scan more at
-once. Both choices are remembered by that browser. The controls appear in the
-lower-right corner on larger screens and near the end of the page on smaller
-screens. Browsers that support local progressive-web-app installation also show
-an **Install app** button. Installation creates an app-like launcher; the local
-DailyDigest server still needs to be running because private digest pages are
-deliberately not stored in the browser's offline cache.
+digest page, **Compact view** condenses the overview, filters, section headers,
+recommendation metadata, and feedback controls so substantially more entries fit
+on screen without shrinking the paper titles. Both choices are remembered by
+that browser. The controls appear in the lower-right corner on larger screens
+and near the end of the page on smaller screens. Browsers that support local
+progressive-web-app installation also show **Add to desktop**. This creates an
+app-like shortcut and standalone window; it does not install or start the
+DailyDigest server. The server still needs to be running because private digest
+pages are deliberately not stored in the browser's offline cache.
+
+Pip, the tea-cup companion, serves a rotating daily deck of science facts
+and lab jokes. On wide desktops Pip sits in the lower-left margin; on smaller
+screens it returns to the normal page flow. Select the leaf floating above Pip
+to drop it into the cup and hear another note, up to ten leaves per daily digest.
+After the tenth leaf, Pip calls the tea break finished. On wide screens Pip can
+be dragged, moved through preset positions, or adjusted
+with the arrow keys; the browser remembers the position. On mouse-equipped
+devices Pip also reacts subtly to the pointer. Its brief animations respect the
+operating system's reduced-motion preference.
+
+A slim green-to-gold bar at the top of the window tracks reading position through
+the digest itself. It reaches the end when the bottom of the recommendation card
+enters the reading area, independent of the setup and diagnostic panels around it.
 
 Funding and event cards show the official source, current status, deadline,
 available amount when stated, location/date for events, and a conservative

@@ -1,9 +1,26 @@
 {% extends "_base.html.j2" %}
 {% block title %}DailyDigest {{ digest_id }}{% endblock %}
 {% block extra_styles %}
+  .wrap { max-width: 1040px; padding: 22px 14px 78px; }
+  .reading-progress {
+    position: fixed; inset: 0 0 auto; z-index: 70; height: 4px;
+    background: var(--border-soft); pointer-events: none;
+  }
+  .reading-progress.empty { display: none; }
+  .reading-progress-fill {
+    width: 100%; height: 100%; transform: scaleX(0); transform-origin: left;
+    background: linear-gradient(90deg, var(--accent), var(--gold));
+    box-shadow: 0 0 8px color-mix(in srgb, var(--accent) 38%, transparent);
+  }
+  .reading-progress-leaf {
+    position: absolute; top: 4px; left: 0; width: 8px; height: 5px;
+    border-radius: 8px 2px 8px 2px; background: var(--gold);
+    opacity: 0; transform: translateX(-50%) rotate(-24deg);
+  }
+  .reading-progress.active .reading-progress-leaf { opacity: 1; }
   .topbar {
     display: grid; grid-template-columns: 1fr auto; gap: 20px;
-    align-items: center; margin-bottom: 18px;
+    align-items: center; margin-bottom: 14px;
   }
   .eyebrow {
     color: var(--accent); font-size: 12px; font-weight: 800;
@@ -29,17 +46,152 @@
     color: var(--text); font-size: 12px; font-weight: 720; cursor: pointer;
   }
   .tea-break {
-    display: flex; align-items: center; gap: 10px; margin: 0 0 16px; padding: 11px 14px;
-    border: 1px solid var(--border); border-radius: 10px; background: var(--panel);
+    display: grid; grid-template-columns: 72px minmax(0, 1fr); align-items: center;
+    gap: 12px; margin: 0 0 12px; padding: 10px 12px;
+    border: 1px solid var(--border); border-radius: 14px;
+    background: linear-gradient(115deg, var(--accent-soft), var(--panel) 44%, var(--gold-soft));
     color: var(--copy-secondary); font-size: 13px; line-height: 1.45;
+    box-shadow: 0 10px 28px rgba(21, 34, 27, 0.05);
   }
-  .tea-break-title { color: var(--accent-strong); font-size: 12px; font-weight: 820; white-space: nowrap; }
-  .tea-break-copy { max-width: 80ch; }
-  .tea-another {
-    flex: 0 0 auto; margin-left: auto; border: 0; padding: 0; background: transparent; color: var(--accent);
-    cursor: pointer; font-size: 11px; font-weight: 760;
+  .pip-stage {
+    position: relative; width: 68px; height: 68px; justify-self: center;
   }
-  .tea-another:hover { color: var(--accent-strong); text-decoration: underline; text-underline-offset: 3px; }
+  .tea-pet {
+    --pet-look-x: 0px; --pet-look-y: 0px; --pet-tilt: 0deg;
+    position: absolute; inset: auto 0 0; width: 64px; height: 62px; touch-action: none;
+    cursor: grab; outline: none;
+  }
+  .tea-pet:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 12px; }
+  .pet-steam {
+    position: absolute; top: 0; width: 7px; height: 17px;
+    border-left: 2px solid var(--accent); border-radius: 50%; opacity: 0;
+  }
+  .pet-steam.one { left: 23px; }
+  .pet-steam.two { left: 37px; animation-delay: 0.28s; }
+  .pet-cup {
+    position: absolute; left: 8px; bottom: 7px; width: 44px; height: 33px;
+    border: 2px solid var(--accent-strong); border-radius: 5px 5px 14px 14px;
+    background: var(--card); box-shadow: inset 0 -7px 0 var(--accent-soft);
+    transform: rotate(var(--pet-tilt));
+    transition: transform 0.18s ease, box-shadow 0.18s ease;
+  }
+  .pet-cup::after {
+    content: ""; position: absolute; right: -13px; top: 6px; width: 13px; height: 15px;
+    border: 2px solid var(--accent-strong); border-left: 0; border-radius: 0 9px 9px 0;
+  }
+  .pet-eye {
+    position: absolute; top: 10px; width: 3px; height: 5px;
+    border-radius: 50%; background: var(--accent-strong);
+    transform: translate(var(--pet-look-x), var(--pet-look-y));
+    transition: transform 0.12s ease;
+  }
+  .pet-eye.left { left: 13px; }
+  .pet-eye.right { right: 13px; }
+  .pet-mouth {
+    position: absolute; left: 20px; top: 19px; width: 7px; height: 4px;
+    border: 1.5px solid var(--accent-strong); border-top: 0; border-radius: 0 0 7px 7px;
+  }
+  .pip-drag-copy { display: none; }
+  .tea-break.is-dragging .tea-break-copy { display: none; }
+  .tea-break.is-dragging .pip-drag-copy { display: block; }
+  .tea-break.is-dragging .tea-pet { cursor: grabbing; }
+  .tea-break.is-dragging .pet-cup {
+    transform: translateY(-10px) rotate(-7deg);
+    box-shadow: inset 0 -7px 0 var(--accent-soft), 0 12px 18px rgba(21, 34, 27, 0.18);
+  }
+  .tea-break.is-dragging .pet-eye { width: 4px; height: 6px; top: 7px; }
+  .tea-break.is-dragging .pet-mouth {
+    left: 20px; top: 18px; width: 6px; height: 6px;
+    border: 1.5px solid var(--accent-strong); border-radius: 50%;
+  }
+  .tea-break[data-note-kind="fact"] .pet-mouth { height: 2px; border-width: 0 0 1.5px; border-radius: 0; }
+  .pet-saucer {
+    position: absolute; left: 5px; bottom: 2px; width: 56px; height: 8px;
+    border: 2px solid var(--accent-strong); border-top: 0; border-radius: 0 0 50% 50%;
+  }
+  .tea-dialog {
+    position: relative; min-width: 0; padding: 8px 11px 9px;
+    border: 1px solid var(--border); border-radius: 10px; background: var(--card);
+    background: color-mix(in srgb, var(--card) 91%, transparent);
+  }
+  .tea-dialog::before {
+    content: ""; position: absolute; left: -7px; top: 20px; width: 12px; height: 12px;
+    border-left: 1px solid var(--border); border-bottom: 1px solid var(--border);
+    background: var(--card); transform: rotate(45deg);
+  }
+  .tea-leaf-count {
+    position: absolute; right: -3px; bottom: -4px; z-index: 5;
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 29px; min-height: 18px; padding: 0 4px;
+    border: 1px solid var(--border); border-radius: 999px; background: var(--card);
+    color: var(--muted); font-size: 9px; font-weight: 800; white-space: nowrap;
+  }
+  .tea-break-copy { display: block; min-width: 0; }
+  .tea-leaf-drop {
+    position: absolute; left: 27px; top: -8px; z-index: 6;
+    width: 34px; height: 34px; padding: 0; border: 0; border-radius: 50%;
+    background: transparent; color: var(--accent); cursor: pointer;
+  }
+  .tea-leaf-shape {
+    position: absolute; left: 9px; top: 10px; width: 15px; height: 10px;
+    border-radius: 14px 3px 14px 3px;
+    background: linear-gradient(135deg, var(--accent), var(--accent-strong));
+    box-shadow: 0 2px 5px rgba(21, 76, 56, 0.18);
+    transform: rotate(-30deg); transform-origin: 70% 70%;
+  }
+  .tea-leaf-shape::after {
+    content: ""; position: absolute; right: -4px; bottom: -1px;
+    width: 7px; height: 1.5px; border-radius: 2px; background: var(--accent-strong);
+    transform: rotate(28deg); transform-origin: left center;
+  }
+  .tea-leaf-drop:hover .tea-leaf-shape { transform: translateY(-2px) rotate(-20deg) scale(1.12); }
+  .tea-leaf-drop:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; }
+  .tea-leaf-drop:disabled { cursor: default; }
+  .tea-leaf-drop:disabled .tea-leaf-shape { opacity: 0; transform: translateY(24px) scale(0.6); }
+  .pip-move {
+    display: none; border: 0; padding: 2px 5px; border-radius: 999px; background: transparent;
+    color: var(--muted); cursor: pointer; font-size: 10px; font-weight: 760;
+  }
+  .pip-move:hover { color: var(--accent-strong); background: var(--accent-soft); }
+  .pip-move:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  @keyframes pet-steam-rise {
+    0% { opacity: 0; transform: translateY(5px) scaleX(0.8); }
+    35% { opacity: 0.7; }
+    100% { opacity: 0; transform: translateY(-7px) translateX(2px) scaleX(1.1); }
+  }
+  @keyframes pet-hop {
+    0%, 100% { transform: translateY(0) rotate(0); }
+    45% { transform: translateY(-4px) rotate(-2deg); }
+  }
+  @keyframes note-pop {
+    0% { box-shadow: 0 0 0 rgba(37, 111, 82, 0); }
+    50% { box-shadow: 0 0 0 3px var(--accent-soft); }
+    100% { box-shadow: 0 0 0 rgba(37, 111, 82, 0); }
+  }
+  @keyframes leaf-drop {
+    0% { opacity: 1; transform: translate(0, 0) rotate(-30deg) scale(1); }
+    65% { opacity: 1; transform: translate(-8px, 25px) rotate(24deg) scale(0.86); }
+    100% { opacity: 0; transform: translate(-9px, 34px) rotate(52deg) scale(0.58); }
+  }
+  @keyframes pet-land {
+    0% { transform: translateY(-7px) scale(1.04); }
+    55% { transform: translateY(2px) scale(0.98); }
+    100% { transform: translateY(0) scale(1); }
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .pet-steam { animation: pet-steam-rise 1.9s ease-out 2 both; }
+    .tea-break.is-changing .pet-cup { animation: pet-hop 0.46s ease-out 1; }
+    .tea-break.is-changing .tea-dialog { animation: note-pop 0.46s ease-out 1; }
+    .tea-break.is-changing .tea-leaf-shape { animation: leaf-drop 0.62s ease-in 1; }
+    .tea-break.is-dropping .tea-pet { animation: pet-land 0.42s ease-out 1; }
+  }
+  @media (hover: hover) and (pointer: fine) and (prefers-reduced-motion: no-preference) {
+    .tea-pet:hover .pet-cup {
+      transform: translateY(-2px) rotate(var(--pet-tilt));
+      box-shadow: inset 0 -7px 0 var(--accent-soft), 0 4px 8px rgba(21, 34, 27, 0.12);
+    }
+    .tea-pet:hover .pet-steam { animation: pet-steam-rise 1.15s ease-out 1 both; }
+  }
   .brew-choice {
     display: grid; grid-template-columns: minmax(150px, 0.65fr) minmax(0, 2fr) auto;
     align-items: center; gap: 14px; margin: 0 0 16px; padding: 14px 16px;
@@ -75,7 +227,7 @@
   }
   .today-cup {
     display: grid; grid-template-columns: minmax(150px, 0.7fr) minmax(0, 2fr);
-    gap: 20px; align-items: center; margin: 0 0 16px; padding: 18px 20px;
+    gap: 18px; align-items: center; margin: 0 0 12px; padding: 14px 18px;
     border: 1px solid var(--border); border-radius: 12px;
     background: linear-gradient(135deg, #f7fbf8, var(--accent-soft));
   }
@@ -135,7 +287,7 @@
   .audit-metric strong { color: var(--text); font-size: 13px; }
   .digest-card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; box-shadow: var(--shadow); overflow: hidden; }
   .digest-toolbar {
-    padding: 16px 18px; background: var(--panel); border-bottom: 1px solid var(--border);
+    padding: 12px 16px; background: var(--panel); border-bottom: 1px solid var(--border);
   }
 	  .digest-date { font-weight: 750; overflow-wrap: anywhere; }
 	  .feedback-note { color: var(--muted); font-size: 13px; line-height: 1.45; max-width: 620px; }
@@ -160,7 +312,7 @@
   .ranking-panel .btn:disabled { opacity: 0.55; cursor: not-allowed; }
   .reader-tools {
     display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
-    gap: 12px; padding: 14px 18px; border-bottom: 1px solid var(--border);
+    gap: 10px; padding: 10px 16px; border-bottom: 1px solid var(--border);
     background: var(--card);
   }
   .reader-tools-side { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 10px; }
@@ -186,7 +338,7 @@
   .filter-count { color: var(--muted); font-size: 12px; }
   .section-toggle {
     display: flex; align-items: center; justify-content: space-between; gap: 12px;
-    padding: 18px 22px; border-top: 1px solid var(--border-soft);
+    padding: 14px 18px; border-top: 1px solid var(--border-soft);
     background: var(--card); cursor: pointer; list-style: none;
   }
   .section-toggle::-webkit-details-marker { display: none; }
@@ -200,7 +352,7 @@
     background: var(--surface-muted); border-radius: 999px; padding: 4px 9px;
   }
   .item {
-    padding: 18px 24px; border-top: 1px solid var(--border-soft);
+    padding: 16px 20px; border-top: 1px solid var(--border-soft);
   }
   .item-main { width: 100%; }
   .item[data-priority="spotlight"] { border-left: 4px solid var(--gold); }
@@ -229,14 +381,14 @@
     color: #6b5b1f; background: #f5efd6; border: 1px solid #e6dab0;
     text-transform: uppercase; letter-spacing: 0.03em;
   }
-  .reason-line { max-width: 84ch; color: var(--muted); font-size: 12px; line-height: 1.4; margin: 5px 0 0; overflow-wrap: anywhere; }
+  .reason-line { max-width: 96ch; color: var(--muted); font-size: 12px; line-height: 1.4; margin: 5px 0 0; overflow-wrap: anywhere; }
   .item a.title-link {
     display: block; color: var(--text); text-decoration: none; font-weight: 720; font-size: 16px;
     line-height: 1.36; overflow-wrap: anywhere; word-break: normal;
   }
   .item a.title-link:hover { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
 	  .item .meta { font-size: 12px; color: var(--muted); margin: 6px 0 0; overflow-wrap: anywhere; }
-	  .item .summary { max-width: 84ch; font-size: 14px; line-height: 1.62; margin: 10px 0 0; color: var(--copy-secondary); overflow-wrap: anywhere; }
+	  .item .summary { max-width: 96ch; font-size: 14px; line-height: 1.62; margin: 10px 0 0; color: var(--copy-secondary); overflow-wrap: anywhere; }
     .opportunity-facts { margin-top: 9px; padding: 9px 11px; border-radius: 7px; background: var(--panel); color: var(--copy-secondary); font-size: 12px; line-height: 1.55; }
     .opportunity-note { color: var(--muted); }
   .summary-primary {
@@ -245,7 +397,7 @@
   }
   .summary-field { display: grid; grid-template-columns: 92px 1fr; gap: 8px; }
   .summary-label { color: var(--accent-strong); font-size: 11px; font-weight: 840; text-transform: uppercase; letter-spacing: 0.04em; }
-  .summary-text { max-width: 84ch; color: var(--copy-secondary); font-size: 13px; line-height: 1.45; overflow-wrap: anywhere; }
+  .summary-text { max-width: 96ch; color: var(--copy-secondary); font-size: 13px; line-height: 1.45; overflow-wrap: anywhere; }
   .reason-row { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
   .reason-badge {
     display: inline-flex; align-items: center; min-height: 22px; padding: 3px 7px;
@@ -261,7 +413,7 @@
     color: var(--accent-strong);
   }
   .item-details-body { display: grid; gap: 8px; padding: 0 10px 10px; }
-  .why-copy { max-width: 84ch; color: var(--copy-secondary); font-size: 12px; line-height: 1.45; }
+  .why-copy { max-width: 96ch; color: var(--copy-secondary); font-size: 12px; line-height: 1.45; }
   .signal-line { color: var(--muted); font-size: 11px; line-height: 1.45; }
   .save-state { margin-top: 8px; color: var(--muted); font-size: 12px; }
   .save-state:empty { display: none; }
@@ -269,7 +421,7 @@
   .save-state.error { color: var(--down); }
   .vote-panel {
     display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 10px 14px;
-    margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border-soft);
+    margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border-soft);
   }
   .vote-title {
     font-size: 11px; color: var(--muted); font-weight: 800; text-transform: uppercase;
@@ -327,12 +479,92 @@
   .about-brew[open] > summary::after { content: "−"; }
   .about-summary { margin-left: auto; color: var(--muted); font-size: 11px; font-weight: 650; }
   .about-body { display: grid; gap: 12px; padding: 0 14px 14px; }
-  html[data-display="compact"] .item { padding: 12px 18px; }
-  html[data-display="compact"] .item a.title-link { font-size: 15px; line-height: 1.3; }
+  html[data-display="compact"] .topbar { margin-bottom: 8px; }
+  html[data-display="compact"] .subhead { display: none; }
+  html[data-display="compact"] .today-cup {
+    grid-template-columns: minmax(190px, auto) minmax(0, 1fr); gap: 10px;
+    padding: 8px 12px; margin-bottom: 8px;
+  }
+  html[data-display="compact"] .cup-kicker { display: none; }
+  html[data-display="compact"] .cup-time { margin: 0; font-size: 17px; }
+  html[data-display="compact"] .cup-label { margin-top: 1px; font-size: 11px; }
+  html[data-display="compact"] .cup-details { gap: 4px; }
+  html[data-display="compact"] .cup-row { gap: 4px; }
+  html[data-display="compact"] .cup-chip { min-height: 21px; padding: 2px 6px; }
+  html[data-display="compact"] .tea-break {
+    grid-template-columns: 54px minmax(0, 1fr); gap: 8px; padding: 6px 8px; margin-bottom: 8px;
+  }
+  html[data-display="compact"] .pip-stage { width: 52px; height: 54px; }
+  html[data-display="compact"] .tea-pet { transform: scale(0.82); transform-origin: bottom left; }
+  html[data-display="compact"] .tea-dialog { padding: 6px 9px 7px; }
+  html[data-display="compact"] .digest-toolbar { padding: 7px 12px; }
+  html[data-display="compact"] .feedback-note { display: none; }
+  html[data-display="compact"] .reader-tools { gap: 6px; padding: 6px 12px; }
+  html[data-display="compact"] .filter-chip,
+  html[data-display="compact"] .more-filters summary { min-height: 26px; padding: 3px 8px; }
+  html[data-display="compact"] .section-toggle { padding: 8px 14px; }
+  html[data-display="compact"] .section-heading { font-size: 15px; }
+  html[data-display="compact"] .section-count { padding: 2px 7px; }
+  html[data-display="compact"] .item { padding: 9px 14px; }
+  html[data-display="compact"] .item-heading { display: flex; flex-wrap: wrap; align-items: baseline; gap: 3px 8px; }
+  html[data-display="compact"] .item-heading .type-label { margin: 0; }
+  html[data-display="compact"] .item a.title-link { flex: 1 1 420px; font-size: 16px; line-height: 1.3; }
+  html[data-display="compact"] .bookmark-label { display: none; }
+  html[data-display="compact"] .bookmark-btn { min-height: 24px; padding: 2px 6px; }
+  html[data-display="compact"] .item .meta { margin-top: 3px; }
+  html[data-display="compact"] .reason-line { display: none; }
   html[data-display="compact"] .item .summary,
-  html[data-display="compact"] .summary-primary { margin-top: 7px; }
-  html[data-display="compact"] .vote-panel { margin-top: 10px; padding-top: 9px; }
-  html[data-display="compact"] .item-details { margin-top: 7px; }
+  html[data-display="compact"] .summary-primary { margin-top: 5px; }
+  html[data-display="compact"] .summary-primary { grid-template-columns: 72px 1fr; gap: 6px; padding: 7px 9px; }
+  html[data-display="compact"] .summary-primary .summary-label { font-size: 10px; white-space: nowrap; }
+  html[data-display="compact"] .item-details { margin-top: 5px; }
+  html[data-display="compact"] .item-details summary { padding: 5px 8px; }
+  html[data-display="compact"] .vote-panel {
+    grid-template-columns: minmax(0, 1fr); gap: 5px; margin-top: 6px; padding-top: 6px;
+  }
+  html[data-display="compact"] .vote-title { display: none; }
+  html[data-display="compact"] .vote-btn { min-height: 29px; padding: 4px 7px; font-size: 11px; }
+  html[data-display="compact"] .reason-block { grid-column: 1; }
+  @media (min-width: 1440px) {
+    .tea-break,
+    html[data-display="compact"] .tea-break {
+      position: fixed; left: max(12px, calc(50% - 714px)); bottom: 18px; z-index: 35;
+      width: 196px; margin: 0; padding: 0; grid-template-columns: 1fr; gap: 8px;
+      border: 0; background: transparent; box-shadow: none;
+    }
+    .tea-dialog,
+    html[data-display="compact"] .tea-dialog {
+      order: 1; padding: 9px 10px 10px;
+      box-shadow: 0 10px 28px rgba(21, 34, 27, 0.10);
+    }
+    .tea-dialog::before {
+      left: calc(50% - 6px); top: auto; bottom: -7px;
+      border-left: 0; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border);
+    }
+    .pip-stage,
+    html[data-display="compact"] .pip-stage {
+      order: 2; justify-self: center; width: 106px; height: 96px;
+    }
+    .tea-pet,
+    html[data-display="compact"] .tea-pet {
+      width: 94px; height: 88px; left: 6px;
+      transform: none; transform-origin: center;
+    }
+    .tea-pet .pet-cup { left: 16px; bottom: 10px; width: 60px; height: 45px; border-width: 2.5px; }
+    .tea-pet .pet-cup::after { right: -17px; top: 8px; width: 17px; height: 21px; border-width: 2.5px; border-left: 0; }
+    .tea-pet .pet-eye { top: 14px; width: 4px; height: 6px; }
+    .tea-pet .pet-eye.left { left: 17px; }
+    .tea-pet .pet-eye.right { right: 17px; }
+    .tea-pet .pet-mouth { left: 27px; top: 27px; width: 9px; height: 6px; }
+    .tea-pet .pet-saucer { left: 10px; bottom: 3px; width: 75px; height: 10px; border-width: 2.5px; border-top: 0; }
+    .tea-pet .pet-steam { top: 0; height: 22px; }
+    .tea-pet .pet-steam.one { left: 34px; }
+    .tea-pet .pet-steam.two { left: 52px; }
+    .tea-leaf-drop { left: 39px; top: -5px; }
+    .tea-leaf-count { right: 0; bottom: 0; }
+    .pip-move { display: inline-flex; position: absolute; left: -29px; bottom: 8px; }
+    .tea-break-copy { font-size: 12px; line-height: 1.45; }
+  }
   html[data-theme="dark"] .today-cup {
     background: linear-gradient(135deg, var(--panel), var(--accent-soft));
     border-color: var(--border);
@@ -349,6 +581,7 @@
   html[data-theme="dark"] .filter-chip:hover,
   html[data-theme="dark"] .vote-btn:hover { background: var(--surface-hover); border-color: var(--accent); }
   @media (max-width: 760px) {
+    .wrap { padding: 20px 12px 72px; }
     .topbar { grid-template-columns: 1fr; align-items: start; }
     .actions { justify-content: flex-start; }
     .mix-row { grid-template-columns: 1fr auto; }
@@ -364,13 +597,20 @@
     .today-cup { grid-template-columns: 1fr; }
     .brew-choice { grid-template-columns: 1fr; }
     .density-options { grid-template-columns: 1fr; }
-    .tea-break { align-items: flex-start; flex-wrap: wrap; }
-    .tea-another { margin-left: 0; }
+    .tea-break { grid-template-columns: 60px minmax(0, 1fr); align-items: center; gap: 8px; padding: 8px; }
+    .pip-stage { width: 58px; height: 62px; }
+    .tea-pet { transform: scale(0.9); transform-origin: bottom left; }
     .item { padding: 16px; }
     .item-head { gap: 8px; }
+    html[data-display="compact"] .today-cup { grid-template-columns: 1fr; }
+    html[data-display="compact"] .item { padding: 9px 12px; }
   }
 {% endblock %}
 {% block body %}
+  <div class="reading-progress{% if empty %} empty{% endif %}" id="reading-progress" role="progressbar" aria-label="Digest reading progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-valuetext="0% of digest read">
+    <div class="reading-progress-fill" id="reading-progress-fill"></div>
+    <span class="reading-progress-leaf" id="reading-progress-leaf" aria-hidden="true"></span>
+  </div>
   <header class="topbar">
     <div>
       <div class="eyebrow">DailyDigest</div>
@@ -457,11 +697,24 @@
   </section>
   {% endif %}
 
-  <section class="tea-break" aria-labelledby="tea-break-title">
-    <span aria-hidden="true">☕</span>
-    <strong class="tea-break-title" id="tea-break-title">Tea break</strong>
-    <span class="tea-break-copy" id="tea-note-text" aria-live="polite">{{ daily_note }}</span>
-    <button class="tea-another" id="tea-another" type="button" aria-label="Show another science fact or joke">Another one</button>
+  <section class="tea-break" id="tea-break" data-note-kind="{{ 'joke' if daily_note.startswith('Lab joke') else 'fact' }}" aria-label="Pip’s tea break">
+    <div class="pip-stage">
+      <button class="tea-leaf-drop" id="tea-another" type="button" aria-label="Drop a tea leaf into Pip’s cup for another science fact or joke" title="Drop a tea leaf into Pip’s cup">
+        <span class="tea-leaf-shape" aria-hidden="true"></span>
+      </button>
+      <div class="tea-pet" id="tea-pet" role="button" tabindex="0" aria-label="Move Pip. Drag with a pointer, use arrow keys, or press Home to reset." aria-describedby="pip-move-help">
+        <span class="pet-steam one"></span><span class="pet-steam two"></span>
+        <span class="pet-cup"><span class="pet-eye left"></span><span class="pet-eye right"></span><span class="pet-mouth"></span></span>
+        <span class="pet-saucer"></span>
+      </div>
+      <span class="tea-leaf-count" aria-label="Tea leaves given to Pip"><span id="tea-leaf-count">0</span>/10</span>
+      <button class="pip-move" id="pip-move" type="button" aria-label="Move Pip to another preset position">Move</button>
+    </div>
+    <span class="sr-only" id="pip-move-help">Press Enter to cycle through preset positions. Arrow keys move Pip. Home returns Pip to the lower-left dock.</span>
+    <div class="tea-dialog">
+      <span class="tea-break-copy" id="tea-note-text" aria-live="polite">{{ daily_note }}</span>
+      <span class="pip-drag-copy" aria-hidden="true">Easy—my tea is still hot!</span>
+    </div>
   </section>
 
   <main class="digest-card">
@@ -751,13 +1004,223 @@
 
   const teaText = document.getElementById("tea-note-text");
   const teaButton = document.getElementById("tea-another");
+  const teaBreak = document.getElementById("tea-break");
+  const teaPet = document.getElementById("tea-pet");
+  const pipMoveButton = document.getElementById("pip-move");
+  const teaLeafCount = document.getElementById("tea-leaf-count");
+  const teaLeafStorageKey = "dailydigest-tea-leaves:" + {{ digest_id|tojson }};
+  const pipPositionStorageKey = "dailydigest-pip-position";
+  const teaBreakOver = "Tea break over—time to read? I’ll keep your cup warm.";
+  let teaLeaves = 0;
+  try {
+    const savedTeaLeaves = Number.parseInt(localStorage.getItem(teaLeafStorageKey) || "0", 10);
+    teaLeaves = Number.isFinite(savedTeaLeaves) ? Math.max(0, Math.min(10, savedTeaLeaves)) : 0;
+  } catch (_) {}
+  const finePointer = window.matchMedia("(hover: hover) and (pointer: fine)");
+  const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+  const pipDock = window.matchMedia("(min-width: 1440px)");
+  let pipDrag = null;
+  let pipPresetIndex = 0;
+
+  function syncTeaBreakState() {
+    if (teaLeafCount) teaLeafCount.textContent = String(teaLeaves);
+    if (!teaButton || !teaText || teaLeaves < 10) return;
+    teaText.textContent = teaBreakOver;
+    teaButton.setAttribute("aria-label", "Tea break complete after ten tea leaves");
+    teaButton.setAttribute("title", "Tea break complete");
+    teaButton.disabled = true;
+    if (teaBreak) teaBreak.dataset.noteKind = "fact";
+  }
+
+  function clampPipPosition(x, y) {
+    if (!teaBreak) return { x: 0, y: 0 };
+    const width = teaBreak.offsetWidth;
+    const height = teaBreak.offsetHeight;
+    return {
+      x: Math.max(8, Math.min(window.innerWidth - width - 8, x)),
+      y: Math.max(8, Math.min(window.innerHeight - height - 8, y)),
+    };
+  }
+
+  function setPipPosition(x, y, persist = true) {
+    if (!teaBreak || !pipDock.matches) return;
+    const point = clampPipPosition(x, y);
+    teaBreak.style.left = `${Math.round(point.x)}px`;
+    teaBreak.style.top = `${Math.round(point.y)}px`;
+    teaBreak.style.bottom = "auto";
+    if (persist) {
+      try { localStorage.setItem(pipPositionStorageKey, JSON.stringify(point)); } catch (_) {}
+    }
+  }
+
+  function resetPipPosition(clearSaved = true) {
+    if (!teaBreak) return;
+    teaBreak.style.removeProperty("left");
+    teaBreak.style.removeProperty("top");
+    teaBreak.style.removeProperty("bottom");
+    if (clearSaved) {
+      try { localStorage.removeItem(pipPositionStorageKey); } catch (_) {}
+    }
+  }
+
+  function restorePipPosition() {
+    if (!teaBreak || !pipDock.matches) {
+      resetPipPosition(false);
+      if (teaPet) teaPet.tabIndex = -1;
+      return;
+    }
+    if (teaPet) teaPet.tabIndex = 0;
+    try {
+      const saved = JSON.parse(localStorage.getItem(pipPositionStorageKey) || "null");
+      if (saved && Number.isFinite(saved.x) && Number.isFinite(saved.y)) {
+        setPipPosition(saved.x, saved.y, false);
+      }
+    } catch (_) {}
+  }
+
+  function cyclePipPosition() {
+    if (!teaBreak || !pipDock.matches) return;
+    const rect = teaBreak.getBoundingClientRect();
+    const sideGap = Math.max(12, window.innerWidth / 2 - 714);
+    const presets = [
+      { x: sideGap, y: window.innerHeight - rect.height - 18 },
+      { x: sideGap, y: 72 },
+      { x: window.innerWidth - sideGap - rect.width, y: 72 },
+    ];
+    pipPresetIndex = (pipPresetIndex + 1) % presets.length;
+    setPipPosition(presets[pipPresetIndex].x, presets[pipPresetIndex].y);
+  }
+
+  function landPip() {
+    if (!teaBreak) return;
+    teaBreak.classList.remove("is-dragging");
+    teaBreak.classList.remove("is-dropping");
+    void teaBreak.offsetWidth;
+    teaBreak.classList.add("is-dropping");
+    window.setTimeout(() => teaBreak.classList.remove("is-dropping"), 460);
+  }
+
+  syncTeaBreakState();
+  restorePipPosition();
+  if (pipDock.addEventListener) pipDock.addEventListener("change", restorePipPosition);
+  window.addEventListener("resize", restorePipPosition);
+
+  if (pipMoveButton) pipMoveButton.addEventListener("click", cyclePipPosition);
+  if (teaPet) {
+    teaPet.addEventListener("pointerdown", (event) => {
+      if (!pipDock.matches || event.button !== 0) return;
+      const rect = teaBreak.getBoundingClientRect();
+      pipDrag = {
+        pointerId: event.pointerId,
+        offsetX: event.clientX - rect.left,
+        offsetY: event.clientY - rect.top,
+      };
+      teaPet.setPointerCapture(event.pointerId);
+      teaBreak.classList.add("is-dragging");
+      event.preventDefault();
+    });
+    teaPet.addEventListener("pointermove", (event) => {
+      if (pipDrag && event.pointerId === pipDrag.pointerId) {
+        setPipPosition(event.clientX - pipDrag.offsetX, event.clientY - pipDrag.offsetY, false);
+        return;
+      }
+      if (!finePointer.matches || reducedMotion.matches) return;
+      const box = teaPet.getBoundingClientRect();
+      const x = Math.max(-1, Math.min(1, ((event.clientX - box.left) / box.width) * 2 - 1));
+      const y = Math.max(-1, Math.min(1, ((event.clientY - box.top) / box.height) * 2 - 1));
+      teaPet.style.setProperty("--pet-look-x", `${(x * 1.6).toFixed(2)}px`);
+      teaPet.style.setProperty("--pet-look-y", `${(y * 1.2).toFixed(2)}px`);
+      teaPet.style.setProperty("--pet-tilt", `${(x * 2.2).toFixed(2)}deg`);
+    });
+    teaPet.addEventListener("pointerleave", () => {
+      if (pipDrag) return;
+      teaPet.style.removeProperty("--pet-look-x");
+      teaPet.style.removeProperty("--pet-look-y");
+      teaPet.style.removeProperty("--pet-tilt");
+    });
+    const finishPipDrag = (event) => {
+      if (!pipDrag || event.pointerId !== pipDrag.pointerId) return;
+      const rect = teaBreak.getBoundingClientRect();
+      setPipPosition(rect.left, rect.top);
+      if (teaPet.hasPointerCapture(event.pointerId)) teaPet.releasePointerCapture(event.pointerId);
+      pipDrag = null;
+      landPip();
+    };
+    teaPet.addEventListener("pointerup", finishPipDrag);
+    teaPet.addEventListener("pointercancel", finishPipDrag);
+    teaPet.addEventListener("keydown", (event) => {
+      if (!pipDock.matches) return;
+      const rect = teaBreak.getBoundingClientRect();
+      const movements = {
+        ArrowLeft: [-18, 0], ArrowRight: [18, 0],
+        ArrowUp: [0, -18], ArrowDown: [0, 18],
+      };
+      if (movements[event.key]) {
+        event.preventDefault();
+        setPipPosition(rect.left + movements[event.key][0], rect.top + movements[event.key][1]);
+        landPip();
+      } else if (event.key === "Home") {
+        event.preventDefault();
+        resetPipPosition();
+        landPip();
+      } else if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        cyclePipPosition();
+        landPip();
+      }
+    });
+  }
   let teaIndex = teaText ? TEA_NOTES.indexOf(teaText.textContent) : -1;
   if (teaText && teaButton && TEA_NOTES.length > 1) {
     teaButton.addEventListener("click", () => {
-      teaIndex = (teaIndex + 1) % TEA_NOTES.length;
-      teaText.textContent = TEA_NOTES[teaIndex];
+      if (teaLeaves >= 10) return;
+      teaLeaves = Math.min(10, teaLeaves + 1);
+      if (teaLeafCount) teaLeafCount.textContent = String(teaLeaves);
+      try { localStorage.setItem(teaLeafStorageKey, String(teaLeaves)); } catch (_) {}
+      if (teaLeaves >= 10) {
+        syncTeaBreakState();
+      } else {
+        teaIndex = (teaIndex + 1) % TEA_NOTES.length;
+        teaText.textContent = TEA_NOTES[teaIndex];
+      }
+      if (teaBreak) {
+        teaBreak.dataset.noteKind = teaText.textContent.startsWith("Lab joke") ? "joke" : "fact";
+        teaBreak.classList.remove("is-changing");
+        void teaBreak.offsetWidth;
+        teaBreak.classList.add("is-changing");
+        window.setTimeout(() => teaBreak.classList.remove("is-changing"), 650);
+      }
     });
   }
+
+  const progressBar = document.getElementById("reading-progress");
+  const progressFill = document.getElementById("reading-progress-fill");
+  const progressLeaf = document.getElementById("reading-progress-leaf");
+  const digestCard = document.querySelector(".digest-card");
+  let progressFrame = null;
+  function updateReadingProgress() {
+    progressFrame = null;
+    if (!progressBar || !progressFill || !digestCard || progressBar.classList.contains("empty")) return;
+    const rect = digestCard.getBoundingClientRect();
+    const documentTop = rect.top + window.scrollY;
+    const documentBottom = documentTop + rect.height;
+    const start = Math.max(0, documentTop - window.innerHeight * 0.25);
+    const finish = Math.max(start + 1, documentBottom - window.innerHeight * 0.75);
+    const fraction = Math.max(0, Math.min(1, (window.scrollY - start) / (finish - start)));
+    const percent = Math.round(fraction * 100);
+    progressFill.style.transform = `scaleX(${fraction})`;
+    if (progressLeaf) progressLeaf.style.left = `${percent}%`;
+    progressBar.classList.toggle("active", percent > 0);
+    progressBar.setAttribute("aria-valuenow", String(percent));
+    progressBar.setAttribute("aria-valuetext", `${percent}% of digest read`);
+  }
+  function scheduleReadingProgress() {
+    if (progressFrame !== null) return;
+    progressFrame = window.requestAnimationFrame(updateReadingProgress);
+  }
+  window.addEventListener("scroll", scheduleReadingProgress, { passive: true });
+  window.addEventListener("resize", scheduleReadingProgress);
+  scheduleReadingProgress();
 
   function setActive(itemEl, grade) {
     itemEl.dataset.currentGrade = String(grade);

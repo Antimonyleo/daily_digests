@@ -243,6 +243,10 @@ def test_openalex_venues_tags_items_with_real_journal(monkeypatch):
         return {"results": [work], "meta": {"next_cursor": None}}
 
     monkeypatch.setattr("dailydigest.ingest.openalex._get_json", fake_get_json)
+    monkeypatch.setattr(
+        "dailydigest.ingest.openalex._get_crossref_json",
+        lambda url, params, headers: {"message": {"items": []}},
+    )
 
     spec = _spec(
         name="ACS journals (via OpenAlex)",
@@ -256,6 +260,108 @@ def test_openalex_venues_tags_items_with_real_journal(monkeypatch):
     assert items[0].source == "ACS Nano"
     # The venue filter was applied.
     assert "primary_location.source.id:S145476921|S143846845" in captured["filter"]
+
+
+def test_openalex_repairs_acs_title_spacing_from_crossref(monkeypatch):
+    """OpenAlex collapses Crossref title line breaks for some ACS papers."""
+    from dailydigest.ingest import openalex as openalex_mod
+
+    openalex_mod._recent_acs_titles.cache_clear()
+
+    work = {
+        "id": "https://openalex.org/W-ACS",
+        "title": (
+            "Brightly FluorescentSelf-Assembled Supra-J-AggregateNanoparticles "
+            "for Bioanalysis"
+        ),
+        "doi": "https://doi.org/10.1021/acsnano.6c04900",
+        "primary_location": {"source": {"display_name": "ACS Nano"}},
+        "abstract_inverted_index": None,
+        "authorships": [],
+        "publication_date": "2026-08-12",
+    }
+    monkeypatch.setattr(
+        openalex_mod,
+        "_get_json",
+        lambda url, params, headers: {
+            "results": [work],
+            "meta": {"next_cursor": None},
+        },
+    )
+    monkeypatch.setattr(
+        openalex_mod,
+        "_get_crossref_json",
+        lambda url, params, headers: {
+            "message": {
+                "items": [
+                    {
+                        "DOI": "10.1021/acsnano.6c04900",
+                        "title": [
+                            "Brightly Fluorescent\nSelf-Assembled "
+                            "Supra-J-Aggregate\nNanoparticles for Bioanalysis"
+                        ],
+                    }
+                ]
+            }
+        },
+        raising=False,
+    )
+
+    items = openalex_mod.OpenAlexSource()._fetch_works(
+        _spec(name="ACS flagships (via OpenAlex)", kind="openalex_venues"),
+        2,
+        {"User-Agent": "test"},
+        cap=10,
+        use_venue_source=True,
+    )
+
+    assert items[0].title == (
+        "Brightly Fluorescent Self-Assembled Supra-J-Aggregate "
+        "Nanoparticles for Bioanalysis"
+    )
+
+
+def test_openalex_title_cleanup_failure_keeps_the_paper(monkeypatch):
+    from dailydigest.ingest import openalex as openalex_mod
+
+    openalex_mod._recent_acs_titles.cache_clear()
+    work = {
+        "id": "https://openalex.org/W-ACS-FALLBACK",
+        "title": "FluorescentSelf-Assembled Nanoparticles",
+        "doi": "https://doi.org/10.1021/acsnano.6c99999",
+        "primary_location": {"source": {"display_name": "ACS Nano"}},
+        "abstract_inverted_index": None,
+        "authorships": [],
+        "publication_date": "2026-08-12",
+    }
+    monkeypatch.setattr(
+        openalex_mod,
+        "_get_json",
+        lambda url, params, headers: {
+            "results": [work],
+            "meta": {"next_cursor": None},
+        },
+    )
+
+    def crossref_offline(url, params, headers):
+        raise RuntimeError("offline")
+
+    monkeypatch.setattr(
+        openalex_mod,
+        "_get_crossref_json",
+        crossref_offline,
+    )
+
+    items = openalex_mod.OpenAlexSource()._fetch_works(
+        _spec(name="ACS flagships (via OpenAlex)", kind="openalex_venues"),
+        2,
+        {"User-Agent": "test"},
+        cap=10,
+        use_venue_source=True,
+    )
+
+    assert len(items) == 1
+    assert items[0].title == "FluorescentSelf-Assembled Nanoparticles"
 
 
 def test_openalex_profile_driven_upgrades_recognized_venue(monkeypatch):

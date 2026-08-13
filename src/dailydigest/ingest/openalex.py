@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import hashlib
+import html
 import logging
+import re
 from datetime import datetime, timedelta, timezone
+from functools import lru_cache
 from typing import Any
 
 import httpx
@@ -19,6 +22,9 @@ from ._terms import profile_search_terms, watched_author_names
 
 logger = logging.getLogger(__name__)
 
+_CROSSREF_ACS_WORKS = "https://api.crossref.org/prefixes/10.1021/works"
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
+
 
 @retry(
     stop=stop_after_attempt(3),
@@ -33,6 +39,70 @@ def _get_json(
         resp = client.get(url, params=params)
         resp.raise_for_status()
         return resp.json()
+
+
+def _get_crossref_json(
+    url: str, params: dict[str, str], headers: dict[str, str]
+) -> dict:
+    """Separate seam for Crossref title metadata; transport retries via `_get_json`."""
+    return _get_json(url, params, headers)
+
+
+def _plain_title(value: str) -> str:
+    value = _HTML_TAG_RE.sub(" ", str(value or ""))
+    return re.sub(r"\s+", " ", html.unescape(value)).strip()
+
+
+@lru_cache(maxsize=8)
+def _recent_acs_titles(
+    window_start: str, window_end: str, polite_email: str
+) -> dict[str, str]:
+    """Load recent authoritative ACS titles once per brew window.
+
+    OpenAlex occasionally collapses Crossref title line breaks and inline markup,
+    yielding strings such as ``FluorescentSelf-Assembled``. A single bounded
+    prefix query avoids one HTTP request per paper.
+    """
+    params = {
+        "filter": f"from-pub-date:{window_start},until-pub-date:{window_end}",
+        "select": "DOI,title",
+        "rows": "1000",
+        "sort": "published",
+        "order": "desc",
+    }
+    if polite_email:
+        params["mailto"] = polite_email
+    headers = {"User-Agent": "dailydigest/0.1"}
+    if polite_email:
+        headers["User-Agent"] += f" (mailto:{polite_email})"
+    try:
+        payload = _get_crossref_json(_CROSSREF_ACS_WORKS, params, headers)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Crossref ACS title cleanup unavailable: %s", exc)
+        return {}
+
+    titles: dict[str, str] = {}
+    for item in (payload.get("message") or {}).get("items") or []:
+        doi = _canonical_doi(str(item.get("DOI") or ""))
+        raw_titles = item.get("title") or []
+        raw_title = raw_titles[0] if isinstance(raw_titles, list) and raw_titles else ""
+        title = _plain_title(str(raw_title))
+        if doi and title:
+            titles[doi] = title
+    return titles
+
+
+def _repair_acs_title(
+    title: str,
+    doi: str,
+    *,
+    window_start: str,
+    window_end: str,
+    polite_email: str,
+) -> str:
+    if not doi.startswith("10.1021/"):
+        return title
+    return _recent_acs_titles(window_start, window_end, polite_email).get(doi, title)
 
 
 def _reconstruct_abstract(inverted: dict[str, list[int]] | None) -> str:
@@ -172,6 +242,15 @@ class OpenAlexSource:
                 title = (work.get("title") or work.get("display_name") or "").strip()
                 if not title:
                     continue
+                raw_doi = work.get("doi") or ""
+                bare_doi = _canonical_doi(raw_doi)
+                title = _repair_acs_title(
+                    title,
+                    bare_doi,
+                    window_start=window_start,
+                    window_end=today.isoformat(),
+                    polite_email=spec.polite_email or "",
+                )
                 raw_url = (
                     work.get("doi")
                     or (work.get("primary_location") or {}).get("landing_page_url")
@@ -193,8 +272,6 @@ class OpenAlexSource:
                     if (a.get("author") or {}).get("display_name")
                 )
                 pub = _parse_date(work.get("publication_date"))
-                raw_doi = work.get("doi") or ""
-                bare_doi = _canonical_doi(raw_doi)
                 ext = bare_doi or work.get("id") or hashlib.sha1(url.encode("utf-8")).hexdigest()[:16]
                 # Real publication venue, used to attribute the item to its actual
                 # journal (so it earns venue prestige) rather than to the generic

@@ -1972,12 +1972,45 @@ def test_main_page_exposes_one_click_reading_modes_and_settings_can_return(
     assert 'action="/run"' in main
     assert 'name="autostart" value="1"' in main
     assert "window.location.href = `/run?reading_mode=" not in main
-    assert "Tea break" in main
+    assert "Pip’s tea break" in main
     assert 'id="tea-note-text"' in main
     assert 'id="tea-another"' in main
-    assert "Another one" in main
-    assert "Show another science fact or joke" in main
+    assert 'class="tea-leaf-drop"' in main
+    assert 'class="tea-leaf-shape" aria-hidden="true"' in main
+    assert "Drop a tea leaf into Pip’s cup for another science fact or joke" in main
+    assert "Add tea leaf" not in main
+    assert 'id="tea-leaf-count">0</span>' in main
+    assert 'const teaLeafStorageKey = "dailydigest-tea-leaves:"' in main
+    assert "Math.min(10, teaLeaves + 1)" in main
+    assert "Tea break over—time to read?" in main
+    assert 'teaButton.setAttribute("title", "Tea break complete")' in main
+    assert "teaButton.disabled = true" in main
+    assert "localStorage.setItem(teaLeafStorageKey, String(teaLeaves))" in main
     assert "teaIndex = (teaIndex + 1) % TEA_NOTES.length" in main
+    assert 'class="tea-pet" id="tea-pet" role="button" tabindex="0"' in main
+    assert 'data-note-kind=' in main
+    assert ".tea-break-copy { display: block; min-width: 0; }" in main
+    assert ".tea-break-copy { max-width: 80ch; }" not in main
+    assert "teaBreak.dataset.noteKind" in main
+    assert "pet-steam-rise 1.9s ease-out 2 both" in main
+    assert ".tea-break.is-changing .tea-leaf-shape { animation: leaf-drop 0.62s ease-in 1; }" in main
+    assert '@media (hover: hover) and (pointer: fine) and (prefers-reduced-motion: no-preference)' in main
+    assert 'teaPet.addEventListener("pointermove"' in main
+    assert 'teaPet.addEventListener("pointerleave"' in main
+    assert 'teaPet.addEventListener("pointerdown"' in main
+    assert "teaPet.setPointerCapture(event.pointerId)" in main
+    assert 'teaPet.addEventListener("keydown"' in main
+    assert 'id="pip-move"' in main
+    assert 'id="pip-move-help"' in main
+    assert 'class="pip-drag-copy"' in main
+    assert main.index('class="pip-stage"') < main.index('class="tea-dialog"')
+    assert '<div class="tea-dialog">\n      <span class="tea-break-copy"' in main
+    assert 'window.matchMedia("(prefers-reduced-motion: reduce)")' in main
+    assert 'role="progressbar"' in main
+    assert 'aria-label="Digest reading progress"' in main
+    assert 'id="reading-progress-fill"' in main
+    assert 'window.addEventListener("scroll", scheduleReadingProgress, { passive: true })' in main
+    assert 'document.querySelector(".digest-card")' in main
     tea_notes_match = re.search(r"const TEA_NOTES = (\[.*?\]);", main)
     assert tea_notes_match is not None
     tea_notes = json.loads(tea_notes_match.group(1))
@@ -2071,24 +2104,32 @@ def test_theme_controls_and_safe_pwa_assets_are_exposed(monkeypatch, tmp_path):
     profile_path = tmp_path / "profile.yaml"
     profile_path.write_text("bio: Reader\nkeywords: []\ndownweight: []\n")
     monkeypatch.setattr(web, "_get_profile_path", lambda: profile_path)
+    monkeypatch.setattr(web, "_digest_id", lambda: "2031-02-03")
+    monkeypatch.setattr(web, "_load_today", lambda _digest_id: ([], {}))
+    monkeypatch.setattr(web, "_digest_exists", lambda _digest_id: False)
 
-    page = _text_payload(web.run_get(_request("GET", "/run")))
+    page = _text_payload(web.index(_request("GET", "/")))
     assert 'rel="manifest" href="/manifest.webmanifest"' in page
     assert 'id="theme-toggle"' in page
     assert '>Night theme</button>' in page
     assert 'id="display-toggle"' in page
     assert '>Compact view</button>' in page
-    assert "themeButton.textContent" not in page
-    assert "displayButton.textContent" not in page
+    assert 'id="install-app"' in page
+    assert '>Add to desktop</button>' in page
+    assert "It does not install or start the DailyDigest server" in page
+    assert 'aria-describedby="install-app-help"' in page
+    assert 'compact ? "Comfortable view" : "Compact view"' in page
     assert "localStorage.getItem(\"dailydigest-theme\")" in page
     assert "localStorage.getItem(\"dailydigest-display\")" in page
     assert page.index("dailydigest-theme") < page.index("<style>")
     assert "@media (max-width: 680px)" in page
     assert ".app-utilities {" in page
-    assert "position: static; justify-content: center" in page
-    assert 'id="install-app"' in page
+    assert "display: flex; flex-direction: column" in page
+    assert "position: static; flex-direction: row; justify-content: center" in page
     assert "navigator.serviceWorker.register" in page
     assert 'data-theme="light"' in page
+    assert "@media (prefers-reduced-motion: no-preference)" in page
+    assert "animation-iteration-count: 1 !important" in page
 
     manifest_response = web.web_manifest(_request("GET", "/manifest.webmanifest"))
     assert manifest_response.media_type == "application/manifest+json"
@@ -2111,6 +2152,30 @@ def test_theme_controls_and_safe_pwa_assets_are_exposed(monkeypatch, tmp_path):
     assert "SAFE_ASSETS.includes(url.pathname)" in worker_text
     assert 'key.startsWith(CACHE_PREFIX)' in worker_text
     assert 'caches.match(event.request)' not in worker_text
+
+
+def test_compact_view_changes_information_hierarchy(monkeypatch, tmp_path):
+    from dailydigest import web
+
+    profile_path = tmp_path / "profile.yaml"
+    profile_path.write_text("bio: Reader\nkeywords: []\ndownweight: []\n")
+    monkeypatch.setattr(web, "_get_profile_path", lambda: profile_path)
+    monkeypatch.setattr(web, "_digest_id", lambda: "2031-02-03")
+    monkeypatch.setattr(web, "_load_today", lambda _digest_id: ([], {}))
+    monkeypatch.setattr(web, "_digest_exists", lambda _digest_id: False)
+
+    page = _text_payload(web.index(_request("GET", "/")))
+
+    assert 'html[data-display="compact"] .subhead { display: none; }' in page
+    assert 'html[data-display="compact"] .feedback-note { display: none; }' in page
+    assert 'html[data-display="compact"] .reason-line { display: none; }' in page
+    assert 'html[data-display="compact"] .item-heading { display: flex;' in page
+    assert 'html[data-display="compact"] .vote-title { display: none; }' in page
+    assert 'html[data-display="compact"] .item a.title-link { flex: 1 1 420px; font-size: 16px;' in page
+    assert 'html[data-display="compact"] .today-cup { grid-template-columns: 1fr; }' in page
+    assert ".wrap { max-width: 1040px; padding: 22px 14px 78px; }" in page
+    assert "@media (min-width: 1440px)" in page
+    assert "position: fixed; left: max(12px, calc(50% - 714px)); bottom: 18px" in page
 
 
 def test_opportunity_calendar_export_uses_structured_dates(tmp_path, monkeypatch):

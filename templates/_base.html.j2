@@ -39,6 +39,10 @@
     --surface-hover: #f8faf7;
     --border-soft: #edf1ec;
     --copy-secondary: #334238;
+    --ambient-mint: rgba(71, 150, 108, 0.16);
+    --ambient-gold: rgba(223, 176, 85, 0.13);
+    --ambient-blue: rgba(92, 145, 179, 0.10);
+    --ambient-dot: rgba(37, 111, 82, 0.14);
   }
   html[data-theme="dark"] {
     color-scheme: dark;
@@ -63,10 +67,14 @@
     --surface-hover: #1a2720;
     --border-soft: #28362e;
     --copy-secondary: #c5d0c9;
+    --ambient-mint: rgba(102, 181, 141, 0.11);
+    --ambient-gold: rgba(213, 165, 82, 0.08);
+    --ambient-blue: rgba(92, 145, 179, 0.07);
+    --ambient-dot: rgba(146, 210, 172, 0.11);
   }
   * { box-sizing: border-box; }
   body {
-    margin: 0;
+    position: relative; min-height: 100vh; margin: 0; overflow-x: hidden;
     background:
       linear-gradient(180deg, var(--bg-top) 0%, var(--bg) 260px);
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
@@ -74,7 +82,23 @@
     -webkit-font-smoothing: antialiased;
     transition: background-color 0.18s ease, color 0.18s ease;
   }
-  .wrap { max-width: 1100px; margin: 0 auto; padding: 28px 16px 78px; }
+  body::before, body::after {
+    content: ""; position: fixed; inset: 0; z-index: 0; pointer-events: none;
+  }
+  body::before {
+    background:
+      radial-gradient(circle at 8% 7%, var(--ambient-mint), transparent 25%),
+      radial-gradient(circle at 92% 12%, var(--ambient-gold), transparent 22%),
+      radial-gradient(circle at 78% 72%, var(--ambient-blue), transparent 24%);
+  }
+  body::after {
+    height: 430px;
+    background-image: radial-gradient(circle, var(--ambient-dot) 1px, transparent 1.4px);
+    background-size: 34px 34px;
+    -webkit-mask-image: linear-gradient(to bottom, #000, transparent 88%);
+    mask-image: linear-gradient(to bottom, #000, transparent 88%);
+  }
+  .wrap { position: relative; z-index: 1; max-width: 1100px; margin: 0 auto; padding: 28px 16px 78px; }
   .card {
     background: var(--card);
     border: 1px solid var(--border);
@@ -107,7 +131,7 @@
   html[data-theme="dark"] .btn.primary { color: #0e1a13; }
   .app-utilities {
     position: fixed; right: 14px; bottom: 14px; z-index: 40;
-    display: flex; gap: 6px; align-items: center;
+    display: flex; flex-direction: column; gap: 6px; align-items: flex-end;
   }
   .app-utility {
     min-height: 34px; padding: 6px 9px; border: 1px solid var(--border);
@@ -116,14 +140,32 @@
     font-size: 12px; font-weight: 740;
   }
   .app-utility:hover { color: var(--text); border-color: var(--accent); }
+  .sr-only {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+  }
   [hidden] { display: none !important; }
+  @keyframes ambient-arrive {
+    from { opacity: 0; transform: scale(1.035); }
+    to { opacity: 1; transform: scale(1); }
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    body::before { animation: ambient-arrive 2.8s ease-out 1 both; }
+  }
   @media (max-width: 680px) {
     .app-utilities {
-      position: static; justify-content: center;
+      position: static; flex-direction: row; justify-content: center; align-items: center;
       margin: -58px 0 16px; padding: 0 16px;
     }
   }
-  @media (prefers-reduced-motion: reduce) { body { transition: none; } }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      scroll-behavior: auto !important;
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
   {% block extra_styles %}{% endblock %}
 </style>
 </head>
@@ -132,7 +174,8 @@
   {% block body %}{% endblock %}
 </div>
 <div class="app-utilities" aria-label="Display and installation controls">
-  <button class="app-utility" id="install-app" type="button" hidden>Install app</button>
+  <button class="app-utility" id="install-app" type="button" aria-describedby="install-app-help" title="Add a desktop shortcut. DailyDigest must still be running on this computer." hidden>Add to desktop</button>
+  <span class="sr-only" id="install-app-help">Adds a standalone app shortcut. It does not install or start the DailyDigest server.</span>
   <button class="app-utility" id="display-toggle" type="button" aria-pressed="false" hidden>Compact view</button>
   <button class="app-utility" id="theme-toggle" type="button" aria-pressed="false">Night theme</button>
 </div>
@@ -159,6 +202,8 @@
     const compact = display === "compact";
     root.dataset.display = compact ? "compact" : "comfortable";
     displayButton.setAttribute("aria-pressed", compact ? "true" : "false");
+    displayButton.textContent = compact ? "Comfortable view" : "Compact view";
+    displayButton.title = compact ? "Show the full reading layout" : "Fit more recommendations on screen";
   }
   applyDisplay(root.dataset.display || "comfortable");
   displayButton.addEventListener("click", () => {
