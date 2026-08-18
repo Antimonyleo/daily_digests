@@ -46,7 +46,11 @@ from .rank.source_quality import (
 from .store import (
     DigestRow,
     ItemRow,
+    add_carryover_items,  # noqa: F401 - re-exported for web/tests
+    carryover_item_rows,
+    clear_carryover_items,
     days_since_last_digest,
+    exclude_known_items,
     exclude_previously_shown,
     exclude_reviewed_items,
     init_db,
@@ -87,6 +91,11 @@ READING_MODE_LIMITS: dict[str, int | None] = {
     "minimal": None,
 }
 MINIMAL_RESEARCH_LIMIT = 5
+# Deadline-bound sections. They are exempt from the reading-mode budget: their
+# volume is already capped by ``top_opportunities``/``top_events`` and by the
+# eligibility gate, and a call trimmed away today may have closed by the time
+# the reader next picks "Energetic".
+DEADLINE_SECTIONS = {"opportunities", "events"}
 
 _TITLE_BLOCKLIST = re.compile(
     r"^(?:volume\s+\d|issue\s+\d|editorial\b|correspondence\b|correction\b|"
@@ -186,7 +195,7 @@ def normalize_reading_mode(value: str | None, *, default: str = "full") -> str:
 def _best_per_other_section(
     ranked: list[tuple[ItemRow, float]],
 ) -> list[tuple[ItemRow, float]]:
-    """Top-scored pick of each non-research section, kept in score order."""
+    """Top-scored pick of each non-research reading section, kept in score order."""
     best: dict[str, tuple[ItemRow, float]] = {}
     for pair in ranked:
         section = pair[0].section or ""
@@ -203,16 +212,28 @@ def apply_reading_mode(
     This runs after normal relevance gates, section caps, source balancing, and
     exploration. It can remove lower-ranked picks but never adds a candidate or
     changes a score. ``full`` preserves the existing configured digest.
+
+    Funding calls and events (``DEADLINE_SECTIONS``) are held out of the budget
+    entirely — the reading mode is about how much *reading* the reader is up
+    for, not about how many deadlines they are willing to miss.
     """
     mode = normalize_reading_mode(reading_mode)
-    ranked = sorted(picked, key=lambda pair: pair[1], reverse=True)
+    deadline_picks = [
+        pair for pair in picked if (pair[0].section or "") in DEADLINE_SECTIONS
+    ]
+    reading_picks = [
+        pair for pair in picked if (pair[0].section or "") not in DEADLINE_SECTIONS
+    ]
+    ranked = sorted(reading_picks, key=lambda pair: pair[1], reverse=True)
     if mode == "minimal":
         research = [pair for pair in ranked if (pair[0].section or "") == "research"]
         selected = research[:MINIMAL_RESEARCH_LIMIT] + _best_per_other_section(ranked)
-        return sorted(selected, key=lambda pair: pair[1], reverse=True)
+        return sorted(
+            selected + deadline_picks, key=lambda pair: pair[1], reverse=True
+        )
 
     limit = READING_MODE_LIMITS[mode]
-    if limit is None or len(picked) <= limit:
+    if limit is None or len(reading_picks) <= limit:
         return picked
     # Scores are NOT comparable across sections: a research pick fuses to ~1.0
     # while a strong news pick tops out near 0.5. A plain global top-N therefore
@@ -225,7 +246,9 @@ def apply_reading_mode(
     fill = [
         pair for pair in ranked if _row_feature_key(pair[0]) not in reserved_keys
     ][: max(0, remaining)]
-    return sorted(reserved + fill, key=lambda pair: pair[1], reverse=True)
+    return sorted(
+        reserved + fill + deadline_picks, key=lambda pair: pair[1], reverse=True
+    )
 
 
 def ingest_all(
@@ -810,6 +833,40 @@ def _selection_reason(row: ItemRow, features: dict[str, Any]) -> str:
     return "score-ranked slot"
 
 
+def _build_reading_mode_overflow_audit(
+    pre_mode: list[tuple[ItemRow, float]],
+    shown: list[tuple[ItemRow, float]],
+    features: ScoreFeatureMap,
+) -> list[dict[str, Any]]:
+    """Qualified picks trimmed ONLY by today's reading mode, best first.
+
+    These items cleared every relevance/quality gate and won a section slot —
+    the reader's chosen serving size is the sole reason they are not in the
+    digest. Persisted so the web UI can show "N more qualified picks" and offer
+    to pin them for one more evaluation tomorrow (``carryover_items``).
+    """
+    shown_keys = {_row_feature_key(row) for row, _score in shown}
+    overflow = []
+    for row, score in sorted(pre_mode, key=lambda pair: pair[1], reverse=True):
+        if _row_feature_key(row) in shown_keys:
+            continue
+        feat = features.get(_row_feature_key(row), {})
+        overflow.append(
+            {
+                "item_id": int(row.id) if isinstance(row.id, int) else None,
+                "section": row.section or "",
+                "source": row.source or "",
+                "title": row.title or "",
+                "url": row.url or "",
+                "score": round(float(score), 4),
+                "topic_score": round(
+                    float(feat.get("topic_score", score) or 0.0), 4
+                ),
+            }
+        )
+    return overflow
+
+
 def _build_top_journal_audit(
     scored: list[tuple[ItemRow, float]],
     picked: list[tuple[ItemRow, float]],
@@ -1044,8 +1101,41 @@ def run_all(
             (getattr(row, "section", "") or "").lower(), section_settings
         )
     ]
+    # "Save for tomorrow": qualified picks the reader pinned after a reading-mode
+    # trim get ONE more full evaluation alongside the fresh pool — their
+    # publication date has usually left the candidate window, so without this
+    # they would never be seen again. Consumed after the digest is written.
+    carryover_ids_evaluated: set[int] = set()
+    try:
+        _carryover = carryover_item_rows()
+        if _carryover:
+            _have = {int(r.id) for r in recent_raw if r.id is not None}
+            _extra = [
+                r
+                for r in _carryover
+                if r.id is not None
+                and int(r.id) not in _have
+                and _section_enabled(
+                    (getattr(r, "section", "") or "").lower(), section_settings
+                )
+            ]
+            carryover_ids_evaluated = {
+                int(r.id) for r in _carryover if r.id is not None
+            }
+            if _extra:
+                recent_raw = recent_raw + _extra
+                logger.info(
+                    "carryover: re-evaluating %d saved-for-tomorrow items",
+                    len(_extra),
+                )
+    except Exception as _e:  # noqa: BLE001
+        logger.warning("carryover injection failed: %s", _e)
     after_reviewed = exclude_reviewed_items(recent_raw)
     after_shown = exclude_previously_shown(after_reviewed, exclude_digest_id=digest_id)
+    # Manual "I already know this" flags win over every re-surfacing rule above,
+    # including the opportunity refresh that re-shows a grant whose official
+    # details changed.
+    after_shown = exclude_known_items(after_shown)
     deduped_candidates = dedupe_ranking_candidates(after_shown)   # within-set dedupe FIRST
     # Cross-day content dedupe: drop items re-surfaced from a recent digest.
     try:
@@ -1308,7 +1398,7 @@ def run_all(
             uncertainty = {
                 key: 1.0 - 2.0 * abs(float(feat.get("learned_score", 0.0)) - 0.5)
                 for key, feat in score_features.items()
-                if str(feat.get("scoring_mode", "")) == "hybrid_lr"
+                if str(feat.get("scoring_mode", "")) in ("hybrid_lr", "hybrid_knn")
             }
             if uncertainty:
                 # Explore only among candidates that already cleared every gate
@@ -1325,7 +1415,11 @@ def run_all(
         except Exception as _e:  # noqa: BLE001
             logger.warning("exploration slot failed: %s", _e)
 
+    pre_mode_picked = picked
     picked = apply_reading_mode(picked, reading_mode)
+    reading_mode_overflow = _build_reading_mode_overflow_audit(
+        pre_mode_picked, picked, score_features
+    )
     top_journal_audit = _build_top_journal_audit(scored, picked, score_features)
     labeled = _assign_labels(picked)
     _emit(
@@ -1523,6 +1617,7 @@ def run_all(
             )
         _audits: dict[str, list[dict]] = {
             "missed_top_journals": top_journal_audit,
+            "reading_mode_overflow": reading_mode_overflow,
             "candidate_funnel": [funnel_audit],
             # An ordinary same-day rebrew must clear a catch-up briefing that
             # was created by an earlier explicit backfill.
@@ -1546,6 +1641,14 @@ def run_all(
             model_version=RANKER_VERSION,
             audits=_audits,
         )
+        # The pinned items got their promised extra evaluation in THIS ranking;
+        # consume them only now that the digest is durably written, so a failed
+        # brew does not silently burn the reader's "save for tomorrow".
+        if carryover_ids_evaluated:
+            try:
+                clear_carryover_items(carryover_ids_evaluated)
+            except Exception as _e:  # noqa: BLE001
+                logger.warning("carryover cleanup failed: %s", _e)
     else:
         logger.info(
             "digest %s already has a sent row; skipping write_digest to preserve sent_at",

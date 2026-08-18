@@ -120,6 +120,68 @@ def _add_item(store_mod, external_id: str, section: str = "research") -> int:
         return int(row.id)
 
 
+def test_known_flag_is_manual_idempotent_and_reversible(monkeypatch, tmp_path):
+    """Only an explicit call flags an item; the flag suppresses and undoes cleanly."""
+    store_mod = _reset_store(tmp_path, monkeypatch)
+    grant = _add_item(store_mod, "grant-known", section="opportunities")
+    other = _add_item(store_mod, "grant-open", section="opportunities")
+
+    # Nothing is known until the reader says so.
+    assert store_mod.known_item_ids([grant, other]) == set()
+    assert store_mod.set_item_known(grant, True) is True
+    assert store_mod.set_item_known(grant, True) is True  # idempotent
+    assert store_mod.known_item_ids([grant, other]) == {grant}
+    assert store_mod.set_item_known(10**9, True) is False  # unknown item id
+
+    with store_mod.session_scope() as s:
+        rows = s.query(store_mod.ItemRow).all()
+        kept = store_mod.exclude_known_items(rows)
+        assert {int(r.id) for r in kept} == {other}
+        for row in rows:
+            s.expunge(row)
+
+    assert store_mod.set_item_known(grant, False) is True
+    assert store_mod.known_item_ids([grant, other]) == set()
+
+
+def test_known_items_survive_retention_pruning(monkeypatch, tmp_path):
+    """Losing the row would lose the flag and let the grant come back."""
+    store_mod = _reset_store(tmp_path, monkeypatch)
+    grant = _add_item(store_mod, "grant-old", section="opportunities")
+    stale = _add_item(store_mod, "news-old", section="world")
+    old = datetime.now(timezone.utc) - timedelta(days=90)
+    with store_mod.session_scope() as s:
+        for row in s.query(store_mod.ItemRow).all():
+            row.fetched_at = old
+    store_mod.set_item_known(grant, True)
+
+    store_mod.prune(days=30)
+    with store_mod.session_scope() as s:
+        remaining = {int(r.id) for r in s.query(store_mod.ItemRow).all()}
+    assert remaining == {grant}
+    assert stale not in remaining
+
+
+def test_carryover_items_pin_evaluate_once_and_clear(monkeypatch, tmp_path):
+    """Save-for-tomorrow entries add idempotently, load as rows, and consume."""
+    store_mod = _reset_store(tmp_path, monkeypatch)
+    a = _add_item(store_mod, "carry-a")
+    b = _add_item(store_mod, "carry-b")
+
+    assert store_mod.add_carryover_items([a, b, a]) == 2
+    assert store_mod.add_carryover_items([a]) == 0  # idempotent
+    assert store_mod.add_carryover_items([10**9]) == 0  # unknown ids ignored
+    assert store_mod.carryover_item_ids() == {a, b}
+    rows = store_mod.carryover_item_rows()
+    assert {int(r.id) for r in rows} == {a, b}
+
+    store_mod.clear_carryover_items([a])
+    assert store_mod.carryover_item_ids() == {b}
+    store_mod.clear_carryover_items([b])
+    assert store_mod.carryover_item_ids() == set()
+    assert store_mod.carryover_item_rows() == []
+
+
 def test_bookmarks_are_idempotent_and_searchable(monkeypatch, tmp_path):
     store_mod = _reset_store(tmp_path, monkeypatch)
     with store_mod.session_scope() as s:

@@ -105,8 +105,13 @@ The app opens <http://127.0.0.1:8765>. On the setup page:
    qualified pick up to your section limits, **Usual** keeps the best 15, and
    **Tired** keeps up to 5 research picks. Both **Usual** and **Tired** keep the
    best pick from each other enabled section, so no section you switched on
-   disappears. This changes only the final serving size; every enabled source is
-   still scanned and filtered.
+   disappears. Funding and events are never trimmed by the reading mode — a call
+   you skip today may have closed by the time you next pick **Energetic**. This
+   changes only the final serving size; every enabled source is still scanned
+   and filtered. When qualified picks are trimmed only by the serving size, the
+   digest lists them under “more qualified picks didn’t fit today’s reading
+   mode” — open the list to read them now, or press **Save all for tomorrow**
+   to give them one more ranking pass against the next brew’s fresh papers.
 
 Keep the launcher or terminal window open while using DailyDigest. Press
 `Ctrl+C` in that window to stop the server.
@@ -134,10 +139,16 @@ you want its recommendation explanation and caveat. Use **Save for later** on
 any item, then open **Saved reading** to search your personal archive. Saved
 items are kept when old unsaved feed items are cleaned up.
 
+Funding calls and events stay open for weeks, and DailyDigest deliberately
+re-shows one when its official details change (a new deadline, amount, or
+eligibility). When you have seen enough of a call, press **Mark known** on it
+and it will not appear in any future digest. Nothing sets that flag
+automatically — press it again to undo.
+
 After each successful brew, DailyDigest removes expired digest history, old
 HTML previews, and unreferenced feed items according to `RETENTION_DAYS`
-(30 days by default). Voted items, saved items, and anything still referenced by
-a retained digest are preserved. Embeddings stay on disk rather than in memory;
+(30 days by default). Voted items, saved items, items marked known, and
+anything still referenced by a retained digest are preserved. Embeddings stay on disk rather than in memory;
 only the active model is loaded during a compute job and released afterward.
 
 Use **Night theme** on any page to switch between light and dark colors. On the

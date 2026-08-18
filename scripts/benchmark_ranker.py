@@ -15,13 +15,14 @@ DIFFERENT things:
      sanity probe, not a benchmark of what ships.
 
   B. PRODUCTION-FAITHFUL EVALUATION (``run_production_benchmark``)
-     Mirrors deployment. It builds PAIRWISE training examples (liked-minus-
-     disliked feature differences, ±, exactly as ``votes.vote_dataset`` does)
-     from the TRAIN split only, fits the standardized ``LRRanker`` the same way
-     production does, then ranks the held-out TEST research items by RRF-fusing
-     the LR MARGIN with the topic-cosine ranking (``ranker._fuse_scores``).
-     It reports pairwise accuracy AND nDCG@10 for BOTH the deployed-style fused
-     ranker and the topic-only baseline. THIS is the deployable-ranker signal:
+     Mirrors deployment. It computes the graded kNN preference score for the
+     held-out TEST research items from TRAIN-only vote exemplars
+     (``votes._knn_scores``), then ranks them by RRF-fusing that with the
+     topic-cosine ranking (``ranker._fuse_scores``) — exactly as
+     ``score_items_lr`` serves. The retired pairwise-LR fusion is reported as a
+     comparison line. It reports pairwise accuracy AND nDCG@10 for BOTH the
+     deployed-style fused ranker and the topic-only baseline. THIS is the
+     deployable-ranker signal:
      "does the shipped-style ranker beat topic-only on held-out votes?"
 
 Both modes are leakage-free in the same way:
@@ -413,18 +414,17 @@ def run_production_benchmark(
     research section this way), excluding any item with no signed vote:
 
       1. Split TRAIN (older 75%) / TEST (newer 25%) chronologically.
-      2. Build the v6 features with TRAIN-only affinity exemplars (leakage-free)
-         and the STATIC config profile (no Rocchio) unless one is injected.
-      3. Build PAIRWISE training examples from the TRAIN features exactly as
-         ``votes.vote_dataset`` does (liked-minus-disliked differences, ±).
-      4. Fit the standardized ``LRRanker`` (same fit path production uses).
-      5. Rank the held-out TEST items by RRF-fusing the LR MARGIN with the
-         topic-cosine ranking via ``ranker._fuse_scores``.
-      6. Report pairwise accuracy AND nDCG@10 for the fused (deployed-style)
-         ranker AND the topic-only baseline.
+      2. Compute the graded kNN preference score for the TEST items from
+         TRAIN-only vote exemplars (leakage-free) — the DEPLOYED learned signal.
+      3. Rank the held-out TEST items by RRF-fusing that with the topic-cosine
+         ranking via ``ranker._fuse_scores`` (as ``score_items_lr`` serves).
+      4. Also fit the retired pairwise LR on the same TRAIN split and report its
+         fusion (``lr_fused_acc``) as a comparison line.
+      5. Report pairwise accuracy AND nDCG@10 for the deployed fusion AND the
+         topic-only baseline.
 
     Returns a dict with keys: n_train, n_test, n_test_pairs,
-    topic_acc, fused_acc, topic_ndcg, fused_ndcg,
+    topic_acc, fused_acc, lr_fused_acc, topic_ndcg, fused_ndcg,
     train_exemplar_ids, test_ids.
     """
     from dailydigest.rank.ranker import LRRanker, _fuse_scores
@@ -469,18 +469,41 @@ def run_production_benchmark(
     ranker = LRRanker()
     ranker.fit(pair_X, pair_y, persist=False)
 
-    # Deployed ranking: RRF-fuse the topic-cosine ranking (feature col 0) with the
-    # LR MARGIN (decision_function), the same fusion ranker.score_items_lr uses.
+    # DEPLOYED ranking (2026-08-18-knn-preference-v7): RRF-fuse the topic-cosine
+    # ranking (feature col 0) with the graded kNN preference score computed from
+    # TRAIN-only votes (leakage-free). The retired pairwise-LR fusion is kept as
+    # a comparison line — on live votes it had drifted BELOW topic-only.
     # NOTE: production fuses the QUALITY-ADJUSTED topic score; here TEST rows are
     # research items so quality adjustment is a monotone-ish per-item shift — we
     # fuse the raw topic cosine to keep the held-out measurement dependent only on
     # the learned preference signal vs. topic, not on venue metadata.
+    from dailydigest.rank.embedding_cache import embed_item_rows
+    from dailydigest.votes import KNN_PREFERENCE_K, _knn_scores
+
+    ex_ids = np.concatenate([pos_ex[0], neg_ex[0]])
+    ex_vecs = np.concatenate(
+        [v for v in (pos_ex[1], neg_ex[1]) if v.shape[0]], axis=0
+    )
+    gw = np.concatenate([pos_ex[2], -neg_ex[2]]).astype(np.float32)
+    test_vecs = embed_item_rows(test_rows).astype(np.float32)
+    test_unit = test_vecs / (np.linalg.norm(test_vecs, axis=1, keepdims=True) + 1e-9)
+    knn_scores = _knn_scores(
+        test_unit,
+        [getattr(r, "id", None) for r in test_rows],
+        ex_ids,
+        ex_vecs,
+        gw,
+        KNN_PREFERENCE_K,
+    )
+
     lr_margin = ranker.decision_function(X_test)
     topic_scores = X_test[:, 0].astype(np.float32)
-    fused_scores = _fuse_scores(topic_scores, lr_margin)
+    fused_scores = _fuse_scores(topic_scores, knn_scores)
+    lr_fused_scores = _fuse_scores(topic_scores, lr_margin)
 
     topic_acc, n_pairs = _pairwise_accuracy(topic_scores, test_labels)
     fused_acc, _ = _pairwise_accuracy(fused_scores, test_labels)
+    lr_fused_acc, _ = _pairwise_accuracy(lr_fused_scores, test_labels)
     topic_ndcg = _ndcg_at_k(topic_scores, test_labels, k=10)
     fused_ndcg = _ndcg_at_k(fused_scores, test_labels, k=10)
 
@@ -490,6 +513,7 @@ def run_production_benchmark(
         "n_test_pairs": n_pairs,
         "topic_acc": topic_acc,
         "fused_acc": fused_acc,
+        "lr_fused_acc": lr_fused_acc,
         "topic_ndcg": topic_ndcg,
         "fused_ndcg": fused_ndcg,
         "train_exemplar_ids": train_exemplar_ids,
@@ -585,13 +609,13 @@ def main() -> int:
     print("-" * 68)
 
     # ------------------------------------------------------------------ #
-    # Mode B: PRODUCTION-FAITHFUL (pairwise LR + RRF fuse), research only.
+    # Mode B: PRODUCTION-FAITHFUL (graded kNN preference + RRF fuse), research only.
     # ------------------------------------------------------------------ #
     r_rows, r_labels, r_ts, r_grades = _load_signed_votes_chronological(research_only=True)
     rn = len(r_rows)
     rn_pos = sum(1 for v in r_labels if v > 0)
     rn_neg = rn - rn_pos
-    print("  [B] production-faithful  (pairwise LR + RRF fuse, research items)")
+    print("  [B] production-faithful  (graded kNN preference + RRF fuse, research items)")
     print(f"      signed research votes: {rn}  (+{rn_pos} / -{rn_neg})")
 
     if rn < 8 or rn_pos < 2 or rn_neg < 2:
@@ -607,12 +631,13 @@ def main() -> int:
             )
             print(f"      topic-only    pairwise acc : {_fmt(b['topic_acc'])}   "
                   f"nDCG@10 : {_fmt(b['topic_ndcg'])}")
-            print(f"      deployed(fuse) pairwise acc : {_fmt(b['fused_acc'])}   "
+            print(f"      deployed(kNN fuse) pw acc   : {_fmt(b['fused_acc'])}   "
                   f"nDCG@10 : {_fmt(b['fused_ndcg'])}")
+            print(f"      retired LR fuse    pw acc   : {_fmt(b['lr_fused_acc'])}")
             d_acc = (b["fused_acc"] - b["topic_acc"])
             print(f"      delta pairwise acc          : {d_acc:+.3f} "
                   f"({'deployed ranker helps' if d_acc > 0 else 'no gain over topic-only'})")
-            print("      THIS is the deployable-ranker signal (pairwise+RRF, as shipped).")
+            print("      THIS is the deployable-ranker signal (kNN preference + RRF, as shipped).")
         except ValueError as e:
             print(f"      could not run production benchmark: {e}")
 

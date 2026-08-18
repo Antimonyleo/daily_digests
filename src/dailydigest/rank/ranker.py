@@ -654,10 +654,16 @@ def score_items_lr(
     reason_penalty_map: Mapping[Any, float] | None = None,
     attribution: Any | None = None,
 ) -> list[tuple[ItemRow, float]]:
-    """Hybrid cosine + LR scorer with downweight penalty.
+    """Hybrid cosine + graded-vote-memory scorer with downweight penalty.
 
-    Falls back to :func:`_cosine_score_items` when the LR ranker cannot be
-    loaded or fewer than 30 votes are available.
+    The learned signal is the grade-weighted kNN preference score over the
+    reader's voted items (``votes.knn_preference_scores``), which replaced the
+    pairwise LR margin: on held-out votes the LR fusion had drifted BELOW the
+    topic-only baseline (0.49–0.64 pairwise accuracy vs 0.57), while the kNN
+    fusion scores 0.65–0.72 overall and 0.63 vs 0.51 on the relevant-vs-hmmm
+    boundary where the digest cutoff actually sits.
+
+    Falls back to :func:`_cosine_score_items` below 30 signed votes.
     """
     items = [item for item in items if not should_skip_item(item)]
     if not items:
@@ -665,8 +671,7 @@ def score_items_lr(
 
     from ..votes import MIN_VOTES_FOR_LR
 
-    lr = get_lr_ranker()
-    if lr is None or _vote_count() < MIN_VOTES_FOR_LR:
+    if _vote_count() < MIN_VOTES_FOR_LR:
         scored, _features = _cosine_score_items_with_features(
             items,
             profile_vec,
@@ -683,15 +688,10 @@ def score_items_lr(
         cosine = _cosine_sim(vecs, profile_vec)
 
     try:
-        from ..votes import _build_item_features
-        features = _build_item_features(
-            items,
-            profile_vec if profile_vec.ndim == 2 else profile_vec.reshape(1, -1),
-        )
-        lr_prob = lr.score(features)
-        lr_margin = lr.decision_function(features)
+        from ..votes import knn_preference_scores
+        preference = knn_preference_scores(items)
     except Exception as e:  # noqa: BLE001
-        logger.warning("LRRanker.score failed (%s); falling back to cosine", e)
+        logger.warning("kNN preference scoring failed (%s); falling back to cosine", e)
         scored, _features = _cosine_score_items_with_features(
             items,
             profile_vec,
@@ -708,14 +708,14 @@ def score_items_lr(
         cosine,  # raw cosine, not normalized blend
         downweight_terms,
         reason_penalty_map,
-        learned_scores=lr_prob,
+        # Display/uncertainty scale: [-1, 1] -> [0, 1], 0.5 = no vote signal.
+        learned_scores=((preference + 1.0) / 2.0).astype(np.float32),
         hybrid_scores=cosine,
-        scoring_mode="hybrid_lr",
+        scoring_mode="hybrid_knn",
         facet_attr=facet_attr,
     )
-    # Fuse quality-adjusted score with the LR MARGIN (not the saturated probability)
-    # for final ranking — see LRRanker.decision_function.
-    blended_rank = _fuse_scores(np.array(final, dtype=np.float32), lr_margin).tolist()
+    # Fuse the quality-adjusted ranking with the graded preference ranking.
+    blended_rank = _fuse_scores(np.array(final, dtype=np.float32), preference).tolist()
     scored = list(zip(items, blended_rank, strict=True))
     scored.sort(key=lambda t: t[1], reverse=True)
     return scored
@@ -735,8 +735,7 @@ def score_items_with_features(
 
     from ..votes import MIN_VOTES_FOR_LR
 
-    lr = get_lr_ranker()
-    if lr is None or _vote_count() < MIN_VOTES_FOR_LR:
+    if _vote_count() < MIN_VOTES_FOR_LR:
         return _cosine_score_items_with_features(
             items,
             profile_vec,
@@ -752,15 +751,10 @@ def score_items_with_features(
         cosine = _cosine_sim(vecs, profile_vec)
 
     try:
-        from ..votes import _build_item_features
-        features_matrix = _build_item_features(
-            items,
-            profile_vec if profile_vec.ndim == 2 else profile_vec.reshape(1, -1),
-        )
-        lr_prob = lr.score(features_matrix)
-        lr_margin = lr.decision_function(features_matrix)
+        from ..votes import knn_preference_scores
+        preference = knn_preference_scores(items)
     except Exception as e:  # noqa: BLE001
-        logger.warning("LRRanker.score failed (%s); falling back to cosine", e)
+        logger.warning("kNN preference scoring failed (%s); falling back to cosine", e)
         return _cosine_score_items_with_features(
             items,
             profile_vec,
@@ -776,14 +770,15 @@ def score_items_with_features(
         cosine,  # raw cosine, not normalized blend
         downweight_terms,
         reason_penalty_map,
-        learned_scores=lr_prob,
+        # Display/uncertainty scale: [-1, 1] -> [0, 1], 0.5 = no vote signal.
+        learned_scores=((preference + 1.0) / 2.0).astype(np.float32),
         hybrid_scores=cosine,
-        scoring_mode="hybrid_lr",
+        scoring_mode="hybrid_knn",
         facet_attr=facet_attr,
     )
-    # Fuse quality-adjusted score with the LR MARGIN (not the saturated probability)
-    # for final ranking — see LRRanker.decision_function.
-    blended_rank = _fuse_scores(np.array(final, dtype=np.float32), lr_margin).tolist()
+    # Fuse the quality-adjusted ranking with the graded preference ranking (see
+    # score_items_lr for the held-out benchmark that motivated the kNN signal).
+    blended_rank = _fuse_scores(np.array(final, dtype=np.float32), preference).tolist()
     # Update features to record the hybrid blend
     for i, (row, _) in enumerate(zip(items, blended_rank, strict=True)):
         key = _row_feature_key(row)
@@ -792,7 +787,7 @@ def score_items_with_features(
             features[key]["rank_score"] = float(blended_rank[i])
             features[key]["hybrid_score"] = float(blended_rank[i])
             features[key]["final_score"] = float(blended_rank[i])
-            features[key]["scoring_mode"] = "hybrid_lr"
+            features[key]["scoring_mode"] = "hybrid_knn"
     scored = list(zip(items, blended_rank, strict=True))
     scored.sort(key=lambda t: t[1], reverse=True)
     return scored, features

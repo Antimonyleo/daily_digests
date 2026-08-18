@@ -15,8 +15,9 @@ def test_daily_tea_deck_is_stable_unique_and_changes_each_day():
     assert first_day == same_day
     assert first_day != next_day
     assert set(first_day).isdisjoint(next_day)
-    assert sum(note.startswith("Tiny fact —") for note in first_day) == 10
-    assert sum(note.startswith("Lab joke —") for note in first_day) == 5
+    # Pip is a break from reading: jokes outnumber facts two to one.
+    assert sum(note.startswith("Lab joke —") for note in first_day) == 10
+    assert sum(note.startswith("Tiny fact —") for note in first_day) == 5
 
 
 def test_daily_tea_deck_draws_from_a_larger_curated_bank():
@@ -27,3 +28,16 @@ def test_daily_tea_deck_draws_from_a_larger_curated_bank():
         TEA_NOTE_BANK
     )
     assert all(note.startswith(("Tiny fact —", "Lab joke —")) for note in TEA_NOTE_BANK)
+
+
+def test_each_tea_bank_can_cover_two_consecutive_days():
+    """The no-repeat-tomorrow guarantee holds only while bank >= 2x daily draw."""
+    from dailydigest.tea_break import (
+        DAILY_FACTS,
+        DAILY_JOKES,
+        _TEA_FACTS,
+        _TEA_JOKES,
+    )
+
+    assert len(_TEA_JOKES) >= 2 * DAILY_JOKES
+    assert len(_TEA_FACTS) >= 2 * DAILY_FACTS

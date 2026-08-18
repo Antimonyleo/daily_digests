@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -387,6 +387,68 @@ def test_reading_mode_caps_only_the_final_ranked_slate():
         pipeline_mod.apply_reading_mode(picked, "bottomless")
 
 
+def test_reading_mode_overflow_audit_lists_only_trimmed_picks():
+    """The overflow shelf shows exactly what the reading mode removed, best first."""
+    from dailydigest import pipeline as pipeline_mod
+
+    rows = [
+        SimpleNamespace(
+            id=idx,
+            section="research",
+            source="Nature",
+            title=f"Paper {idx}",
+            url=f"https://example.com/{idx}",
+        )
+        for idx in range(20)
+    ]
+    picked = [(row, float(20 - row.id)) for row in rows]
+    shown = pipeline_mod.apply_reading_mode(picked, "usual")
+    features = {row.id: {"topic_score": 0.7} for row in rows}
+
+    overflow = pipeline_mod._build_reading_mode_overflow_audit(
+        picked, shown, features
+    )
+    shown_ids = {row.id for row, _score in shown}
+    assert len(overflow) == 20 - len(shown)
+    assert all(entry["item_id"] not in shown_ids for entry in overflow)
+    # best trimmed pick first
+    scores = [entry["score"] for entry in overflow]
+    assert scores == sorted(scores, reverse=True)
+    assert overflow[0]["topic_score"] == 0.7
+    assert overflow[0]["url"].startswith("https://example.com/")
+    # nothing trimmed -> empty audit (clears a stale one on rebrew)
+    assert pipeline_mod._build_reading_mode_overflow_audit(picked, picked, features) == []
+
+
+def test_reading_mode_never_trims_funding_or_events():
+    """Deadline-bound picks are exempt: a call trimmed today may close tomorrow."""
+    from dailydigest import pipeline as pipeline_mod
+
+    research = [SimpleNamespace(id=idx, section="research") for idx in range(20)]
+    grants = [SimpleNamespace(id=300 + idx, section="opportunities") for idx in range(4)]
+    events = [SimpleNamespace(id=400, section="events")]
+    picked = (
+        [(row, float(20 - row.id)) for row in research]
+        # Opportunity scores sit far below research scores, so any global top-N
+        # budget would have kept at most one of them.
+        + [(row, 0.30 - 0.01 * idx) for idx, row in enumerate(grants)]
+        + [(events[0], 0.25)]
+    )
+
+    for mode in ("usual", "minimal"):
+        kept = pipeline_mod.apply_reading_mode(picked, mode)
+        assert [row.id for row, _score in kept if row.section == "opportunities"] == [
+            300,
+            301,
+            302,
+            303,
+        ]
+        assert [row.id for row, _score in kept if row.section == "events"] == [400]
+    # The reading budget still applies to everything else.
+    usual = pipeline_mod.apply_reading_mode(picked, "usual")
+    assert len([1 for row, _score in usual if row.section == "research"]) == 15
+
+
 def _reset_store(tmp_path, monkeypatch):
     from dailydigest import config as config_mod
     from dailydigest import store as store_mod
@@ -490,6 +552,82 @@ def test_run_all_persists_summaries_for_web_view(monkeypatch, tmp_path):
     audit = store_mod.load_digest_audit(pipeline_mod._digest_id(), "candidate_funnel")
     assert audit
     assert audit[0]["after_cross_source_dedupe"] == 1
+
+
+def test_run_all_gives_carryover_items_one_more_pass_then_consumes(monkeypatch, tmp_path):
+    """A saved-for-tomorrow item outside the window re-enters the pool once."""
+    from dailydigest import config as config_mod
+    from dailydigest import pipeline as pipeline_mod
+    from dailydigest import store as store_mod
+
+    monkeypatch.setenv("DB_PATH", str(tmp_path / "digest.db"))
+    monkeypatch.setenv("PROFILE_PATH", "config/profile.example.yaml")
+    config_mod.reload_settings()
+    store_mod.SETTINGS = config_mod.SETTINGS
+    store_mod._ENGINE = None
+    store_mod._SessionLocal = None
+    store_mod._INITIALIZED = False
+
+    store_mod.init_db()
+    with store_mod.session_scope() as s:
+        # Published 5 days ago: recent_items(days=2) can never return it again.
+        old_row = store_mod.ItemRow(
+            source="Test",
+            section="research",
+            external_id="carryover-1",
+            url="https://example.com/carryover-1",
+            title="Saved for tomorrow",
+            abstract="Trimmed by the reading mode yesterday.",
+            published_at=datetime.now(timezone.utc) - timedelta(days=5),
+        )
+        s.add(old_row)
+        s.flush()
+        item_id = int(old_row.id)
+    store_mod.add_carryover_items([item_id])
+
+    seen_pools = []
+
+    def _capture_score(items, _pv, _downweight, reason_penalty_map=None):
+        seen_pools.append([int(row.id) for row in items])
+        return [(items[0], 0.9)] if items else []
+
+    monkeypatch.setattr(
+        pipeline_mod,
+        "ingest_all",
+        lambda progress_callback=None, days=2, section_settings=None: 0,
+    )
+    monkeypatch.setattr(
+        pipeline_mod,
+        "load_profile",
+        lambda: SimpleNamespace(bio="", keywords=[], downweight=[]),
+    )
+    monkeypatch.setattr(
+        pipeline_mod,
+        "build_profile_matrix",
+        lambda _profile: __import__("numpy").zeros((1, 3)),
+    )
+    monkeypatch.setattr(pipeline_mod, "recent_items", lambda days=2: [])
+    monkeypatch.setattr(pipeline_mod, "score_items", _capture_score)
+    monkeypatch.setattr(
+        pipeline_mod,
+        "pick_top_per_section",
+        lambda scored, _caps, catch_up=False: scored,
+    )
+    monkeypatch.setattr(
+        pipeline_mod,
+        "summarize_items",
+        lambda rows, profile=None: {int(rows[0].id): "s"} if rows else {},
+    )
+    monkeypatch.setattr(
+        pipeline_mod, "send_digest", lambda html, subject, dry_run=False: True
+    )
+
+    pipeline_mod.run_all(dry_run=True)
+
+    # The pinned item entered ranking despite the empty recent window...
+    assert seen_pools and item_id in seen_pools[0]
+    # ...and its pin was consumed once the digest was written.
+    assert store_mod.carryover_item_ids() == set()
 
 
 def test_run_all_logs_research_candidate_pool_with_selected_flags(monkeypatch, tmp_path):

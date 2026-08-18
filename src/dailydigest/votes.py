@@ -20,7 +20,6 @@ import numpy as np
 from sqlalchemy import func, select
 
 from .rank import embedding_cache as _embedding_cache
-from .rank.ranker import LRRanker, reset_lr_cache
 from .store import DigestItemRow, DigestRow, ItemRow, VoteRow, init_db, session_scope
 
 logger = logging.getLogger(__name__)
@@ -179,6 +178,77 @@ def _affinity(cand_unit: np.ndarray, cand_ids, exemplars, k: int = 5) -> np.ndar
             continue
         kk = min(k, row.size)
         out[i] = float(np.sort(row)[-kk:].mean())
+    return out
+
+
+KNN_PREFERENCE_K = 8
+
+
+def knn_preference_scores(rows: list, k: int = KNN_PREFERENCE_K) -> np.ndarray:
+    """Grade-weighted k-nearest-voted-neighbour preference score per row, in [-1, 1].
+
+    For each candidate, take the k most similar previously voted items and
+    average their grade weights (+1 must-read ... −0.2 hmmm ... −0.8 not-for-me),
+    weighted by similarity. Unlike the pairwise LR — which collapses grades to a
+    sign and squeezes preference through 8 aggregate features — this uses the
+    full graded vote memory directly, so it can separate "relevant" from
+    "on-topic but boring", which is exactly the boundary the digest cutoff sits
+    on. Held-out (chronological split, leakage-free): fusing this with the topic
+    ranking scores 0.65–0.72 pairwise accuracy vs 0.49–0.64 for the LR fusion it
+    replaces (scripts/benchmark_ranker.py).
+
+    Leave-one-out: a voted candidate never matches its own vote. Returns zeros
+    (neutral) when there are no voted exemplars or no usable embeddings.
+    """
+    n = len(rows)
+    if n == 0:
+        return np.zeros(0, dtype=np.float32)
+    (pos_ids, pos_vecs, pos_w), (neg_ids, neg_vecs, neg_w) = _load_vote_exemplars()
+    ex_ids = np.concatenate([pos_ids, neg_ids])
+    if ex_ids.size == 0:
+        return np.zeros(n, dtype=np.float32)
+    if pos_vecs.shape[0] and neg_vecs.shape[0] and pos_vecs.shape[1] != neg_vecs.shape[1]:
+        return np.zeros(n, dtype=np.float32)
+    ex_vecs = np.concatenate(
+        [v for v in (pos_vecs, neg_vecs) if v.shape[0]], axis=0
+    )
+    # Signed grade weights: exemplar weights are |grade-50|/50 magnitudes.
+    gw = np.concatenate([pos_w, -neg_w]).astype(np.float32)
+
+    vecs = embed_item_rows(rows).astype(np.float32)
+    if vecs.size == 0 or vecs.shape[1] != ex_vecs.shape[1]:
+        return np.zeros(n, dtype=np.float32)
+    cand_unit = vecs / (np.linalg.norm(vecs, axis=1, keepdims=True) + 1e-9)
+
+    cand_ids = [
+        rid if isinstance((rid := getattr(row, "id", None)), int) else None
+        for row in rows
+    ]
+    return _knn_scores(cand_unit, cand_ids, ex_ids, ex_vecs, gw, k)
+
+
+def _knn_scores(
+    cand_unit: np.ndarray,
+    cand_ids: list,
+    ex_ids: np.ndarray,
+    ex_vecs: np.ndarray,
+    gw: np.ndarray,
+    k: int,
+) -> np.ndarray:
+    """Core kNN math, exemplars passed explicitly (leakage-free benchmarking)."""
+    n = cand_unit.shape[0]
+    sims = cand_unit @ ex_vecs.T
+    out = np.zeros(n, dtype=np.float32)
+    for i in range(n):
+        srow = sims[i].copy()
+        if cand_ids[i] is not None:
+            srow[ex_ids == cand_ids[i]] = -1.0
+        kk = min(k, srow.size)
+        idx = np.argsort(srow)[-kk:]
+        w = np.maximum(srow[idx], 0.0) ** 2
+        denom = float(w.sum())
+        if denom > 0:
+            out[i] = float((w * gw[idx]).sum() / denom)
     return out
 
 
@@ -941,27 +1011,39 @@ def latest_vote_timestamp() -> float | None:
 
 
 def lr_training_status() -> dict[str, object]:
-    """Return lightweight LR training/ranking status for web/API display."""
+    """Return lightweight preference-ranking status for web/API display.
+
+    The graded kNN preference memory needs no training step: it reads the
+    current votes at every brew, so it is "active" purely on the vote count.
+    ``model_trained`` is kept for API compatibility and mirrors that flag.
+    """
     counts = vote_counts()
     signed = counts["signed"]
     remaining = max(MIN_VOTES_FOR_LR - signed, 0)
-    model_trained = LRRanker().load()
     can_train = remaining == 0
-    ranking_status = "lr_active" if model_trained and can_train else "cosine_baseline"
+    ranking_status = "preference_active" if can_train else "cosine_baseline"
     training_status = "ready" if can_train else "needs_votes"
     return {
         "vote_counts": counts,
         "min_votes_for_lr": MIN_VOTES_FOR_LR,
         "remaining_votes_for_lr": remaining,
         "can_train": can_train,
-        "model_trained": model_trained,
+        "model_trained": can_train,
         "training_status": training_status,
         "ranking_status": ranking_status,
     }
 
 
 def train_lr_ranker() -> dict[str, object]:
-    """Train the persisted LR ranker from signed votes when enough exist."""
+    """Refresh the vote-derived ranking artifacts on demand.
+
+    The graded kNN preference memory replaced the trained LR in serving, and it
+    reads the vote table directly at each brew — there is no model to fit. The
+    one artifact that IS fit from votes is the Platt score calibrator (usually
+    refreshed during a brew); refitting it here means a manual "update my
+    ranking" click takes effect immediately instead of at the next brew. The
+    name is kept for the existing web endpoint/UI contract.
+    """
     status = lr_training_status()
     if not status["can_train"]:
         return {
@@ -969,81 +1051,38 @@ def train_lr_ranker() -> dict[str, object]:
             "trained": False,
             "reason": "needs_votes",
             "message": (
-                f"Need {status['remaining_votes_for_lr']} more signed votes "
-                f"before LR training."
+                f"Need {status['remaining_votes_for_lr']} more ratings "
+                f"before personal ranking activates."
             ),
             "status": status,
         }
 
     try:
-        dataset = vote_dataset()
+        from .rank.calibrate import fit_calibrator
+
+        calibration = fit_calibrator()
     except Exception as e:  # noqa: BLE001
-        logger.exception("LR training dataset assembly failed")
+        logger.exception("calibrator refresh failed")
         status = lr_training_status()
         return {
             "ok": False,
             "trained": False,
             "reason": "training_error",
-            "message": f"Could not assemble training data: {type(e).__name__}: {e}",
-            "status": status,
-        }
-    if dataset is None:
-        status = lr_training_status()
-        return {
-            "ok": False,
-            "trained": False,
-            "reason": "needs_votes",
-            "message": "Not enough signed votes to train LR ranking.",
+            "message": f"Could not refresh ranking calibration: {type(e).__name__}: {e}",
             "status": status,
         }
 
-    counts = vote_counts()
-    n_pos_raw = counts.get("good", 0)
-    n_neg_raw = counts.get("bad", 0)
-    if n_pos_raw < 3 or n_neg_raw < 3:
-        status = lr_training_status()
-        return {
-            "ok": False,
-            "trained": False,
-            "reason": "class_imbalance",
-            "message": (
-                f"Need at least 3 votes of each sign for reliable LR training "
-                f"(have {n_pos_raw} positive, {n_neg_raw} negative). "
-                f"Keep voting to balance the dataset."
-            ),
-            "status": status,
-        }
-
-    X, y = dataset
-    ranker = LRRanker()
-    try:
-        ranker.fit(X, y)
-    except ValueError as e:
-        status = lr_training_status()
-        return {
-            "ok": False,
-            "trained": False,
-            "reason": "invalid_dataset",
-            "message": str(e),
-            "status": status,
-        }
-    except Exception as e:  # noqa: BLE001
-        logger.exception("LR training failed")
-        status = lr_training_status()
-        return {
-            "ok": False,
-            "trained": False,
-            "reason": "training_error",
-            "message": f"Could not train LR ranking: {type(e).__name__}: {e}",
-            "status": status,
-        }
-
-    reset_lr_cache()
     status = lr_training_status()
     return {
         "ok": True,
         "trained": True,
-        "trained_votes": int(len(y)),
+        "calibrated_votes": int(calibration["n"]) if calibration else 0,
+        "message": (
+            "Ratings are part of ranking automatically; calibration refreshed."
+            if calibration
+            else "Ratings are part of ranking automatically; calibration will "
+            "refresh at the next brew."
+        ),
         "status": status,
     }
 

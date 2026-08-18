@@ -6,7 +6,7 @@ embeddings (no model download), and asserts:
 
   1. the preference-feature probe's HELD-OUT pairwise accuracy beats the
      topic-cosine-only baseline on clearly-separable liked/disliked clusters;
-  2. the PRODUCTION-FAITHFUL mode (pairwise LR + RRF fuse) also beats topic-only
+  2. the PRODUCTION-FAITHFUL mode (graded kNN preference + RRF fuse) also beats topic-only
      on the same clusters and reports a defined nDCG@10;
   3. exemplar construction is leakage-free in BOTH modes — no test-set item id
      appears in the train exemplar id arrays; and
@@ -165,7 +165,7 @@ def test_full_model_beats_topic_baseline_and_is_leakage_free(monkeypatch):
 
 
 def test_production_benchmark_beats_topic_and_is_leakage_free(monkeypatch):
-    """Mode B: pairwise LR + RRF fuse beats topic-only, leakage-free, with nDCG@10."""
+    """Mode B: graded kNN + RRF fuse beats topic-only, leakage-free, with nDCG@10."""
     bench = _load_benchmark_module()
     rows, labels, timestamps, grades, vec_by_id = _make_synthetic_votes()
     _install_fake_embeddings(monkeypatch, vec_by_id)

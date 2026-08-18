@@ -382,8 +382,56 @@ class TestScoreItems:
         payload = features[id(item)]
         assert payload["ranker_version"]
         assert payload["source_bucket"] == "published_journal"
-        assert payload["scoring_mode"] in {"cosine", "hybrid_lr"}
+        assert payload["scoring_mode"] in {"cosine", "hybrid_knn"}
         assert isinstance(payload["topic_score"], float)
+
+
+class TestHybridKnnServing:
+    def test_hybrid_path_fuses_quality_score_with_knn_preference(self, monkeypatch):
+        """Above the vote threshold, serving fuses QA with the graded kNN memory.
+
+        The kNN signal replaced the pairwise LR margin: held-out, the LR fusion
+        had fallen below the topic-only baseline while RRF(topic, kNN) beats it
+        on every chronological split (scripts/benchmark_ranker.py).
+        """
+        import numpy as np
+
+        from dailydigest.rank import ranker as ranker_mod
+        from dailydigest import votes as votes_mod
+
+        items = [
+            _make_row("Loved subtopic paper", "research", "About the loved subtopic."),
+            _make_row("Boring subtopic paper", "research", "About the boring subtopic."),
+        ]
+        for i, it in enumerate(items):
+            it.id = 100 + i
+
+        monkeypatch.setattr(ranker_mod, "_vote_count", lambda: 999)
+        # Identical topic cosine for both items; only the vote memory differs.
+        monkeypatch.setattr(
+            ranker_mod, "_cosine_sim", lambda vecs, pv: np.array([0.7, 0.7], np.float32)
+        )
+        monkeypatch.setattr(
+            ranker_mod,
+            "embed_item_rows",
+            lambda rows: np.ones((len(rows), 4), dtype=np.float32),
+        )
+        monkeypatch.setattr(
+            votes_mod,
+            "knn_preference_scores",
+            lambda rows, k=8: np.array([0.6, -0.4], dtype=np.float32),
+        )
+
+        scored, features = ranker_mod.score_items_with_features(
+            items, _profile_vec(4), []
+        )
+        by_title = {row.title: score for row, score in scored}
+        assert by_title["Loved subtopic paper"] > by_title["Boring subtopic paper"]
+        payload = features[100]
+        assert payload["scoring_mode"] == "hybrid_knn"
+        # Display scale: [-1, 1] preference -> [0, 1] with 0.5 neutral.
+        assert payload["learned_score"] == pytest.approx(0.8)
+        assert features[101]["learned_score"] == pytest.approx(0.3)
 
 
 class TestLRRankerPersistence:

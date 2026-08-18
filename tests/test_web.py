@@ -1072,7 +1072,7 @@ def test_index_renders_reader_card_hierarchy_and_feedback_controls(tmp_path, mon
     assert "Too promotional" in text
     assert "Choose Seen or Not for me" not in text
     assert "Choose Hmmm or Not for me" in text
-    assert "Update my ranking" in text
+    assert "Refresh calibration" in text
     assert "Learned" not in text
 
 
@@ -1114,6 +1114,7 @@ def test_reader_can_save_and_remove_an_item_from_the_digest(tmp_path, monkeypatc
     assert re.search(
         r'<div class="item-head">\s*<div class="item-heading">.*?'
         r'<a class="title-link".*?>Save this RNA paper</a>\s*</div>\s*'
+        r'<div class="item-head-actions">\s*'
         r'<button class="bookmark-btn"[^>]+aria-label="Save for later"',
         before,
         re.DOTALL,
@@ -1135,6 +1136,167 @@ def test_reader_can_save_and_remove_an_item_from_the_digest(tmp_path, monkeypatc
     )
     assert _json_payload(removed) == {"ok": True, "item_id": item_id, "saved": False}
     assert store_mod.bookmarked_item_ids([item_id]) == set()
+
+
+def test_known_button_is_opportunity_only_and_toggles(tmp_path, monkeypatch):
+    """Manual "mark known" is offered where items legitimately recur: funding."""
+    from dailydigest import config as config_mod
+    from dailydigest import store as store_mod
+    from dailydigest import web
+
+    monkeypatch.setenv("DB_PATH", str(tmp_path / "digest.db"))
+    monkeypatch.setenv("INCLUDE_OPPORTUNITIES", "true")
+    config_mod.reload_settings()
+    store_mod.SETTINGS = config_mod.SETTINGS
+    web.SETTINGS = config_mod.SETTINGS
+    store_mod._ENGINE = None
+    store_mod._SessionLocal = None
+    store_mod._INITIALIZED = False
+    profile_path = tmp_path / "profile.yaml"
+    profile_path.write_text("name: Ada\nbio: Researcher.\nkeywords: []\ndownweight: []\n")
+    monkeypatch.setattr(web, "_get_profile_path", lambda: profile_path)
+    monkeypatch.setattr(web, "_digest_id", lambda: "2026-05-06")
+
+    store_mod.init_db()
+    with store_mod.session_scope() as s:
+        s.add(store_mod.DigestRow(id="2026-05-06", item_count=2))
+        grant = store_mod.ItemRow(
+            source="Grants.gov",
+            section="opportunities",
+            external_id="known-web",
+            url="https://example.com/known-web",
+            title="RNA delivery funding call",
+            digest_id="2026-05-06",
+            item_label="F1",
+        )
+        paper = store_mod.ItemRow(
+            source="Nature",
+            section="research",
+            external_id="known-web-paper",
+            url="https://example.com/known-web-paper",
+            title="A research paper",
+            digest_id="2026-05-06",
+            item_label="R1",
+        )
+        s.add_all([grant, paper])
+        s.flush()
+        grant_id, paper_id = int(grant.id), int(paper.id)
+
+    before = _text_payload(web.index(_request("GET", "/")))
+    assert before.count('class="bookmark-btn known-btn"') == 1
+    assert '<span class="known-label">Mark known</span>' in before
+    # Research items never recur, so they get no extra button.
+    blocks = {
+        chunk.split('"', 1)[0]: chunk
+        for chunk in before.split('class="item" data-item-id="')[1:]
+    }
+    assert "known-btn" in blocks[str(grant_id)]
+    assert "known-btn" not in blocks[str(paper_id)]
+
+    headers = {"X-CSRF-Token": web._CSRF_TOKEN}
+    marked = web.known_add(
+        _request("POST", f"/known/{grant_id}", headers=headers), grant_id
+    )
+    assert _json_payload(marked) == {"ok": True, "item_id": grant_id, "known": True}
+    assert store_mod.known_item_ids([grant_id]) == {grant_id}
+
+    after = _text_payload(web.index(_request("GET", "/")))
+    assert 'data-known="true"' in after
+    assert '<span class="known-label">Known</span>' in after
+
+    cleared = web.known_remove(
+        _request("DELETE", f"/known/{grant_id}", headers=headers), grant_id
+    )
+    assert _json_payload(cleared) == {"ok": True, "item_id": grant_id, "known": False}
+    assert store_mod.known_item_ids([grant_id]) == set()
+
+    with pytest.raises(HTTPException):
+        web.known_add(_request("POST", "/known/999999", headers=headers), 999999)
+
+
+def test_overflow_shelf_renders_and_saves_for_tomorrow(tmp_path, monkeypatch):
+    """Trimmed-but-qualified picks are shown and can be pinned for the next brew."""
+    from dailydigest import config as config_mod
+    from dailydigest import store as store_mod
+    from dailydigest import web
+
+    monkeypatch.setenv("DB_PATH", str(tmp_path / "digest.db"))
+    config_mod.reload_settings()
+    store_mod.SETTINGS = config_mod.SETTINGS
+    web.SETTINGS = config_mod.SETTINGS
+    store_mod._ENGINE = None
+    store_mod._SessionLocal = None
+    store_mod._INITIALIZED = False
+    profile_path = tmp_path / "profile.yaml"
+    profile_path.write_text("name: Ada\nbio: Researcher.\nkeywords: []\ndownweight: []\n")
+    monkeypatch.setattr(web, "_get_profile_path", lambda: profile_path)
+    monkeypatch.setattr(web, "_digest_id", lambda: "2026-05-07")
+
+    store_mod.init_db()
+    with store_mod.session_scope() as s:
+        s.add(store_mod.DigestRow(id="2026-05-07", item_count=1))
+        shown = store_mod.ItemRow(
+            source="Nature",
+            section="research",
+            external_id="overflow-shown",
+            url="https://example.com/shown",
+            title="The one that fit",
+            digest_id="2026-05-07",
+            item_label="R1",
+        )
+        trimmed = store_mod.ItemRow(
+            source="Science",
+            section="research",
+            external_id="overflow-trimmed",
+            url="https://example.com/trimmed",
+            title="The one that did not fit",
+        )
+        s.add_all([shown, trimmed])
+        s.flush()
+        trimmed_id = int(trimmed.id)
+        s.add(
+            store_mod.DigestAuditRow(
+                digest_id="2026-05-07",
+                audit_type="reading_mode_overflow",
+                payload_json=json.dumps(
+                    {
+                        "item_id": trimmed_id,
+                        "section": "research",
+                        "source": "Science",
+                        "title": "The one that did not fit",
+                        "url": "https://example.com/trimmed",
+                        "score": 0.91,
+                        "topic_score": 0.74,
+                    }
+                ),
+            )
+        )
+
+    before = _text_payload(web.index(_request("GET", "/")))
+    assert "1 more qualified pick didn’t fit today’s reading mode" in before
+    assert "The one that did not fit" in before
+    assert "Save all for tomorrow" in before
+
+    headers = {"X-CSRF-Token": web._CSRF_TOKEN}
+    response = web.overflow_save(_request("POST", "/overflow/save", headers=headers))
+    payload = _json_payload(response)
+    assert payload == {
+        "ok": True,
+        "digest_id": "2026-05-07",
+        "saved": 1,
+        "added": 1,
+    }
+    assert store_mod.carryover_item_ids() == {trimmed_id}
+
+    # Reload keeps the pinned state so the button cannot double-arm.
+    after = _text_payload(web.index(_request("GET", "/")))
+    assert "Saved for tomorrow" in after
+
+    # A day with no overflow audit -> 404 rather than a silent no-op.
+    monkeypatch.setattr(web, "_digest_id", lambda: "2026-05-08")
+    with pytest.raises(HTTPException) as excinfo:
+        web.overflow_save(_request("POST", "/overflow/save", headers=headers))
+    assert excinfo.value.status_code == 404
 
 
 def test_saved_archive_is_searchable_and_escapes_item_content(tmp_path, monkeypatch):
@@ -1709,7 +1871,6 @@ def test_vote_reason_api_requires_csrf_and_persists_reason(tmp_path, monkeypatch
 def test_ranking_status_api_reports_vote_counts_without_training(tmp_path, monkeypatch):
     from dailydigest import config as config_mod
     from dailydigest import store as store_mod
-    from dailydigest import votes as votes_mod
     from dailydigest import web
 
     monkeypatch.setenv("DB_PATH", str(tmp_path / "digest.db"))
@@ -1718,12 +1879,6 @@ def test_ranking_status_api_reports_vote_counts_without_training(tmp_path, monke
     store_mod._ENGINE = None
     store_mod._SessionLocal = None
     store_mod._INITIALIZED = False
-
-    class DummyRanker:
-        def load(self):
-            return True
-
-    monkeypatch.setattr(votes_mod, "LRRanker", DummyRanker)
 
     store_mod.init_db()
     with store_mod.session_scope() as s:
@@ -1754,7 +1909,9 @@ def test_ranking_status_api_reports_vote_counts_without_training(tmp_path, monke
         "signed": 2,
         "total": 3,
     }
-    assert status["model_trained"] is True
+    # Preference memory needs no persisted model: below the vote threshold the
+    # ranking is the cosine baseline and nothing is "trained".
+    assert status["model_trained"] is False
     assert status["training_status"] == "needs_votes"
     assert status["ranking_status"] == "cosine_baseline"
 
@@ -1773,13 +1930,6 @@ def test_ranking_train_api_uses_monkeypatched_dataset_and_ranker(tmp_path, monke
     store_mod._INITIALIZED = False
     monkeypatch.setattr(votes_mod, "MIN_VOTES_FOR_LR", 2)
 
-    class DummyRanker:
-        trained = False
-
-        def load(self):
-            return self.trained
-
-    monkeypatch.setattr(votes_mod, "LRRanker", DummyRanker)
     release_train = threading.Event()
 
     def _slow_train():
@@ -2168,7 +2318,14 @@ def test_main_page_exposes_one_click_reading_modes_and_settings_can_return(
     assert ".tea-break-copy { max-width: 80ch; }" not in main
     assert "teaBreak.dataset.noteKind" in main
     assert "pet-steam-rise 1.9s ease-out 2 both" in main
-    assert ".tea-break.is-changing .tea-leaf-shape { animation: leaf-drop 0.62s ease-in 1; }" in main
+    # The fall holds the leaf gone (forwards) and a separate regrow brings the
+    # next one back, so the two never run back to back.
+    assert (
+        ".tea-break.is-changing .tea-leaf-shape { animation: leaf-drop 0.62s ease-in 1 forwards; }"
+        in main
+    )
+    assert ".tea-break.is-regrowing .tea-leaf-shape { animation: leaf-regrow" in main
+    assert "const LEAF_PAUSE_MS = 220;" in main
     assert '@media (hover: hover) and (pointer: fine) and (prefers-reduced-motion: no-preference)' in main
     assert 'teaPet.addEventListener("pointermove"' in main
     assert 'teaPet.addEventListener("pointerleave"' in main

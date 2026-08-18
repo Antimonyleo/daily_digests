@@ -524,6 +524,80 @@ def test_grants_gov_fetches_official_details_and_amounts(monkeypatch):
     assert len(calls) == 2
 
 
+def test_grants_gov_eligibility_order_is_stable_across_fetches(monkeypatch):
+    """Grants.gov shuffles applicantTypes per call.
+
+    The order leaked into the opportunity snapshot hash, so every grant looked
+    materially changed on every brew and was re-surfaced in every digest.
+    """
+    from dailydigest.ingest.grants_gov import GrantsGovSource
+
+    shuffled = [
+        ["Small businesses", "County governments", "State governments"],
+        ["State governments", "Small businesses", "County governments"],
+    ]
+
+    def _payloads(applicant_types):
+        return (
+            {
+                "data": {
+                    "oppHits": [
+                        {
+                            "id": 77,
+                            "number": "RFA-ORDER-26-001",
+                            "title": "Stable ordering programme",
+                            "closeDate": "10/01/2026",
+                            "oppStatus": "posted",
+                        }
+                    ]
+                }
+            },
+            {
+                "data": {
+                    "opportunityNumber": "RFA-ORDER-26-001",
+                    "opportunityTitle": "Stable ordering programme",
+                    "synopsis": {
+                        "agencyName": "NIH",
+                        "applicantTypes": [
+                            {"description": name} for name in applicant_types
+                        ],
+                        "fundingInstruments": [{"description": "Grant"}],
+                    },
+                }
+            },
+        )
+
+    monkeypatch.setattr(
+        "dailydigest.ingest.grants_gov._today", lambda: date(2026, 8, 10)
+    )
+    monkeypatch.setattr(
+        "dailydigest.ingest.grants_gov.profile_search_terms", lambda limit: ["RNA"]
+    )
+
+    seen = []
+    for applicant_types in shuffled:
+        search_payload, detail_payload = _payloads(applicant_types)
+        monkeypatch.setattr(
+            "dailydigest.ingest.grants_gov._post_json",
+            lambda url, payload, s=search_payload, d=detail_payload: (
+                s if url.endswith("/search2") else d
+            ),
+        )
+        item = GrantsGovSource().fetch(
+            _spec(
+                name="Grants.gov",
+                kind="grants_gov",
+                section="opportunities",
+                profile_driven=True,
+                lookahead_days=180,
+            )
+        )[0]
+        seen.append((item.metadata["eligibility"], item.metadata["eligibility_tags"]))
+
+    assert seen[0] == seen[1]
+    assert seen[0][1] == ["County governments", "Small businesses", "State governments"]
+
+
 def test_event_rss_keeps_only_upcoming_open_events(monkeypatch):
     from dailydigest.ingest.events_rss import EventsRSSSource
 

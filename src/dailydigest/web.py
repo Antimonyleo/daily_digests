@@ -8,10 +8,12 @@ Routes:
 - ``POST /vote/{id}/{v}``  — record a +1/0/-1 vote for an item
 - ``POST|DELETE /bookmark/{id}`` — save or remove an item from the reading archive
 - ``GET /saved``           — search the local saved-reading archive
+- ``POST|DELETE /known/{id}`` — manually flag an item as known so future digests skip it
+- ``POST /overflow/save``  — pin today's reading-mode overflow for tomorrow's brew
 - ``POST /vote/{id}/reason/{reason}`` — record qualitative feedback reason
 - ``DELETE /vote/{id}/reason/{reason}`` — remove qualitative feedback reason
 - ``GET /ranking/status``  — return vote counts and LR ranker status
-- ``POST /ranking/train``  — train the local LR ranker when enough votes exist
+- ``POST /ranking/train``  — refresh vote-derived ranking calibration on demand
 - ``POST /refresh``        — kick off a dry-run pipeline in the background
 - ``GET /healthz``         — liveness probe
 - ``GET /setup``           — onboarding wizard (weighted interests, LLM backend)
@@ -82,15 +84,19 @@ from .store import (
     DigestRow,
     ItemRow,
     VoteRow,
+    add_carryover_items,
     bookmarked_item_ids,
+    carryover_item_ids,
     init_db,
     item_metadata,
+    known_item_ids,
     load_digest_audit,
     load_digest_features,
     mark_impressions_viewed,
     search_bookmarks,
     session_scope,
     set_bookmark,
+    set_item_known,
 )
 from .tea_break import daily_tea_deck
 
@@ -329,6 +335,7 @@ def _load_today(digest_id: str) -> tuple[list[dict], dict[int, int]]:
 
         item_ids = [r.id for r in rows]
         saved_item_ids = bookmarked_item_ids(int(item_id) for item_id in item_ids)
+        known_ids = known_item_ids(int(item_id) for item_id in item_ids)
         vote_rows = s.execute(
             select(VoteRow.item_id, VoteRow.value, VoteRow.grade)
             .where(VoteRow.item_id.in_(item_ids))
@@ -413,6 +420,7 @@ def _load_today(digest_id: str) -> tuple[list[dict], dict[int, int]]:
                     "current_grade": current_grade.get(int(row.id)),
                     "current_reasons": current_reasons.get(int(row.id), []),
                     "bookmarked": int(row.id) in saved_item_ids,
+                    "known": int(row.id) in known_ids,
                 }
             )
 
@@ -1039,6 +1047,19 @@ def index(request: Request) -> Response:
     catch_up_days = (_synth_rows[0].get("days") or 0) if _synth_rows else 0
     for audit in top_journal_audit:
         audit["url"] = safe_url(str(audit.get("url") or ""))
+    # Qualified picks the reading mode trimmed today, with their pin state so a
+    # reloaded page keeps showing "saved for tomorrow" after the click.
+    overflow_audit = (
+        load_digest_audit(digest_id, "reading_mode_overflow") if brewed else []
+    )
+    for audit in overflow_audit:
+        audit["url"] = safe_url(str(audit.get("url") or ""))
+    _overflow_ids = {
+        int(audit["item_id"])
+        for audit in overflow_audit
+        if audit.get("item_id") is not None
+    }
+    overflow_saved = bool(_overflow_ids) and _overflow_ids <= carryover_item_ids()
     response = templates.TemplateResponse(
         request,
         "digest_web.html.j2",
@@ -1052,6 +1073,8 @@ def index(request: Request) -> Response:
             "sections": sections,
             "overview": overview,
             "top_journal_audit": top_journal_audit,
+            "overflow_audit": overflow_audit,
+            "overflow_saved": overflow_saved,
             "candidate_funnel": candidate_funnel,
             "catch_up_synthesis": catch_up_synthesis,
             "catch_up_days": catch_up_days,
@@ -1140,6 +1163,40 @@ def bookmark_remove(request: Request, item_id: int) -> JSONResponse:
     if not set_bookmark(item_id, False):
         raise HTTPException(status_code=404, detail=f"item {item_id} not found")
     return JSONResponse({"ok": True, "item_id": item_id, "saved": False})
+
+
+@app.post("/known/{item_id}")
+def known_add(request: Request, item_id: int) -> JSONResponse:
+    """Flag an item as already known so future digests skip it."""
+    _require_csrf(request)
+    if not set_item_known(item_id, True):
+        raise HTTPException(status_code=404, detail=f"item {item_id} not found")
+    return JSONResponse({"ok": True, "item_id": item_id, "known": True})
+
+
+@app.delete("/known/{item_id}")
+def known_remove(request: Request, item_id: int) -> JSONResponse:
+    _require_csrf(request)
+    if not set_item_known(item_id, False):
+        raise HTTPException(status_code=404, detail=f"item {item_id} not found")
+    return JSONResponse({"ok": True, "item_id": item_id, "known": False})
+
+
+@app.post("/overflow/save")
+def overflow_save(request: Request) -> JSONResponse:
+    """Pin today's reading-mode overflow for one more evaluation at the next brew."""
+    _require_csrf(request)
+    digest_id = _digest_id()
+    overflow = load_digest_audit(digest_id, "reading_mode_overflow")
+    item_ids = [
+        int(audit["item_id"]) for audit in overflow if audit.get("item_id") is not None
+    ]
+    if not item_ids:
+        raise HTTPException(status_code=404, detail="no reading-mode overflow today")
+    added = add_carryover_items(item_ids)
+    return JSONResponse(
+        {"ok": True, "digest_id": digest_id, "saved": len(item_ids), "added": added}
+    )
 
 
 @app.post("/vote/{item_id}/reason/{reason}")

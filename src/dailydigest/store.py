@@ -148,6 +148,59 @@ class BookmarkRow(Base):
     __table_args__ = (UniqueConstraint("item_id", name="uq_bookmarks_item_id"),)
 
 
+class KnownItemRow(Base):
+    """Items the reader manually flagged as already known / handled.
+
+    Only an explicit click writes here. Funding calls stay open for weeks and
+    are deliberately re-surfaced whenever their official details change, so
+    without a manual "I've seen this" signal the same grant keeps returning.
+    """
+
+    __tablename__ = "known_items"
+
+    id = Column(Integer, primary_key=True)
+    item_id = Column(
+        Integer,
+        ForeignKey("items.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    created_at = Column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+
+    item = relationship("ItemRow")
+
+    __table_args__ = (UniqueConstraint("item_id", name="uq_known_items_item_id"),)
+
+
+class CarryoverItemRow(Base):
+    """Reading-mode overflow the reader chose to re-run against tomorrow's pool.
+
+    A qualified pick trimmed by "Usual"/"Tired" normally gets at most one more
+    chance before its publication date leaves the candidate window. "Save for
+    tomorrow" pins it here; the next brew injects it into the pool for ONE more
+    full evaluation alongside the fresh papers, then the entry is consumed.
+    """
+
+    __tablename__ = "carryover_items"
+
+    id = Column(Integer, primary_key=True)
+    item_id = Column(
+        Integer,
+        ForeignKey("items.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    created_at = Column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+
+    item = relationship("ItemRow")
+
+    __table_args__ = (UniqueConstraint("item_id", name="uq_carryover_item_id"),)
+
+
 class ItemEmbeddingRow(Base):
     __tablename__ = "item_embeddings"
 
@@ -522,6 +575,119 @@ def bookmarked_item_ids(item_ids: Iterable[int]) -> set[int]:
                 select(BookmarkRow.item_id).where(BookmarkRow.item_id.in_(ids))
             ).scalars()
         }
+
+
+def set_item_known(item_id: int, known: bool) -> bool:
+    """Idempotently flag/unflag an item as already known. False = no such item.
+
+    Manual only: nothing in the pipeline writes this. A known item is dropped
+    from every future digest even if its official details change again.
+    """
+    init_db()
+    with session_scope() as s:
+        if s.get(ItemRow, int(item_id)) is None:
+            return False
+        if known:
+            s.execute(
+                sqlite_insert(KnownItemRow)
+                .values(item_id=int(item_id))
+                .on_conflict_do_nothing(index_elements=["item_id"])
+            )
+        else:
+            s.execute(delete(KnownItemRow).where(KnownItemRow.item_id == int(item_id)))
+    return True
+
+
+def known_item_ids(item_ids: Iterable[int]) -> set[int]:
+    """Return the subset of item ids the reader flagged as already known."""
+    ids = {int(item_id) for item_id in item_ids}
+    if not ids:
+        return set()
+    init_db()
+    with session_scope() as s:
+        return {
+            int(item_id)
+            for item_id in s.execute(
+                select(KnownItemRow.item_id).where(KnownItemRow.item_id.in_(ids))
+            ).scalars()
+        }
+
+
+def exclude_known_items(rows: list[ItemRow]) -> list[ItemRow]:
+    """Drop rows the reader manually flagged as known.
+
+    Applied after ``exclude_previously_shown`` so it also overrides that
+    function's deliberate re-surfacing of opportunities whose details changed.
+    """
+    ids = [int(r.id) for r in rows if r.id is not None]
+    if not ids:
+        return rows
+    known = known_item_ids(ids)
+    if not known:
+        return rows
+    return [r for r in rows if r.id is None or int(r.id) not in known]
+
+
+def add_carryover_items(item_ids: Iterable[int]) -> int:
+    """Pin items for one more ranking pass at the next brew. Returns rows added."""
+    ids = {int(item_id) for item_id in item_ids}
+    if not ids:
+        return 0
+    init_db()
+    added = 0
+    with session_scope() as s:
+        existing = {
+            int(item_id)
+            for item_id in s.execute(
+                select(ItemRow.id).where(ItemRow.id.in_(ids))
+            ).scalars()
+        }
+        for item_id in sorted(existing):
+            result = s.execute(
+                sqlite_insert(CarryoverItemRow)
+                .values(item_id=item_id)
+                .on_conflict_do_nothing(index_elements=["item_id"])
+            )
+            added += int(result.rowcount or 0)
+    return added
+
+
+def carryover_item_ids() -> set[int]:
+    """Item ids currently pinned for the next brew."""
+    init_db()
+    with session_scope() as s:
+        return {
+            int(item_id)
+            for item_id in s.execute(select(CarryoverItemRow.item_id)).scalars()
+        }
+
+
+def carryover_item_rows() -> list[ItemRow]:
+    """Return the pinned items as detached rows for candidate injection."""
+    init_db()
+    with session_scope() as s:
+        rows = (
+            s.execute(
+                select(ItemRow)
+                .join(CarryoverItemRow, CarryoverItemRow.item_id == ItemRow.id)
+                .order_by(CarryoverItemRow.id)
+            )
+            .scalars()
+            .all()
+        )
+        for row in rows:
+            s.expunge(row)
+        return list(rows)
+
+
+def clear_carryover_items(item_ids: Iterable[int]) -> None:
+    """Consume pinned entries once their one extra evaluation has happened."""
+    ids = {int(item_id) for item_id in item_ids}
+    if not ids:
+        return
+    init_db()
+    with session_scope() as s:
+        s.execute(delete(CarryoverItemRow).where(CarryoverItemRow.item_id.in_(ids)))
 
 
 def search_bookmarks(query: str = "", limit: int = 200) -> list[SavedItem]:
@@ -920,22 +1086,26 @@ def exclude_previously_shown(
 
 
 def prune(days: int) -> int:
-    """Delete items older than ``days``, but preserve voted or saved items.
+    """Delete items older than ``days``, but preserve voted, saved, or known items.
 
     Voted items are kept so the LR ranker retains its training signal; saved
     items are kept so the reading archive remains durable after normal
-    rotation. Without these guards, cascade deletion would erase both.
+    rotation; items flagged known are kept so a re-ingested funding call still
+    matches an existing row and stays suppressed. Without these guards, cascade
+    deletion would erase all three.
     """
     init_db()
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     with session_scope() as s:
         voted_subq = select(VoteRow.item_id).distinct().scalar_subquery()
         bookmarked_subq = select(BookmarkRow.item_id).distinct().scalar_subquery()
+        known_subq = select(KnownItemRow.item_id).distinct().scalar_subquery()
         digest_item_subq = select(DigestItemRow.item_id).distinct().scalar_subquery()
         stmt = delete(ItemRow).where(
             ItemRow.fetched_at < cutoff,
             ItemRow.id.not_in(voted_subq),
             ItemRow.id.not_in(bookmarked_subq),
+            ItemRow.id.not_in(known_subq),
             ItemRow.id.not_in(digest_item_subq),
         )
         result = s.execute(stmt)

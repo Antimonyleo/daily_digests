@@ -144,6 +144,42 @@ def test_material_change_can_resurface_a_previously_shown_opportunity():
     assert exclude_previously_shown([refreshed]) == [refreshed]
 
 
+def test_known_flag_beats_the_material_change_resurface():
+    """A manual "I know this" retires a call even when its details keep changing."""
+    from dailydigest.store import (
+        exclude_known_items,
+        exclude_previously_shown,
+        recent_items,
+        set_item_known,
+        upsert_items,
+        write_digest,
+    )
+
+    item = Item(
+        source="Grants.gov",
+        section="opportunities",
+        external_id="KNOWN-1",
+        url="https://grants.gov/opportunity/known",
+        title="RNA research opportunity",
+        abstract="Support for RNA research and technology development.",
+        metadata={"status": "open", "deadline": "2026-10-01", "official": True},
+    )
+    upsert_items([item])
+    row = next(r for r in recent_items(days=2) if r.external_id == "KNOWN-1")
+    write_digest("2026-08-11", [("F1", int(row.id), 0.9)])
+    set_item_known(int(row.id), True)
+
+    changed = item.model_copy(
+        update={"metadata": {**item.metadata, "deadline": "2026-10-20"}}
+    )
+    upsert_items([changed])
+    refreshed = next(r for r in recent_items(days=2) if r.external_id == "KNOWN-1")
+    # The change alone would bring it back...
+    assert exclude_previously_shown([refreshed]) == [refreshed]
+    # ...but the manual flag is final.
+    assert exclude_known_items(exclude_previously_shown([refreshed])) == []
+
+
 def test_assessment_filters_ineligible_closed_and_too_soon_items():
     from dailydigest.opportunities import OpportunityProfile, assess_opportunity
 

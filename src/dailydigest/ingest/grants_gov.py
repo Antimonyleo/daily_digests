@@ -159,11 +159,18 @@ class GrantsGovSource:
                 or hit.get("agency")
                 or "Grants.gov"
             ).strip()
-            applicant_types = [
-                str(row.get("description") or "").strip()
-                for row in synopsis.get("applicantTypes") or []
-                if str(row.get("description") or "").strip()
-            ]
+            # Sorted because the API returns this list in a different order on
+            # every fetch. The order leaks into both `eligibility_tags` and the
+            # joined `eligibility` string, which the opportunity snapshot hashes
+            # to decide whether a call materially changed — unsorted, every
+            # grant looked "updated" daily and was re-surfaced in every digest.
+            applicant_types = sorted(
+                {
+                    str(row.get("description") or "").strip()
+                    for row in synopsis.get("applicantTypes") or []
+                    if str(row.get("description") or "").strip()
+                }
+            )
             eligibility_description = _plain_text(
                 synopsis.get("applicantEligibilityDesc")
                 or synopsis.get("additionalInformationOnEligibility")
