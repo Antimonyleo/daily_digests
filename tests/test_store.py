@@ -162,6 +162,37 @@ def test_known_items_survive_retention_pruning(monkeypatch, tmp_path):
     assert stale not in remaining
 
 
+def test_unshown_candidates_are_not_suppressed_as_previously_shown(monkeypatch, tmp_path):
+    """A trimmed near-miss must stay eligible, or "save for tomorrow" is a no-op.
+
+    Research impressions log the whole scored pool, so an overflow item DOES get
+    an impression row — with selected=False. exclude_previously_shown must key on
+    the selected flag, not on the row's existence.
+    """
+    store_mod = _reset_store(tmp_path, monkeypatch)
+    shown = _add_item(store_mod, "shown-item")
+    trimmed = _add_item(store_mod, "trimmed-item")
+    digest_id = "2026-06-20"
+
+    store_mod.write_digest(digest_id, [("R1", shown)])
+    store_mod.write_impressions(
+        digest_id,
+        [
+            ("research", shown, 0, 0.9, True, "facet", 0.8, 0.8),
+            ("research", trimmed, 1, 0.8, False, "facet", 0.8, 0.8),
+        ],
+    )
+    store_mod.mark_impressions_viewed(digest_id)
+
+    with store_mod.session_scope() as s:
+        rows = s.query(store_mod.ItemRow).all()
+        kept = {int(r.id) for r in store_mod.exclude_previously_shown(rows)}
+        for row in rows:
+            s.expunge(row)
+    assert trimmed in kept
+    assert shown not in kept
+
+
 def test_carryover_items_pin_evaluate_once_and_clear(monkeypatch, tmp_path):
     """Save-for-tomorrow entries add idempotently, load as rows, and consume."""
     store_mod = _reset_store(tmp_path, monkeypatch)

@@ -481,6 +481,15 @@
   .overflow-row a { color: var(--text); font-size: 14px; font-weight: 640; text-decoration: none; }
   .overflow-row a:hover { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
   .overflow-meta { display: block; color: var(--muted); font-size: 12px; margin-top: 1px; }
+  .overflow-votes { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
+  .overflow-vote {
+    border: 1px solid var(--border); border-radius: 999px; background: var(--card);
+    color: var(--muted); padding: 2px 9px; font-size: 11px; font-weight: 720; cursor: pointer;
+  }
+  .overflow-vote:hover { color: var(--accent-strong); border-color: #9fc2ae; }
+  .overflow-vote.active { color: var(--accent-strong); border-color: #9fc2ae; background: var(--accent-soft); }
+  .overflow-vote:disabled { cursor: progress; opacity: 0.6; }
+  .overflow-vote-state { color: var(--muted); font-size: 11px; }
   #overflow-save-btn { margin-bottom: 10px; }
   #overflow-save-btn:disabled { opacity: 0.7; cursor: default; }
   .no-filter-results {
@@ -945,9 +954,20 @@
         </p>
         <ul class="overflow-list">
           {% for entry in overflow_audit %}
-          <li class="overflow-row">
+          <li class="overflow-row" data-item-id="{{ entry.item_id }}">
             <a href="{{ entry.url }}" target="_blank" rel="noopener">{{ entry.title }}</a>
             <span class="overflow-meta">{{ entry.source }}{% if entry.section %} · {{ entry.section }}{% endif %} · relevance {{ '%.2f'|format(entry.topic_score) }}</span>
+            {# Rating a near-miss is the scarcest training signal there is: these
+               sit exactly on the cutoff the ranker keeps getting wrong. A positive
+               grade also keeps the item eligible for tomorrow, a negative retires
+               it (see store.exclude_reviewed_items). #}
+            <span class="overflow-votes" role="group" aria-label="Rate {{ entry.title }}">
+              <button class="overflow-vote" data-grade="100" type="button">Must read</button>
+              <button class="overflow-vote" data-grade="70" type="button">Relevant</button>
+              <button class="overflow-vote" data-grade="40" type="button">Hmmm</button>
+              <button class="overflow-vote" data-grade="10" type="button">Not for me</button>
+              <span class="overflow-vote-state" aria-live="polite"></span>
+            </span>
           </li>
           {% endfor %}
         </ul>
@@ -1510,6 +1530,33 @@
       }
     });
   }
+
+  document.querySelectorAll(".overflow-row").forEach((rowEl) => {
+    const stateEl = rowEl.querySelector(".overflow-vote-state");
+    rowEl.querySelectorAll(".overflow-vote").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const id = rowEl.dataset.itemId;
+        const grade = btn.dataset.grade;
+        const buttons = rowEl.querySelectorAll(".overflow-vote");
+        buttons.forEach((b) => { b.disabled = true; });
+        try {
+          const response = await fetch(`/vote/${id}/${grade}`, {
+            method: "POST",
+            headers: { "X-CSRF-Token": CSRF_TOKEN },
+          });
+          if (!response.ok) throw new Error("HTTP " + response.status);
+          buttons.forEach((b) => b.classList.toggle("active", b === btn));
+          if (stateEl) stateEl.textContent = "Saved";
+          const payload = await response.json();
+          if (payload.ranking_status) updateRankingStatus(payload.ranking_status);
+        } catch (error) {
+          if (stateEl) stateEl.textContent = "Could not save";
+        } finally {
+          buttons.forEach((b) => { b.disabled = false; });
+        }
+      });
+    });
+  });
 
   document.querySelectorAll(".item").forEach((itemEl) => {
     syncReasonChips(itemEl);

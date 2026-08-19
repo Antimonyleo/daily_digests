@@ -49,6 +49,35 @@ def test_venue_low_impact_flag_overrides_aggregator_bucket():
     assert is_low_impact_research(row) is True
 
 
+def test_venue_low_impact_flag_never_relabels_a_preprint_server():
+    """A preprint is unpublished, not trivial.
+
+    Every preprint server has low OpenAlex mean-citedness by construction
+    (bioRxiv ~0.30, under the low-venue threshold), so honoring the enrichment
+    flag for them squeezed preprints into the 15% low-impact quota instead of
+    the 20% preprint budget — while the reader's votes rate bioRxiv above most
+    journals they are shown.
+    """
+    for source, expected in (
+        ("bioRxiv (recent)", "bio_med_preprint"),
+        ("medRxiv (recent)", "bio_med_preprint"),
+        ("arXiv q-bio.QM", "arxiv_other"),
+        ("arXiv cs.LG", "arxiv_cs"),
+    ):
+        row = _row("A structural DNA nanotechnology study", source)
+        assert source_bucket(row) == expected
+        row.venue_low_impact = True
+        assert source_bucket(row) == expected
+        assert is_low_impact_research(row) is False
+
+    # The guard still does its real job: a hidden trivial venue behind an
+    # aggregator is still caught.
+    hidden = _row("A targeted therapeutics study", "PubMed (your topics)")
+    assert source_bucket(hidden) == "published_database"
+    hidden.venue_low_impact = True
+    assert source_bucket(hidden) == "low_impact_journal"
+
+
 def test_low_impact_penalized_vs_top_at_equal_relevance():
     minor = _row("RNA delivery mechanism", "Journal of Minor Results")
     nature = _row("RNA delivery mechanism", "Nature")

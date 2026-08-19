@@ -1276,6 +1276,10 @@ def test_overflow_shelf_renders_and_saves_for_tomorrow(tmp_path, monkeypatch):
     assert "1 more qualified pick didn’t fit today’s reading mode" in before
     assert "The one that did not fit" in before
     assert "Save all for tomorrow" in before
+    # Near-miss rows are gradable: they sit exactly on the cutoff the ranker
+    # keeps getting wrong, so they are the scarcest training signal available.
+    assert f'class="overflow-row" data-item-id="{trimmed_id}"' in before
+    assert before.count('class="overflow-vote"') == 4
 
     headers = {"X-CSRF-Token": web._CSRF_TOKEN}
     response = web.overflow_save(_request("POST", "/overflow/save", headers=headers))
@@ -1291,6 +1295,23 @@ def test_overflow_shelf_renders_and_saves_for_tomorrow(tmp_path, monkeypatch):
     # Reload keeps the pinned state so the button cannot double-arm.
     after = _text_payload(web.index(_request("GET", "/")))
     assert "Saved for tomorrow" in after
+
+    # A positive grade on a near-miss keeps it eligible for tomorrow; a negative
+    # one retires it (store.exclude_reviewed_items).
+    votes_mod = __import__("dailydigest.votes", fromlist=["votes"])
+    web.vote(_request("POST", f"/vote/{trimmed_id}/70", headers=headers), trimmed_id, 70)
+    with store_mod.session_scope() as s:
+        rows = [r for r in s.query(store_mod.ItemRow).all() if int(r.id) == trimmed_id]
+        assert store_mod.exclude_reviewed_items(rows) == rows
+        for r in rows:
+            s.expunge(r)
+    web.vote(_request("POST", f"/vote/{trimmed_id}/10", headers=headers), trimmed_id, 10)
+    with store_mod.session_scope() as s:
+        rows = [r for r in s.query(store_mod.ItemRow).all() if int(r.id) == trimmed_id]
+        assert store_mod.exclude_reviewed_items(rows) == []
+        for r in rows:
+            s.expunge(r)
+    assert votes_mod.vote_counts()["total"] >= 1
 
     # A day with no overflow audit -> 404 rather than a silent no-op.
     monkeypatch.setattr(web, "_digest_id", lambda: "2026-05-08")

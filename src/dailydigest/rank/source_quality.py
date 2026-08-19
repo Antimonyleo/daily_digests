@@ -535,18 +535,30 @@ def source_bucket(row: Any) -> str:
     section = _row_section(row).lower()
     if section != "research":
         return section or "other"
-    # Live venue-impact enrichment (when enabled) can flag an item whose actual
-    # publication venue is low impact — this is the only way to catch low-impact
-    # papers arriving through aggregators (OpenAlex/PubMed) whose source name
-    # hides the real journal. Honor it so the low-impact frequency cap applies.
-    if getattr(row, "venue_low_impact", False) is True:
-        return "low_impact_journal"
+    # Preprint servers classify themselves. They must be matched BEFORE the
+    # venue-impact flag below: a preprint server's OpenAlex mean-citedness is
+    # low by construction (bioRxiv scores ~0.30), so honoring the flag here
+    # relabeled every enriched preprint a "trivial journal" and squeezed it into
+    # the 15% low-impact quota instead of the 20% preprint budget — even though
+    # the reader's own votes rate bioRxiv (0.27 hit rate) above most journals
+    # they are shown. A preprint is unpublished, not trivial.
     if is_arxiv_cs_source(source_lc):
         return "arxiv_cs"
     if "arxiv" in source_lc:
         return "arxiv_other"
     if "biorxiv" in source_lc or "medrxiv" in source_lc:
         return "bio_med_preprint"
+
+    # Live venue-impact enrichment (when enabled) can flag an item whose actual
+    # publication venue is low impact — this is the only way to catch low-impact
+    # papers arriving through aggregators (OpenAlex/PubMed) whose source name
+    # hides the real journal. Honor it so the low-impact frequency cap applies.
+    # The preprint servers above already returned, so this can no longer relabel
+    # them (PubMed shares their "repository" tier, so tier cannot separate the
+    # two — only the explicit source match can).
+    if getattr(row, "venue_low_impact", False) is True:
+        return "low_impact_journal"
+
     if "openalex" in source_lc:
         return "aggregator"
     if "pubmed" in source_lc:
