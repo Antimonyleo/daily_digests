@@ -394,10 +394,24 @@ ai:
 # setup switch is enabled. Grants.gov detail pages and institutional event feeds
 # are authoritative; each item is rechecked for status/deadline before selection.
 opportunities:
+  # Searches the reader's RESEARCH keywords: project grants in their field.
   - name: Grants.gov
     kind: grants_gov
     profile_driven: true
     lookahead_days: 180
+  # Searches the vocabulary of the AWARD rather than the science. Fellowships and
+  # personal/career awards are described by their mechanism, so a research-keyword
+  # search never returns them — measured on the live API, "DNA nanotechnology"
+  # gives 48 hits while "career development award" gives 1205 and "research
+  # training" (NRSA/Kirschstein) 1364. The opportunity topic floor and the
+  # eligibility gate still decide what is actually shown.
+  - name: Grants.gov (fellowships and career awards)
+    kind: grants_gov
+    lookahead_days: 270
+    query: >-
+      postdoctoral fellowship|career development award|research training|
+      early career investigator|visiting scholar|research fellowship|
+      mentored research scientist|independent scientist award
 
 events:
   - name: EMBL Events

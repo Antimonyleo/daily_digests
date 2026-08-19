@@ -104,7 +104,17 @@ class GrantsGovSource:
         if spec.profile_driven:
             terms = profile_search_terms(self.MAX_TERMS)
         else:
-            terms = [spec.query] if spec.query else []
+            # A pipe-separated `query` searches several phrases. Career awards and
+            # fellowships are described by the AWARD, not by the research topic, so
+            # a profile-keyword search ("DNA nanotechnology") never returns them —
+            # they need their own vocabulary ("postdoctoral fellowship", "career
+            # development award"). Relevance is still enforced downstream by the
+            # opportunity topic floor and the eligibility gate.
+            terms = [
+                part.strip()
+                for part in str(spec.query or "").split("|")
+                if part.strip()
+            ][: self.MAX_TERMS]
         if not terms:
             return []
 

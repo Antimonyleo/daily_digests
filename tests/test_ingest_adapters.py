@@ -524,6 +524,54 @@ def test_grants_gov_fetches_official_details_and_amounts(monkeypatch):
     assert len(calls) == 2
 
 
+def test_grants_gov_static_query_supports_multiple_terms(monkeypatch):
+    """Fellowships are described by the award mechanism, not the science.
+
+    A profile-keyword search never returns them, so the fellowship channel uses a
+    pipe-separated static query. Each phrase must become its own API search.
+    """
+    from dailydigest.ingest.grants_gov import GrantsGovSource
+
+    searched = []
+
+    def fake_post(url, payload):
+        if url.endswith("/search2"):
+            searched.append(payload["keyword"])
+            return {"data": {"oppHits": []}}
+        return {"data": {}}
+
+    monkeypatch.setattr("dailydigest.ingest.grants_gov._post_json", fake_post)
+    monkeypatch.setattr(
+        "dailydigest.ingest.grants_gov._today", lambda: date(2026, 8, 19)
+    )
+
+    GrantsGovSource().fetch(
+        _spec(
+            name="Grants.gov (fellowships and career awards)",
+            kind="grants_gov",
+            section="opportunities",
+            query="postdoctoral fellowship| career development award |visiting scholar",
+        )
+    )
+    assert searched == [
+        "postdoctoral fellowship",
+        "career development award",
+        "visiting scholar",
+    ]
+
+    # A plain single-phrase query still behaves as before.
+    searched.clear()
+    GrantsGovSource().fetch(
+        _spec(
+            name="Grants.gov",
+            kind="grants_gov",
+            section="opportunities",
+            query="RNA delivery",
+        )
+    )
+    assert searched == ["RNA delivery"]
+
+
 def test_biorxiv_drops_withdrawn_and_keeps_quality_metadata(monkeypatch):
     """Withdrawn preprints must never be recommended, and the fields that could
     answer preprint-quality questions later must be persisted now."""
