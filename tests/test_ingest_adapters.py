@@ -524,6 +524,57 @@ def test_grants_gov_fetches_official_details_and_amounts(monkeypatch):
     assert len(calls) == 2
 
 
+def test_biorxiv_drops_withdrawn_and_keeps_quality_metadata(monkeypatch):
+    """Withdrawn preprints must never be recommended, and the fields that could
+    answer preprint-quality questions later must be persisted now."""
+    from dailydigest.ingest.biorxiv import BiorxivSource
+
+    payload = {
+        "collection": [
+            {
+                "doi": "10.1101/withdrawn.1",
+                "title": "WITHDRAWN: A retracted study",
+                "abstract": "Nope.",
+                "authors": "Smith, A.",
+                "date": "2026-08-17",
+                "version": "2",
+                "type": "withdrawn",
+                "category": "biophysics",
+                "author_corresponding_institution": "Somewhere",
+            },
+            {
+                "doi": "10.1101/good.1",
+                "title": "A programmable DNA origami actuator",
+                "abstract": "We build a DNA origami device with tunable response.",
+                "authors": "Yin, P.; Rothemund, P.",
+                "date": "2026-08-17",
+                "version": "3",
+                "type": "new results",
+                "category": "bioengineering",
+                "author_corresponding_institution": "Harvard University",
+            },
+        ],
+        "messages": [{"total": 2}],
+    }
+    monkeypatch.setattr(
+        "dailydigest.ingest.biorxiv._get_json",
+        lambda client, url: payload if url.endswith("/0") else {"collection": []},
+    )
+
+    items = BiorxivSource().fetch(
+        _spec(name="bioRxiv (recent)", kind="biorxiv", server="biorxiv"), days=2
+    )
+    titles = [i.title for i in items]
+    assert not any(t.upper().startswith("WITHDRAWN") for t in titles)
+    assert "A programmable DNA origami actuator" in titles
+
+    kept = next(i for i in items if "origami" in i.title)
+    assert kept.metadata["preprint_version"] == "3"
+    assert kept.metadata["preprint_type"] == "new results"
+    assert kept.metadata["corresponding_institution"] == "Harvard University"
+    assert kept.metadata["preprint_category"] == "bioengineering"
+
+
 def test_openalex_venue_source_honours_configured_work_types(monkeypatch):
     """A preprint repository needs type:preprint, not the default type:article.
 

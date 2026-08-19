@@ -79,6 +79,13 @@ class BiorxivSource:
                     title = (entry.get("title") or "").strip()
                     if not title:
                         continue
+                    # bioRxiv marks retracted/withdrawn work in-band and keeps
+                    # serving it in the daily feed. Recommending a withdrawn
+                    # preprint is never right, so drop it at ingest.
+                    entry_type = str(entry.get("type") or "").strip().lower()
+                    if entry_type == "withdrawn" or title.upper().startswith("WITHDRAWN"):
+                        logger.info("biorxiv: skipping withdrawn preprint %s", doi or title[:60])
+                        continue
                     link = f"https://doi.org/{doi}" if doi else entry.get("link", "")
                     if not link:
                         continue
@@ -107,6 +114,19 @@ class BiorxivSource:
                             abstract=abstract,
                             authors=authors,
                             published_at=pub_dt,
+                            # Kept so preprint-quality questions are answerable
+                            # later without re-fetching: version (has it been
+                            # revised), category, corresponding institution, and
+                            # the entry type. Nothing ranks on these yet.
+                            metadata={
+                                "preprint_version": str(entry.get("version") or ""),
+                                "preprint_category": str(entry.get("category") or ""),
+                                "preprint_type": entry_type,
+                                "corresponding_institution": str(
+                                    entry.get("author_corresponding_institution") or ""
+                                ),
+                                "doi": doi,
+                            },
                         )
                     )
                 # paginate
