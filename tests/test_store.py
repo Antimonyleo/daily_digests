@@ -199,12 +199,18 @@ def test_carryover_items_pin_evaluate_once_and_clear(monkeypatch, tmp_path):
     a = _add_item(store_mod, "carry-a")
     b = _add_item(store_mod, "carry-b")
 
-    assert store_mod.add_carryover_items([a, b, a]) == 2
+    assert store_mod.add_carryover_items([a, b, a], pinned_digest_id="2026-06-01") == 2
     assert store_mod.add_carryover_items([a]) == 0  # idempotent
     assert store_mod.add_carryover_items([10**9]) == 0  # unknown ids ignored
     assert store_mod.carryover_item_ids() == {a, b}
     rows = store_mod.carryover_item_rows()
     assert {int(r.id) for r in rows} == {a, b}
+    # A same-day re-brew must not spend the pins it just created: the pipeline
+    # passes the current digest id, and pins made from it are withheld.
+    assert store_mod.carryover_item_rows(exclude_digest_id="2026-06-01") == []
+    assert {
+        int(r.id) for r in store_mod.carryover_item_rows(exclude_digest_id="2026-06-02")
+    } == {a, b}
 
     store_mod.clear_carryover_items([a])
     assert store_mod.carryover_item_ids() == {b}

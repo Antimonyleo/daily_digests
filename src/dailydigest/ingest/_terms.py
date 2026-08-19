@@ -44,8 +44,12 @@ def profile_search_terms(max_terms: int = 32) -> list[str]:
     return out
 
 
-def watched_author_names(max_authors: int = 10) -> list[str]:
-    """Return up to ``max_authors`` watched author names from the profile."""
+def watched_author_names(max_authors: int = 25) -> list[str]:
+    """Return up to ``max_authors`` watched author names from the profile.
+
+    Truncation is logged: a silently-dropped tail is why a long
+    ``authors_of_interest`` list can look like it does nothing.
+    """
     try:
         from ..config import load_profile
 
@@ -53,11 +57,16 @@ def watched_author_names(max_authors: int = 10) -> list[str]:
     except Exception as e:  # noqa: BLE001
         logger.warning("watched_author_names: could not load profile: %s", e)
         return []
-    out: list[str] = []
-    for a in getattr(prof, "authors_of_interest", []) or []:
-        name = str(a).strip()
-        if name:
-            out.append(name)
-        if len(out) >= max_authors:
-            break
+    configured = [
+        str(a).strip() for a in getattr(prof, "authors_of_interest", []) or []
+    ]
+    configured = [name for name in configured if name]
+    out = configured[:max_authors]
+    if len(configured) > len(out):
+        logger.warning(
+            "watched authors: using %d of %d configured names; the rest are not "
+            "queried as a retrieval channel",
+            len(out),
+            len(configured),
+        )
     return out

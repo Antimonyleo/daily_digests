@@ -211,6 +211,37 @@ def _ndcg_at_k(scores: np.ndarray, labels: np.ndarray, k: int = 10) -> float:
     return _dcg(ranked_gains) / idcg
 
 
+def _precision_at_k(scores: np.ndarray, labels: np.ndarray, k: int) -> float:
+    """Fraction of the top-k that the reader actually liked.
+
+    The digest shows ~``top_research`` items, so this — not full-list pairwise
+    accuracy — is the metric that matches what the reader sees. Reporting only
+    pairwise accuracy is how a head-of-list regression stayed invisible.
+    """
+    n = len(labels)
+    if n == 0 or k <= 0:
+        return float("nan")
+    order = np.argsort(-np.asarray(scores, dtype=np.float64), kind="stable")
+    top = order[: min(k, n)]
+    return float(sum(1 for i in top if labels[i] > 0) / len(top))
+
+
+def _recall_at_k(scores: np.ndarray, wanted: np.ndarray, k: int) -> float:
+    """Fraction of the ``wanted`` items that land in the top-k.
+
+    Used for grade-100 ("Must read") recall: the reader's complaint was that
+    important papers were missed, which is a recall-at-the-head question that
+    pairwise accuracy cannot answer.
+    """
+    wanted = np.asarray(wanted, dtype=bool)
+    total = int(wanted.sum())
+    if total == 0 or k <= 0:
+        return float("nan")
+    order = np.argsort(-np.asarray(scores, dtype=np.float64), kind="stable")
+    top = order[: min(k, len(wanted))]
+    return float(sum(1 for i in top if wanted[i]) / total)
+
+
 def _split_chronological(
     n: int, timestamps: list[datetime], train_frac: float
 ) -> tuple[list[int], list[int]]:
@@ -501,21 +532,52 @@ def run_production_benchmark(
     fused_scores = _fuse_scores(topic_scores, knn_scores)
     lr_fused_scores = _fuse_scores(topic_scores, lr_margin)
 
+    # HEAD metrics are reported for EVERY configuration. The digest serves about
+    # `top_research` items, so a config can win full-list pairwise accuracy while
+    # losing the head — which is exactly what happened when only `fused_ndcg` was
+    # reported and the LR's nDCG@10 silently dropped out of the comparison.
+    try:
+        from dailydigest.config import get_settings
+
+        head_k = int(getattr(get_settings(), "top_research", 10)) or 10
+    except Exception:  # noqa: BLE001
+        head_k = 10
+    test_grades = np.array([grades[i] for i in test_idx], dtype=np.float32)
+    must_read = test_grades >= 100
+
     topic_acc, n_pairs = _pairwise_accuracy(topic_scores, test_labels)
     fused_acc, _ = _pairwise_accuracy(fused_scores, test_labels)
     lr_fused_acc, _ = _pairwise_accuracy(lr_fused_scores, test_labels)
-    topic_ndcg = _ndcg_at_k(topic_scores, test_labels, k=10)
-    fused_ndcg = _ndcg_at_k(fused_scores, test_labels, k=10)
+
+    def _head(scores: np.ndarray) -> dict[str, float]:
+        return {
+            "ndcg": _ndcg_at_k(scores, test_labels, k=10),
+            "p_at_k": _precision_at_k(scores, test_labels, head_k),
+            "must_read_recall": _recall_at_k(scores, must_read, head_k),
+        }
+
+    topic_head = _head(topic_scores)
+    fused_head = _head(fused_scores)
+    lr_head = _head(lr_fused_scores)
 
     return {
         "n_train": len(train_idx),
         "n_test": len(test_idx),
         "n_test_pairs": n_pairs,
+        "head_k": head_k,
+        "n_must_read": int(must_read.sum()),
         "topic_acc": topic_acc,
         "fused_acc": fused_acc,
         "lr_fused_acc": lr_fused_acc,
-        "topic_ndcg": topic_ndcg,
-        "fused_ndcg": fused_ndcg,
+        "topic_ndcg": topic_head["ndcg"],
+        "fused_ndcg": fused_head["ndcg"],
+        "lr_fused_ndcg": lr_head["ndcg"],
+        "topic_p_at_k": topic_head["p_at_k"],
+        "fused_p_at_k": fused_head["p_at_k"],
+        "lr_fused_p_at_k": lr_head["p_at_k"],
+        "topic_must_read_recall": topic_head["must_read_recall"],
+        "fused_must_read_recall": fused_head["must_read_recall"],
+        "lr_fused_must_read_recall": lr_head["must_read_recall"],
         "train_exemplar_ids": train_exemplar_ids,
         "test_ids": test_ids,
     }
@@ -629,15 +691,21 @@ def main() -> int:
                 f"({b['n_test_pairs']} held-out pairs)  "
                 f"leakage: {'FAIL' if leaked_b else 'OK'}"
             )
-            print(f"      topic-only    pairwise acc : {_fmt(b['topic_acc'])}   "
-                  f"nDCG@10 : {_fmt(b['topic_ndcg'])}")
-            print(f"      deployed(kNN fuse) pw acc   : {_fmt(b['fused_acc'])}   "
-                  f"nDCG@10 : {_fmt(b['fused_ndcg'])}")
-            print(f"      retired LR fuse    pw acc   : {_fmt(b['lr_fused_acc'])}")
-            d_acc = (b["fused_acc"] - b["topic_acc"])
-            print(f"      delta pairwise acc          : {d_acc:+.3f} "
-                  f"({'deployed ranker helps' if d_acc > 0 else 'no gain over topic-only'})")
-            print("      THIS is the deployable-ranker signal (kNN preference + RRF, as shipped).")
+            k = b["head_k"]
+            print(f"      {'config':<14s} {'pw acc':>7s} {'nDCG@10':>8s} "
+                  f"{'P@' + str(k):>7s} {'mustR@' + str(k):>8s}")
+            for label, pre in (
+                ("topic-only", "topic"),
+                ("kNN fuse", "fused"),
+                ("LR fuse", "lr_fused"),
+            ):
+                print(f"      {label:<14s} {_fmt(b[pre + '_acc']):>7s} "
+                      f"{_fmt(b[pre + '_ndcg']):>8s} {_fmt(b[pre + '_p_at_k']):>7s} "
+                      f"{_fmt(b[pre + '_must_read_recall']):>8s}")
+            print(f"      (head metrics at K={k}; {b['n_must_read']} must-read items held out)")
+            print("      Pairwise acc scores the WHOLE list; nDCG/P@K/mustR@K score the")
+            print("      ~K items actually served. A config can win one and lose the other —")
+            print("      decide on the head metrics, and quote intervals, not third digits.")
         except ValueError as e:
             print(f"      could not run production benchmark: {e}")
 

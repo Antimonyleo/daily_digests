@@ -956,11 +956,13 @@
           {% for entry in overflow_audit %}
           <li class="overflow-row" data-item-id="{{ entry.item_id }}">
             <a href="{{ entry.url }}" target="_blank" rel="noopener">{{ entry.title }}</a>
-            <span class="overflow-meta">{{ entry.source }}{% if entry.section %} · {{ entry.section }}{% endif %} · relevance {{ '%.2f'|format(entry.topic_score) }}</span>
+            <span class="overflow-meta">{{ entry.source }}{% if entry.section %} · {{ entry.section }}{% endif %} · relevance {{ '%.2f'|format(entry.topic_score | default(0.0) | float) }}</span>
             {# Rating a near-miss is the scarcest training signal there is: these
-               sit exactly on the cutoff the ranker keeps getting wrong. A positive
-               grade also keeps the item eligible for tomorrow, a negative retires
-               it (see store.exclude_reviewed_items). #}
+               sit exactly on the cutoff the ranker keeps getting wrong. A negative
+               grade retires the item (store.exclude_reviewed_items). A positive one
+               keeps it ELIGIBLE but cannot bring it back on its own — its
+               publication date has usually left the candidate window — so the
+               handler also pins it, exactly as "Save all for tomorrow" would. #}
             <span class="overflow-votes" role="group" aria-label="Rate {{ entry.title }}">
               <button class="overflow-vote" data-grade="100" type="button">Must read</button>
               <button class="overflow-vote" data-grade="70" type="button">Relevant</button>
@@ -1546,9 +1548,19 @@
           });
           if (!response.ok) throw new Error("HTTP " + response.status);
           buttons.forEach((b) => b.classList.toggle("active", b === btn));
-          if (stateEl) stateEl.textContent = "Saved";
           const payload = await response.json();
           if (payload.ranking_status) updateRankingStatus(payload.ranking_status);
+          // A positive rating means "I want this" — pin it so it competes in the
+          // next brew instead of ageing out of the candidate window.
+          let kept = false;
+          if (Number(grade) >= 70) {
+            const pin = await fetch(`/overflow/save/${id}`, {
+              method: "POST",
+              headers: { "X-CSRF-Token": CSRF_TOKEN },
+            });
+            kept = pin.ok;
+          }
+          if (stateEl) stateEl.textContent = kept ? "Saved · kept for tomorrow" : "Saved";
         } catch (error) {
           if (stateEl) stateEl.textContent = "Could not save";
         } finally {

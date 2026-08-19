@@ -145,3 +145,8 @@ class SourceSpec(BaseModel):
     # Each fetched item is tagged with its real journal name so it earns the
     # correct venue prestige rather than aggregator tier.
     venue_ids: list[str] = Field(default_factory=list)
+    # OpenAlex work types to accept, pipe-separated (OpenAlex filter syntax).
+    # Defaults to "article". Preprint repositories index their output as
+    # ``type:preprint``, so a ChemRxiv/OSF venue channel returns nothing without
+    # this override.
+    openalex_types: str = "article"

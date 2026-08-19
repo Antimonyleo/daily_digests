@@ -10,6 +10,7 @@ Routes:
 - ``GET /saved``           — search the local saved-reading archive
 - ``POST|DELETE /known/{id}`` — manually flag an item as known so future digests skip it
 - ``POST /overflow/save``  — pin today's reading-mode overflow for tomorrow's brew
+- ``POST /overflow/save/{id}`` — pin one overflow item (used when rating it positively)
 - ``POST /vote/{id}/reason/{reason}`` — record qualitative feedback reason
 - ``DELETE /vote/{id}/reason/{reason}`` — remove qualitative feedback reason
 - ``GET /ranking/status``  — return vote counts and LR ranker status
@@ -451,6 +452,21 @@ def _digest_exists(digest_id: str) -> bool:
     init_db()
     with session_scope() as s:
         return s.get(DigestRow, digest_id) is not None
+
+
+def _as_int(value: object) -> int | None:
+    """Coerce an audit field to int, or None when it is missing/garbage."""
+    try:
+        return int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+
+
+def _as_float(value: object, default: float = 0.0) -> float:
+    try:
+        return float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return default
 
 
 def _saved_date(value: date | None) -> str:
@@ -1052,13 +1068,23 @@ def index(request: Request) -> Response:
     overflow_audit = (
         load_digest_audit(digest_id, "reading_mode_overflow") if brewed else []
     )
-    for audit in overflow_audit:
-        audit["url"] = safe_url(str(audit.get("url") or ""))
-    _overflow_ids = {
-        int(audit["item_id"])
+    # `load_digest_audit` yields {} for a malformed row, so every field here is
+    # normalized before it reaches the template. Without this a single bad row
+    # 500s the entire digest page, not just the shelf.
+    overflow_audit = [
+        {
+            **audit,
+            "url": safe_url(str(audit.get("url") or "")),
+            "title": str(audit.get("title") or "Untitled"),
+            "source": str(audit.get("source") or ""),
+            "section": str(audit.get("section") or ""),
+            "topic_score": _as_float(audit.get("topic_score")),
+            "item_id": _as_int(audit.get("item_id")),
+        }
         for audit in overflow_audit
-        if audit.get("item_id") is not None
-    }
+    ]
+    overflow_audit = [a for a in overflow_audit if a["item_id"] is not None]
+    _overflow_ids = {int(audit["item_id"]) for audit in overflow_audit}
     overflow_saved = bool(_overflow_ids) and _overflow_ids <= carryover_item_ids()
     response = templates.TemplateResponse(
         request,
@@ -1189,14 +1215,40 @@ def overflow_save(request: Request) -> JSONResponse:
     digest_id = _digest_id()
     overflow = load_digest_audit(digest_id, "reading_mode_overflow")
     item_ids = [
-        int(audit["item_id"]) for audit in overflow if audit.get("item_id") is not None
+        parsed
+        for audit in overflow
+        if (parsed := _as_int(audit.get("item_id"))) is not None
     ]
     if not item_ids:
         raise HTTPException(status_code=404, detail="no reading-mode overflow today")
-    added = add_carryover_items(item_ids)
+    added = add_carryover_items(item_ids, pinned_digest_id=digest_id)
     return JSONResponse(
         {"ok": True, "digest_id": digest_id, "saved": len(item_ids), "added": added}
     )
+
+
+@app.post("/overflow/save/{item_id}")
+def overflow_save_one(request: Request, item_id: int) -> JSONResponse:
+    """Pin a single overflow item — used when a near-miss is rated positively.
+
+    A positive grade keeps an item eligible but cannot bring it back on its own:
+    its publication date has usually left the candidate window. Pinning is what
+    actually gives it another pass.
+    """
+    _require_csrf(request)
+    digest_id = _digest_id()
+    overflow = load_digest_audit(digest_id, "reading_mode_overflow")
+    known_ids = {
+        parsed
+        for audit in overflow
+        if (parsed := _as_int(audit.get("item_id"))) is not None
+    }
+    if item_id not in known_ids:
+        raise HTTPException(
+            status_code=404, detail=f"item {item_id} is not in today's overflow"
+        )
+    added = add_carryover_items([item_id], pinned_digest_id=digest_id)
+    return JSONResponse({"ok": True, "item_id": item_id, "added": added})
 
 
 @app.post("/vote/{item_id}/reason/{reason}")

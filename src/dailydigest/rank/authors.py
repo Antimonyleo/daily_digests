@@ -32,7 +32,16 @@ def load_watchlist(profile: object) -> list[str]:
 
 
 def author_match_score(authors: str, watchlist: list[str]) -> float:
-    """Return 1.0 if any watchlist entry matches the author string, else 0.0."""
+    """Return 1.0 if any watchlist entry matches the author string, else 0.0.
+
+    A watchlist entry must carry at least two tokens (e.g. "Peng Yin", or an
+    initial plus surname). A bare surname is not specific enough: matching is
+    token-subset, so a single common name like "Wang" or "Li" would match a
+    large share of every day's papers and hand them all the same boost, which
+    both distorts the ranking and destroys the signal's meaning. Single-token
+    entries are ignored here and reported by :func:`unusable_watchlist_entries`
+    so the reader can fix them rather than wonder why nothing matched.
+    """
     if not authors or not watchlist:
         return 0.0
     author_tokens = _tokens(authors)
@@ -40,6 +49,11 @@ def author_match_score(authors: str, watchlist: list[str]) -> float:
         return 0.0
     for entry in watchlist:
         entry_tokens = _tokens(entry)
-        if entry_tokens and entry_tokens <= author_tokens:
+        if len(entry_tokens) >= 2 and entry_tokens <= author_tokens:
             return 1.0
     return 0.0
+
+
+def unusable_watchlist_entries(watchlist: list[str]) -> list[str]:
+    """Watchlist entries too generic to match on (fewer than two name tokens)."""
+    return [entry for entry in watchlist if len(_tokens(entry)) < 2]

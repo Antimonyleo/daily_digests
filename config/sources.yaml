@@ -63,9 +63,12 @@ research:
     quality_tier: high
     prestige_score: 0.9
     impact_floor: 7.0
+  # `recent.xml` returns 406 Not Acceptable regardless of User-Agent/Accept
+  # (verified against four header combinations); `ahead.xml` serves the same
+  # upcoming-articles stream and returns 200.
   - name: eLife
     kind: rss
-    url: https://elifesciences.org/rss/recent.xml
+    url: https://elifesciences.org/rss/ahead.xml
     quality_tier: strong
     prestige_score: 0.74
   - name: bioRxiv (recent)
@@ -80,9 +83,19 @@ research:
   - name: arXiv cs.LG
     kind: arxiv
     category: cs.LG
-  # Note: soft-matter / materials / optics preprints are covered via profile-
-  # driven OpenAlex below (which indexes arXiv by keyword), avoiding extra direct
-  # arXiv category feeds — arXiv rate-limits rapid sequential requests.
+  # q-bio.BM is where computational/AI biomolecular design is posted (protein and
+  # nucleic-acid design models). cond-mat.soft is the home of colloidal
+  # self-assembly and soft matter. Both are core interests that keyword-driven
+  # OpenAlex was reaching only incidentally.
+  - name: arXiv q-bio.BM
+    kind: arxiv
+    category: q-bio.BM
+  - name: arXiv cond-mat.soft
+    kind: arxiv
+    category: cond-mat.soft
+  # Note: remaining materials / optics preprints are covered via profile-driven
+  # OpenAlex below (which indexes arXiv by keyword); arXiv rate-limits rapid
+  # sequential requests, so direct category feeds are kept to the core few.
   # Profile-driven OpenAlex: actively searches ALL venues (incl. ChemRxiv, and
   # journals not in the RSS list) for the user's own keywords — the main recall
   # lever. Falls back to `query` only if the profile has no keywords.
@@ -129,6 +142,18 @@ research:
       - S118914585   # ACS Chemical Biology
       - S177196338   # Macromolecules
       - S167262187   # Journal of Chemical Information and Modeling
+  # ChemRxiv is a primary preprint venue for DNA/RNA nanotechnology and
+  # supramolecular chemistry and had no channel at all. Routed through the
+  # existing OpenAlex venue reader rather than a new adapter.
+  - name: ChemRxiv (via OpenAlex)
+    kind: openalex_venues
+    quality_tier: repository
+    prestige_score: 0.56
+    polite_email: noreply@example.com
+    # OpenAlex records ChemRxiv output as type:preprint, not type:article.
+    openalex_types: preprint
+    venue_ids:
+      - S4393918830  # ChemRxiv
 
   # --- Nature family (high-impact) ---
   - name: Nature Nanotechnology

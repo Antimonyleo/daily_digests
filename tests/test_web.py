@@ -1296,6 +1296,19 @@ def test_overflow_shelf_renders_and_saves_for_tomorrow(tmp_path, monkeypatch):
     after = _text_payload(web.index(_request("GET", "/")))
     assert "Saved for tomorrow" in after
 
+    # Rating a near-miss positively must also PIN it: eligibility alone cannot
+    # bring it back once its publication date leaves the candidate window.
+    pinned = web.overflow_save_one(
+        _request("POST", f"/overflow/save/{trimmed_id}", headers=headers), trimmed_id
+    )
+    assert _json_payload(pinned)["ok"] is True
+    assert trimmed_id in store_mod.carryover_item_ids()
+    with pytest.raises(HTTPException) as not_overflow:
+        web.overflow_save_one(
+            _request("POST", "/overflow/save/424242", headers=headers), 424242
+        )
+    assert not_overflow.value.status_code == 404
+
     # A positive grade on a near-miss keeps it eligible for tomorrow; a negative
     # one retires it (store.exclude_reviewed_items).
     votes_mod = __import__("dailydigest.votes", fromlist=["votes"])

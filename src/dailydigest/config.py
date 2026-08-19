@@ -102,6 +102,15 @@ class Settings(BaseSettings):
     # penalize low-impact ones) applied when citation_enrichment is enabled.
     venue_quality_weight: float = Field(default=0.18, ge=0.0, le=1.0)
 
+    # Which learned signal the hybrid ranker fuses with the quality-adjusted
+    # topic score. "hybrid_knn" (default) uses the graded kNN over voted items;
+    # "hybrid_lr" restores the retired pairwise-LR margin; "cosine" disables the
+    # learned leg entirely. The two hybrids trade off against each other — kNN
+    # wins full-list pairwise accuracy and precision at the served depth, the LR
+    # wins nDCG@10 — so this is a switch to A/B with, not a settled default.
+    # Compare with `python scripts/benchmark_ranker.py`.
+    scoring_mode: str = "hybrid_knn"
+
     # Active learning: reserve up to N research slots for the most LR-uncertain
     # HIGH-QUALITY items, to gather informative feedback. Off by default; only
     # high-quality venues are eligible, so exploration never shows low-impact work.
@@ -216,6 +225,13 @@ class Settings(BaseSettings):
     # max_backfill_days), and the research ceiling scales up so a backlog of
     # relevant papers can surface instead of only the last day or two.
     max_backfill_days: int = Field(default=21, ge=1, le=90)
+    # Baseline look-back for the CANDIDATE POOL on an ordinary daily brew. Feeds
+    # lag and many journals stamp a publication date a day or two before the
+    # item appears, so a 2-day floor discarded most of what was fetched. This
+    # widens retrieval only — it does not trigger catch-up behaviour (a bigger
+    # research section, the backlog briefing), which still keys off the real gap
+    # since the last digest.
+    min_window_days: int = Field(default=4, ge=2, le=14)
     # Research ceiling on a full catch-up run (grows from top_research toward this
     # as the gap widens). Set equal to top_research to disable catch-up growth.
     max_research_backlog: int = Field(default=40, ge=0, le=200)
@@ -284,6 +300,25 @@ _OPTIONAL_SECTION_FLAGS: dict[str, str] = {
     "opportunities": "include_opportunities",
     "events": "include_events",
 }
+
+
+VALID_SCORING_MODES = ("hybrid_knn", "hybrid_lr", "cosine")
+
+
+def resolve_scoring_mode(settings: Settings) -> str:
+    """Return a validated scoring mode, falling back to the default on garbage."""
+    mode = str(getattr(settings, "scoring_mode", "") or "").strip().lower()
+    if mode not in VALID_SCORING_MODES:
+        if mode:
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "unknown SCORING_MODE %r; using hybrid_knn (valid: %s)",
+                mode,
+                ", ".join(VALID_SCORING_MODES),
+            )
+        return "hybrid_knn"
+    return mode
 
 
 def section_enabled(settings: Settings, section: str) -> bool:

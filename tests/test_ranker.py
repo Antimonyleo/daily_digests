@@ -388,12 +388,68 @@ class TestScoreItems:
 
 class TestHybridKnnServing:
     def test_hybrid_path_fuses_quality_score_with_knn_preference(self, monkeypatch):
-        """Above the vote threshold, serving fuses QA with the graded kNN memory.
+        """The preference memory must actually move items in the ranking.
 
-        The kNN signal replaced the pairwise LR margin: held-out, the LR fusion
-        had fallen below the topic-only baseline while RRF(topic, kNN) beats it
-        on every chronological split (scripts/benchmark_ranker.py).
+        Asserting "loved beats boring" on a two-item fixture proves nothing:
+        `_rank_desc` breaks ties by input position and RRF with two equal-weight
+        legs is symmetric under reversal, so such a test passes even when the
+        preference term is replaced by zeros. Instead run the SAME slate twice,
+        changing only the preference vector, and require the item the memory
+        likes to climb.
         """
+        import numpy as np
+
+        from dailydigest import votes as votes_mod
+        from dailydigest.rank import ranker as ranker_mod
+
+        titles = [f"Paper {i}" for i in range(6)]
+        items = [_make_row(t, "research", "A structural DNA study.") for t in titles]
+        for i, it in enumerate(items):
+            it.id = 100 + i
+
+        monkeypatch.setattr(ranker_mod, "_vote_count", lambda: 999)
+        monkeypatch.setattr(
+            ranker_mod,
+            "embed_item_rows",
+            lambda rows: np.ones((len(rows), 4), dtype=np.float32),
+        )
+        # Topic cosine descends with input order, so the quality-adjusted leg
+        # ranks them 0..5 and is IDENTICAL across both runs below.
+        monkeypatch.setattr(
+            ranker_mod,
+            "_cosine_sim",
+            lambda vecs, pv: np.array([0.90, 0.86, 0.82, 0.78, 0.74, 0.70], np.float32),
+        )
+
+        def _rank_with(preference):
+            monkeypatch.setattr(
+                votes_mod,
+                "knn_preference_scores",
+                lambda rows, k=8, _p=preference: np.asarray(_p, dtype=np.float32),
+            )
+            scored, features = ranker_mod.score_items_with_features(
+                items, _profile_vec(4), []
+            )
+            return [row.title for row, _score in scored], features
+
+        # Run A: no preference signal at all.
+        order_flat, _ = _rank_with([0.0] * 6)
+        # Run B: the memory strongly likes the item the topic score ranks LAST.
+        order_pref, features = _rank_with([-0.5, -0.5, -0.5, -0.5, -0.5, 0.9])
+
+        assert order_flat == titles, "flat preference should leave topic order intact"
+        assert order_pref.index("Paper 5") < order_flat.index("Paper 5"), (
+            "the preference memory did not move its favourite up the ranking; "
+            f"flat={order_flat} pref={order_pref}"
+        )
+        payload = features[105]
+        assert payload["scoring_mode"] == "hybrid_knn"
+        # Display scale maps [-1, 1] -> [0, 1].
+        assert payload["learned_score"] == pytest.approx(0.95)
+        assert features[100]["learned_score"] == pytest.approx(0.25)
+
+    def test_scoring_mode_cosine_disables_the_learned_leg(self, monkeypatch):
+        """SCORING_MODE is the rollback switch; cosine must ignore preference."""
         import numpy as np
 
         from dailydigest.rank import ranker as ranker_mod
@@ -404,34 +460,75 @@ class TestHybridKnnServing:
             _make_row("Boring subtopic paper", "research", "About the boring subtopic."),
         ]
         for i, it in enumerate(items):
-            it.id = 100 + i
+            it.id = 200 + i
 
         monkeypatch.setattr(ranker_mod, "_vote_count", lambda: 999)
-        # Identical topic cosine for both items; only the vote memory differs.
-        monkeypatch.setattr(
-            ranker_mod, "_cosine_sim", lambda vecs, pv: np.array([0.7, 0.7], np.float32)
-        )
+        # Synthetic ids are not in the DB; keep the embedding cache out of it.
         monkeypatch.setattr(
             ranker_mod,
             "embed_item_rows",
             lambda rows: np.ones((len(rows), 4), dtype=np.float32),
         )
+        # Imported inside the function, so patch it on the config module.
+        from dailydigest import config as config_mod
+
+        monkeypatch.setattr(
+            config_mod, "resolve_scoring_mode", lambda _settings: "cosine"
+        )
+        called = []
         monkeypatch.setattr(
             votes_mod,
             "knn_preference_scores",
-            lambda rows, k=8: np.array([0.6, -0.4], dtype=np.float32),
+            lambda rows, k=8: called.append(1) or np.zeros(len(rows), np.float32),
         )
 
-        scored, features = ranker_mod.score_items_with_features(
+        _scored, features = ranker_mod.score_items_with_features(
             items, _profile_vec(4), []
         )
-        by_title = {row.title: score for row, score in scored}
-        assert by_title["Loved subtopic paper"] > by_title["Boring subtopic paper"]
-        payload = features[100]
-        assert payload["scoring_mode"] == "hybrid_knn"
-        # Display scale: [-1, 1] preference -> [0, 1] with 0.5 neutral.
-        assert payload["learned_score"] == pytest.approx(0.8)
-        assert features[101]["learned_score"] == pytest.approx(0.3)
+        assert not called, "cosine mode must not consult the preference memory"
+        assert features[200]["scoring_mode"] == "cosine"
+
+
+class TestPreprintDiversity:
+    def test_one_preprint_server_cannot_take_the_whole_preprint_quota(self):
+        """bioRxiv must not crowd out ChemRxiv / arXiv at equal relevance.
+
+        bioRxiv posts an order of magnitude more than the other repositories, so
+        with a 3-slot preprint budget it filled every slot each day and equally
+        relevant ChemRxiv and cond-mat.soft work was never selected.
+        """
+        from dailydigest.rank.ranker import _pick_research_balanced
+
+        rows = []
+        # bioRxiv leads on score at every position...
+        for i in range(6):
+            r = _make_row(f"bioRxiv paper {i}", "research", "DNA nanostructure work.")
+            r.id = 500 + i
+            r.source = "bioRxiv (recent)"
+            rows.append((r, 0.90 - i * 0.01))
+        # ...and the other servers sit just below it.
+        chem = _make_row("ChemRxiv paper", "research", "DNA nanostructure work.")
+        chem.id = 600
+        chem.source = "ChemRxiv"
+        rows.append((chem, 0.80))
+        arx = _make_row("cond-mat paper", "research", "Colloidal self-assembly work.")
+        arx.id = 601
+        arx.source = "arXiv cond-mat.soft"
+        rows.append((arx, 0.79))
+        # Journal items so the section is not preprint-only (which would trip the
+        # all-limited safety valve).
+        for i in range(8):
+            j = _make_row(f"Journal paper {i}", "research", "A study.")
+            j.id = 700 + i
+            j.source = "Nature Nanotechnology"
+            rows.append((j, 0.70 - i * 0.01))
+
+        picked = _pick_research_balanced(rows, cap=11)
+        sources = [str(r.source) for r, _s in picked]
+        preprints = [s for s in sources if "rxiv" in s.lower()]
+        assert preprints, "expected some preprints to be selected"
+        # No single repository may hold every preprint slot.
+        assert len(set(preprints)) > 1, f"one server took the whole quota: {preprints}"
 
 
 class TestLRRankerPersistence:

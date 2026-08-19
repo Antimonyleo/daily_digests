@@ -387,6 +387,29 @@ def test_reading_mode_caps_only_the_final_ranked_slate():
         pipeline_mod.apply_reading_mode(picked, "bottomless")
 
 
+def test_candidate_pool_reaches_back_further_than_the_catch_up_window():
+    """Retrieval widens without triggering catch-up behaviour.
+
+    Feeds lag: most recently-fetched research carries a publication date older
+    than a 2-day window. The pool must reach further back, but a normal daily
+    brew must NOT grow its research section or emit a backlog briefing, both of
+    which key off the real gap since the last digest.
+    """
+    from dailydigest import config as config_mod
+    from dailydigest import pipeline as pipeline_mod
+
+    settings = config_mod.load_settings()
+    assert settings.min_window_days >= 3
+
+    # A same-day brew: gap-based window stays at the 2-day floor...
+    assert pipeline_mod._catch_up_window("2026-08-18", None) >= 2
+    # ...and that floor is what still gates catch-up sizing.
+    base = int(settings.top_research)
+    assert pipeline_mod._research_ceiling_for_window(2, settings=settings) == base
+    # An explicit backfill still wins outright.
+    assert pipeline_mod._catch_up_window("2026-08-18", 9) == 9
+
+
 def test_reading_mode_overflow_audit_lists_only_trimmed_picks():
     """The overflow shelf shows exactly what the reading mode removed, best first."""
     from dailydigest import pipeline as pipeline_mod
@@ -435,18 +458,28 @@ def test_reading_mode_never_trims_funding_or_events():
         + [(events[0], 0.25)]
     )
 
-    for mode in ("usual", "minimal"):
-        kept = pipeline_mod.apply_reading_mode(picked, mode)
-        assert [row.id for row, _score in kept if row.section == "opportunities"] == [
-            300,
-            301,
-            302,
-            303,
-        ]
-        assert [row.id for row, _score in kept if row.section == "events"] == [400]
-    # The reading budget still applies to everything else.
+    # "Usual" keeps every deadline pick here (5 <= the 6-item deadline budget).
     usual = pipeline_mod.apply_reading_mode(picked, "usual")
+    assert [row.id for row, _score in usual if row.section == "opportunities"] == [
+        300,
+        301,
+        302,
+        303,
+    ]
+    assert [row.id for row, _score in usual if row.section == "events"] == [400]
+    # The reading budget still applies to everything else.
     assert len([1 for row, _score in usual if row.section == "research"]) == 15
+
+    # "Tired" bounds them — exempting deadline sections outright turned Tired
+    # into a 19-item digest — but never to nothing: each deadline section keeps
+    # its most urgent item.
+    minimal = pipeline_mod.apply_reading_mode(picked, "minimal")
+    deadline = [
+        row for row, _score in minimal if row.section in pipeline_mod.DEADLINE_SECTIONS
+    ]
+    assert len(deadline) == pipeline_mod.DEADLINE_KEEP["minimal"] == 3
+    assert {row.section for row in deadline} == {"opportunities", "events"}
+    assert 400 in {row.id for row in deadline}
 
 
 def _reset_store(tmp_path, monkeypatch):

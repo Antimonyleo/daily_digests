@@ -20,8 +20,20 @@ def test_partial_token_subset_does_not_match():
     assert author_match_score("Doudna, Jennifer", ["Doudna Zhang"]) == 0.0
 
 
-def test_single_token_matches_any_surname():
-    assert author_match_score("Feng Zhang, et al.", ["Zhang"]) == 1.0
+def test_single_token_entry_is_too_generic_to_match():
+    """A bare surname must NOT match.
+
+    Matching is token-subset, so "Zhang" alone would hand the watched-author
+    boost to every paper with any Zhang on it — a large share of each day's
+    output. That both distorts the ranking and empties the signal of meaning,
+    so an entry needs at least two name tokens to count.
+    """
+    from dailydigest.rank.authors import unusable_watchlist_entries
+
+    assert author_match_score("Feng Zhang, et al.", ["Zhang"]) == 0.0
+    assert author_match_score("Feng Zhang, et al.", ["Feng Zhang"]) == 1.0
+    # The generic entry is reported rather than silently ignored.
+    assert unusable_watchlist_entries(["Zhang", "Feng Zhang"]) == ["Zhang"]
 
 
 def test_empty_inputs():

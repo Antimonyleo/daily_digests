@@ -17,6 +17,11 @@ from ..models import Item, SourceSpec
 
 logger = logging.getLogger(__name__)
 
+# bioRxiv posts ~500 preprints/day, so a 500-row ceiling silently truncated a
+# normal two-day window (observed: "hit pagination cap (510/525)"). The API
+# pages 100 at a time, so this is ~20 requests worst case.
+_MAX_ROWS = 2000
+
 
 @retry(
     stop=stop_after_attempt(3),
@@ -119,7 +124,10 @@ class BiorxivSource:
                 cursor += len(collection)
                 if cursor >= total:
                     break
-                if cursor >= 500:
-                    logger.warning("biorxiv %s hit pagination cap (%d/%d); some items may be dropped", server, cursor, total)
+                if cursor >= _MAX_ROWS:
+                    logger.warning(
+                        "biorxiv %s hit pagination cap (%d/%d); some items may be dropped",
+                        server, cursor, total,
+                    )
                     break
         return out

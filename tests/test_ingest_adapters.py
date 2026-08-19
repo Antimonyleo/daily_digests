@@ -524,6 +524,46 @@ def test_grants_gov_fetches_official_details_and_amounts(monkeypatch):
     assert len(calls) == 2
 
 
+def test_openalex_venue_source_honours_configured_work_types(monkeypatch):
+    """A preprint repository needs type:preprint, not the default type:article.
+
+    OpenAlex records ChemRxiv output as ``type:preprint``, so the hardcoded
+    ``type:article`` filter returned zero items for that whole channel.
+    """
+    from dailydigest.ingest.openalex import OpenAlexVenuesSource
+
+    seen = {}
+
+    def fake_get(url, params, headers):
+        seen["filter"] = params["filter"]
+        return {"results": [], "meta": {"next_cursor": None}}
+
+    monkeypatch.setattr("dailydigest.ingest.openalex._get_json", fake_get)
+
+    OpenAlexVenuesSource().fetch(
+        _spec(
+            name="ChemRxiv (via OpenAlex)",
+            kind="openalex_venues",
+            section="research",
+            venue_ids=["S4393918830"],
+            openalex_types="preprint",
+        )
+    )
+    assert "type:preprint" in seen["filter"]
+    assert "type:article" not in seen["filter"]
+    assert "primary_location.source.id:S4393918830" in seen["filter"]
+
+    OpenAlexVenuesSource().fetch(
+        _spec(
+            name="ACS flagships (via OpenAlex)",
+            kind="openalex_venues",
+            section="research",
+            venue_ids=["S145476921"],
+        )
+    )
+    assert "type:article" in seen["filter"]
+
+
 def test_grants_gov_eligibility_order_is_stable_across_fetches(monkeypatch):
     """Grants.gov shuffles applicantTypes per call.
 

@@ -654,70 +654,19 @@ def score_items_lr(
     reason_penalty_map: Mapping[Any, float] | None = None,
     attribution: Any | None = None,
 ) -> list[tuple[ItemRow, float]]:
-    """Hybrid cosine + graded-vote-memory scorer with downweight penalty.
+    """Hybrid scorer without the feature snapshots.
 
-    The learned signal is the grade-weighted kNN preference score over the
-    reader's voted items (``votes.knn_preference_scores``), which replaced the
-    pairwise LR margin: on held-out votes the LR fusion had drifted BELOW the
-    topic-only baseline (0.49–0.64 pairwise accuracy vs 0.57), while the kNN
-    fusion scores 0.65–0.72 overall and 0.63 vs 0.51 on the relevant-vs-hmmm
-    boundary where the digest cutoff actually sits.
-
-    Falls back to :func:`_cosine_score_items` below 30 signed votes.
+    Delegates to :func:`score_items_with_features` rather than repeating the
+    fusion. The two used to carry separate copies of the same blend, so a change
+    to one could silently diverge from the other and only one was under test.
     """
-    items = [item for item in items if not should_skip_item(item)]
-    if not items:
-        return []
-
-    from ..votes import MIN_VOTES_FOR_LR
-
-    if _vote_count() < MIN_VOTES_FOR_LR:
-        scored, _features = _cosine_score_items_with_features(
-            items,
-            profile_vec,
-            downweight_terms,
-            reason_penalty_map,
-            attribution=attribution,
-        )
-        return scored
-
-    vecs = embed_item_rows(items)
-    if profile_vec.size == 0 or vecs.size == 0:
-        cosine = np.zeros(len(items), dtype=np.float32)
-    else:
-        cosine = _cosine_sim(vecs, profile_vec)
-
-    try:
-        from ..votes import knn_preference_scores
-        preference = knn_preference_scores(items)
-    except Exception as e:  # noqa: BLE001
-        logger.warning("kNN preference scoring failed (%s); falling back to cosine", e)
-        scored, _features = _cosine_score_items_with_features(
-            items,
-            profile_vec,
-            downweight_terms,
-            reason_penalty_map,
-            attribution=attribution,
-        )
-        return scored
-
-    facet_attr = _attribute_or_none(vecs, attribution, len(items))
-    # Apply quality adjustments on raw cosine so calibrated thresholds remain meaningful
-    final, _features = _apply_quality_adjustments_with_features(
+    scored, _features = score_items_with_features(
         items,
-        cosine,  # raw cosine, not normalized blend
+        profile_vec,
         downweight_terms,
         reason_penalty_map,
-        # Display/uncertainty scale: [-1, 1] -> [0, 1], 0.5 = no vote signal.
-        learned_scores=((preference + 1.0) / 2.0).astype(np.float32),
-        hybrid_scores=cosine,
-        scoring_mode="hybrid_knn",
-        facet_attr=facet_attr,
+        attribution=attribution,
     )
-    # Fuse the quality-adjusted ranking with the graded preference ranking.
-    blended_rank = _fuse_scores(np.array(final, dtype=np.float32), preference).tolist()
-    scored = list(zip(items, blended_rank, strict=True))
-    scored.sort(key=lambda t: t[1], reverse=True)
     return scored
 
 
@@ -733,9 +682,11 @@ def score_items_with_features(
     if not items:
         return [], {}
 
+    from ..config import get_settings, resolve_scoring_mode
     from ..votes import MIN_VOTES_FOR_LR
 
-    if _vote_count() < MIN_VOTES_FOR_LR:
+    mode = resolve_scoring_mode(get_settings())
+    if mode == "cosine" or _vote_count() < MIN_VOTES_FOR_LR:
         return _cosine_score_items_with_features(
             items,
             profile_vec,
@@ -751,10 +702,28 @@ def score_items_with_features(
         cosine = _cosine_sim(vecs, profile_vec)
 
     try:
-        from ..votes import knn_preference_scores
-        preference = knn_preference_scores(items)
+        if mode == "hybrid_lr":
+            lr = get_lr_ranker()
+            if lr is None:
+                raise RuntimeError("SCORING_MODE=hybrid_lr but no trained weights")
+            from ..votes import _build_item_features
+
+            matrix = _build_item_features(
+                items,
+                profile_vec if profile_vec.ndim == 2 else profile_vec.reshape(1, -1),
+            )
+            fusion_signal = lr.decision_function(matrix)
+            display = lr.score(matrix)
+        else:
+            from ..votes import knn_preference_scores
+
+            fusion_signal = knn_preference_scores(items)
+            # Display/uncertainty scale: [-1, 1] -> [0, 1]. NOTE this is NOT a
+            # calibrated probability and its median sits near 0.33, so 0.5 is not
+            # a "no signal" midpoint (see the exploration-slot note in pipeline).
+            display = ((fusion_signal + 1.0) / 2.0).astype(np.float32)
     except Exception as e:  # noqa: BLE001
-        logger.warning("kNN preference scoring failed (%s); falling back to cosine", e)
+        logger.warning("%s scoring failed (%s); falling back to cosine", mode, e)
         return _cosine_score_items_with_features(
             items,
             profile_vec,
@@ -771,14 +740,18 @@ def score_items_with_features(
         downweight_terms,
         reason_penalty_map,
         # Display/uncertainty scale: [-1, 1] -> [0, 1], 0.5 = no vote signal.
-        learned_scores=((preference + 1.0) / 2.0).astype(np.float32),
+        learned_scores=display,
         hybrid_scores=cosine,
-        scoring_mode="hybrid_knn",
+        scoring_mode=mode,
         facet_attr=facet_attr,
     )
-    # Fuse the quality-adjusted ranking with the graded preference ranking (see
-    # score_items_lr for the held-out benchmark that motivated the kNN signal).
-    blended_rank = _fuse_scores(np.array(final, dtype=np.float32), preference).tolist()
+    # Fuse the quality-adjusted ranking with the learned ranking. Compare modes
+    # with scripts/benchmark_ranker.py, which reports head metrics (nDCG, P@K,
+    # must-read recall) for every configuration — full-list pairwise accuracy
+    # alone once hid a head-of-list regression.
+    blended_rank = _fuse_scores(
+        np.array(final, dtype=np.float32), fusion_signal
+    ).tolist()
     # Update features to record the hybrid blend
     for i, (row, _) in enumerate(zip(items, blended_rank, strict=True)):
         key = _row_feature_key(row)
@@ -787,7 +760,7 @@ def score_items_with_features(
             features[key]["rank_score"] = float(blended_rank[i])
             features[key]["hybrid_score"] = float(blended_rank[i])
             features[key]["final_score"] = float(blended_rank[i])
-            features[key]["scoring_mode"] = "hybrid_knn"
+            features[key]["scoring_mode"] = mode
     scored = list(zip(items, blended_rank, strict=True))
     scored.sort(key=lambda t: t[1], reverse=True)
     return scored, features
@@ -915,6 +888,7 @@ def _pick_research_balanced(
     selected_ids: set[int] = set()
     bucket_counts: dict[str, int] = {}
     source_counts: dict[str, int] = {}
+    preprint_source_counts: dict[str, int] = {}
 
     def add(
         row: ItemRow,
@@ -943,6 +917,9 @@ def _pick_research_balanced(
         ):
             return False
         selected.append((row, score))
+        if is_preprint_source(row):
+            key = str(getattr(row, "source", "") or "").strip().lower()
+            preprint_source_counts[key] = preprint_source_counts.get(key, 0) + 1
         selected_ids.add(key)
         bucket = source_bucket(row)
         bucket_counts[bucket] = bucket_counts.get(bucket, 0) + 1
@@ -1000,6 +977,19 @@ def _pick_research_balanced(
                 if name in {"arxiv_cs", "arxiv_other", "bio_med_preprint", "preprint_other"}
             )
             if preprint_count >= max_preprints:
+                continue
+            # Keep one preprint slot open for a SECOND server. bioRxiv posts an
+            # order of magnitude more than ChemRxiv or cond-mat.soft, so it
+            # filled the entire preprint quota every day and equally relevant
+            # work from the other repositories never appeared — measured: their
+            # best items scored 0.752/0.753 against the day's best 0.792, all
+            # well clear of the relevance floor, and neither was selected.
+            source_name = str(getattr(row, "source", "") or "").strip().lower()
+            if (
+                max_preprints >= 2
+                and preprint_source_counts.get(source_name, 0)
+                >= max(1, max_preprints - 1)
+            ):
                 continue
         if bucket == "aggregator" and bucket_counts.get(bucket, 0) >= max_aggregators:
             continue

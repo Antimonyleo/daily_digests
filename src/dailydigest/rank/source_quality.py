@@ -134,6 +134,25 @@ REPOSITORY_PATTERNS = (
     "pubmed",
 )
 
+# Preprint servers that identify themselves by name. Kept separate from
+# REPOSITORY_PATTERNS (which also covers the PubMed/OpenAlex databases) because
+# only these may pre-empt the low-impact venue flag: a preprint server's
+# mean-citedness is low by construction, but unpublished is not the same as
+# trivial. Without them, ChemRxiv/SSRN/Research Square fell through to the
+# prestige floor and were bucketed as trivial journals.
+PREPRINT_SERVER_PATTERNS = (
+    "arxiv",
+    "biorxiv",
+    "medrxiv",
+    "chemrxiv",
+    "ssrn",
+    "research square",
+    "researchsquare",
+    "preprints.org",
+    "osf preprints",
+    "authorea",
+)
+
 CREDIBLE_NEWS_PATTERNS = (
     "stat news",
     "endpoints",
@@ -456,7 +475,10 @@ def _infer_source_quality_by_name(source_lc: str, section_lc: str) -> SourceQual
             return SourceQuality(0.90, "high", 7.0)
         if any(pattern in source_lc for pattern in STRONG_TIER_PATTERNS):
             return SourceQuality(0.76, "strong", 7.0)
-        if any(pattern in source_lc for pattern in REPOSITORY_PATTERNS):
+        if any(
+            pattern in source_lc
+            for pattern in (*REPOSITORY_PATTERNS, *PREPRINT_SERVER_PATTERNS)
+        ):
             return SourceQuality(0.56, "repository", None)
         return SourceQuality(DEFAULT_RESEARCH_PRESTIGE, "unknown", None)
 
@@ -544,10 +566,12 @@ def source_bucket(row: Any) -> str:
     # they are shown. A preprint is unpublished, not trivial.
     if is_arxiv_cs_source(source_lc):
         return "arxiv_cs"
-    if "arxiv" in source_lc:
+    if "arxiv" in source_lc and "chemrxiv" not in source_lc:
         return "arxiv_other"
     if "biorxiv" in source_lc or "medrxiv" in source_lc:
         return "bio_med_preprint"
+    if any(pattern in source_lc for pattern in PREPRINT_SERVER_PATTERNS):
+        return "preprint_other"
 
     # Live venue-impact enrichment (when enabled) can flag an item whose actual
     # publication venue is low impact — this is the only way to catch low-impact

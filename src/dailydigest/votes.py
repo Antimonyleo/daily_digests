@@ -1073,15 +1073,18 @@ def train_lr_ranker() -> dict[str, object]:
         }
 
     status = lr_training_status()
+    # Report honestly: a RANKER_VERSION bump leaves no same-policy rows to fit,
+    # so `fit_calibrator` returns None and nothing was refreshed. Claiming
+    # success there made the button look like it worked every time.
     return {
         "ok": True,
-        "trained": True,
+        "trained": bool(calibration),
         "calibrated_votes": int(calibration["n"]) if calibration else 0,
         "message": (
             "Ratings are part of ranking automatically; calibration refreshed."
             if calibration
-            else "Ratings are part of ranking automatically; calibration will "
-            "refresh at the next brew."
+            else "Ratings already shape ranking. Calibration needs a few more "
+            "rated items brewed under the current ranking version."
         ),
         "status": status,
     }

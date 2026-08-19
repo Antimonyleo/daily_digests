@@ -7,7 +7,7 @@ import re
 import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import UTC, datetime, timezone
+from datetime import UTC, date, datetime, timezone
 from typing import Any
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
@@ -91,11 +91,12 @@ READING_MODE_LIMITS: dict[str, int | None] = {
     "minimal": None,
 }
 MINIMAL_RESEARCH_LIMIT = 5
-# Deadline-bound sections. They are exempt from the reading-mode budget: their
-# volume is already capped by ``top_opportunities``/``top_events`` and by the
-# eligibility gate, and a call trimmed away today may have closed by the time
-# the reader next picks "Energetic".
+# Deadline-bound sections. They are held out of the reading-mode budget so a
+# funding call is never trimmed to one item — but NOT unbounded: exempting them
+# outright turned "Tired" into a 19-item digest on a day with 5 grants and 5
+# events, which defeats the mode. Reduced modes keep the most urgent few.
 DEADLINE_SECTIONS = {"opportunities", "events"}
+DEADLINE_KEEP = {"full": None, "usual": 6, "minimal": 3}
 
 _TITLE_BLOCKLIST = re.compile(
     r"^(?:volume\s+\d|issue\s+\d|editorial\b|correspondence\b|correction\b|"
@@ -192,6 +193,47 @@ def normalize_reading_mode(value: str | None, *, default: str = "full") -> str:
     return mode
 
 
+def _deadline_sort_key(pair: tuple[ItemRow, float]) -> tuple[float, float]:
+    """Order deadline picks by urgency, then score. Undated calls sort last."""
+    row, score = pair
+    if not hasattr(row, "metadata_json"):
+        return (10_000.0, -float(score))
+    raw = str((item_metadata(row) or {}).get("deadline") or "").strip()
+    try:
+        days = (date.fromisoformat(raw[:10]) - date.today()).days
+    except (ValueError, TypeError):
+        days = 10_000
+    return (float(days), -float(score))
+
+
+def _limit_deadline_picks(
+    picks: list[tuple[ItemRow, float]], mode: str
+) -> list[tuple[ItemRow, float]]:
+    """Keep the most urgent deadline picks for the requested reading depth.
+
+    Never trims a deadline section to nothing: the most urgent item of each
+    section is seated first (so "funding" and "events" both survive "Tired"),
+    then the remaining budget goes to whatever closes soonest.
+    """
+    keep = DEADLINE_KEEP.get(mode)
+    if keep is None or len(picks) <= keep:
+        return picks
+    by_urgency = sorted(picks, key=_deadline_sort_key)
+    reserved: list[tuple[ItemRow, float]] = []
+    seen_sections: set[str] = set()
+    for pair in by_urgency:
+        section = pair[0].section or ""
+        if section not in seen_sections:
+            seen_sections.add(section)
+            reserved.append(pair)
+    reserved = reserved[:keep]
+    reserved_keys = {_row_feature_key(row) for row, _score in reserved}
+    fill = [
+        pair for pair in by_urgency if _row_feature_key(pair[0]) not in reserved_keys
+    ]
+    return reserved + fill[: max(0, keep - len(reserved))]
+
+
 def _best_per_other_section(
     ranked: list[tuple[ItemRow, float]],
 ) -> list[tuple[ItemRow, float]]:
@@ -225,6 +267,9 @@ def apply_reading_mode(
         pair for pair in picked if (pair[0].section or "") not in DEADLINE_SECTIONS
     ]
     ranked = sorted(reading_picks, key=lambda pair: pair[1], reverse=True)
+    kept_deadline = _limit_deadline_picks(deadline_picks, mode)
+    trimmed_deadline = len(kept_deadline) != len(deadline_picks)
+    deadline_picks = kept_deadline
     if mode == "minimal":
         research = [pair for pair in ranked if (pair[0].section or "") == "research"]
         selected = research[:MINIMAL_RESEARCH_LIMIT] + _best_per_other_section(ranked)
@@ -234,7 +279,12 @@ def apply_reading_mode(
 
     limit = READING_MODE_LIMITS[mode]
     if limit is None or len(reading_picks) <= limit:
-        return picked
+        # Nothing was cut, so preserve the caller's ordering exactly.
+        if not trimmed_deadline:
+            return picked
+        return sorted(
+            reading_picks + deadline_picks, key=lambda pair: pair[1], reverse=True
+        )
     # Scores are NOT comparable across sections: a research pick fuses to ~1.0
     # while a strong news pick tops out near 0.5. A plain global top-N therefore
     # kept only research and silently emptied every other section the reader had
@@ -1008,53 +1058,37 @@ def run_all(
     # Widen the look-back once, after any usage gap, and use it for BOTH the
     # ingest fetch window (so the backlog is actually retrieved) and the ranking
     # recency window below.
+    # `window_days` measures the GAP since the last digest and drives catch-up
+    # behaviour (a larger research section, the backlog briefing). `pool_days` is
+    # how far back candidates are gathered, which is at least `min_window_days`
+    # because feeds lag: on the live DB, 2270 recently-fetched research items
+    # carried a publication date older than a 2-day window versus 1325 inside it,
+    # so most of what was ingested could never be ranked.
     window_days = _catch_up_window(digest_id, backfill_days)
+    pool_days = max(window_days, int(getattr(get_settings(), "min_window_days", 4)))
+    if backfill_days and backfill_days > 0:
+        pool_days = window_days
     if window_days > 2:
         logger.info("catch-up: widening window to %d days after usage gap", window_days)
+    if pool_days != window_days:
+        logger.info(
+            "candidate pool reaches back %d days (catch-up window %d)",
+            pool_days,
+            window_days,
+        )
     inserted = ingest_all(
         progress_callback=progress_callback,
-        days=window_days,
+        days=pool_days,
         section_settings=section_settings,
     )
     logger.info("upserted %d new items", inserted)
 
-    # Auto-retrain LR when there are new/changed votes since the model was trained
-    # (feedback must apply promptly, not after a 7-day timer), with a 7-day fallback
-    # so recency-decayed features refresh even on a quiet week.
-    try:
-        from .votes import MIN_VOTES_FOR_LR as _min_lr
-        from .votes import latest_vote_timestamp as _latest_vote_ts
-        from .votes import signed_vote_count as _svc
-
-        _current_votes = _svc()
-        if _current_votes >= _min_lr:
-            from pathlib import Path as _Path
-
-            _lr_path = _Path(get_settings().db_path).parent / "lr_ranker.npz"
-            _needs_retrain = not _lr_path.exists()
-            if not _needs_retrain and _lr_path.exists():
-                _lr_mtime = _lr_path.stat().st_mtime
-                _vote_ts = _latest_vote_ts()
-                _new_feedback = _vote_ts is not None and _vote_ts > _lr_mtime
-                _lr_age_days = (time.time() - _lr_mtime) / 86400
-                _needs_retrain = _new_feedback or _lr_age_days > 7
-            if _needs_retrain:
-                from .votes import train_lr_ranker as _train_lr
-
-                _retrain_result = _train_lr()
-                if _retrain_result.get("trained"):
-                    logger.info(
-                        "auto-retrained LR ranker on %d votes",
-                        _retrain_result.get("trained_votes", 0),
-                    )
-                else:
-                    logger.info(
-                        "auto-retrain skipped: %s",
-                        _retrain_result.get("message", "unknown"),
-                    )
-    except Exception as _e:  # noqa: BLE001
-        logger.warning("auto-retrain check failed: %s", _e)
-
+    # NOTE: there is no model to retrain. The ranker reads the vote table
+    # directly at scoring time, so feedback applies at the next brew with no
+    # training step. The block that used to live here gated a "retrain" on
+    # `lr_ranker.npz`'s mtime — a file nothing writes any more, so the check was
+    # permanently true and refit the calibrator on EVERY brew, defeating the
+    # 7-day staleness gate immediately below.
     # Refit the score→probability calibrator when stale (> 7 days) so the
     # adaptive relevance floor tracks recent feedback.
     try:
@@ -1062,10 +1096,17 @@ def run_all(
 
         from .rank.calibrate import fit_calibrator as _fit_calib
 
+        from .rank.calibrate import load_calibrator as _load_calib
+
         _calib_path = _Path(get_settings().db_path).parent / "calibrator.json"
+        # Refit when the fit is old OR unusable. A RANKER_VERSION bump makes the
+        # persisted calibrator stale-by-policy, so `load_calibrator` returns None
+        # while the file itself is recent — without this check the digest would
+        # run uncalibrated until the file happened to age out.
         _calib_stale = (
             not _calib_path.exists()
             or (time.time() - _calib_path.stat().st_mtime) / 86400 > 7
+            or _load_calib() is None
         )
         if _calib_stale and _fit_calib() is not None:
             logger.info("auto-fit score calibrator")
@@ -1091,7 +1132,7 @@ def run_all(
         profile_vec = build_profile_matrix(profile)
     logger.info("ranker: profile_rows=%d votes=%d", len(profile_vec), _vote_count_now)
 
-    days = window_days
+    days = pool_days
     # Do not score disabled sections from older stored rows. The zero selection
     # caps below are a second line of defence against them reaching the digest.
     recent_raw = [
@@ -1107,7 +1148,9 @@ def run_all(
     # they would never be seen again. Consumed after the digest is written.
     carryover_ids_evaluated: set[int] = set()
     try:
-        _carryover = carryover_item_rows()
+        # Withhold pins made from THIS digest so a same-day re-brew leaves them
+        # for the next real one.
+        _carryover = carryover_item_rows(exclude_digest_id=digest_id)
         if _carryover:
             _have = {int(r.id) for r in recent_raw if r.id is not None}
             _extra = [
@@ -1119,8 +1162,13 @@ def run_all(
                     (getattr(r, "section", "") or "").lower(), section_settings
                 )
             ]
-            carryover_ids_evaluated = {
-                int(r.id) for r in _carryover if r.id is not None
+            # Only consume a pin that actually entered the candidate pool —
+            # either injected here, or already present in the fresh window. A pin
+            # whose section the reader has since switched off stays pinned.
+            carryover_ids_evaluated = {int(r.id) for r in _extra} | {
+                int(r.id)
+                for r in _carryover
+                if r.id is not None and int(r.id) in _have
             }
             if _extra:
                 recent_raw = recent_raw + _extra

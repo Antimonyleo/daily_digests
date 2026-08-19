@@ -193,9 +193,10 @@ class OpenAlexSource:
 
         today = datetime.now(timezone.utc).date()
         window_start = (today - timedelta(days=max(1, days))).isoformat()
+        work_types = str(getattr(spec, "openalex_types", "") or "article").strip()
         filter_str = (
             f"from_publication_date:{window_start},"
-            f"to_publication_date:{today.isoformat()},type:article"
+            f"to_publication_date:{today.isoformat()},type:{work_types}"
         )
         if extra_filter:
             filter_str = f"{filter_str},{extra_filter}"
@@ -351,8 +352,8 @@ class OpenAlexAuthorsSource:
     """
 
     AUTHORS_URL = "https://api.openalex.org/authors"
-    MAX_AUTHORS = 10
-    MAX_ITEMS = 60
+    MAX_AUTHORS = 25
+    MAX_ITEMS = 120
 
     def fetch(self, spec: SourceSpec, days: int = 2) -> list[Item]:
         names = watched_author_names(self.MAX_AUTHORS)

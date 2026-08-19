@@ -192,6 +192,11 @@ class CarryoverItemRow(Base):
         nullable=False,
         index=True,
     )
+    # The digest the reader pinned FROM. A same-day re-brew (the Refresh button
+    # runs the pipeline again under the same digest id) would otherwise spend the
+    # pin against the identical candidate pool, lose the identical reading-mode
+    # trim, and clear it — so the promised extra pass never happened.
+    pinned_digest_id = Column(String, index=True)
     created_at = Column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
@@ -440,6 +445,12 @@ def _migrate_sqlite_schema(eng) -> None:
             "primary_facet_score": "FLOAT",
             "topic_score": "FLOAT",
         },
+        # Added after the first carryover release; existing pins get NULL, which
+        # `carryover_item_rows` treats as "pinned by an unknown digest" and still
+        # injects.
+        "carryover_items": {
+            "pinned_digest_id": "VARCHAR",
+        },
     }
 
     with eng.connect() as conn:
@@ -628,8 +639,14 @@ def exclude_known_items(rows: list[ItemRow]) -> list[ItemRow]:
     return [r for r in rows if r.id is None or int(r.id) not in known]
 
 
-def add_carryover_items(item_ids: Iterable[int]) -> int:
-    """Pin items for one more ranking pass at the next brew. Returns rows added."""
+def add_carryover_items(
+    item_ids: Iterable[int], pinned_digest_id: str | None = None
+) -> int:
+    """Pin items for one more ranking pass at a LATER brew. Returns rows added.
+
+    ``pinned_digest_id`` records which digest the reader pinned from so the
+    pipeline can skip (and preserve) pins during a same-day re-brew.
+    """
     ids = {int(item_id) for item_id in item_ids}
     if not ids:
         return 0
@@ -645,7 +662,7 @@ def add_carryover_items(item_ids: Iterable[int]) -> int:
         for item_id in sorted(existing):
             result = s.execute(
                 sqlite_insert(CarryoverItemRow)
-                .values(item_id=item_id)
+                .values(item_id=item_id, pinned_digest_id=pinned_digest_id)
                 .on_conflict_do_nothing(index_elements=["item_id"])
             )
             added += int(result.rowcount or 0)
@@ -662,19 +679,27 @@ def carryover_item_ids() -> set[int]:
         }
 
 
-def carryover_item_rows() -> list[ItemRow]:
-    """Return the pinned items as detached rows for candidate injection."""
+def carryover_item_rows(exclude_digest_id: str | None = None) -> list[ItemRow]:
+    """Return pinned items as detached rows for candidate injection.
+
+    ``exclude_digest_id`` withholds pins made from THAT digest, so re-brewing the
+    same day leaves them intact for the next real brew.
+    """
     init_db()
     with session_scope() as s:
-        rows = (
-            s.execute(
-                select(ItemRow)
-                .join(CarryoverItemRow, CarryoverItemRow.item_id == ItemRow.id)
-                .order_by(CarryoverItemRow.id)
-            )
-            .scalars()
-            .all()
+        stmt = (
+            select(ItemRow)
+            .join(CarryoverItemRow, CarryoverItemRow.item_id == ItemRow.id)
+            .order_by(CarryoverItemRow.id)
         )
+        if exclude_digest_id is not None:
+            stmt = stmt.where(
+                or_(
+                    CarryoverItemRow.pinned_digest_id.is_(None),
+                    CarryoverItemRow.pinned_digest_id != exclude_digest_id,
+                )
+            )
+        rows = s.execute(stmt).scalars().all()
         for row in rows:
             s.expunge(row)
         return list(rows)
@@ -1091,7 +1116,8 @@ def prune(days: int) -> int:
     Voted items are kept so the LR ranker retains its training signal; saved
     items are kept so the reading archive remains durable after normal
     rotation; items flagged known are kept so a re-ingested funding call still
-    matches an existing row and stays suppressed. Without these guards, cascade
+    matches an existing row and stays suppressed; pinned carryover items are kept
+    so a promised extra ranking pass is not deleted before it happens. Without these guards, cascade
     deletion would erase all three.
     """
     init_db()
@@ -1100,12 +1126,16 @@ def prune(days: int) -> int:
         voted_subq = select(VoteRow.item_id).distinct().scalar_subquery()
         bookmarked_subq = select(BookmarkRow.item_id).distinct().scalar_subquery()
         known_subq = select(KnownItemRow.item_id).distinct().scalar_subquery()
+        carryover_subq = (
+            select(CarryoverItemRow.item_id).distinct().scalar_subquery()
+        )
         digest_item_subq = select(DigestItemRow.item_id).distinct().scalar_subquery()
         stmt = delete(ItemRow).where(
             ItemRow.fetched_at < cutoff,
             ItemRow.id.not_in(voted_subq),
             ItemRow.id.not_in(bookmarked_subq),
             ItemRow.id.not_in(known_subq),
+            ItemRow.id.not_in(carryover_subq),
             ItemRow.id.not_in(digest_item_subq),
         )
         result = s.execute(stmt)
