@@ -83,6 +83,15 @@ class Settings(BaseSettings):
     # Max fraction of the research section that may be filled by low-impact-venue
     # items, so they cannot appear frequently even when many are related.
     max_low_impact_research_frac: float = Field(default=0.15, ge=0.0, le=1.0)
+    # Share of research slots preprints may hold. Selection runs AFTER ranking on
+    # one combined list, so this ceiling is the only thing that can drop a
+    # high-ranked preprint in favour of a lower-ranked journal. It was an
+    # unconfigurable 0.20, which on a normal day cut items scoring 0.87 to seat
+    # items scoring 0.69. The reader's own votes rate bioRxiv (0.27 hit rate)
+    # at least as highly as journals (0.24), so the default now lets rank order
+    # mostly decide; `min_published_research_frac` still guarantees journals a
+    # floor, and no single repository may take the whole preprint allowance.
+    max_preprint_research_frac: float = Field(default=0.55, ge=0.0, le=1.0)
     # Negative-interest penalty (see profile.negative_interests). DISCRIMINATIVE
     # (relative) formulation: penalize by ``negative_interest_weight *
     # max(0, sim_to_nearest_negative − topic_relevance − negative_interest_margin)``

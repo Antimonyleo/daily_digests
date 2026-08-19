@@ -530,6 +530,50 @@ class TestPreprintDiversity:
         # No single repository may hold every preprint slot.
         assert len(set(preprints)) > 1, f"one server took the whole quota: {preprints}"
 
+    def test_preprint_ceiling_is_configurable(self, monkeypatch):
+        """The class-level preprint cap must be tunable, not hardcoded at 20%.
+
+        Selection runs after ranking, so this ceiling is what decides whether a
+        higher-ranked preprint loses its slot to a lower-ranked journal.
+        """
+        import math
+
+        from dailydigest import config as config_mod
+        from dailydigest.rank.ranker import _pick_research_balanced
+
+        rows = []
+        for i in range(9):
+            r = _make_row(f"Preprint {i}", "research", "DNA nanostructure work.")
+            r.id = 800 + i
+            r.source = "bioRxiv (recent)" if i % 2 else f"ChemRxiv {i}"
+            rows.append((r, 0.95 - i * 0.01))
+        for i in range(9):
+            j = _make_row(f"Journal {i}", "research", "A study.")
+            j.id = 900 + i
+            j.source = "Nature Nanotechnology"
+            rows.append((j, 0.60 - i * 0.01))
+
+        def _with_frac(frac):
+            base = config_mod.load_settings()
+
+            class S:
+                def __getattr__(self, n):
+                    return getattr(base, n)
+
+                max_preprint_research_frac = frac
+
+            monkeypatch.setattr(config_mod, "get_settings", lambda: S())
+            picked = _pick_research_balanced(rows, cap=11)
+            return sum(1 for r, _s in picked if "rxiv" in str(r.source).lower())
+
+        tight = _with_frac(0.20)
+        loose = _with_frac(0.80)
+        assert loose > tight, (
+            f"raising the preprint share changed nothing ({tight} -> {loose}); "
+            "the ceiling is not actually configurable"
+        )
+        assert tight <= math.ceil(11 * 0.20) + 1
+
 
 class TestLRRankerPersistence:
     def test_fit_writes_loadable_npz(self, tmp_path, monkeypatch):

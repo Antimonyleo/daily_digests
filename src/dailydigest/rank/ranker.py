@@ -863,7 +863,13 @@ def _pick_research_balanced(
         max_per_source = max(3, math.ceil(cap * 0.60))
     else:
         max_arxiv_cs = max(1, min(3, math.ceil(cap * 0.10)))
-        max_preprints = max(max_arxiv_cs, math.ceil(cap * 0.20))
+        try:
+            from ..config import get_settings as _gs
+
+            _preprint_frac = float(_gs().max_preprint_research_frac)
+        except Exception:  # noqa: BLE001
+            _preprint_frac = 0.55
+        max_preprints = max(max_arxiv_cs, math.ceil(cap * _preprint_frac))
         max_aggregators = max(1, math.ceil(cap * 0.10))
         max_per_source = max(2, math.ceil(cap * 0.20)) if cap >= 5 else None
     min_high_quality = min(math.ceil(cap * 0.20), _available(scored, is_high_quality_journal_source))
