@@ -924,8 +924,14 @@ def _pick_research_balanced(
             return False
         selected.append((row, score))
         if is_preprint_source(row):
-            key = str(getattr(row, "source", "") or "").strip().lower()
-            preprint_source_counts[key] = preprint_source_counts.get(key, 0) + 1
+            # NB: use ``source``, never rebind ``key`` — ``key`` is the identity
+            # used for de-duplication below. Shadowing it here registered the
+            # SOURCE NAME instead of the item id, so every preprint escaped the
+            # dedupe set and could be selected twice (once by the exceptional-
+            # preprint pass, again by the main pass). That produced a slate with
+            # a repeated row, which _assign_labels then labelled twice, and the
+            # digest_items (digest_id, item_label) unique constraint rejected.
+            preprint_source_counts[source] = preprint_source_counts.get(source, 0) + 1
         selected_ids.add(key)
         bucket = source_bucket(row)
         bucket_counts[bucket] = bucket_counts.get(bucket, 0) + 1

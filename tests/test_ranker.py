@@ -1005,3 +1005,75 @@ class TestFreshnessPenalty:
         pen_90d = _freshness_penalty(self._row("regulatory", 100))
         assert 0 <= pen_2d < pen_90d
         assert pen_90d == pytest.approx(0.10, abs=0.01)
+
+
+class TestSlateHasNoDuplicateRows:
+    """A selected item must never appear twice in the same slate.
+
+    Regression: ``add()`` in ``_pick_research_balanced`` computed ``key`` as the
+    item id for de-duplication, but the per-repository preprint counter then
+    rebound ``key`` to the SOURCE NAME before ``selected_ids.add(key)``. Every
+    preprint therefore registered its source string instead of its id, escaped
+    the dedupe set, and could be taken twice -- once by the exceptional-preprint
+    pass and again by the main pass. The duplicate reached ``_assign_labels``,
+    which handed the same row two labels, and the digest_items
+    (digest_id, item_label) unique constraint aborted the whole brew.
+    """
+
+    def _slate(self):
+        from dailydigest.rank.ranker import _pick_research_balanced
+
+        rows = []
+        # A strong preprint: clears the exceptional threshold AND leads the main
+        # pass, so both passes try to take it.
+        top = _make_row("Top preprint", "research", "DNA nanostructure design.")
+        top.id = 54864
+        top.source = "arXiv q-bio.BM"
+        rows.append((top, 0.95))
+        for i in range(6):
+            j = _make_row(f"Journal paper {i}", "research", "A study.")
+            j.id = 700 + i
+            j.source = "Nature Nanotechnology"
+            rows.append((j, 0.70 - i * 0.01))
+        return _pick_research_balanced(rows, cap=11)
+
+    def test_no_item_id_appears_twice(self):
+        picked = self._slate()
+        ids = [int(r.id) for r, _s in picked]
+        assert len(ids) == len(set(ids)), f"duplicate rows in slate: {ids}"
+
+    def test_labels_are_unique_for_the_published_slate(self):
+        """End of the same failure chain: unique rows must yield unique labels."""
+        from dailydigest.pipeline import _assign_labels
+
+        labeled = _assign_labels(self._slate())
+        labels = [label for _row, _score, label in labeled]
+        assert len(labels) == len(set(labels)), f"duplicate labels: {labels}"
+        # The published tuple must carry the ASSIGNED label, not the mutated
+        # row.item_label -- which is what masked the duplicate as a label clash.
+        published = [(label, row.id) for row, _score, label in labeled]
+        assert len({lab for lab, _ in published}) == len(published)
+
+    def test_per_repository_preprint_counter_still_works(self):
+        """The fix must not disable the counter it accidentally shared a name with."""
+        from dailydigest.rank.ranker import _pick_research_balanced
+
+        rows = []
+        for i in range(8):
+            r = _make_row(f"bioRxiv paper {i}", "research", "DNA nanostructure work.")
+            r.id = 800 + i
+            r.source = "bioRxiv (recent)"
+            rows.append((r, 0.90 - i * 0.01))
+        chem = _make_row("ChemRxiv paper", "research", "DNA nanostructure work.")
+        chem.id = 900
+        chem.source = "ChemRxiv"
+        rows.append((chem, 0.80))
+        for i in range(8):
+            j = _make_row(f"Journal paper {i}", "research", "A study.")
+            j.id = 950 + i
+            j.source = "Nature Nanotechnology"
+            rows.append((j, 0.70 - i * 0.01))
+
+        picked = _pick_research_balanced(rows, cap=11)
+        preprints = [str(r.source) for r, _s in picked if "rxiv" in str(r.source).lower()]
+        assert len(set(preprints)) > 1, f"one server took the whole quota: {preprints}"

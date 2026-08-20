@@ -1550,12 +1550,17 @@ def run_all(
         def _feature(row: ItemRow) -> dict[str, Any]:
             return score_features.get(_row_feature_key(row), {})
 
+        # Serialize the label ASSIGNED to this slate entry, not row.item_label:
+        # item_label is mutated in place by _assign_labels, so if one row ever
+        # appears twice the second assignment overwrites the first and BOTH
+        # entries serialize the same label — surfacing as a UNIQUE violation on
+        # (digest_id, item_label) that hides the real duplicate-row cause.
         _labeled_rows = [
-            (row.item_label, row.id, score) for row, score, _ in labeled
+            (label, row.id, score) for row, score, label in labeled
         ]
         _feature_rows = [
             (
-                row.item_label or label,
+                label,
                 int(row.id),
                 float(score),
                 breakdown_payload(
