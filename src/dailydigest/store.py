@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import sqlite3
 import uuid
 from collections.abc import Iterable
@@ -1151,6 +1152,47 @@ def prune_old_digests(days: int) -> int:
         return result.rowcount or 0
 
 
+logger = logging.getLogger(__name__)
+
+
+def _dedupe_labeled_items(digest_id: str, labeled_items: list[tuple]) -> list[tuple]:
+    """Drop repeated slate entries, loudly.
+
+    digest_items carries unique constraints on (digest_id, item_id) and
+    (digest_id, item_label). A repeated entry therefore surfaced as an opaque
+    autoflush IntegrityError naming neither the duplicate nor where it came
+    from, and it aborted the whole brew -- a selection bug upstream cost a full
+    day's digest before it was traced. Keep the first occurrence so the reader
+    still gets a digest, and log the rest at ERROR so the upstream defect stays
+    visible instead of being silently absorbed.
+    """
+    seen_ids: set[int] = set()
+    seen_labels: set[str] = set()
+    kept: list[tuple] = []
+    dropped: list[tuple[str, int]] = []
+    for item in labeled_items:
+        try:
+            label, item_id = str(item[0]), int(item[1])
+        except (TypeError, ValueError, IndexError):
+            kept.append(item)
+            continue
+        if item_id in seen_ids or label in seen_labels:
+            dropped.append((label, item_id))
+            continue
+        seen_ids.add(item_id)
+        seen_labels.add(label)
+        kept.append(item)
+    if dropped:
+        logger.error(
+            "digest %s: dropped %d duplicate slate entries %s -- "
+            "this indicates a selection bug upstream, not a data problem",
+            digest_id,
+            len(dropped),
+            dropped,
+        )
+    return kept
+
+
 def write_digest(digest_id: str, labeled_items: list[tuple]) -> None:
     """Persist digest item assignments.
 
@@ -1159,6 +1201,7 @@ def write_digest(digest_id: str, labeled_items: list[tuple]) -> None:
     the web/email renderers.
     """
     init_db()
+    labeled_items = _dedupe_labeled_items(digest_id, labeled_items)
     with session_scope() as s:
         digest = s.get(DigestRow, digest_id)
         if digest is None:
@@ -1481,6 +1524,7 @@ def publish_digest(
 ) -> str:
     """Publish one complete slate and its measurement rows in one transaction."""
     init_db()
+    labeled_items = _dedupe_labeled_items(digest_id, labeled_items)
     run_id = run_id or uuid.uuid4().hex
     now = datetime.now(timezone.utc)
     with session_scope() as s:

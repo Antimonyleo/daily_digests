@@ -797,22 +797,34 @@ def _pick_news_balanced(
     def _key(row: ItemRow) -> str:
         return str(getattr(row, "source", "") or "").strip().lower()
 
+    def _identity(row: ItemRow) -> int:
+        # De-duplicate on the ITEM id, falling back to object identity only for
+        # unsaved rows. id(row) alone silently admits the same paper twice when
+        # two ItemRow objects describe one item (e.g. rows loaded in separate
+        # sessions), which is exactly how a duplicate reached the research slate
+        # and aborted a brew on the digest_items unique constraint.
+        row_id = getattr(row, "id", None)
+        return int(row_id) if isinstance(row_id, int) else id(row)
+
     for row, score in ranked:
         if len(picked) >= cap:
             break
+        if _identity(row) in picked_ids:
+            continue
         src = _key(row)
         if counts.get(src, 0) >= max_per_source:
             continue
         picked.append((row, score))
-        picked_ids.add(id(row))
+        picked_ids.add(_identity(row))
         counts[src] = counts.get(src, 0) + 1
     # Relax the per-source cap to backfill if diversity left the section short.
     if len(picked) < cap:
         for row, score in ranked:
             if len(picked) >= cap:
                 break
-            if id(row) not in picked_ids:
+            if _identity(row) not in picked_ids:
                 picked.append((row, score))
+                picked_ids.add(_identity(row))
     return picked
 
 

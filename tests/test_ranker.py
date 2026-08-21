@@ -1077,3 +1077,46 @@ class TestSlateHasNoDuplicateRows:
         picked = _pick_research_balanced(rows, cap=11)
         preprints = [str(r.source) for r, _s in picked if "rxiv" in str(r.source).lower()]
         assert len(set(preprints)) > 1, f"one server took the whole quota: {preprints}"
+
+
+class TestNewsPickerDeduplicates:
+    """The news picker must dedupe on item id, not CPython object identity.
+
+    Same class of defect as the research-slate duplicate: ``picked_ids`` stored
+    ``id(row)``, so two ItemRow objects describing ONE item (rows loaded in
+    separate sessions, e.g. the carryover injection path) both passed the check
+    and the item was served twice. The backfill pass additionally appended
+    without recording what it took.
+    """
+
+    def _pair_for_same_item(self):
+        a = _make_row("Same story", "industry", "One item, two row objects.")
+        a.id = 4242
+        a.source = "STAT"
+        b = _make_row("Same story", "industry", "One item, two row objects.")
+        b.id = 4242
+        b.source = "STAT"
+        assert a is not b
+        return a, b
+
+    def test_two_row_objects_for_one_item_are_served_once(self):
+        from dailydigest.rank.ranker import _pick_news_balanced
+
+        a, b = self._pair_for_same_item()
+        picked = _pick_news_balanced([(a, 0.9), (b, 0.88)], cap=5)
+        ids = [int(r.id) for r, _s in picked]
+        assert ids.count(4242) == 1, f"same item served twice: {ids}"
+
+    def test_backfill_pass_cannot_re_add_a_picked_row(self):
+        """Backfill relaxes the per-source cap; it must not re-add its own picks."""
+        from dailydigest.rank.ranker import _pick_news_balanced
+
+        rows = []
+        for i in range(6):
+            r = _make_row(f"STAT story {i}", "industry", "News.")
+            r.id = 5000 + i
+            r.source = "STAT"
+            rows.append((r, 0.9 - i * 0.01))
+        picked = _pick_news_balanced(rows, cap=6)
+        ids = [int(r.id) for r, _s in picked]
+        assert len(ids) == len(set(ids)), f"duplicate rows after backfill: {ids}"

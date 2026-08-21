@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
 
@@ -911,3 +911,79 @@ def test_previously_viewed_item_stays_hidden_after_same_day_rebrew(
     )
 
     assert filtered == []
+
+
+def test_duplicate_slate_entries_do_not_abort_the_digest(monkeypatch, tmp_path, caplog):
+    """A repeated slate entry must not cost the reader their whole digest.
+
+    digest_items is unique on (digest_id, item_id) and (digest_id, item_label),
+    so a duplicate used to surface as an opaque autoflush IntegrityError that
+    named neither the offending row nor its origin, and aborted the brew. Keep
+    the first occurrence and log the rest at ERROR instead.
+    """
+    import logging
+
+    store_mod = _reset_store(tmp_path, monkeypatch)
+    ids = []
+    with store_mod.session_scope() as s:
+        for n in range(2):
+            row = store_mod.ItemRow(
+                source="Science",
+                section="research",
+                external_id=f"dupe-{n}",
+                url=f"https://example.com/dupe-{n}",
+                title=f"Paper {n}",
+                fetched_at=datetime.now(UTC),
+            )
+            s.add(row)
+            s.flush()
+            ids.append(int(row.id))
+
+    # Same item twice under two labels -- exactly the shape the picker produced.
+    with caplog.at_level(logging.ERROR):
+        store_mod.write_digest(
+            "2026-08-20", [("R1", ids[0]), ("R2", ids[0]), ("R3", ids[1])]
+        )
+
+    with store_mod.session_scope() as s:
+        rows = (
+            s.query(store_mod.DigestItemRow)
+            .filter(store_mod.DigestItemRow.digest_id == "2026-08-20")
+            .all()
+        )
+    labels = sorted(r.item_label for r in rows)
+    item_ids = sorted(r.item_id for r in rows)
+    assert labels == ["R1", "R3"], labels
+    assert item_ids == sorted(ids), item_ids
+    # The upstream defect must stay visible rather than being silently absorbed.
+    assert any("duplicate slate entries" in r.getMessage() for r in caplog.records)
+
+
+def test_duplicate_label_for_distinct_items_is_also_dropped(monkeypatch, tmp_path):
+    """The failure that actually fired: two DIFFERENT items sharing one label."""
+    store_mod = _reset_store(tmp_path, monkeypatch)
+    ids = []
+    with store_mod.session_scope() as s:
+        for n in range(2):
+            row = store_mod.ItemRow(
+                source="Science",
+                section="research",
+                external_id=f"samelabel-{n}",
+                url=f"https://example.com/samelabel-{n}",
+                title=f"Paper {n}",
+                fetched_at=datetime.now(UTC),
+            )
+            s.add(row)
+            s.flush()
+            ids.append(int(row.id))
+
+    store_mod.write_digest("2026-08-21", [("R2", ids[0]), ("R2", ids[1])])
+
+    with store_mod.session_scope() as s:
+        rows = (
+            s.query(store_mod.DigestItemRow)
+            .filter(store_mod.DigestItemRow.digest_id == "2026-08-21")
+            .all()
+        )
+    assert len(rows) == 1
+    assert rows[0].item_id == ids[0]
