@@ -149,6 +149,23 @@ class BookmarkRow(Base):
     __table_args__ = (UniqueConstraint("item_id", name="uq_bookmarks_item_id"),)
 
 
+class TeaDeckDayRow(Base):
+    """One day's Pip deck, so the reader never meets the same card twice soon.
+
+    Without this the deck was a pure function of the date over a fixed bank, so
+    it cycled: 57 cards drawn 15 at a time meant every card had reappeared by
+    day 5 and the rotation then repeated forever. Recording what was served lets
+    the picker choose the LEAST RECENTLY SHOWN cards, which cycles the whole
+    bank before repeating anything. It also pins the deck for a given day so
+    reloading the page does not reshuffle Pip mid-tea-break.
+    """
+
+    __tablename__ = "tea_deck_days"
+
+    day = Column(String, primary_key=True)
+    notes_json = Column(Text, nullable=False)
+
+
 class KnownItemRow(Base):
     """Items the reader manually flagged as already known / handled.
 
@@ -1752,3 +1769,64 @@ def days_since_last_digest(exclude_digest_id: str | None = None) -> int:
 
 def db_path_exists() -> bool:
     return Path(SETTINGS.db_path).exists()
+
+
+# --------------------------------------------------------------------------- #
+# Pip's tea deck
+# --------------------------------------------------------------------------- #
+
+
+def tea_deck_for_day(day: str) -> list[str] | None:
+    """Return the deck already served for *day*, or None if there is not one."""
+    init_db()
+    with session_scope() as s:
+        row = s.get(TeaDeckDayRow, str(day))
+        if row is None:
+            return None
+        try:
+            notes = json.loads(row.notes_json)
+        except (TypeError, ValueError):
+            return None
+        return [str(n) for n in notes] if isinstance(notes, list) else None
+
+
+def tea_note_last_shown() -> dict[str, str]:
+    """Map each previously served note to the LAST day it was served."""
+    init_db()
+    last: dict[str, str] = {}
+    with session_scope() as s:
+        rows = s.execute(select(TeaDeckDayRow)).scalars().all()
+        for row in rows:
+            try:
+                notes = json.loads(row.notes_json)
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(notes, list):
+                continue
+            day = str(row.day)
+            for note in notes:
+                note = str(note)
+                if day > last.get(note, ""):
+                    last[note] = day
+    return last
+
+
+def record_tea_deck(day: str, notes: list[str], *, keep_days: int = 400) -> None:
+    """Persist the deck served for *day* and trim ancient rows."""
+    init_db()
+    payload = json.dumps([str(n) for n in notes])
+    with session_scope() as s:
+        row = s.get(TeaDeckDayRow, str(day))
+        if row is None:
+            s.add(TeaDeckDayRow(day=str(day), notes_json=payload))
+        else:
+            row.notes_json = payload
+        kept = (
+            s.execute(select(TeaDeckDayRow.day).order_by(TeaDeckDayRow.day.desc()))
+            .scalars()
+            .all()
+        )
+        if len(kept) > keep_days:
+            s.execute(
+                delete(TeaDeckDayRow).where(TeaDeckDayRow.day.in_(kept[keep_days:]))
+            )

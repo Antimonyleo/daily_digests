@@ -610,7 +610,8 @@ def _dynamic_section_caps(
             # Career/location fit can reorder qualified calls, but it must not
             # rescue a grant or event unrelated to the reader's research.
             v = feat.get("topic_score", fused)
-            if v is not None and float(v) >= opportunity_floor:
+            neg = float(feat.get("negative_interest_penalty", 0.0) or 0.0)
+            if v is not None and float(v) - neg >= opportunity_floor:
                 counts[section] += 1
 
     caps: dict[str, int] = {}
@@ -671,8 +672,18 @@ def _filter_off_topic(
             if c is not None and float(c) < news_floor:
                 continue
         elif section in ("opportunities", "events"):
+            # Subtract the negative-interest penalty here too. Research already
+            # gates on (topic + venue credit - negative); opportunities gated on
+            # the BARE cosine, so the reader's explicit negative interests
+            # (clinical oncology, neurodegenerative pathology, clinical trial
+            # outcomes) never applied to funding calls. Measured over 81 live
+            # opportunities, that asymmetry passed 16 items where the symmetric
+            # rule passes 7 -- the nine it removes are ultra-rare cancers, a
+            # Type 1 Diabetes repository, GREGoRi clinical trials, childhood
+            # cancers and Duchenne, none of them the reader's field.
             topic = feat.get("topic_score")
-            if topic is not None and float(topic) < opportunity_floor:
+            neg = float(feat.get("negative_interest_penalty", 0.0) or 0.0)
+            if topic is not None and float(topic) - neg < opportunity_floor:
                 continue
         out.append((row, score))
     return out

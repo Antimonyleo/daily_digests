@@ -64,23 +64,60 @@ def _event_range(value: str) -> tuple[date | None, date | None]:
     return parsed, parsed
 
 
+_DATE_PATTERN = (
+    r"\b(?:\d{4}-\d{1,2}-\d{1,2}|\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4}|"
+    r"[A-Za-z]{3,9}\s+\d{1,2},?\s+\d{4})\b"
+)
+
+
 def _deadline(value: str) -> tuple[date | None, bool]:
+    """Return the LATEST still-open deadline, and whether every route is closed.
+
+    Official event pages list several routes to attend, e.g.
+
+        Abstract submission: Closed
+        Registration (On-site): Closed
+        Registration (Virtual): 25 Aug 2026
+
+    Reading only the first "Closed" declared the whole event shut, which
+    discarded conferences the reader could still register for -- measured on the
+    live EMBL feed, 8 of 10 events were dropped while on-site or virtual
+    registration was still open, leaving the events section permanently empty.
+    An event is closed only when NO route remains: no future date anywhere.
+    """
+    if not value.strip():
+        return None, False
+    dates = [
+        parsed
+        for parsed in (_parse_date(m.group(0)) for m in re.finditer(_DATE_PATTERN, value))
+        if parsed is not None
+    ]
+    if dates:
+        # The most distant deadline is the last chance to act on the event.
+        return max(dates), False
+    # No date anywhere: only now does an explicit "closed" settle it.
     if re.search(r"\bclosed\b", value, flags=re.IGNORECASE):
         return None, True
-    explicit = re.search(
-        r"\b(?:\d{4}-\d{1,2}-\d{1,2}|\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4}|"
-        r"[A-Za-z]{3,9}\s+\d{1,2},?\s+\d{4})\b",
-        value,
-    )
-    return _parse_date(explicit.group(0) if explicit else value), False
+    return _parse_date(value), False
 
 
-def _event_type(title: str) -> str:
-    lower = title.casefold()
-    for kind in ("workshop", "conference", "course", "symposium", "webinar"):
-        if kind in lower:
+def _event_type(title: str, description: str = "") -> str:
+    """Classify an event from its title AND its description.
+
+    Returns "" when the kind cannot be determined. That matters: the
+    opportunity gate passes an EMPTY type through as "unknown, needs review"
+    but drops a type that fails to match the reader's preferences, so labelling
+    every unclassifiable entry with a generic "event" silently discarded the
+    whole section -- measured on the live EMBL feed, all 6 open conferences
+    were typed "event" and dropped as "type is outside preferences" because
+    their titles ("Chemical biology 2026", "The complex life of RNA") never
+    say what kind of gathering they are.
+    """
+    haystack = f"{title}\n{description}".casefold()
+    for kind in ("conference", "workshop", "course", "symposium", "webinar", "lecture", "seminar"):
+        if kind in haystack:
             return kind
-    return "event"
+    return ""
 
 
 class EventsRSSSource:
@@ -135,7 +172,7 @@ class EventsRSSSource:
             )
             metadata = {
                 "record_type": "event",
-                "event_type": _event_type(title),
+                "event_type": _event_type(title, facts_text),
                 "status": "open",
                 "official": True,
                 "verified_at": datetime.now(timezone.utc).isoformat(),

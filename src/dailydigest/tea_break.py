@@ -39,6 +39,32 @@ _TEA_FACTS = (
     "Tiny fact — Fluorescence lifetimes are measured in nanoseconds, and they report on a molecule’s surroundings rather than on how bright it looks.",
     "Tiny fact — A protein structure is a useful pose, not a frozen biography; proteins keep moving as they work.",
     "Tiny fact — An atomic-force microscope maps a surface by feeling it with a tiny cantilever instead of illuminating it.",
+    "Tiny fact — A DNA origami staple set arrives as ordinary oligos in a plastic plate, so an object with nanometre features comes by post.",
+    "Tiny fact — Magnesium screens the phosphate backbone's charge; without it a folded origami simply pushes itself apart.",
+    "Tiny fact — Blunt-end stacking, not base pairing, is what makes separate origami tiles polymerise without forming a single new bond.",
+    "Tiny fact — Strand displacement needs no enzyme: a toehold of six or seven bases lets one strand pry another off.",
+    "Tiny fact — DNA computing has solved Hamiltonian path problems in a test tube, using hybridisation itself as the search.",
+    "Tiny fact — The nuclear pore passes small molecules freely and gates large ones with no moving door — the barrier is a mesh of disordered protein.",
+    "Tiny fact — Intrinsically disordered regions make up roughly a third of the human proteome and were long dismissed as unfoldable junk.",
+    "Tiny fact — Liquid-liquid phase separation builds a compartment with no membrane at all, held together only by weak multivalent contacts.",
+    "Tiny fact — AlphaFold's pLDDT confidence tracks disorder: a low score often means the region genuinely has no fixed structure.",
+    "Tiny fact — Protein design became tractable when the field stopped predicting structure from sequence and started choosing a structure to search a sequence for.",
+    "Tiny fact — A designed protein can out-stabilise almost anything natural, because evolution never optimised for boiling.",
+    "Tiny fact — Directed evolution won a Nobel Prize for deliberately doing what nature does slowly: mutate, select, repeat.",
+    "Tiny fact — A ribozyme can be evolved in vitro in weeks, compressing a search that took biology millions of years.",
+    "Tiny fact — Lipid nanoparticles deliver mRNA by escaping the endosome, and that escape step is still only a few percent efficient.",
+    "Tiny fact — Ionisable lipids are neutral in blood and charged in the endosome — a pH switch that made mRNA vaccines practical.",
+    "Tiny fact — Codon choice changes how fast a ribosome moves and therefore how a protein folds, so a synonymous change is not always silent.",
+    "Tiny fact — A typical human protein has a half-life of hours to days: the proteome is rebuilt constantly, not maintained.",
+    "Tiny fact — Molecular dynamics simulations still spend most of their compute on water.",
+    "Tiny fact — A microsecond of all-atom simulation was a landmark result in 2000 and is now an afternoon.",
+    "Tiny fact — Force fields are fitted rather than derived, so a simulation is an interpolation wearing the clothes of physics.",
+    "Tiny fact — Single-molecule FRET reports distances from two to ten nanometres, a window that happens to match most protein conformational changes.",
+    "Tiny fact — Super-resolution microscopy beats the diffraction limit by never imaging two nearby molecules in the same instant.",
+    "Tiny fact — Expansion microscopy gains resolution by physically swelling the sample in a hydrogel instead of improving the optics.",
+    "Tiny fact — A DNA synthesiser writes about two hundred bases reliably; everything longer is assembled from those pieces.",
+    "Tiny fact — Nanopore sequencing reads a strand by measuring the ionic current it blocks, making the signal electrical rather than optical.",
+    "Tiny fact — The cost of reading a genome fell faster than Moore's law for a decade, which is why the bottleneck moved to interpretation.",
 )
 
 _TEA_JOKES = (
@@ -75,6 +101,85 @@ _TEA_JOKES = (
     "Lab joke — In silico experiments never spill, but they can still leak data.",
     "Lab joke — The colloid insisted it was stable. Gravity asked for a longer time course.",
     "Lab joke — DNA origami is molecular flat-pack furniture, except the staples really are included.",
+    "Lab joke — The grant was funded, then the budget was cut by forty percent, so we will do all of the aims at half the speed and call it focus.",
+    "Lab joke — My no-cost extension has now outlived two lab members and one instrument.",
+    "Lab joke — The PI said we should write this up. That was the entire experimental design.",
+    "Lab joke — Our collaboration has a shared drive, a shared vision, and no shared file-naming convention.",
+    "Lab joke — Someone found a bug in the analysis. The bug turned out to be load-bearing.",
+    "Lab joke — We pre-registered the hypothesis. The data pre-registered its objection.",
+    "Lab joke — My figure has seven panels because the story has one point and six caveats.",
+    "Lab joke — Panel A took two years. Panel B took two hours and is the one everyone cites.",
+    "Lab joke — The reviewer asked for a mechanism. We had a correlation and a diagram with arrows.",
+    "Lab joke — Every arrow in a schematic conceals at least one entire PhD.",
+    "Lab joke — Rejected without review, which is the fastest feedback this project has ever received.",
+    "Lab joke — Desk rejection: all the speed of peer review with none of the peer.",
+    "Lab joke — The preprint has four thousand downloads and one comment, which is a typo correction.",
+    "Lab joke — We posted the preprint at two in the morning so nobody would read the acknowledgements.",
+    "Lab joke — The journal's impact factor is twelve. The paper's impact is my mother reading the abstract.",
+    "Lab joke — The first citation arrived today. It was us.",
+    "Lab joke — The h-index mostly measures how long you have been alive.",
+    "Lab joke — I gave a talk to forty people. Two were awake and one was the next speaker.",
+    "Lab joke — Question time opened with more of a comment than a question, and the room quietly aged.",
+    "Lab joke — The poster session had free wine, which remains the only known treatment for a poster session.",
+    "Lab joke — My poster was in the far corner by the fire exit, which at least made leaving convenient.",
+    "Lab joke — The conference Wi-Fi held up beautifully right until the first live demo.",
+    "Lab joke — The demo worked in the hotel room. The hotel room is now a co-author.",
+    "Lab joke — The keynote showed data from 1998 and it was still better than mine.",
+    "Lab joke — My talk was scheduled immediately after lunch, the hour when science goes to die.",
+    "Lab joke — I networked at the conference, meaning I stood near the coffee and made eye contact with the sugar.",
+    "Lab joke — The cells look happy. The cells have never looked happy; I have simply lowered my standards.",
+    "Lab joke — Passage forty-seven has developed a personality and I no longer trust it.",
+    "Lab joke — Contamination is nature's way of asking whether you really needed that experiment.",
+    "Lab joke — The incubator held 37 degrees, give or take one student leaving the door open.",
+    "Lab joke — The animal work was approved, budgeted and scheduled. The animals were not consulted.",
+    "Lab joke — The knockout has no phenotype, which we will be describing as surprisingly robust compensation.",
+    "Lab joke — We cloned it in a week and sequenced it in a week, and it was wrong in both weeks.",
+    "Lab joke — The plasmid map and the plasmid have agreed to differ.",
+    "Lab joke — The assembly worked on the first attempt, so I have not slept, waiting for the catch.",
+    "Lab joke — One clean band, which guarantees it will fail tomorrow for reasons nobody will establish.",
+    "Lab joke — The negative control has a band. We are all going home.",
+    "Lab joke — The column ran beautifully and eluted absolutely nothing.",
+    "Lab joke — The protein expressed magnificently, entirely into inclusion bodies.",
+    "Lab joke — My protein is soluble at every concentration too low to be useful.",
+    "Lab joke — The crystal diffracted to six angstroms, enough to confirm we have a protein and nothing else.",
+    "Lab joke — The spectrum is beautifully clean if you ignore the region containing the answer.",
+    "Lab joke — The mass spec found keratin. The mass spec always finds keratin.",
+    "Lab joke — The plate reader returns ninety-six wells of hope and one gradient of evaporation.",
+    "Lab joke — Row H is always strange. Nobody knows why. Row H knows why.",
+    "Lab joke — The autoclave is running, so the whole floor now smells like a decision.",
+    "Lab joke — Somebody has taken the good pipette. There is a list, and there will be a reckoning.",
+    "Lab joke — The minus-eighty alarm went off at three in the morning, as it always has and always will.",
+    "Lab joke — The dewar is full of everything except a record of what is in it.",
+    "Lab joke — I ordered the reagent in March. It arrives in November. The project ended in July.",
+    "Lab joke — The quote was in euros, the budget in dollars, and the finance office in another dimension.",
+    "Lab joke — Purchasing rejected the order because the vendor's name contained an ampersand.",
+    "Lab joke — The code runs. The code has always run. What the code does is a separate research question.",
+    "Lab joke — The results reproduce on my machine, which is now formally a piece of scientific equipment.",
+    "Lab joke — I containerised the pipeline so that it can now fail identically everywhere.",
+    "Lab joke — Version control tells me the truth about what I did, which is why I sometimes avoid it.",
+    "Lab joke — The commit message says fix. It changed four hundred lines and the conclusion.",
+    "Lab joke — The random seed was 42 and, for one glorious afternoon, so was the result.",
+    "Lab joke — We tuned the hyperparameters until the model agreed with us. This is called domain knowledge.",
+    "Lab joke — The ablation removed the component and performance improved, so there will be no ablation section.",
+    "Lab joke — The model is interpretable in the sense that we have a heatmap and a confident tone.",
+    "Lab joke — The benchmark saturated, so the field built a harder benchmark and saturated that too.",
+    "Lab joke — The model drafted the related work and cited three papers that would have been excellent.",
+    "Lab joke — I asked it to check my algebra. It agreed with me warmly, and incorrectly.",
+    "Lab joke — Our uncertainty estimates are well calibrated on the data where we measured the calibration.",
+    "Lab joke — The dataset is public, the labels are proprietary, and the ground truth is in somebody's notebook.",
+    "Lab joke — It self-assembled overnight while nobody watched, which remains our most reliable protocol.",
+    "Lab joke — It folds perfectly at two hundred millimolar magnesium, a condition found nowhere in biology.",
+    "Lab joke — The micrograph shows exactly what we designed, in the four fields of view we are showing you.",
+    "Lab joke — The shift assay says it bound something. The something remains at large.",
+    "Lab joke — The yield is eighty percent if you define yield generously and eight percent if you do not.",
+    "Lab joke — Twenty-four hours to anneal, three minutes to ruin it at the bench.",
+    "Lab joke — Our construct is stable in buffer, stable in serum, and extremely stable in the introduction.",
+    "Lab joke — The instrument was serviced last week, so it is now broken in an entirely new way.",
+    "Lab joke — I wrote the discussion first, which is how I discovered what the paper was about.",
+    "Lab joke — The limitations paragraph is where I keep the experiments I could not afford.",
+    "Lab joke — Statistics is the art of being uncertain with confidence intervals.",
+    "Lab joke — We powered the study for the effect we wanted rather than the effect that exists.",
+    "Lab joke — The outlier was removed for technical reasons, the technical reason being that it was inconvenient.",
 )
 
 TEA_NOTE_BANK = _TEA_FACTS + _TEA_JOKES
@@ -91,8 +196,70 @@ def _daily_pick(entries: tuple[str, ...], count: int, day: date, kind: str) -> l
     return [ordered[(start + offset) % len(ordered)] for offset in range(count)]
 
 
+def _least_recently_shown(
+    entries: tuple[str, ...],
+    count: int,
+    last_shown: dict[str, str],
+    kind: str,
+) -> list[str]:
+    """Draw the *count* cards the reader has not seen for the longest.
+
+    Never-shown cards sort first (their last-shown day is the empty string), and
+    the rest sort by the day they last appeared. A card therefore cannot return
+    until every other card in its bank has had a turn, which turns the rotation
+    from a fixed few-day loop into a full pass over the bank. Ties break on a
+    stable hash so the order does not wander between processes.
+    """
+    return sorted(
+        entries,
+        key=lambda note: (
+            last_shown.get(note, ""),
+            sha256(f"{kind}|v1|{note}".encode()).digest(),
+        ),
+    )[:count]
+
+
+def _compose_deck(jokes: list[str], facts: list[str], day: date) -> tuple[str, ...]:
+    # Two jokes, then a fact, so the facts stay a garnish rather than a lecture.
+    interleaved: list[str] = []
+    for index, fact in enumerate(facts):
+        interleaved.extend(jokes[index * 2 : index * 2 + 2])
+        interleaved.append(fact)
+    if not interleaved:
+        return ()
+    # Rotate the interleaved deck so the first card is not always the same kind.
+    offset = sha256(f"order|{day.isoformat()}".encode()).digest()[0] % len(interleaved)
+    return tuple(interleaved[offset:] + interleaved[:offset])
+
+
 def daily_tea_deck(day: date) -> tuple[str, ...]:
-    """Return the day's stable deck: ten jokes and five facts, shown one at a time."""
+    """Return the day's stable deck: ten jokes and five facts, shown one at a time.
+
+    The deck is drawn from the cards least recently served and then recorded, so
+    Pip works through the whole bank before repeating anything. Previously the
+    deck was a pure function of the date, which cycled a 57-card bank every few
+    days -- by day 5 every card on offer had already been seen. If the store is
+    unavailable (tests, ad-hoc use) this falls back to the old date-derived
+    rotation rather than failing.
+    """
+    try:
+        from .store import record_tea_deck, tea_deck_for_day, tea_note_last_shown
+
+        served = tea_deck_for_day(day.isoformat())
+        if served:
+            return tuple(served)
+        last_shown = tea_note_last_shown()
+        deck = _compose_deck(
+            _least_recently_shown(_TEA_JOKES, DAILY_JOKES, last_shown, "joke"),
+            _least_recently_shown(_TEA_FACTS, DAILY_FACTS, last_shown, "fact"),
+            day,
+        )
+        if deck:
+            record_tea_deck(day.isoformat(), list(deck))
+            return deck
+    except Exception:  # noqa: BLE001 - Pip must never break the page
+        pass
+
     jokes = _daily_pick(_TEA_JOKES, DAILY_JOKES, day, "joke")
     facts = _daily_pick(_TEA_FACTS, DAILY_FACTS, day, "fact")
 
