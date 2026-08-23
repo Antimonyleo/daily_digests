@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import logging
 import os
+from datetime import UTC, date, datetime
 from functools import lru_cache
 from importlib.resources import files
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import yaml
 from pydantic import Field, field_validator
@@ -343,6 +345,18 @@ def section_enabled(settings: Settings, section: str) -> bool:
     return bool(getattr(settings, flag, True)) and int(
         getattr(settings, f"top_{key}", 1)
     ) > 0
+
+
+def user_local_date(now: datetime | None = None) -> date:
+    """Return the calendar date in the reader's configured timezone."""
+    current = now or datetime.now(UTC)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=UTC)
+    try:
+        zone = ZoneInfo(get_settings().user_tz)
+    except Exception:  # noqa: BLE001 - validated settings still deserve a safe fallback
+        zone = UTC
+    return current.astimezone(zone).date()
 
 
 def load_profile(path: str | None = None) -> Profile:

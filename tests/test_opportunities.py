@@ -51,6 +51,24 @@ def test_opportunity_profile_accepts_structured_fields_without_legacy_descriptio
     assert profile.description == ""
 
 
+def test_default_deadline_clock_uses_reader_local_date(monkeypatch):
+    from dailydigest import opportunities as opportunities_mod
+    from dailydigest.opportunities import OpportunityProfile, assess_opportunity
+
+    profile = OpportunityProfile(**_profile_payload()).model_copy(
+        update={"minimum_lead_days": 2}
+    )
+    monkeypatch.setattr(
+        opportunities_mod, "user_local_date", lambda: date(2026, 8, 23)
+    )
+
+    result = assess_opportunity(
+        {"status": "open", "deadline": "2026-08-25"}, profile
+    )
+
+    assert result.actionable is True
+
+
 def test_opportunity_metadata_updates_and_keeps_immutable_change_history():
     from dailydigest.store import (
         ItemRow,

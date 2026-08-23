@@ -1013,24 +1013,52 @@ def latest_vote_timestamp() -> float | None:
 def lr_training_status() -> dict[str, object]:
     """Return lightweight preference-ranking status for web/API display.
 
-    The graded kNN preference memory needs no training step: it reads the
-    current votes at every brew, so it is "active" purely on the vote count.
-    ``model_trained`` is kept for API compatibility and mirrors that flag.
+    The default graded-kNN preference memory needs no training step: it reads
+    the current votes at every brew, so it becomes active once the vote count
+    clears the threshold. Explicit cosine/legacy modes are reported honestly.
+    ``model_trained`` is kept for API compatibility and means that the selected
+    preference mode can actually serve, not merely that enough votes exist.
     """
+    from .config import get_settings, resolve_scoring_mode
+
     counts = vote_counts()
     signed = counts["signed"]
     remaining = max(MIN_VOTES_FOR_LR - signed, 0)
     can_train = remaining == 0
-    ranking_status = "preference_active" if can_train else "cosine_baseline"
-    training_status = "ready" if can_train else "needs_votes"
+    mode = resolve_scoring_mode(get_settings())
+    preference_active = can_train and mode == "hybrid_knn"
+    if can_train and mode == "hybrid_lr":
+        from .rank.ranker import get_lr_ranker
+
+        preference_active = get_lr_ranker() is not None
+
+    if preference_active:
+        message = (
+            "Personal ranking is active — every rating sharpens the next brew "
+            "automatically."
+        )
+        training_status = "ready"
+    elif mode == "cosine":
+        message = "Personal preference fusion is disabled; ranking uses topic similarity."
+        training_status = "disabled"
+    elif mode == "hybrid_lr" and can_train:
+        message = "Legacy LR weights are unavailable; ranking is using topic similarity."
+        training_status = "model_missing"
+    else:
+        message = f"{remaining} more ratings unlock personal ranking."
+        training_status = "needs_votes"
     return {
         "vote_counts": counts,
         "min_votes_for_lr": MIN_VOTES_FOR_LR,
         "remaining_votes_for_lr": remaining,
         "can_train": can_train,
-        "model_trained": can_train,
+        "model_trained": preference_active,
         "training_status": training_status,
-        "ranking_status": ranking_status,
+        "ranking_status": (
+            "preference_active" if preference_active else "cosine_baseline"
+        ),
+        "scoring_mode": mode,
+        "message": message,
     }
 
 

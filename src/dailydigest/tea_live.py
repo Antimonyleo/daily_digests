@@ -1,18 +1,19 @@
 """Tea-break cards computed fresh for each brew, with no model in the loop.
 
 The curated banks in :mod:`dailydigest.tea_break` are finite, so however large
-they grow they eventually come round again. These three generators do not:
+they grow they eventually come round again. These generators add cards whose
+details vary with each brew or day:
 
 * :func:`brew_observations` reports on the run that just happened, using the
   ``candidate_funnel`` audit the pipeline already writes;
 * :func:`corpus_observations` measures the window's literature in aggregate;
 * :func:`generated_jokes` fills a grammar from lab vocabulary.
 
-The first two are genuinely unrepeatable because their inputs change every day.
-The third is *combinatorial*, which is not the same thing: readers recognise a
-template long before they exhaust its fillings, so its real novelty is closer to
-the number of templates than to the product of the slot sizes. It is therefore a
-minority of the deck, not the backbone.
+The first two can still repeat when their measured inputs are unchanged. The
+third is *combinatorial*, which is not the same thing: readers recognise a
+template long before they exhaust its fillings, so its real novelty is closer
+to the number of templates than to the product of the slot sizes. It is
+therefore a minority of the deck, not the backbone.
 
 Sentence-level extraction from abstracts was measured and deliberately rejected:
 over 234 papers that actually reached the reader's slate, a strict filter kept
@@ -77,30 +78,53 @@ def _brew_observations(digest_id: str) -> list[str]:
         published = [r.published_at for r in rows if getattr(r, "published_at", None)]
         vote_total = s.query(VoteRow).count()
 
+    # Votes are global history, not evidence that this digest was brewed. On a
+    # morning before the first run, a non-empty vote table must not produce a
+    # misleading "From your brew" card.
+    if not funnel_rows and not slate:
+        return []
+
     shown = len(rows)
-    considered = int(funnel.get("recent_items") or 0)
+    # ``recent_items`` spans every enabled section, while ``shown`` below is
+    # research-only. New audits persist the matching denominator; retain the
+    # old field as a compatibility fallback for decks brewed before that change.
+    considered = int(funnel.get("recent_research_items") or funnel.get("recent_items") or 0)
     window = int(funnel.get("window_days") or 0)
 
     if considered and shown:
         out.append(
-            f"{BREW_PREFIX}Pip read {considered:,} papers from the last {window} "
-            f"{_plural(window, 'day')} and kept {shown}. That is one in {considered // shown}."
+            f"{BREW_PREFIX}Pip considered {considered:,} research papers from the last "
+            f"{window} {_plural(window, 'day')} and kept {shown}. That is about one in "
+            f"{max(1, round(considered / shown))}."
         )
 
     near_dups = funnel.get("cross_day_near_dup_drops") or []
-    if near_dups:
-        best = max(float(d.get("max_similarity") or 0) for d in near_dups)
+    near_dup_count = max(
+        0,
+        int(funnel.get("after_cross_source_dedupe") or 0)
+        - int(funnel.get("after_cross_day_near_dup") or 0),
+    ) or len(near_dups)
+    if near_dup_count:
+        best = max(
+            (float(d.get("max_similarity") or 0) for d in near_dups),
+            default=0.0,
+        )
+        detail = f" The closest matched at {best * 100:.0f}%." if best > 0 else ""
         out.append(
-            f"{BREW_PREFIX}{len(near_dups)} {_plural(len(near_dups), 'paper')} today "
-            f"turned out to be a near-copy of something you have already seen. "
-            f"The closest matched at {best * 100:.0f}%."
+            f"{BREW_PREFIX}{near_dup_count} {_plural(near_dup_count, 'item')} in the "
+            f"candidate pool turned out to be a near-copy of something you have already "
+            f"seen.{detail}"
         )
 
     dropped = funnel.get("quality_gate_drops") or []
-    if dropped:
+    dropped_count = max(
+        0,
+        int(funnel.get("after_cross_day_near_dup") or 0)
+        - int(funnel.get("after_quality_gate") or 0),
+    ) or len(dropped)
+    if dropped_count:
         out.append(
-            f"{BREW_PREFIX}{len(dropped)} items were shown the door before ranking "
-            f"even started."
+            f"{BREW_PREFIX}{dropped_count} items were shown the door before ranking even started."
         )
 
     misses = load_digest_audit(digest_id, "missed_top_journals")
@@ -135,8 +159,7 @@ def _brew_observations(digest_id: str) -> list[str]:
 
     if vote_total:
         out.append(
-            f"{BREW_PREFIX}You have graded {vote_total:,} items so far. "
-            f"Pip is keeping score."
+            f"{BREW_PREFIX}You have graded {vote_total:,} items so far. Pip is keeping score."
         )
 
     return out
@@ -146,19 +169,47 @@ def _brew_observations(digest_id: str) -> list[str]:
 # 2. Aggregate facts about the window's literature
 # --------------------------------------------------------------------------- #
 
-# Counted over titles only: cheap, and a title states the subject plainly.
-_WATCHED_TERMS = (
-    "DNA origami",
-    "self-assembly",
-    "CRISPR",
-    "machine learning",
-    "protein design",
-    "nanoparticle",
-    "mRNA",
-    "cryo-EM",
-    "foundation model",
-    "phase separation",
-)
+def _normalize_topic_text(value: str) -> str:
+    """Normalize punctuation while retaining whole-word phrase boundaries."""
+    return " ".join(re.sub(r"[\W_]+", " ", value.casefold()).split())
+
+
+def _watched_topics() -> list[tuple[str, tuple[str, ...]]]:
+    """Return up to ten topic labels and aliases from the reader's profile."""
+    from .config import load_profile
+
+    try:
+        profile = load_profile()
+    except (FileNotFoundError, ValueError):
+        return []
+    topics: list[tuple[str, tuple[str, ...]]] = []
+    canonical = getattr(profile, "canonical_facets", None) or {}
+    if canonical:
+        for label, facet in list(canonical.items())[:10]:
+            phrases = [label, *(getattr(facet, "aliases", None) or [])]
+            normalized = tuple(
+                dict.fromkeys(
+                    term for phrase in phrases if (term := _normalize_topic_text(str(phrase)))
+                )
+            )
+            if normalized:
+                topics.append((str(label), normalized))
+        return topics
+
+    for keyword in (getattr(profile, "keywords", None) or [])[:10]:
+        label = str(keyword).strip()
+        normalized = _normalize_topic_text(label)
+        if normalized:
+            topics.append((label, (normalized,)))
+    return topics
+
+
+def _topic_counts(titles: list[str], topics: list[tuple[str, tuple[str, ...]]]) -> dict[str, int]:
+    normalized_titles = [f" {_normalize_topic_text(title)} " for title in titles]
+    return {
+        label: sum(any(f" {phrase} " in title for phrase in phrases) for title in normalized_titles)
+        for label, phrases in topics
+    }
 
 
 def corpus_observations(window_days: int = 4, limit: int = 6000) -> list[str]:
@@ -175,84 +226,116 @@ def _corpus_observations(window_days: int, limit: int) -> list[str]:
 
     from .store import ItemRow, session_scope
 
-    cutoff = datetime.now(UTC) - timedelta(days=max(1, window_days))
-    previous_cutoff = cutoff - timedelta(days=max(1, window_days))
+    window_days = max(1, int(window_days))
+    limit = int(limit)
+    if limit <= 0:
+        return []
+    now = datetime.now(UTC)
+    cutoff = now - timedelta(days=window_days)
+    previous_cutoff = cutoff - timedelta(days=window_days)
 
     with session_scope() as s:
-        rows = (
-            s.execute(
-                select(ItemRow.source, ItemRow.title, ItemRow.fetched_at)
-                .where(ItemRow.section == "research", ItemRow.fetched_at >= previous_cutoff)
-                .limit(limit)
+        # Query the two windows independently. A single unordered LIMIT across
+        # both could contain only old rows on SQLite, yielding no current facts;
+        # it also made trend claims compare unequal, arbitrary samples.
+        current_rows = s.execute(
+            select(ItemRow.source, ItemRow.title, ItemRow.fetched_at)
+            .where(
+                ItemRow.section == "research",
+                ItemRow.fetched_at >= cutoff,
+                ItemRow.fetched_at <= now,
             )
-            .all()
-        )
+            .order_by(ItemRow.fetched_at.desc())
+            .limit(limit + 1)
+        ).all()
+        earlier_rows = s.execute(
+            select(ItemRow.source, ItemRow.title, ItemRow.fetched_at)
+            .where(
+                ItemRow.section == "research",
+                ItemRow.fetched_at >= previous_cutoff,
+                ItemRow.fetched_at < cutoff,
+            )
+            .order_by(ItemRow.fetched_at.desc())
+            .limit(limit + 1)
+        ).all()
 
-    current = [r for r in rows if r[2] is not None and _aware(r[2]) >= cutoff]
-    earlier = [r for r in rows if r[2] is not None and _aware(r[2]) < cutoff]
+    current_truncated = len(current_rows) > limit
+    earlier_truncated = len(earlier_rows) > limit
+    current = list(current_rows[:limit])
+    earlier = list(earlier_rows[:limit])
     if not current:
         return []
 
     out: list[str] = []
-    titles = " \n ".join(str(t or "") for _src, t, _f in current).casefold()
-    prior_titles = " \n ".join(str(t or "") for _src, t, _f in earlier).casefold()
+    topics = _watched_topics()
+    current_titles = [str(title or "") for _src, title, _fetched in current]
+    prior_titles = [str(title or "") for _src, title, _fetched in earlier]
 
-    counts = {
-        term: len(re.findall(re.escape(term.casefold()), titles)) for term in _WATCHED_TERMS
-    }
+    counts = _topic_counts(current_titles, topics)
     ranked = [(term, n) for term, n in counts.items() if n]
     ranked.sort(key=lambda kv: -kv[1])
 
     if len(ranked) >= 2:
         (top_term, top_n), (second_term, second_n) = ranked[0], ranked[1]
+        scope = (
+            f"In a sample of the latest {len(current):,} research papers"
+            if current_truncated
+            else f"Across {len(current):,} newly fetched research papers"
+        )
         out.append(
-            f"{FEED_PREFIX}Across {len(current):,} new papers, "
+            f"{FEED_PREFIX}{scope}, "
             f"{top_term} shows up {top_n} {_plural(top_n, 'time')} and "
             f"{second_term} {second_n}."
         )
 
     # A term that moved sharply against the previous window of the same length.
-    if prior_titles:
-        for term, now in ranked[:6]:
-            before = len(re.findall(re.escape(term.casefold()), prior_titles))
-            if before >= 3 and now >= 3:
-                change = (now - before) / before
+    if prior_titles and not current_truncated and not earlier_truncated:
+        prior_counts = _topic_counts(prior_titles, topics)
+        for term, count_now in ranked[:6]:
+            before = prior_counts.get(term, 0)
+            if before >= 3 and count_now >= 3:
+                change = (count_now - before) / before
                 if abs(change) >= 0.5:
                     direction = "up" if change > 0 else "down"
                     out.append(
                         f"{FEED_PREFIX}Mentions of {term} are {direction} "
-                        f"{abs(change) * 100:.0f}% on the previous {window_days} days "
-                        f"({before} to {now})."
+                        f"{abs(change) * 100:.0f}% against the previous {window_days} days "
+                        f"({before} to {count_now})."
                     )
                     break
 
     source_counts = Counter(str(src or "") for src, _t, _f in current)
     if source_counts:
         busiest, n = source_counts.most_common(1)[0]
-        out.append(
-            f"{FEED_PREFIX}{busiest} alone posted {n:,} papers in the last "
-            f"{window_days} days. You will see a handful."
-        )
+        if current_truncated:
+            out.append(
+                f"{FEED_PREFIX}{busiest} supplied {n:,} papers in that "
+                f"{len(current):,}-title sample."
+            )
+        else:
+            out.append(
+                f"{FEED_PREFIX}{busiest} alone posted {n:,} papers in the last "
+                f"{window_days} days. You will see a handful."
+            )
         quiet = [name for name, c in source_counts.items() if c == 1]
         if quiet:
-            out.append(
-                f"{FEED_PREFIX}{len(quiet)} {_plural(len(quiet), 'source')} "
-                f"contributed exactly one paper this window."
+            scope = (
+                "appeared exactly once in that sample"
+                if current_truncated
+                else "contributed exactly one paper this window"
             )
+            out.append(f"{FEED_PREFIX}{len(quiet)} {_plural(len(quiet), 'source')} {scope}.")
 
     longest = max(current, key=lambda r: len(str(r[1] or "")))
     words = len(str(longest[1] or "").split())
     if words >= 20:
+        scope = "sample" if current_truncated else "window"
         out.append(
-            f"{FEED_PREFIX}The longest title in the window runs to {words} words. "
+            f"{FEED_PREFIX}The longest title in the {scope} runs to {words} words. "
             f"Pip counted them so you do not have to."
         )
 
     return out
-
-
-def _aware(value: datetime) -> datetime:
-    return value if value.tzinfo else value.replace(tzinfo=UTC)
 
 
 # --------------------------------------------------------------------------- #
@@ -281,6 +364,43 @@ _SLOTS: dict[str, tuple[str, ...]] = {
         "overnight", "on a Friday", "during the site visit", "mid-demo",
         "two days before the deadline", "while nobody was watching",
         "the week it was finally cited",
+    ),
+}
+
+# Labels make the generated cards sound like a rotating lab cast rather than
+# one anonymous narrator.  Each label is unique across families, and every
+# family has at least as many viewpoints as it has templates below.
+_SLOT_PERSPECTIVES: dict[str, tuple[str, ...]] = {
+    "instrument": (
+        "Instrument's view",
+        "Facility manager's view",
+        "Core technician's view",
+        "Service engineer's view",
+        "Booking calendar's view",
+        "Night-shift researcher's view",
+        "Maintenance log's view",
+    ),
+    "reagent": (
+        "Reagent's view",
+        "Bench scientist's view",
+        "Lab manager's view",
+        "Purchasing office's view",
+        "Freezer's view",
+    ),
+    "artefact": (
+        "PI's view",
+        "Reviewer's view",
+        "Editor's view",
+        "Co-author's view",
+        "Grant panel's view",
+    ),
+    "code": (
+        "Dataset's view",
+        "Analyst's view",
+        "Computer's view",
+        "Future maintainer's view",
+        "Repository's view",
+        "Model's view",
     ),
 }
 
@@ -332,6 +452,7 @@ def _generated_jokes(count: int, day: date, exclude: set[str]) -> list[str]:
     seed = int.from_bytes(sha256(day.isoformat().encode()).digest()[:8], "big")
     out: list[str] = []
     used_templates: set[int] = set()
+    used_perspectives: set[str] = set()
     # Walk the template list on a day-dependent stride so consecutive days do
     # not open with the same shape.
     stride = 1 + (seed % (len(_TEMPLATES) - 1))
@@ -344,17 +465,30 @@ def _generated_jokes(count: int, day: date, exclude: set[str]) -> list[str]:
         if template_index in used_templates:
             continue
         slot, template = _TEMPLATES[template_index]
+        perspectives = _SLOT_PERSPECTIVES[slot]
+        perspective_start = (seed // (template_index + 1) + step) % len(perspectives)
+        perspective = next(
+            (
+                perspectives[(perspective_start + offset) % len(perspectives)]
+                for offset in range(len(perspectives))
+                if perspectives[(perspective_start + offset) % len(perspectives)]
+                not in used_perspectives
+            ),
+            None,
+        )
+        if perspective is None:
+            continue
         values = _SLOTS[slot]
         value = values[(seed // (template_index + 1) + step) % len(values)]
-        text = JOKE_PREFIX + template.format(
+        body = template.format(
             x=value,
             occasion=_SLOTS["occasion"][(seed // 7 + step) % len(_SLOTS["occasion"])],
         )
-        # Capitalise after the prefix when the slot starts the sentence.
-        head = len(JOKE_PREFIX)
-        text = text[:head] + text[head].upper() + text[head + 1 :]
+        body = body[0].upper() + body[1:]
+        text = f"{JOKE_PREFIX}{perspective} — {body}"
         if text in exclude or text in out:
             continue
         used_templates.add(template_index)
+        used_perspectives.add(perspective)
         out.append(text)
     return out

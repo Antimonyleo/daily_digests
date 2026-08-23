@@ -1950,6 +1950,35 @@ def test_ranking_status_api_reports_vote_counts_without_training(tmp_path, monke
     assert status["ranking_status"] == "cosine_baseline"
 
 
+def test_ranking_status_does_not_claim_personalization_in_cosine_mode(
+    tmp_path, monkeypatch
+):
+    from dailydigest import config as config_mod
+    from dailydigest import votes as votes_mod
+
+    monkeypatch.setenv("DB_PATH", str(tmp_path / "digest.db"))
+    monkeypatch.setenv("SCORING_MODE", "cosine")
+    config_mod.reload_settings()
+    monkeypatch.setattr(
+        votes_mod,
+        "vote_counts",
+        lambda: {
+            "good": 30,
+            "bad": 0,
+            "neutral": 0,
+            "signed": 30,
+            "total": 30,
+        },
+    )
+
+    status = votes_mod.lr_training_status()
+
+    assert status["scoring_mode"] == "cosine"
+    assert status["model_trained"] is False
+    assert status["ranking_status"] == "cosine_baseline"
+    assert status["training_status"] == "disabled"
+
+
 def test_ranking_train_api_uses_monkeypatched_dataset_and_ranker(tmp_path, monkeypatch):
     from dailydigest import config as config_mod
     from dailydigest import store as store_mod

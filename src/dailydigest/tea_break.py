@@ -14,7 +14,7 @@ DAILY_FACTS = 5
 
 # How much of each deck is computed fresh rather than drawn from the banks.
 # A curated bank is finite, so however large it grows it eventually comes round
-# again; these three sources do not repeat because their inputs change daily.
+# again; these sources add details that can change with each brew or day.
 # Generated jokes stay a small minority on purpose -- combinatorial variety is
 # shallow, and a reader recognises the template long before the fillings run out.
 BREW_CARDS = 2
@@ -248,7 +248,7 @@ def _compose_deck(jokes: list[str], facts: list[str], day: date) -> tuple[str, .
     return tuple(interleaved[offset:] + interleaved[:offset])
 
 
-def daily_tea_deck(day: date) -> tuple[str, ...]:
+def daily_tea_deck(day: date, *, refresh: bool = False) -> tuple[str, ...]:
     """Return the day's stable deck: ten jokes and five facts, shown one at a time.
 
     The deck is drawn from the cards least recently served and then recorded, so
@@ -263,18 +263,23 @@ def daily_tea_deck(day: date) -> tuple[str, ...]:
         from .tea_live import BREW_PREFIX, brew_observations, corpus_observations, generated_jokes
 
         served = tea_deck_for_day(day.isoformat())
-        if served and any(card.startswith(BREW_PREFIX) for card in served):
-            # Already carries this run's observations: nothing left to add.
+        brew = _shuffle(brew_observations(day.isoformat()), day, "brew-selection")[:BREW_CARDS]
+        served_brew = [card for card in served if card.startswith(BREW_PREFIX)] if served else []
+        if (
+            not refresh
+            and served
+            and len(served_brew) == len(brew)
+            and set(served_brew) == set(brew)
+        ):
+            # Already carries the latest run's selected observations.
             return tuple(served)
-
-        brew = brew_observations(day.isoformat())[:BREW_CARDS]
-        if served and not brew:
+        if not refresh and served and not brew:
             # Composed before today's brew and the brew still has not run.
             # Hand back the same deck rather than reshuffling on every reload.
             return tuple(served)
 
         last_shown = tea_note_last_shown()
-        corpus = corpus_observations()[:CORPUS_CARDS]
+        corpus = _shuffle(corpus_observations(), day, "corpus-selection")[:CORPUS_CARDS]
         generated = generated_jokes(GENERATED_JOKES, day, exclude=set(last_shown))
 
         # Whatever the live sources cannot supply is topped up from the banks,

@@ -8,6 +8,7 @@ from datetime import date, datetime, timedelta, timezone
 import feedparser
 from dateutil import parser as date_parser
 
+from ..config import user_local_date
 from ..models import Item, SourceSpec
 from .rss import (
     _external_id,
@@ -20,7 +21,7 @@ from .rss import (
 
 
 def _today() -> date:
-    return datetime.now(timezone.utc).date()
+    return user_local_date()
 
 
 def _field(text: str, name: str, following: tuple[str, ...]) -> str:

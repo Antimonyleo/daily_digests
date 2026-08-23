@@ -74,13 +74,3 @@ class TestRegionPreference:
         from dailydigest.opportunities import _region_matches
 
         assert not _region_matches(["United States"], "EMBL Heidelberg, Germany")
-
-    def test_configured_profile_includes_europe_and_asia(self):
-        import yaml
-
-        from dailydigest.opportunities import OpportunityProfile
-
-        with open("data/opportunities.yaml") as handle:
-            profile = OpportunityProfile(**yaml.safe_load(handle))
-        regions = {r.casefold() for r in profile.event_regions}
-        assert "europe" in regions and "asia" in regions

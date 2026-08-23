@@ -616,6 +616,10 @@ def test_run_all_gives_carryover_items_one_more_pass_then_consumes(monkeypatch, 
         s.add(old_row)
         s.flush()
         item_id = int(old_row.id)
+        # This is the real UI flow: the reader rates an overflow item before
+        # clicking "save for tomorrow". The pin must remain eligible for its
+        # one promised pass.
+        s.add(store_mod.VoteRow(item_id=item_id, value=1, grade=70))
     store_mod.add_carryover_items([item_id])
 
     seen_pools = []

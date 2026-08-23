@@ -987,3 +987,49 @@ def test_duplicate_label_for_distinct_items_is_also_dropped(monkeypatch, tmp_pat
         )
     assert len(rows) == 1
     assert rows[0].item_id == ids[0]
+
+
+def test_publish_dedupe_keeps_features_and_impressions_consistent(
+    monkeypatch, tmp_path
+):
+    """Dropping a duplicate slate row must not log it as selected."""
+    store_mod = _reset_store(tmp_path, monkeypatch)
+    ids = []
+    with store_mod.session_scope() as s:
+        for n in range(2):
+            row = store_mod.ItemRow(
+                source="Science",
+                section="research",
+                external_id=f"publish-dupe-{n}",
+                url=f"https://example.com/publish-dupe-{n}",
+                title=f"Paper {n}",
+                fetched_at=datetime.now(UTC),
+            )
+            s.add(row)
+            s.flush()
+            ids.append(int(row.id))
+
+    store_mod.publish_digest(
+        "2026-08-22",
+        [("R1", ids[0], 0.9), ("R1", ids[1], 0.8)],
+        [
+            ("R1", ids[0], 0.9, {"score": 0.9}),
+            ("R1", ids[1], 0.8, {"score": 0.8}),
+        ],
+        [
+            ("research", ids[0], 0, 0.9, True),
+            ("research", ids[1], 1, 0.8, True),
+        ],
+    )
+
+    with store_mod.session_scope() as s:
+        digest_items = s.query(store_mod.DigestItemRow).all()
+        features = s.query(store_mod.DigestItemFeatureRow).all()
+        impressions = {
+            row.item_id: row for row in s.query(store_mod.ImpressionRow).all()
+        }
+
+    assert [row.item_id for row in digest_items] == [ids[0]]
+    assert [row.item_id for row in features] == [ids[0]]
+    assert impressions[ids[0]].selected is True
+    assert impressions[ids[1]].selected is False

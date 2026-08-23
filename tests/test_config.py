@@ -5,6 +5,7 @@ Uses tmp_path to write tiny YAML fixtures so tests are fully isolated.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -78,6 +79,17 @@ def test_legacy_zero_cap_disables_optional_section():
 
     assert section_enabled(settings, "research") is True
     assert section_enabled(settings, "ai") is False
+
+
+def test_user_local_date_uses_configured_timezone(monkeypatch):
+    from dailydigest import config as config_mod
+
+    monkeypatch.setenv("USER_TZ", "America/Phoenix")
+    config_mod.reload_settings()
+
+    assert config_mod.user_local_date(
+        datetime(2026, 8, 24, 0, 30, tzinfo=UTC)
+    ).isoformat() == "2026-08-23"
 
 
 def test_docker_compose_persists_settings_file():

@@ -1542,6 +1542,14 @@ def publish_digest(
     """Publish one complete slate and its measurement rows in one transaction."""
     init_db()
     labeled_items = _dedupe_labeled_items(digest_id, labeled_items)
+    selected_pairs = {(str(item[0]), int(item[1])) for item in labeled_items}
+    selected_ids = {item_id for _label, item_id in selected_pairs}
+    # Feature rows describe the displayed slate. If persistence had to remove a
+    # duplicate label/item, retain no phantom feature snapshot for the row that
+    # was dropped.
+    feature_rows = [
+        row for row in feature_rows if (str(row[0]), int(row[1])) in selected_pairs
+    ]
     run_id = run_id or uuid.uuid4().hex
     now = datetime.now(timezone.utc)
     with session_scope() as s:
@@ -1610,7 +1618,9 @@ def publish_digest(
 
         for impression in impression_rows:
             section, item_id, position, final_score = impression[:4]
-            selected = bool(impression[4]) if len(impression) >= 5 else True
+            selected = (
+                bool(impression[4]) if len(impression) >= 5 else True
+            ) and int(item_id) in selected_ids
             primary_facet = str(impression[5]) if len(impression) >= 6 else ""
             primary_facet_score = (
                 float(impression[6])
@@ -1816,11 +1826,11 @@ def record_tea_deck(day: str, notes: list[str], *, keep_days: int = 400) -> None
     init_db()
     payload = json.dumps([str(n) for n in notes])
     with session_scope() as s:
-        row = s.get(TeaDeckDayRow, str(day))
-        if row is None:
-            s.add(TeaDeckDayRow(day=str(day), notes_json=payload))
-        else:
-            row.notes_json = payload
+        s.execute(
+            sqlite_insert(TeaDeckDayRow)
+            .values(day=str(day), notes_json=payload)
+            .on_conflict_do_update(index_elements=["day"], set_={"notes_json": payload})
+        )
         kept = (
             s.execute(select(TeaDeckDayRow.day).order_by(TeaDeckDayRow.day.desc()))
             .scalars()

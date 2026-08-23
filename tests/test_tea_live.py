@@ -1,4 +1,4 @@
-"""Live tea cards: computed per brew, so they cannot fall into a rotation."""
+"""Live tea cards computed from the brew and recent corpus."""
 
 from __future__ import annotations
 
@@ -71,7 +71,18 @@ class TestBrewObservations:
         assert "100%" in blob
 
     def test_is_silent_rather_than_wrong_when_there_is_no_brew(self, tmp_path, monkeypatch):
-        _reset_store(tmp_path, monkeypatch)
+        store_mod = _reset_store(tmp_path, monkeypatch)
+        with store_mod.session_scope() as s:
+            item = store_mod.ItemRow(
+                source="Old journal",
+                section="research",
+                external_id="old-vote",
+                url="https://example.com/old-vote",
+                title="An item from an earlier day",
+            )
+            s.add(item)
+            s.flush()
+            s.add(store_mod.VoteRow(item_id=item.id, value=1, grade=70))
         from dailydigest.tea_live import brew_observations
 
         assert brew_observations("2026-08-22") == []
@@ -85,6 +96,34 @@ class TestBrewObservations:
             tea_live, "_brew_observations", lambda _d: (_ for _ in ()).throw(RuntimeError("boom"))
         )
         assert tea_live.brew_observations("2026-08-22") == []
+
+    def test_uses_exact_funnel_counts_when_audit_samples_are_capped(self, tmp_path, monkeypatch):
+        store_mod = _reset_store(tmp_path, monkeypatch)
+        _seed_brew(store_mod)
+        store_mod.write_digest_audit(
+            "2026-08-22",
+            "candidate_funnel",
+            [
+                {
+                    "window_days": 4,
+                    "recent_items": 500,
+                    "recent_research_items": 400,
+                    "after_cross_source_dedupe": 350,
+                    "after_cross_day_near_dup": 200,
+                    "after_quality_gate": 75,
+                    # Detailed audit rows are deliberately capped in production.
+                    "cross_day_near_dup_drops": [{"max_similarity": 0.99} for _ in range(100)],
+                    "quality_gate_drops": [{} for _ in range(100)],
+                }
+            ],
+        )
+        from dailydigest.tea_live import brew_observations
+
+        blob = " ".join(brew_observations("2026-08-22"))
+
+        assert "400" in blob
+        assert "150 items" in blob
+        assert "125 items" in blob
 
 
 class TestCorpusObservations:
@@ -114,6 +153,79 @@ class TestCorpusObservations:
         cards = corpus_observations(4)
         assert cards, "a populated window produced no observations"
         assert any("bioRxiv" in c for c in cards)
+
+    def test_limit_is_applied_to_each_window_without_inventing_a_trend(self, tmp_path, monkeypatch):
+        """A shared unordered LIMIT could contain only the older window."""
+        store_mod = _reset_store(tmp_path, monkeypatch)
+        now = datetime.now(UTC)
+        with store_mod.session_scope() as s:
+            # Insert older rows first to expose the old unordered combined LIMIT.
+            for i in range(4):
+                s.add(
+                    store_mod.ItemRow(
+                        source="Older",
+                        section="research",
+                        external_id=f"older-{i}",
+                        url=f"https://example.com/older-{i}",
+                        title="Machine learning in an older paper",
+                        fetched_at=now - timedelta(days=6),
+                    )
+                )
+            for i in range(4):
+                s.add(
+                    store_mod.ItemRow(
+                        source="Current",
+                        section="research",
+                        external_id=f"current-{i}",
+                        url=f"https://example.com/current-{i}",
+                        title="Machine learning and nanoparticle design",
+                        fetched_at=now - timedelta(days=1),
+                    )
+                )
+        from dailydigest.tea_live import corpus_observations
+
+        cards = corpus_observations(window_days=4, limit=3)
+        blob = " ".join(cards)
+
+        assert cards
+        assert "3-title sample" in blob
+        assert "previous 4 days" not in blob
+
+    def test_topics_come_from_the_user_profile_instead_of_a_fixed_science_list(
+        self, tmp_path, monkeypatch
+    ):
+        import yaml
+
+        profile_path = tmp_path / "profile.yaml"
+        profile_path.write_text(
+            yaml.safe_dump(
+                {
+                    "bio": "Astronomer",
+                    "keywords": ["exoplanet atmospheres", "quantum sensing"],
+                }
+            )
+        )
+        monkeypatch.setenv("PROFILE_PATH", str(profile_path))
+        store_mod = _reset_store(tmp_path, monkeypatch)
+        now = datetime.now(UTC)
+        with store_mod.session_scope() as s:
+            for i in range(4):
+                s.add(
+                    store_mod.ItemRow(
+                        source="Astronomy Journal",
+                        section="research",
+                        external_id=f"astro-{i}",
+                        url=f"https://example.com/astro-{i}",
+                        title="Exoplanet atmospheres measured with quantum sensing",
+                        fetched_at=now - timedelta(days=1),
+                    )
+                )
+        from dailydigest.tea_live import corpus_observations
+
+        blob = " ".join(corpus_observations())
+
+        assert "exoplanet atmospheres" in blob
+        assert "quantum sensing" in blob
 
 
 class TestGeneratedJokes:
@@ -151,6 +263,19 @@ class TestGeneratedJokes:
         day = date(2026, 8, 22)
         assert generated_jokes(3, day) == generated_jokes(3, day)
         assert generated_jokes(3, day) != generated_jokes(3, date(2026, 8, 23))
+
+    def test_uses_distinct_viewpoints_within_a_day(self):
+        from dailydigest.tea_live import JOKE_PREFIX, generated_jokes
+
+        jokes = generated_jokes(6, date(2026, 8, 22))
+        viewpoints = [
+            joke.removeprefix(JOKE_PREFIX).split(" — ", 1)[0]
+            for joke in jokes
+        ]
+
+        assert len(jokes) == 6
+        assert len(set(viewpoints)) == len(viewpoints)
+        assert all(viewpoint.endswith("view") for viewpoint in viewpoints)
 
     def test_every_template_renders_with_every_filling(self):
         """Guards against a slot value that makes a template ungrammatical."""
@@ -209,3 +334,46 @@ class TestDeckComposition:
         assert any(c.startswith(BREW_PREFIX) for c in later), "observations never appeared"
         # And now it is settled: further reloads return the upgraded deck.
         assert daily_tea_deck(date(2026, 8, 22)) == later
+
+    def test_same_day_rebrew_replaces_stale_live_cards(self, tmp_path, monkeypatch):
+        _reset_store(tmp_path, monkeypatch)
+        from dailydigest import tea_live
+        from dailydigest.tea_break import daily_tea_deck
+        from dailydigest.tea_live import BREW_PREFIX
+
+        state = {"run": "first"}
+        monkeypatch.setattr(
+            tea_live,
+            "brew_observations",
+            lambda _digest_id: [f"{BREW_PREFIX}{state['run']} run"],
+        )
+        monkeypatch.setattr(tea_live, "corpus_observations", lambda: [])
+        monkeypatch.setattr(tea_live, "generated_jokes", lambda *_args, **_kwargs: [])
+
+        first = daily_tea_deck(date(2026, 8, 22))
+        assert any("first run" in card for card in first)
+
+        state["run"] = "second"
+        second = daily_tea_deck(date(2026, 8, 22))
+        assert any("second run" in card for card in second)
+        assert not any("first run" in card for card in second)
+
+    def test_live_observation_types_rotate_instead_of_always_taking_the_first_two(
+        self, tmp_path, monkeypatch
+    ):
+        _reset_store(tmp_path, monkeypatch)
+        from dailydigest import tea_live
+        from dailydigest.tea_break import daily_tea_deck
+        from dailydigest.tea_live import BREW_PREFIX
+
+        observations = [f"{BREW_PREFIX}observation {i}" for i in range(8)]
+        monkeypatch.setattr(tea_live, "brew_observations", lambda _digest_id: observations)
+        monkeypatch.setattr(tea_live, "corpus_observations", lambda: [])
+        monkeypatch.setattr(tea_live, "generated_jokes", lambda *_args, **_kwargs: [])
+
+        selected = set()
+        for offset in range(8):
+            deck = daily_tea_deck(date(2026, 8, 22) + timedelta(days=offset))
+            selected.update(card for card in deck if card.startswith(BREW_PREFIX))
+
+        assert len(selected) > 2

@@ -1000,11 +1000,7 @@
         <span class="count-pill">Helpful ratings <span id="vote-signed">{{ ranking_status.vote_counts.signed }}</span>/<span id="vote-threshold">{{ ranking_status.min_votes_for_lr }}</span></span>
       </div>
       <div class="ranking-message" id="ranking-message">
-        {% if ranking_status.ranking_status == "preference_active" %}
-        Personal ranking is active — every rating sharpens the next brew automatically.
-        {% else %}
-        {{ ranking_status.remaining_votes_for_lr }} more ratings unlock personal ranking.
-        {% endif %}
+        {{ ranking_status.message }}
       </div>
       <button class="btn primary" id="train-ranker-btn" type="button"{% if not ranking_status.can_train %} disabled{% endif %}>Refresh calibration</button>
     </section>
@@ -1406,11 +1402,7 @@
     if (thresholdEl) thresholdEl.textContent = status.min_votes_for_lr;
     if (trainBtn) trainBtn.disabled = !status.can_train;
     if (!msgEl) return;
-    if (status.ranking_status === "preference_active") {
-      msgEl.textContent = "Personal ranking is active — every rating sharpens the next brew automatically.";
-    } else {
-      msgEl.textContent = `${status.remaining_votes_for_lr} more ratings unlock personal ranking.`;
-    }
+    msgEl.textContent = status.message || `${status.remaining_votes_for_lr} more ratings unlock personal ranking.`;
   }
 
   async function pollTrainingStatus() {

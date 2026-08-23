@@ -10,6 +10,8 @@ from typing import Any
 import yaml
 from pydantic import BaseModel, Field, field_validator
 
+from .config import user_local_date
+
 
 class OpportunityProfile(BaseModel):
     """Private reader information used only for opportunity eligibility."""
@@ -171,7 +173,7 @@ def assess_opportunity(
     it is never silently promoted to "eligible". Topic relevance is handled by
     the existing semantic ranker, not duplicated here.
     """
-    now = today or date.today()
+    now = today or user_local_date()
     status = str(metadata.get("status") or "unknown").casefold()
     if status in {"closed", "cancelled", "canceled", "archived"}:
         return OpportunityAssessment(False, "unknown", f"status is {status}")

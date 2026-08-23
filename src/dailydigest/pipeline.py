@@ -7,14 +7,20 @@ import re
 import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import UTC, date, datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any
 from urllib.parse import urlsplit
-from zoneinfo import ZoneInfo
 
 from . import health
 from . import votes as votes_mod
-from .config import Settings, get_settings, load_profile, load_sources, section_enabled
+from .config import (
+    Settings,
+    get_settings,
+    load_profile,
+    load_sources,
+    section_enabled,
+    user_local_date,
+)
 from .dedupe import (
     cap_near_duplicates,
     dedupe_by_url,
@@ -200,7 +206,7 @@ def _deadline_sort_key(pair: tuple[ItemRow, float]) -> tuple[float, float]:
         return (10_000.0, -float(score))
     raw = str((item_metadata(row) or {}).get("deadline") or "").strip()
     try:
-        days = (date.fromisoformat(raw[:10]) - date.today()).days
+        days = (date.fromisoformat(raw[:10]) - user_local_date()).days
     except (ValueError, TypeError):
         days = 10_000
     return (float(days), -float(score))
@@ -871,11 +877,7 @@ def _digest_id() -> str:
     matches the day they expect — not whatever UTC date happens to coincide
     with their local 8am.
     """
-    try:
-        tz: ZoneInfo | timezone = ZoneInfo(get_settings().user_tz)
-    except Exception:  # noqa: BLE001 - bad TZ string falls back to UTC
-        tz = UTC
-    return datetime.now(tz).strftime("%Y-%m-%d")
+    return user_local_date().isoformat()
 
 
 def _selection_reason(row: ItemRow, features: dict[str, Any]) -> str:
@@ -1210,6 +1212,9 @@ def run_all(
         "ranker_version": RANKER_VERSION,
         "window_days": days,
         "recent_items": len(recent_raw),
+        "recent_research_items": sum(
+            1 for row in recent_raw if (row.section or "") == "research"
+        ),
         "after_reviewed_filter": len(after_reviewed),
         "after_previously_shown_filter": len(after_shown),
         "after_cross_source_dedupe": len(deduped_candidates),
@@ -1705,6 +1710,15 @@ def run_all(
             model_version=RANKER_VERSION,
             audits=_audits,
         )
+        # Refresh Pip after every successful publish, including a same-day
+        # rebrew whose funnel happens to have the same counts. Comparing card
+        # text alone cannot identify that a new run replaced the audit rows.
+        try:
+            from .tea_break import daily_tea_deck
+
+            daily_tea_deck(date.fromisoformat(digest_id), refresh=True)
+        except Exception as _e:  # noqa: BLE001 - a tea card never invalidates a brew
+            logger.warning("tea deck refresh failed: %s", _e)
         # The pinned items got their promised extra evaluation in THIS ranking;
         # consume them only now that the digest is durably written, so a failed
         # brew does not silently burn the reader's "save for tomorrow".

@@ -14,6 +14,7 @@ import sys
 import pytest
 
 _SETUP_ENV_KEYS = (
+    "PROFILE_PATH",
     "LLM_BACKEND",
     "LLM_BASE_URL",
     "LLM_API_KEY",
@@ -42,7 +43,9 @@ def _isolate_env(tmp_path, monkeypatch):
     original_setup_env = {key: os.environ.get(key) for key in _SETUP_ENV_KEYS}
     db_file = tmp_path / "test_digest.db"
     monkeypatch.setenv("DB_PATH", str(db_file))
+    monkeypatch.setenv("PROFILE_PATH", "config/profile.example.yaml")
     monkeypatch.setenv("LLM_API_KEY", "")
+    monkeypatch.setenv("USER_TZ", "UTC")
     # A developer's private opportunity settings must not change validation of
     # ordinary setup-form tests. Tests that exercise these sections opt in.
     monkeypatch.setenv("INCLUDE_OPPORTUNITIES", "false")
