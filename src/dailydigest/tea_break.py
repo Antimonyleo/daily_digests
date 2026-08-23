@@ -12,6 +12,15 @@ DAILY_TEA_DECK_SIZE = 15
 DAILY_JOKES = 10
 DAILY_FACTS = 5
 
+# How much of each deck is computed fresh rather than drawn from the banks.
+# A curated bank is finite, so however large it grows it eventually comes round
+# again; these three sources do not repeat because their inputs change daily.
+# Generated jokes stay a small minority on purpose -- combinatorial variety is
+# shallow, and a reader recognises the template long before the fillings run out.
+BREW_CARDS = 2
+CORPUS_CARDS = 2
+GENERATED_JOKES = 2
+
 # Deliberately skewed toward the surprising over the textbook: a fact everyone
 # met in their first year is not a break, it is a flashcard.
 _TEA_FACTS = (
@@ -196,6 +205,13 @@ def _daily_pick(entries: tuple[str, ...], count: int, day: date, kind: str) -> l
     return [ordered[(start + offset) % len(ordered)] for offset in range(count)]
 
 
+def _shuffle(notes: list[str], day: date, salt: str) -> list[str]:
+    """Order *notes* deterministically for *day* so live cards are not clumped."""
+    return sorted(
+        notes, key=lambda note: sha256(f"{salt}|{day.isoformat()}|{note}".encode()).digest()
+    )
+
+
 def _least_recently_shown(
     entries: tuple[str, ...],
     count: int,
@@ -244,17 +260,43 @@ def daily_tea_deck(day: date) -> tuple[str, ...]:
     """
     try:
         from .store import record_tea_deck, tea_deck_for_day, tea_note_last_shown
+        from .tea_live import BREW_PREFIX, brew_observations, corpus_observations, generated_jokes
 
         served = tea_deck_for_day(day.isoformat())
-        if served:
+        if served and any(card.startswith(BREW_PREFIX) for card in served):
+            # Already carries this run's observations: nothing left to add.
             return tuple(served)
+
+        brew = brew_observations(day.isoformat())[:BREW_CARDS]
+        if served and not brew:
+            # Composed before today's brew and the brew still has not run.
+            # Hand back the same deck rather than reshuffling on every reload.
+            return tuple(served)
+
         last_shown = tea_note_last_shown()
-        deck = _compose_deck(
-            _least_recently_shown(_TEA_JOKES, DAILY_JOKES, last_shown, "joke"),
-            _least_recently_shown(_TEA_FACTS, DAILY_FACTS, last_shown, "fact"),
+        corpus = corpus_observations()[:CORPUS_CARDS]
+        generated = generated_jokes(GENERATED_JOKES, day, exclude=set(last_shown))
+
+        # Whatever the live sources cannot supply is topped up from the banks,
+        # so a deck is always full even on a day with no brew behind it.
+        jokes = _shuffle(
+            _least_recently_shown(
+                _TEA_JOKES, max(0, DAILY_JOKES - len(generated)), last_shown, "joke"
+            )
+            + generated,
             day,
+            "joke-order",
         )
+        facts = list(brew) + list(corpus)
+        facts += _least_recently_shown(
+            _TEA_FACTS, max(0, DAILY_FACTS - len(facts)), last_shown, "fact"
+        )
+        deck = _compose_deck(jokes, _shuffle(facts, day, "fact-order"), day)
         if deck:
+            # Always record: the ledger is what stops the banks recycling, and
+            # skipping it left every pre-brew day drawing the same cards. A deck
+            # composed before the brew is replaced (once) as soon as the brew
+            # lands -- see the BREW_PREFIX check above.
             record_tea_deck(day.isoformat(), list(deck))
             return deck
     except Exception:  # noqa: BLE001 - Pip must never break the page
