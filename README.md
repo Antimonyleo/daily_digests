@@ -299,7 +299,7 @@ Run the automated tests with:
 ```bash
 uv sync --frozen --group dev
 uv run pytest
-uv run ruff check --select F,B src tests
+uv run ruff check src tests
 ```
 
 DailyDigest is released under the [MIT License](LICENSE).
