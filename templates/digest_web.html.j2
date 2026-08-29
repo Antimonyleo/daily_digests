@@ -1524,6 +1524,8 @@
     });
     syncAllChip(state);
 
+    // Skip the zero-count placeholders: they hold no .item by construction, so
+    // this sweep would hide them on the first filter click and never restore them.
     document.querySelectorAll(".section-block:not(.empty-section)").forEach((sectionEl) => {
       const hasVisibleItem = Array.from(sectionEl.querySelectorAll(".item")).some((itemEl) => !itemEl.hidden);
       sectionEl.hidden = !hasVisibleItem;

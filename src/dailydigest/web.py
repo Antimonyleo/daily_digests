@@ -321,7 +321,16 @@ def _summary_fields(summary: str) -> dict[str, str]:
 def _load_today(
     digest_id: str, *, include_disabled_sections: bool = False
 ) -> tuple[list[dict], dict[int, int]]:
-    """Return (rendered_sections, current_vote_per_item)."""
+    """Return (rendered_sections, current_vote_per_item).
+
+    The slate comes from ``digest_items``, the authoritative per-digest record,
+    not from ``ItemRow.digest_id``: that back-pointer holds a single value and a
+    later brew reassigns it whenever it re-selects the same item, which would
+    silently rewrite an archived day. ``ItemRow.digest_id`` is only a fallback
+    for digests stored before ``digest_items`` recorded the slate.
+    ``include_disabled_sections`` renders an archived day as it was served, even
+    if the reader has since switched one of its sections off.
+    """
     init_db()
     with session_scope() as s:
         slate = s.execute(
