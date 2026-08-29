@@ -1020,9 +1020,11 @@ def exclude_previously_shown(
 
     We now suppress on membership in ANY current digest or a viewed, selected
     browser impression within ``days_lookback`` (matching the 30-day item
-    retention). The append-only impression history matters after a same-day
-    rebrew replaces ``digest_items``. ``exclude_digest_id`` keeps re-brewing the
-    *current* day from hiding items already shown that day.
+    retention). Funding calls and events are the exception: unchanged records
+    may return after seven days because their application window outlives a
+    daily paper's novelty. The append-only impression history matters after a
+    same-day rebrew replaces ``digest_items``. ``exclude_digest_id`` keeps
+    re-brewing the *current* day from hiding items already shown that day.
     """
     ids = [int(r.id) for r in rows if r.id is not None]
     if not ids:
@@ -1116,12 +1118,20 @@ def exclude_previously_shown(
                     .group_by(OpportunitySnapshotRow.item_id)
                 ).all()
             )
+            repeat_cutoff = (
+                datetime.now(timezone.utc) - timedelta(days=7)
+            ).date()
             shown_ids -= {
                 item_id
                 for item_id in opportunity_ids
-                if changed_at.get(item_id) is not None
-                and shown_at.get(item_id) is not None
-                and changed_at[item_id] > shown_at[item_id]
+                if shown_at.get(item_id) is not None
+                and (
+                    shown_at[item_id].date() <= repeat_cutoff
+                    or (
+                        changed_at.get(item_id) is not None
+                        and changed_at[item_id] > shown_at[item_id]
+                    )
+                )
             }
     if not shown_ids:
         return rows

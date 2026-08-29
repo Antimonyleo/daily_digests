@@ -318,7 +318,9 @@ def _summary_fields(summary: str) -> dict[str, str]:
     return out
 
 
-def _load_today(digest_id: str) -> tuple[list[dict], dict[int, int]]:
+def _load_today(
+    digest_id: str, *, include_disabled_sections: bool = False
+) -> tuple[list[dict], dict[int, int]]:
     """Return (rendered_sections, current_vote_per_item)."""
     init_db()
     with session_scope() as s:
@@ -330,7 +332,8 @@ def _load_today(digest_id: str) -> tuple[list[dict], dict[int, int]]:
         if not rows:
             return [], {}
 
-        rows = [r for r in rows if section_enabled(SETTINGS, r.section or "")]
+        if not include_disabled_sections:
+            rows = [r for r in rows if section_enabled(SETTINGS, r.section or "")]
         if not rows:
             return [], {}
 
@@ -1031,13 +1034,54 @@ def _bool_form(form: dict[str, str], key: str, default: bool) -> str:
 
 
 @app.get("/", response_class=HTMLResponse)
-def index(request: Request) -> Response:
+def index(request: Request, digest_id: str = "") -> Response:
     if not _profile_exists():
         return RedirectResponse(url="/setup", status_code=302)
-    digest_id = _digest_id()
+    today_id = _digest_id()
+    today_date = date.fromisoformat(today_id)
+    recent_brews = []
+    for offset, label in ((0, "Today"), (1, "Yesterday"), (2, "2 days ago")):
+        brew_date = today_date - timedelta(days=offset)
+        brew_id = brew_date.isoformat()
+        if not _digest_exists(brew_id):
+            continue
+        recent_brews.append(
+            {
+                "id": brew_id,
+                "label": label,
+                "date_label": brew_date.strftime("%b %d").replace(" 0", " "),
+                "href": "/" if offset == 0 else f"/?digest_id={brew_id}",
+            }
+        )
+    available_brew_ids = {str(brew["id"]) for brew in recent_brews}
+    if not digest_id or digest_id not in available_brew_ids:
+        digest_id = today_id
+    for brew in recent_brews:
+        brew["active"] = brew["id"] == digest_id
     tea_notes = daily_tea_deck(date.fromisoformat(digest_id))
-    sections, current_vote = _load_today(digest_id)
+    if digest_id == today_id:
+        sections, current_vote = _load_today(digest_id)
+    else:
+        sections, current_vote = _load_today(
+            digest_id, include_disabled_sections=True
+        )
     brewed = bool(sections) or _digest_exists(digest_id)
+    shown_section_keys = {str(section.get("key") or "") for section in sections}
+    empty_enabled_sections = []
+    if digest_id == today_id and brewed:
+        for section_key in ("opportunities", "events"):
+            if section_key in shown_section_keys or not section_enabled(
+                get_settings(), section_key
+            ):
+                continue
+            section_meta = SECTION_META[section_key]
+            empty_enabled_sections.append(
+                {
+                    "key": section_key,
+                    "title": section_meta["title"],
+                    "emoji": section_meta["emoji"],
+                }
+            )
     if brewed:
         # The reader is viewing this digest: flag its latest run's impressions as
         # viewed. Measurement-only; best-effort so a logging hiccup never blocks
@@ -1091,12 +1135,15 @@ def index(request: Request) -> Response:
         "digest_web.html.j2",
         {
             "digest_id": digest_id,
+            "viewing_today": digest_id == today_id,
             "profile_name": _profile_name(),
             "salutation": "Welcome back",
+            "recent_brews": recent_brews,
             "daily_note": tea_notes[0],
             "daily_notes": tea_notes,
             "summarizer_label": _summarizer_label(digest_id),
             "sections": sections,
+            "empty_enabled_sections": empty_enabled_sections,
             "overview": overview,
             "top_journal_audit": top_journal_audit,
             "overflow_audit": overflow_audit,

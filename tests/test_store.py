@@ -193,6 +193,31 @@ def test_unshown_candidates_are_not_suppressed_as_previously_shown(monkeypatch, 
     assert shown not in kept
 
 
+@pytest.mark.parametrize("section", ["opportunities", "events"])
+def test_week_old_opportunity_or_event_resurfaces_but_research_stays_hidden(
+    monkeypatch, tmp_path, section
+):
+    store_mod = _reset_store(tmp_path, monkeypatch)
+    opportunity = _add_item(store_mod, f"weekly-{section}", section=section)
+    paper = _add_item(store_mod, "weekly-paper")
+    digest_id = "2026-06-20"
+    store_mod.write_digest(digest_id, [("F1", opportunity), ("R1", paper)])
+
+    shown_at = datetime.now(timezone.utc) - timedelta(days=8)
+    with store_mod.session_scope() as session:
+        session.get(store_mod.DigestRow, digest_id).created_at = shown_at
+        for row in session.query(store_mod.DigestItemRow).filter_by(digest_id=digest_id):
+            row.created_at = shown_at
+        rows = session.query(store_mod.ItemRow).all()
+        for row in rows:
+            session.expunge(row)
+
+    kept = {int(row.id) for row in store_mod.exclude_previously_shown(rows)}
+
+    assert opportunity in kept
+    assert paper not in kept
+
+
 def test_carryover_items_pin_evaluate_once_and_clear(monkeypatch, tmp_path):
     """Save-for-tomorrow entries add idempotently, load as rows, and consume."""
     store_mod = _reset_store(tmp_path, monkeypatch)

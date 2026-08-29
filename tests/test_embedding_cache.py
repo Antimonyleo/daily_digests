@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 from datetime import datetime, timedelta, timezone
 
 import numpy as np
@@ -162,6 +163,49 @@ def test_embed_item_rows_handles_repeated_item_in_one_batch(monkeypatch, tmp_pat
     with store_mod.session_scope() as s:
         cached = s.execute(select(store_mod.ItemEmbeddingRow)).scalars().all()
         assert len(cached) == 1
+
+
+def test_embed_item_rows_does_not_lock_database_while_encoding(monkeypatch, tmp_path):
+    _reset_store(monkeypatch, tmp_path)
+    from dailydigest.rank import embedding_cache as cache_mod
+
+    store_mod.init_db()
+    with store_mod.session_scope() as s:
+        row = _row("Test", "concurrent-write", "Concurrent write")
+        s.add(row)
+        s.flush()
+        item_id = int(row.id)
+        s.add(
+            store_mod.ItemEmbeddingRow(
+                item_id=item_id,
+                model="old-model",
+                text_hash="stale",
+                dim=3,
+                vector=np.zeros(3, dtype=np.float32).tobytes(),
+            )
+        )
+        s.expunge(row)
+
+    def fake_embed(texts: list[str]) -> np.ndarray:
+        with sqlite3.connect(tmp_path / "digest.db", timeout=0) as conn:
+            conn.execute("PRAGMA busy_timeout=0")
+            conn.execute(
+                "INSERT INTO runs (stage, status, detail) VALUES (?, ?, ?)",
+                ("test", "ok", "encoder ran without a database write lock"),
+            )
+        return np.ones((len(texts), 3), dtype=np.float32)
+
+    monkeypatch.setattr(cache_mod, "active_embedding_signature", lambda: "new-model")
+    monkeypatch.setattr(cache_mod, "embed_texts", fake_embed)
+
+    vectors = cache_mod.embed_item_rows([row])
+
+    assert vectors.shape == (1, 3)
+    with sqlite3.connect(tmp_path / "digest.db") as conn:
+        assert conn.execute("SELECT COUNT(*) FROM runs").fetchone() == (1,)
+    with store_mod.session_scope() as s:
+        cached = s.execute(select(store_mod.ItemEmbeddingRow)).scalars().all()
+        assert [row.model for row in cached] == ["new-model"]
 
 
 def test_prune_removes_cached_embeddings_for_deleted_items(monkeypatch, tmp_path):

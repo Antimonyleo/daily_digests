@@ -137,13 +137,15 @@ The digest starts with an estimated reading time and its main topics. Each
 section opens to a compact list of picks; expand an item’s **Details** only when
 you want its recommendation explanation and caveat. Use **Save for later** on
 any item, then open **Saved reading** to search your personal archive. Saved
-items are kept when old unsaved feed items are cleaned up.
+items are kept when old unsaved feed items are cleaned up. Use **Time Machine**
+at the top of the digest to revisit saved brews from today and the previous two
+calendar days.
 
-Funding calls and events stay open for weeks, and DailyDigest deliberately
-re-shows one when its official details change (a new deadline, amount, or
-eligibility). When you have seen enough of a call, press **Mark known** on it
-and it will not appear in any future digest. Nothing sets that flag
-automatically — press it again to undo.
+Funding calls and events stay open for weeks, so DailyDigest may re-show an
+unchanged call after seven days and re-shows it sooner when official details
+change (a new deadline, amount, or eligibility). When you have seen enough of a
+call, press **Mark known** and it will not appear in any future digest. Nothing
+sets that flag automatically — press it again to undo.
 
 After each successful brew, DailyDigest removes expired digest history, old
 HTML previews, and unreferenced feed items according to `RETENTION_DAYS`

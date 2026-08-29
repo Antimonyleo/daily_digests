@@ -69,6 +69,16 @@ def _text_payload(response) -> str:
     return response.body.decode("utf-8")
 
 
+def _stub_index_dependencies(web, monkeypatch) -> None:
+    """Keep route-only tests independent of persisted user state."""
+    monkeypatch.setattr(web, "daily_tea_deck", lambda *_args, **_kwargs: ["Tea"])
+    monkeypatch.setattr(web, "load_digest_audit", lambda *_args: [])
+    monkeypatch.setattr(web, "carryover_item_ids", lambda: set())
+    monkeypatch.setattr(web, "mark_impressions_viewed", lambda *_args: 0)
+    monkeypatch.setattr(web, "_summarizer_label", lambda *_args: "Extractive")
+    monkeypatch.setattr(web.votes_mod, "lr_training_status", lambda: {})
+
+
 def test_setup_post_accepts_urlencoded_form_without_multipart(tmp_path, monkeypatch):
     from dailydigest import web
 
@@ -885,6 +895,124 @@ def test_index_redirects_to_setup_when_local_profile_missing(tmp_path, monkeypat
     assert response.headers["location"] == "/setup"
 
 
+def test_index_can_render_a_retained_digest(tmp_path, monkeypatch):
+    from dailydigest import web
+
+    profile_path = tmp_path / "profile.yaml"
+    profile_path.write_text("name: Ada\nbio: Researcher.\nkeywords: []\ndownweight: []\n")
+    monkeypatch.setattr(web, "_get_profile_path", lambda: profile_path)
+    monkeypatch.setattr(web, "_digest_id", lambda: "2026-05-05")
+    monkeypatch.setattr(web, "_digest_exists", lambda value: value == "2026-05-04")
+    _stub_index_dependencies(web, monkeypatch)
+    loaded: list[tuple[str, bool]] = []
+
+    def _load_retained(
+        digest_id: str, *, include_disabled_sections: bool = False
+    ):
+        loaded.append((digest_id, include_disabled_sections))
+        return [], {}
+
+    monkeypatch.setattr(web, "_load_today", _load_retained)
+
+    response = web.index(_request("GET", "/"), digest_id="2026-05-04")
+
+    assert response.status_code == 200
+    assert loaded == [("2026-05-04", True)]
+    page = _text_payload(response)
+    assert "2026-05-04" in page
+    assert "A digest was brewed for 2026-05-04" in page
+    assert "A digest was brewed for today" not in page
+
+
+def test_index_renders_time_machine_for_available_recent_brews(
+    tmp_path, monkeypatch
+):
+    from dailydigest import web
+
+    profile_path = tmp_path / "profile.yaml"
+    profile_path.write_text("name: Ada\nbio: Researcher.\nkeywords: []\ndownweight: []\n")
+    available = {"2026-05-05", "2026-05-04"}
+    monkeypatch.setattr(web, "_get_profile_path", lambda: profile_path)
+    monkeypatch.setattr(web, "_digest_id", lambda: "2026-05-05")
+    monkeypatch.setattr(web, "_digest_exists", lambda value: value in available)
+    _stub_index_dependencies(web, monkeypatch)
+    monkeypatch.setattr(web, "_load_today", lambda _value, **_kwargs: ([], {}))
+
+    response = web.index(_request("GET", "/"), digest_id="2026-05-04")
+
+    assert response.status_code == 200
+    page = _text_payload(response)
+    assert 'aria-label="Browse recent digests"' in page
+    assert 'href="/"' in page
+    assert '>Today<' in page
+    assert 'href="/?digest_id=2026-05-04"' in page
+    assert '>Yesterday<' in page
+    assert 'aria-current="page"' in page
+    assert "2026-05-03" not in page
+
+
+def test_index_falls_back_to_today_outside_the_time_machine_window(
+    tmp_path, monkeypatch
+):
+    from dailydigest import web
+
+    profile_path = tmp_path / "profile.yaml"
+    profile_path.write_text("name: Ada\nbio: Researcher.\nkeywords: []\ndownweight: []\n")
+    available = {"2026-05-05", "2026-05-01"}
+    loaded: list[str] = []
+    monkeypatch.setattr(web, "_get_profile_path", lambda: profile_path)
+    monkeypatch.setattr(web, "_digest_id", lambda: "2026-05-05")
+    monkeypatch.setattr(web, "_digest_exists", lambda value: value in available)
+    _stub_index_dependencies(web, monkeypatch)
+
+    def _load_digest(digest_id: str, **_kwargs):
+        loaded.append(digest_id)
+        return [], {}
+
+    monkeypatch.setattr(web, "_load_today", _load_digest)
+
+    response = web.index(_request("GET", "/"), digest_id="2026-05-01")
+
+    assert response.status_code == 200
+    assert loaded == ["2026-05-05"]
+    assert "2026-05-01" not in _text_payload(response)
+
+
+@pytest.mark.parametrize("digest_exists", [True, False])
+def test_index_reports_enabled_empty_funding_only_after_a_brew(
+    tmp_path, monkeypatch, digest_exists
+):
+    from dailydigest import web
+
+    profile_path = tmp_path / "profile.yaml"
+    profile_path.write_text("name: Ada\nbio: Researcher.\nkeywords: []\ndownweight: []\n")
+    monkeypatch.setattr(web, "_get_profile_path", lambda: profile_path)
+    monkeypatch.setattr(web, "_digest_id", lambda: "2026-05-05")
+    monkeypatch.setattr(web, "_digest_exists", lambda _value: digest_exists)
+    _stub_index_dependencies(web, monkeypatch)
+    monkeypatch.setattr(
+        web,
+        "_load_today",
+        lambda _value, **_kwargs: ([], {}),
+    )
+    monkeypatch.setattr(
+        web,
+        "section_enabled",
+        lambda _settings, section: section == "opportunities",
+    )
+
+    response = web.index(_request("GET", "/"))
+
+    assert response.status_code == 200
+    page = _text_payload(response)
+    funding_status = "No qualified new funding calls were selected in this brew."
+    if digest_exists:
+        assert "Funding &amp; Opportunities" in page
+        assert funding_status in page
+    else:
+        assert funding_status not in page
+
+
 def test_index_escapes_feed_html_and_rejects_unsafe_links(tmp_path, monkeypatch):
     from dailydigest import config as config_mod
     from dailydigest import store as store_mod
@@ -1672,7 +1800,9 @@ def test_load_today_uses_latest_vote_when_legacy_duplicates_exist(tmp_path, monk
     assert sections[0]["entries"][0]["current_vote"] == -1
 
 
-def test_load_today_hides_disabled_stored_sections(tmp_path, monkeypatch):
+def test_load_today_hides_disabled_sections_unless_rendering_archive(
+    tmp_path, monkeypatch
+):
     from dailydigest import config as config_mod
     from dailydigest import store as store_mod
     from dailydigest import web
@@ -1721,6 +1851,15 @@ def test_load_today_hides_disabled_stored_sections(tmp_path, monkeypatch):
 
     assert [section["key"] for section in sections] == ["research"]
     assert sections[0]["entries"][0]["title"] == "Visible research"
+
+    archived_sections, _current_vote = web._load_today(
+        "2026-05-13", include_disabled_sections=True
+    )
+
+    assert [section["key"] for section in archived_sections] == [
+        "research",
+        "industry",
+    ]
 
 
 def test_setup_post_rejects_missing_csrf_token(tmp_path, monkeypatch):
