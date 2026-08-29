@@ -681,7 +681,7 @@
       <p class="subhead">Fresh research and the signals you chose, ranked against your profile.</p>
     </div>
     <div class="actions">
-      {% if not empty %}
+      {% if not empty and viewing_today %}
       <form class="compact-brew-form" action="/run" method="get">
         <input type="hidden" name="autostart" value="1">
         <label class="compact-brew" for="reading-mode-select">
@@ -748,9 +748,9 @@
   {% endif %}
 
   {% if not empty %}
-  <section class="today-cup" aria-label="Today’s cup">
+  <section class="today-cup" aria-label="{{ cup_kicker | default("Today’s cup", true) }}">
     <div>
-      <div class="cup-kicker">Today’s cup</div>
+      <div class="cup-kicker">{{ cup_kicker | default("Today’s cup", true) }}</div>
       <div class="cup-time">≈ {{ overview.reading_minutes }} minute digest</div>
       <div class="cup-label">{{ overview.selected }} carefully selected entries</div>
     </div>
@@ -1524,7 +1524,7 @@
     });
     syncAllChip(state);
 
-    document.querySelectorAll(".section-block").forEach((sectionEl) => {
+    document.querySelectorAll(".section-block:not(.empty-section)").forEach((sectionEl) => {
       const hasVisibleItem = Array.from(sectionEl.querySelectorAll(".item")).some((itemEl) => !itemEl.hidden);
       sectionEl.hidden = !hasVisibleItem;
       if (hasVisibleItem && (state.priorityOnly || state.unreadOnly || state.activeSourceTypes.size > 0)) {

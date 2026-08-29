@@ -1862,6 +1862,45 @@ def test_load_today_hides_disabled_sections_unless_rendering_archive(
     ]
 
 
+def test_load_today_keeps_an_archived_slate_when_a_later_brew_reuses_an_item(
+    tmp_path, monkeypatch
+):
+    """History comes from digest_items, not the mutable ItemRow back-pointer."""
+    from dailydigest import config as config_mod
+    from dailydigest import store as store_mod
+    from dailydigest import web
+
+    monkeypatch.setenv("DB_PATH", str(tmp_path / "digest.db"))
+    config_mod.reload_settings()
+    store_mod.SETTINGS = config_mod.SETTINGS
+    store_mod._ENGINE = None
+    store_mod._SessionLocal = None
+    store_mod._INITIALIZED = False
+
+    store_mod.init_db()
+    with store_mod.session_scope() as s:
+        row = store_mod.ItemRow(
+            source="Nature",
+            section="research",
+            external_id="reused-entry",
+            url="https://example.com/reused",
+            title="Reused entry",
+        )
+        s.add(row)
+        s.flush()
+        item_id = int(row.id)
+
+    store_mod.write_digest("2026-05-13", [("R1", item_id, 0.71)])
+    store_mod.write_digest("2026-05-14", [("R4", item_id, 0.42)])
+
+    archived, _current_vote = web._load_today("2026-05-13")
+
+    entries = [entry for section in archived for entry in section["entries"]]
+    assert [entry["title"] for entry in entries] == ["Reused entry"]
+    assert entries[0]["label"] == "R1"
+    assert entries[0]["score_raw"] == pytest.approx(0.71)
+
+
 def test_setup_post_rejects_missing_csrf_token(tmp_path, monkeypatch):
     from dailydigest import web
 

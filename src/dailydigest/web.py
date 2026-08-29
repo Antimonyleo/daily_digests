@@ -324,11 +324,29 @@ def _load_today(
     """Return (rendered_sections, current_vote_per_item)."""
     init_db()
     with session_scope() as s:
-        rows = (
-            s.execute(select(ItemRow).where(ItemRow.digest_id == digest_id))
-            .scalars()
-            .all()
-        )
+        slate = s.execute(
+            select(
+                DigestItemRow.item_id,
+                DigestItemRow.item_label,
+                DigestItemRow.score,
+            ).where(DigestItemRow.digest_id == digest_id)
+        ).all()
+        slate_labels = {int(item_id): (label or "") for item_id, label, _ in slate}
+        slate_scores = {
+            int(item_id): score for item_id, _, score in slate if score is not None
+        }
+        if slate_labels:
+            rows = (
+                s.execute(select(ItemRow).where(ItemRow.id.in_(list(slate_labels))))
+                .scalars()
+                .all()
+            )
+        else:
+            rows = (
+                s.execute(select(ItemRow).where(ItemRow.digest_id == digest_id))
+                .scalars()
+                .all()
+            )
         if not rows:
             return [], {}
 
@@ -368,10 +386,16 @@ def _load_today(
             except Exception:  # noqa: BLE001
                 pass
 
+        def _slate_label(row: ItemRow) -> str:
+            return slate_labels.get(int(row.id), row.item_label or "")
+
+        def _slate_score(row: ItemRow) -> float:
+            return float(slate_scores.get(int(row.id), row.score or 0.0) or 0.0)
+
         rows.sort(
             key=lambda r: (
                 _SECTION_RANK.get(r.section or "", 99),
-                _label_number(r.item_label),
+                _label_number(_slate_label(r)),
             )
         )
 
@@ -382,7 +406,7 @@ def _load_today(
             key = row.section or "other"
             ranking = _breakdown_payload(row, persisted_features.get(int(row.id)))
             confidence_score = _entry_confidence(
-                {"ranking": ranking, "score_raw": float(row.score or 0.0)}
+                {"ranking": ranking, "score_raw": _slate_score(row)}
             )
             reason = reason_line(
                 ranking.get("primary_facet"),
@@ -407,14 +431,14 @@ def _load_today(
             by_section[key].append(
                 {
                     "id": row.id,
-                    "label": row.item_label or "",
+                    "label": _slate_label(row),
                     "title": row.title or "",
                     "url": safe_url(row.url),
                     "source": row.source or "",
                     "published": _format_date(row),
                     "summary": row.summary or "",
                     "summary_fields": _summary_fields(row.summary or ""),
-                    "score_raw": float(row.score or 0.0),
+                    "score_raw": _slate_score(row),
                     "confidence_score": confidence_score,
                     "ranking": ranking,
                     "reason_line": reason,
@@ -1040,7 +1064,11 @@ def index(request: Request, digest_id: str = "") -> Response:
     today_id = _digest_id()
     today_date = date.fromisoformat(today_id)
     recent_brews = []
-    for offset, label in ((0, "Today"), (1, "Yesterday"), (2, "2 days ago")):
+    for offset, label, cup_kicker in (
+        (0, "Today", "Today’s cup"),
+        (1, "Yesterday", "Yesterday’s cup"),
+        (2, "2 days ago", "Cup from 2 days ago"),
+    ):
         brew_date = today_date - timedelta(days=offset)
         brew_id = brew_date.isoformat()
         if not _digest_exists(brew_id):
@@ -1049,6 +1077,7 @@ def index(request: Request, digest_id: str = "") -> Response:
             {
                 "id": brew_id,
                 "label": label,
+                "cup_kicker": cup_kicker,
                 "date_label": brew_date.strftime("%b %d").replace(" 0", " "),
                 "href": "/" if offset == 0 else f"/?digest_id={brew_id}",
             }
@@ -1056,8 +1085,11 @@ def index(request: Request, digest_id: str = "") -> Response:
     available_brew_ids = {str(brew["id"]) for brew in recent_brews}
     if not digest_id or digest_id not in available_brew_ids:
         digest_id = today_id
+    cup_kicker = "Today’s cup"
     for brew in recent_brews:
         brew["active"] = brew["id"] == digest_id
+        if brew["active"]:
+            cup_kicker = str(brew["cup_kicker"])
     tea_notes = daily_tea_deck(date.fromisoformat(digest_id))
     if digest_id == today_id:
         sections, current_vote = _load_today(digest_id)
@@ -1136,6 +1168,7 @@ def index(request: Request, digest_id: str = "") -> Response:
         {
             "digest_id": digest_id,
             "viewing_today": digest_id == today_id,
+            "cup_kicker": cup_kicker,
             "profile_name": _profile_name(),
             "salutation": "Welcome back",
             "recent_brews": recent_brews,

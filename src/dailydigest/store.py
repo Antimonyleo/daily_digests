@@ -377,6 +377,17 @@ _SessionLocal = None
 _SESSION_LOCK = Lock()
 
 
+def _naive_utc(value: datetime) -> datetime:
+    """Normalize a timestamp to naive UTC.
+
+    SQLite drops the offset on write, so timestamps read back are naive UTC
+    while freshly built ones are aware. Comparing the two raises TypeError.
+    """
+    if value.tzinfo is None:
+        return value
+    return value.astimezone(timezone.utc).replace(tzinfo=None)
+
+
 def _engine():
     global _ENGINE
     if _ENGINE is not None:
@@ -1118,18 +1129,19 @@ def exclude_previously_shown(
                     .group_by(OpportunitySnapshotRow.item_id)
                 ).all()
             )
-            repeat_cutoff = (
+            repeat_cutoff = _naive_utc(
                 datetime.now(timezone.utc) - timedelta(days=7)
-            ).date()
+            )
             shown_ids -= {
                 item_id
                 for item_id in opportunity_ids
                 if shown_at.get(item_id) is not None
                 and (
-                    shown_at[item_id].date() <= repeat_cutoff
+                    _naive_utc(shown_at[item_id]) <= repeat_cutoff
                     or (
                         changed_at.get(item_id) is not None
-                        and changed_at[item_id] > shown_at[item_id]
+                        and _naive_utc(changed_at[item_id])
+                        > _naive_utc(shown_at[item_id])
                     )
                 )
             }
