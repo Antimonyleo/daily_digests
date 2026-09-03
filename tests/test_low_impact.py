@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -54,7 +55,7 @@ def test_venue_low_impact_flag_never_relabels_a_preprint_server():
 
     Every preprint server has low OpenAlex mean-citedness by construction
     (bioRxiv ~0.30, under the low-venue threshold), so honoring the enrichment
-    flag for them squeezed preprints into the 15% low-impact quota instead of
+    flag for them squeezed preprints into the low-impact quota instead of
     the 20% preprint budget — while the reader's votes rate bioRxiv above most
     journals they are shown.
     """
@@ -76,6 +77,34 @@ def test_venue_low_impact_flag_never_relabels_a_preprint_server():
     assert source_bucket(hidden) == "published_database"
     hidden.venue_low_impact = True
     assert source_bucket(hidden) == "low_impact_journal"
+
+
+def test_hidden_unknown_pubmed_venue_is_low_impact_without_live_enrichment():
+    row = SimpleNamespace(
+        title="A niche RNA paper",
+        abstract="Primary research with methods and results.",
+        section="research",
+        source="PubMed (your topics)",
+        metadata_json='{"venue":"Journal of Minor Results"}',
+        id=1,
+    )
+
+    assert source_bucket(row) == "low_impact_journal"
+    assert is_low_impact_research(row) is True
+
+
+def test_hidden_top_pubmed_venue_keeps_published_journal_quality():
+    row = SimpleNamespace(
+        title="A major RNA paper",
+        abstract="Primary research with methods and results.",
+        section="research",
+        source="PubMed (your topics)",
+        metadata_json='{"venue":"Nature Biotechnology"}',
+        id=1,
+    )
+
+    assert source_bucket(row) == "published_journal"
+    assert is_low_impact_research(row) is False
 
 
 def test_low_impact_penalized_vs_top_at_equal_relevance():
@@ -138,7 +167,7 @@ def _hq_pool(n: int):
 
 
 def test_low_impact_journals_are_frequency_capped():
-    # Low-impact items score *higher* but must still be capped (int(10*0.15)=1).
+    # Low-impact items score *higher* but must still be capped to one of ten.
     scored = _hq_pool(12)
     scored += [
         (_row(f"Minor paper {i}", f"Journal of Minor Results {i}"), 0.90 - i * 0.005)

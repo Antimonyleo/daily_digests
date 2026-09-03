@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import UTC, datetime, time, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
 
@@ -73,6 +73,29 @@ def test_recent_items_uses_published_at_before_fetched_at(monkeypatch, tmp_path)
     assert "no-pub-new-fetch" in external_ids
     assert "fresh-pub-old-fetch" in external_ids
     assert "future-pub" not in external_ids
+
+
+def test_reingest_backfills_missing_research_metadata(monkeypatch, tmp_path):
+    from dailydigest.models import Item
+
+    store_mod = _reset_store(tmp_path, monkeypatch)
+    original = Item(
+        source="PubMed (your topics)",
+        section="research",
+        external_id="12345",
+        url="https://pubmed.ncbi.nlm.nih.gov/12345/",
+        title="RNA structure prediction",
+    )
+    enriched = original.model_copy(
+        update={"metadata": {"venue": "Journal of Minor Results", "doi": "10.1/x"}}
+    )
+
+    assert store_mod.upsert_items([original]) == 1
+    assert store_mod.upsert_items([enriched]) == 0
+
+    with store_mod.session_scope() as session:
+        row = session.query(store_mod.ItemRow).one()
+        assert row.metadata_json == '{"doi":"10.1/x","venue":"Journal of Minor Results"}'
 
 
 def test_exclude_reviewed_items_removes_saved_feedback(monkeypatch, tmp_path):
@@ -194,55 +217,22 @@ def test_unshown_candidates_are_not_suppressed_as_previously_shown(monkeypatch, 
 
 
 @pytest.mark.parametrize("section", ["opportunities", "events"])
-def test_week_old_opportunity_or_event_resurfaces_but_research_stays_hidden(
+def test_active_opportunity_or_event_is_not_hidden_after_prior_digest(
     monkeypatch, tmp_path, section
 ):
+    """Deadline-bound sections are standing shortlists, not one-day news."""
     store_mod = _reset_store(tmp_path, monkeypatch)
-    opportunity = _add_item(store_mod, f"weekly-{section}", section=section)
-    paper = _add_item(store_mod, "weekly-paper")
-    digest_id = "2026-06-20"
-    store_mod.write_digest(digest_id, [("F1", opportunity), ("R1", paper)])
+    item_id = _add_item(store_mod, f"active-{section}", section=section)
+    store_mod.write_digest("2026-06-20", [("F1", item_id)])
 
-    shown_at = datetime.now(timezone.utc) - timedelta(days=8)
     with store_mod.session_scope() as session:
-        session.get(store_mod.DigestRow, digest_id).created_at = shown_at
-        for row in session.query(store_mod.DigestItemRow).filter_by(digest_id=digest_id):
-            row.created_at = shown_at
         rows = session.query(store_mod.ItemRow).all()
         for row in rows:
             session.expunge(row)
 
     kept = {int(row.id) for row in store_mod.exclude_previously_shown(rows)}
 
-    assert opportunity in kept
-    assert paper not in kept
-
-
-def test_opportunity_stays_hidden_until_a_full_seven_days_elapse(monkeypatch, tmp_path):
-    """The recurrence gate measures elapsed time, not elapsed calendar dates."""
-    store_mod = _reset_store(tmp_path, monkeypatch)
-    opportunity = _add_item(store_mod, "boundary-call", section="opportunities")
-    digest_id = "2026-06-21"
-    store_mod.write_digest(digest_id, [("F1", opportunity)])
-
-    # Same calendar date as the seven-day cutoff, but not yet seven full days.
-    seven_days_ago = datetime.now(timezone.utc) - timedelta(days=7)
-    shown_at = datetime.combine(
-        seven_days_ago.date(), time(23, 59), tzinfo=timezone.utc
-    )
-    with store_mod.session_scope() as session:
-        session.get(store_mod.DigestRow, digest_id).created_at = shown_at
-        for row in session.query(store_mod.DigestItemRow).filter_by(
-            digest_id=digest_id
-        ):
-            row.created_at = shown_at
-        rows = session.query(store_mod.ItemRow).all()
-        for row in rows:
-            session.expunge(row)
-
-    kept = {int(row.id) for row in store_mod.exclude_previously_shown(rows)}
-
-    assert opportunity not in kept
+    assert item_id in kept
 
 
 def test_carryover_items_pin_evaluate_once_and_clear(monkeypatch, tmp_path):

@@ -587,6 +587,87 @@ def test_run_all_persists_summaries_for_web_view(monkeypatch, tmp_path):
     assert audit[0]["after_cross_source_dedupe"] == 1
 
 
+def test_run_all_enriches_only_candidates_that_clear_free_gates(
+    monkeypatch, tmp_path
+):
+    """Optional network enrichment must not run for already-rejected papers."""
+    from dailydigest import pipeline as pipeline_mod
+    from dailydigest import store as store_mod
+    from dailydigest.rank import enrich as enrich_mod
+
+    _reset_store(tmp_path, monkeypatch)
+    with store_mod.session_scope() as session:
+        rows = [
+            store_mod.ItemRow(
+                source="Nature",
+                section="research",
+                external_id=name,
+                url=f"https://example.com/{name}",
+                title=f"Research candidate {name}",
+                abstract="Primary research with methods and results.",
+                published_at=datetime.now(timezone.utc),
+            )
+            for name in ("on-topic", "off-topic")
+        ]
+        session.add_all(rows)
+        session.flush()
+        ids = [int(row.id) for row in rows]
+
+    def recent_items(days=2):
+        del days
+        with store_mod.session_scope() as session:
+            found = [session.get(store_mod.ItemRow, item_id) for item_id in ids]
+            for row in found:
+                session.expunge(row)
+            return found
+
+    def score(items, _profile, _downweight, attribution=None):
+        del attribution
+        scored = [(row, 0.9 if row.external_id == "on-topic" else 0.8) for row in items]
+        features = {
+            int(row.id): {
+                "topic_score": 0.8 if row.external_id == "on-topic" else 0.2,
+                "confidence_score": value,
+                "final_score": value,
+            }
+            for row, value in scored
+        }
+        return scored, features
+
+    enriched_ids: list[int] = []
+
+    def enrich(scored, **_kwargs):
+        enriched_ids.extend(int(row.id) for row, _score in scored)
+        return scored
+
+    monkeypatch.setattr(pipeline_mod, "_digest_id", lambda: "2026-09-02")
+    monkeypatch.setattr(pipeline_mod, "ingest_all", lambda **_kwargs: 0)
+    monkeypatch.setattr(
+        pipeline_mod,
+        "load_profile",
+        lambda: SimpleNamespace(bio="", keywords=[], downweight=[]),
+    )
+    monkeypatch.setattr(
+        pipeline_mod,
+        "build_profile_matrix",
+        lambda _profile: __import__("numpy").zeros((1, 3)),
+    )
+    monkeypatch.setattr(pipeline_mod, "recent_items", recent_items)
+    monkeypatch.setattr(pipeline_mod, "_score_items_for_pipeline", score)
+    monkeypatch.setattr(pipeline_mod, "_build_neg_centroid", None)
+    monkeypatch.setattr(enrich_mod, "enrich_scored", enrich)
+    monkeypatch.setattr(
+        pipeline_mod,
+        "summarize_items",
+        lambda selected, profile=None: {int(row.id): "summary" for row in selected},
+    )
+    monkeypatch.setattr(pipeline_mod, "send_digest", lambda *_args, **_kwargs: False)
+
+    pipeline_mod.run_all(dry_run=True)
+
+    assert enriched_ids == [ids[0]]
+
+
 def test_run_all_gives_carryover_items_one_more_pass_then_consumes(monkeypatch, tmp_path):
     """A saved-for-tomorrow item outside the window re-enters the pool once."""
     from dailydigest import config as config_mod

@@ -1359,11 +1359,31 @@ def run_all(
     except Exception as _e:  # noqa: BLE001
         logger.warning("author match boost failed: %s", _e)
 
+    # Cheap deterministic gates run before optional network enrichment and
+    # within-day dedupe. Neither gate depends on citation data, so enriching
+    # rejected candidates only makes a brew slower without changing its slate.
+    pickable = _filter_actionable_opportunities(scored, opportunity_profile)
+    pickable = _filter_off_topic(pickable, score_features)
+
     # Optional live citation-velocity boost via OpenAlex (no-op unless enabled).
     try:
         from .rank.enrich import enrich_scored
 
-        scored = enrich_scored(scored)
+        pickable = enrich_scored(pickable)
+        enriched_scores = {
+            _row_feature_key(row): float(score) for row, score in pickable
+        }
+        for row, score in pickable:
+            feature = score_features.get(_row_feature_key(row))
+            if feature is not None:
+                feature["final_score"] = round(float(score), 4)
+                feature["confidence_score"] = round(float(score), 4)
+                feature["source_bucket"] = source_bucket(row)
+        scored = [
+            (row, enriched_scores.get(_row_feature_key(row), float(score)))
+            for row, score in scored
+        ]
+        scored.sort(key=lambda pair: pair[1], reverse=True)
     except Exception as _e:  # noqa: BLE001
         logger.warning("citation enrichment failed: %s", _e)
 
@@ -1387,7 +1407,7 @@ def run_all(
             )
             _wd_rows = [
                 row
-                for row, _ in scored
+                for row, _ in pickable
                 if (getattr(row, "section", "") or "") == "research"
             ]
             if len(_wd_rows) > 1:
@@ -1417,10 +1437,6 @@ def run_all(
     # Note: do NOT pre-truncate `scored` to a global top-K before per-section picking;
     # a single-domain profile (e.g. biotech-heavy) starves industry/regulatory/world.
     # `pick_top_per_section` already caps per-section, so summary cost is bounded.
-    # Hard-gate off-topic research/industry first so prestige can't fill a slot an
-    # item's topic relevance never earned, then size + pick from what remains.
-    pickable = _filter_actionable_opportunities(scored, opportunity_profile)
-    pickable = _filter_off_topic(pickable, score_features)
     # Apply the within-day near-dup decision to the selection candidates only.
     if _wd_drop_research_ids:
         pickable = [

@@ -9,7 +9,7 @@ from jinja2 import Environment, FileSystemLoader
 
 from .config import get_settings
 from .opportunities import load_opportunity_profile, opportunity_display
-from .rank.source_quality import display_breakdown, source_bucket
+from .rank.source_quality import display_breakdown, display_source, source_bucket
 from .store import ItemRow, item_metadata, load_digest_features
 
 _PACKAGE_TEMPLATE_DIR = Path(__file__).resolve().parent / "templates"
@@ -162,6 +162,7 @@ def render_digest(
         meta = SECTION_META.get(key, {"title": key.title(), "emoji": ""})
         rendered_items = []
         for row, score, summary in items:
+            source = display_source(row)
             features = persisted_features.get(int(row.id)) if row.id is not None else None
             features = features or {}
             # content_type / quality signals: prefer persisted, else recompute.
@@ -181,7 +182,7 @@ def render_digest(
             reason = reason_line(
                 features.get("primary_facet"),
                 high_profile=_is_high_profile(bucket, tags),
-                journal=row.source or "",
+                journal=source,
                 why_shown=why,
                 tags=tags,
             )
@@ -190,7 +191,7 @@ def render_digest(
                     "label": row.item_label or "",
                     "title": row.title or "",
                     "url": safe_url(row.url),
-                    "source": row.source or "",
+                    "source": source,
                     "published": _format_date(row),
                     "summary": summary or "",
                     "score": score,

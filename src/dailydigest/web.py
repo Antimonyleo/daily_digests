@@ -79,7 +79,7 @@ from .opportunities import (
 )
 from .pipeline import _digest_id, normalize_reading_mode, run_all
 from .rank.embed import release_encoder
-from .rank.source_quality import display_breakdown, source_bucket
+from .rank.source_quality import display_breakdown, display_source, source_bucket
 from .store import (
     DigestItemRow,
     DigestRow,
@@ -413,6 +413,7 @@ def _load_today(
         by_section: dict[str, list[dict]] = {}
         for row in rows:
             key = row.section or "other"
+            source = display_source(row)
             ranking = _breakdown_payload(row, persisted_features.get(int(row.id)))
             confidence_score = _entry_confidence(
                 {"ranking": ranking, "score_raw": _slate_score(row)}
@@ -422,7 +423,7 @@ def _load_today(
                 high_profile=_is_high_profile(
                     ranking.get("source_bucket"), ranking.get("tags") or []
                 ),
-                journal=row.source or "",
+                journal=source,
                 why_shown=ranking.get("why_shown") or [],
                 tags=ranking.get("tags") or [],
             )
@@ -443,7 +444,7 @@ def _load_today(
                     "label": _slate_label(row),
                     "title": row.title or "",
                     "url": safe_url(row.url),
-                    "source": row.source or "",
+                    "source": source,
                     "published": _format_date(row),
                     "summary": row.summary or "",
                     "summary_fields": _summary_fields(row.summary or ""),
@@ -488,6 +489,21 @@ def _digest_exists(digest_id: str) -> bool:
     init_db()
     with session_scope() as s:
         return s.get(DigestRow, digest_id) is not None
+
+
+def _recent_digest_ids(today_id: str, limit: int = 3) -> list[str]:
+    """Return the latest actual brews, so calendar gaps do not hide history."""
+    init_db()
+    with session_scope() as session:
+        return [
+            str(value)
+            for value in session.execute(
+                select(DigestRow.id)
+                .where(DigestRow.id <= today_id)
+                .order_by(DigestRow.id.desc())
+                .limit(max(1, min(int(limit), 30)))
+            ).scalars()
+        ]
 
 
 def _as_int(value: object) -> int | None:
@@ -1073,15 +1089,18 @@ def index(request: Request, digest_id: str = "") -> Response:
     today_id = _digest_id()
     today_date = date.fromisoformat(today_id)
     recent_brews = []
-    for offset, label, cup_kicker in (
-        (0, "Today", "Today’s cup"),
-        (1, "Yesterday", "Yesterday’s cup"),
-        (2, "2 days ago", "Cup from 2 days ago"),
-    ):
-        brew_date = today_date - timedelta(days=offset)
-        brew_id = brew_date.isoformat()
-        if not _digest_exists(brew_id):
+    for brew_id in _recent_digest_ids(today_id, limit=3):
+        try:
+            brew_date = date.fromisoformat(brew_id)
+        except ValueError:
             continue
+        offset = (today_date - brew_date).days
+        if offset == 0:
+            label, cup_kicker = "Today", "Today’s cup"
+        elif offset == 1:
+            label, cup_kicker = "Yesterday", "Yesterday’s cup"
+        else:
+            label, cup_kicker = f"{offset} days ago", f"Cup from {offset} days ago"
         recent_brews.append(
             {
                 "id": brew_id,

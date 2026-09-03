@@ -56,6 +56,13 @@ def test_derive_doi_from_url():
     assert derive_doi(row) == "10.1038/s41586-024-12345-6"
 
 
+def test_derive_doi_from_persisted_metadata():
+    row = _item("A", "https://pubmed.ncbi.nlm.nih.gov/12345/")
+    row.metadata_json = '{"doi":"10.1234/rna.1"}'
+
+    assert derive_doi(row) == "10.1234/rna.1"
+
+
 def test_derive_doi_none_when_absent():
     assert derive_doi(_item("A", "https://www.nature.com/articles/xyz")) is None
 

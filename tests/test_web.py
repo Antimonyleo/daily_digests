@@ -903,6 +903,11 @@ def test_index_can_render_a_retained_digest(tmp_path, monkeypatch):
     monkeypatch.setattr(web, "_get_profile_path", lambda: profile_path)
     monkeypatch.setattr(web, "_digest_id", lambda: "2026-05-05")
     monkeypatch.setattr(web, "_digest_exists", lambda value: value == "2026-05-04")
+    monkeypatch.setattr(
+        web,
+        "_recent_digest_ids",
+        lambda _today_id, limit=3: ["2026-05-04"],
+    )
     _stub_index_dependencies(web, monkeypatch)
     loaded: list[tuple[str, bool]] = []
 
@@ -935,6 +940,11 @@ def test_index_renders_time_machine_for_available_recent_brews(
     monkeypatch.setattr(web, "_get_profile_path", lambda: profile_path)
     monkeypatch.setattr(web, "_digest_id", lambda: "2026-05-05")
     monkeypatch.setattr(web, "_digest_exists", lambda value: value in available)
+    monkeypatch.setattr(
+        web,
+        "_recent_digest_ids",
+        lambda _today_id, limit=3: ["2026-05-05", "2026-05-04"],
+    )
     _stub_index_dependencies(web, monkeypatch)
     monkeypatch.setattr(web, "_load_today", lambda _value, **_kwargs: ([], {}))
 
@@ -951,6 +961,32 @@ def test_index_renders_time_machine_for_available_recent_brews(
     assert "2026-05-03" not in page
 
 
+def test_index_time_machine_uses_latest_actual_brews_across_gaps(
+    tmp_path, monkeypatch
+):
+    from dailydigest import web
+
+    profile_path = tmp_path / "profile.yaml"
+    profile_path.write_text("name: Ada\nbio: Researcher.\nkeywords: []\ndownweight: []\n")
+    monkeypatch.setattr(web, "_get_profile_path", lambda: profile_path)
+    monkeypatch.setattr(web, "_digest_id", lambda: "2026-05-05")
+    monkeypatch.setattr(
+        web,
+        "_recent_digest_ids",
+        lambda _today_id, limit=3: ["2026-05-05", "2026-05-03", "2026-05-01"],
+    )
+    monkeypatch.setattr(web, "_digest_exists", lambda _value: True)
+    _stub_index_dependencies(web, monkeypatch)
+    monkeypatch.setattr(web, "_load_today", lambda _value, **_kwargs: ([], {}))
+
+    page = _text_payload(web.index(_request("GET", "/")))
+
+    assert 'href="/?digest_id=2026-05-03"' in page
+    assert 'href="/?digest_id=2026-05-01"' in page
+    assert ">2 days ago<" in page
+    assert ">4 days ago<" in page
+
+
 def test_index_falls_back_to_today_outside_the_time_machine_window(
     tmp_path, monkeypatch
 ):
@@ -963,6 +999,11 @@ def test_index_falls_back_to_today_outside_the_time_machine_window(
     monkeypatch.setattr(web, "_get_profile_path", lambda: profile_path)
     monkeypatch.setattr(web, "_digest_id", lambda: "2026-05-05")
     monkeypatch.setattr(web, "_digest_exists", lambda value: value in available)
+    monkeypatch.setattr(
+        web,
+        "_recent_digest_ids",
+        lambda _today_id, limit=3: ["2026-05-05"],
+    )
     _stub_index_dependencies(web, monkeypatch)
 
     def _load_digest(digest_id: str, **_kwargs):

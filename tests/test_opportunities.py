@@ -134,36 +134,8 @@ def test_opportunity_metadata_updates_and_keeps_immutable_change_history():
     assert refreshed.summary_backend is None
 
 
-def test_material_change_can_resurface_a_previously_shown_opportunity():
-    from dailydigest.store import (
-        exclude_previously_shown,
-        recent_items,
-        upsert_items,
-        write_digest,
-    )
-
-    item = Item(
-        source="Grants.gov",
-        section="opportunities",
-        external_id="CHANGED-1",
-        url="https://grants.gov/opportunity/changed",
-        title="RNA research opportunity",
-        abstract="Support for RNA research and technology development.",
-        metadata={"status": "open", "deadline": "2026-10-01", "official": True},
-    )
-    upsert_items([item])
-    row = next(r for r in recent_items(days=2) if r.external_id == "CHANGED-1")
-    write_digest("2026-08-10", [("F1", int(row.id), 0.9)])
-    assert exclude_previously_shown([row]) == []
-
-    changed = item.model_copy(update={"metadata": {**item.metadata, "deadline": "2026-10-15"}})
-    upsert_items([changed])
-    refreshed = next(r for r in recent_items(days=2) if r.external_id == "CHANGED-1")
-    assert exclude_previously_shown([refreshed]) == [refreshed]
-
-
-def test_known_flag_beats_the_material_change_resurface():
-    """A manual "I know this" retires a call even when its details keep changing."""
+def test_known_flag_retires_an_active_standing_opportunity():
+    """A manual "I know this" wins over the standing-shortlist policy."""
     from dailydigest.store import (
         exclude_known_items,
         exclude_previously_shown,
@@ -185,17 +157,11 @@ def test_known_flag_beats_the_material_change_resurface():
     upsert_items([item])
     row = next(r for r in recent_items(days=2) if r.external_id == "KNOWN-1")
     write_digest("2026-08-11", [("F1", int(row.id), 0.9)])
+    assert exclude_previously_shown([row]) == [row]
+
     set_item_known(int(row.id), True)
 
-    changed = item.model_copy(
-        update={"metadata": {**item.metadata, "deadline": "2026-10-20"}}
-    )
-    upsert_items([changed])
-    refreshed = next(r for r in recent_items(days=2) if r.external_id == "KNOWN-1")
-    # The change alone would bring it back...
-    assert exclude_previously_shown([refreshed]) == [refreshed]
-    # ...but the manual flag is final.
-    assert exclude_known_items(exclude_previously_shown([refreshed])) == []
+    assert exclude_known_items(exclude_previously_shown([row])) == []
 
 
 def test_assessment_filters_ineligible_closed_and_too_soon_items():

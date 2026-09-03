@@ -84,7 +84,7 @@ class Settings(BaseSettings):
     adaptive_relevance_floor: bool = True
     # Max fraction of the research section that may be filled by low-impact-venue
     # items, so they cannot appear frequently even when many are related.
-    max_low_impact_research_frac: float = Field(default=0.15, ge=0.0, le=1.0)
+    max_low_impact_research_frac: float = Field(default=0.10, ge=0.0, le=1.0)
     # Share of research slots preprints may hold. Selection runs AFTER ranking on
     # one combined list, so this ceiling is the only thing that can drop a
     # high-ranked preprint in favour of a lower-ranked journal. It was an

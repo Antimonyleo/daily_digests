@@ -339,6 +339,10 @@
   async function startBrew() {
     if (brewButton.disabled) return;
     const readingMode = new FormData(form).get("reading_mode") || "usual";
+    if (AUTOSTART) {
+      const cleanUrl = `/run?reading_mode=${encodeURIComponent(readingMode)}`;
+      window.history.replaceState(null, "", cleanUrl);
+    }
     brewButton.disabled = true;
     choicePanel.hidden = true;
     progressPanel.hidden = false;

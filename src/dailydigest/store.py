@@ -1031,11 +1031,11 @@ def exclude_previously_shown(
 
     We now suppress on membership in ANY current digest or a viewed, selected
     browser impression within ``days_lookback`` (matching the 30-day item
-    retention). Funding calls and events are the exception: unchanged records
-    may return after seven days because their application window outlives a
-    daily paper's novelty. The append-only impression history matters after a
-    same-day rebrew replaces ``digest_items``. ``exclude_digest_id`` keeps
-    re-brewing the *current* day from hiding items already shown that day.
+    retention). Funding calls and events are standing, deadline-bound shortlists:
+    prior display alone never hides an otherwise active call. Their actionability,
+    topic, explicit feedback, and ``known`` gates still run on every brew.
+    ``exclude_digest_id`` keeps re-brewing the current day from hiding items
+    already shown that day.
     """
     ids = [int(r.id) for r in rows if r.id is not None]
     if not ids:
@@ -1066,85 +1066,13 @@ def exclude_previously_shown(
         shown_ids.update(
             int(item_id) for item_id in s.execute(impression_stmt).scalars()
         )
-        opportunity_ids = {
+        deadline_ids = {
             int(row.id)
             for row in rows
             if row.id is not None
             and (row.section or "") in {"opportunities", "events"}
-            and int(row.id) in shown_ids
         }
-        if opportunity_ids:
-            digest_shown_stmt = (
-                select(DigestItemRow.item_id, func.max(DigestItemRow.created_at))
-                .join(DigestRow, DigestRow.id == DigestItemRow.digest_id)
-                .where(
-                    DigestItemRow.item_id.in_(opportunity_ids),
-                    DigestRow.created_at >= cutoff,
-                )
-                .group_by(DigestItemRow.item_id)
-            )
-            impression_shown_stmt = (
-                select(ImpressionRow.item_id, func.max(ImpressionRow.created_at))
-                .where(
-                    ImpressionRow.item_id.in_(opportunity_ids),
-                    ImpressionRow.created_at >= cutoff,
-                    ImpressionRow.selected.is_(True),
-                    ImpressionRow.viewed.is_(True),
-                )
-                .group_by(ImpressionRow.item_id)
-            )
-            if exclude_digest_id is not None:
-                digest_shown_stmt = digest_shown_stmt.where(
-                    DigestItemRow.digest_id != exclude_digest_id
-                )
-                impression_shown_stmt = impression_shown_stmt.where(
-                    ImpressionRow.digest_id != exclude_digest_id
-                )
-            digest_shown_at = dict(
-                s.execute(digest_shown_stmt).all()
-            )
-            impression_shown_at = dict(
-                s.execute(impression_shown_stmt).all()
-            )
-            shown_at = {
-                item_id: max(
-                    timestamp
-                    for timestamp in (
-                        digest_shown_at.get(item_id),
-                        impression_shown_at.get(item_id),
-                    )
-                    if timestamp is not None
-                )
-                for item_id in opportunity_ids
-                if digest_shown_at.get(item_id) is not None
-                or impression_shown_at.get(item_id) is not None
-            }
-            changed_at = dict(
-                s.execute(
-                    select(
-                        OpportunitySnapshotRow.item_id,
-                        func.max(OpportunitySnapshotRow.observed_at),
-                    )
-                    .where(OpportunitySnapshotRow.item_id.in_(opportunity_ids))
-                    .group_by(OpportunitySnapshotRow.item_id)
-                ).all()
-            )
-            repeat_cutoff = _naive_utc(
-                datetime.now(timezone.utc) - timedelta(days=7)
-            )
-            shown_ids -= {
-                item_id
-                for item_id in opportunity_ids
-                if shown_at.get(item_id) is not None
-                and (
-                    _naive_utc(shown_at[item_id]) <= repeat_cutoff
-                    or (
-                        changed_at.get(item_id) is not None
-                        and _naive_utc(changed_at[item_id])
-                        > _naive_utc(shown_at[item_id])
-                    )
-                )
-            }
+        shown_ids -= deadline_ids
     if not shown_ids:
         return rows
     return [r for r in rows if r.id is None or int(r.id) not in shown_ids]

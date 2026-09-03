@@ -295,6 +295,11 @@ class OpenAlexSource:
                         abstract=abstract,
                         authors=authors,
                         published_at=pub,
+                        metadata={
+                            key: value
+                            for key, value in (("venue", venue), ("doi", bare_doi))
+                            if value
+                        },
                     )
                 )
 

@@ -14,6 +14,7 @@ unit-testable offline, and any fetch failure degrades to a no-op.
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 import re
@@ -76,6 +77,18 @@ def derive_doi(row: object) -> str | None:
             m = _DOI_RE.search(value)
             if m:
                 return m.group(0).rstrip(").").lower()
+    metadata = getattr(row, "metadata", None)
+    if not isinstance(metadata, dict):
+        raw = getattr(row, "metadata_json", "")
+        try:
+            metadata = json.loads(raw) if isinstance(raw, str) and raw else {}
+        except (TypeError, json.JSONDecodeError):
+            metadata = {}
+    value = metadata.get("doi") if isinstance(metadata, dict) else None
+    if isinstance(value, str):
+        match = _DOI_RE.search(value)
+        if match:
+            return match.group(0).rstrip(").").lower()
     return None
 
 
