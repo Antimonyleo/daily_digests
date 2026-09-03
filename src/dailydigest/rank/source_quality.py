@@ -633,7 +633,7 @@ def source_bucket(row: Any) -> str:
     # two — only the explicit source match can).
     if getattr(row, "venue_low_impact", False) is True:
         return "low_impact_journal"
-    if getattr(row, "venue_quality_verified", False) is True:
+    if getattr(row, "venue_high_impact", False) is True:
         return "published_journal"
 
     if is_aggregator and not venue:

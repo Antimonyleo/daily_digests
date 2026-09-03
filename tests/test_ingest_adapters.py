@@ -478,6 +478,47 @@ def test_pubmed_preserves_journal_and_doi_metadata():
     }
 
 
+def test_pubmed_never_takes_a_doi_from_the_reference_list():
+    from defusedxml.ElementTree import fromstring
+
+    from dailydigest.ingest.pubmed import PubMedSource
+
+    article = fromstring(
+        """
+        <PubmedArticle>
+          <MedlineCitation>
+            <PMID>12347</PMID>
+            <Article>
+              <ArticleTitle>RNA folding kinetics</ArticleTitle>
+              <Journal><Title>Journal of Minor Results</Title></Journal>
+            </Article>
+          </MedlineCitation>
+          <PubmedData>
+            <ArticleIdList>
+              <ArticleId IdType="pubmed">12347</ArticleId>
+              <ArticleId IdType="pii">S0000-0000(26)00001-2</ArticleId>
+            </ArticleIdList>
+            <ReferenceList>
+              <Reference>
+                <Citation>Cited paper. Nature. 2024.</Citation>
+                <ArticleIdList>
+                  <ArticleId IdType="doi">10.1038/cited-paper</ArticleId>
+                </ArticleIdList>
+              </Reference>
+            </ReferenceList>
+          </PubmedData>
+        </PubmedArticle>
+        """
+    )
+
+    item = PubMedSource()._parse_article(
+        article, _spec(name="PubMed (your topics)", kind="pubmed")
+    )
+
+    assert item is not None
+    assert item.metadata == {"venue": "Journal of Minor Results"}
+
+
 def test_pubmed_reads_doi_from_elocation_when_article_id_is_absent():
     from defusedxml.ElementTree import fromstring
 

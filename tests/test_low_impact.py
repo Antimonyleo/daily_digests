@@ -51,6 +51,14 @@ def test_venue_low_impact_flag_overrides_aggregator_bucket():
     assert is_low_impact_research(row) is True
 
 
+def test_venue_high_impact_flag_promotes_an_unlisted_journal():
+    row = _row("A targeted therapeutics study", "Journal of Minor Results")
+    assert source_bucket(row) == "low_impact_journal"
+    row.venue_high_impact = True
+    assert source_bucket(row) == "published_journal"
+    assert is_low_impact_research(row) is False
+
+
 def test_venue_low_impact_flag_never_relabels_a_preprint_server():
     """A preprint is unpublished, not trivial.
 

@@ -150,7 +150,7 @@ class PubMedSource:
 
         venue = (art.findtext(".//Journal/Title") or "").strip()
         doi = ""
-        for article_id in art.findall(".//ArticleId"):
+        for article_id in art.findall("./PubmedData/ArticleIdList/ArticleId"):
             if str(article_id.attrib.get("IdType") or "").lower() == "doi":
                 doi = (article_id.text or "").strip().lower()
                 if doi:

@@ -345,9 +345,9 @@
   async function startBrew() {
     if (brewButton.disabled) return;
     const readingMode = new FormData(form).get("reading_mode") || "usual";
-    if (AUTOSTART) {
-      window.history.replaceState(null, "", RESUME_URL);
-    }
+    const resumeUrl = new URL(RESUME_URL, window.location.href);
+    resumeUrl.searchParams.set("reading_mode", readingMode);
+    window.history.replaceState(null, "", resumeUrl.pathname + resumeUrl.search);
     brewButton.disabled = true;
     choicePanel.hidden = true;
     progressPanel.hidden = false;

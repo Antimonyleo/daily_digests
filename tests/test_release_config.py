@@ -3,6 +3,9 @@ import tomllib
 from pathlib import Path
 
 import yaml
+from dotenv import dotenv_values
+
+from dailydigest.config import Settings
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -43,10 +46,15 @@ def test_dockerfile_pins_uv_image_version():
 
 
 def test_example_config_keeps_live_citation_enrichment_opt_in():
-    example_env = (ROOT / ".env.example").read_text()
+    example = dotenv_values(ROOT / ".env.example")
+    fields = Settings.model_fields
 
-    assert "CITATION_ENRICHMENT=false" in example_env
-    assert "LOW_IMPACT_RELEVANCE_FLOOR=0.72" in example_env
+    assert str(example["CITATION_ENRICHMENT"]).lower() == "false"
+    assert fields["citation_enrichment"].default is False
+    assert (
+        float(example["LOW_IMPACT_RELEVANCE_FLOOR"])
+        == fields["low_impact_relevance_floor"].default
+    )
 
 
 def test_example_profile_respects_ten_core_topic_limit():

@@ -37,6 +37,12 @@ _VENUE_SCALE = 8.0
 # routes it into the low_impact_journal bucket (frequency-capped). 0.4 ~
 # 2yr_mean_citedness of ~1.4 — roughly a low-impact-factor journal.
 _LOW_VENUE_QUALITY = 0.4
+# Venue-quality score at or above this marks the item's venue as a verified
+# high-impact journal, exempting it from the low-impact gate even when its name
+# is not on the curated venue lists. 0.85 ~ 2yr_mean_citedness of ~5.5, above
+# the mega-journal band (PLOS ONE ~3, Scientific Reports ~4, most MDPI/Frontiers
+# titles ~4-5) that the curated lists deliberately leave under the cap.
+_HIGH_VENUE_QUALITY = 0.85
 _OPENALEX_URL = "https://api.openalex.org/works"
 _OPENALEX_SOURCES_URL = "https://api.openalex.org/sources"
 
@@ -360,10 +366,10 @@ def enrich_scored(
                 # Flag genuinely low-impact venues so the selection-stage
                 # frequency cap treats them as low_impact_journal even though
                 # their configured source (e.g. OpenAlex) hides the real venue.
-                # Transient markers let the selection policy distinguish a
-                # verified journal from an unknown aggregator.
-                row.venue_quality_verified = True
+                # Only a materially high verified impact lifts an unlisted venue
+                # out of that gate; the middle band keeps the name-based policy.
                 row.venue_low_impact = vq < _LOW_VENUE_QUALITY
+                row.venue_high_impact = vq >= _HIGH_VENUE_QUALITY
             score = max(0.0, min(1.0, score))
         boosted.append((row, score))
     boosted.sort(key=lambda t: t[1], reverse=True)
