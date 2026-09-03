@@ -86,6 +86,28 @@ def _current_lr_schema() -> tuple[str, int]:
     return LR_FEATURE_SCHEMA_VERSION, LR_FEATURE_DIM
 
 
+def test_quality_adjustments_clip_after_freshness_bonus(monkeypatch):
+    """Every persisted confidence remains on the documented [0, 1] scale."""
+    from dailydigest.rank import ranker as ranker_mod
+
+    row = _make_selectable_row("Fresh high-confidence paper")
+    monkeypatch.setattr(ranker_mod, "quality_adjusted_score", lambda _row, _base: 1.0)
+    monkeypatch.setattr(ranker_mod, "_freshness_penalty", lambda _row: -0.05)
+
+    scores, features = _apply_quality_adjustments_with_features(
+        [row],
+        np.asarray([1.0], dtype=np.float32),
+        [],
+        learned_scores=np.asarray([0.5], dtype=np.float32),
+        hybrid_scores=np.asarray([1.0], dtype=np.float32),
+        scoring_mode="cosine",
+    )
+
+    assert scores == [1.0]
+    assert features[id(row)]["final_score"] == 1.0
+    assert features[id(row)]["confidence_score"] == 1.0
+
+
 # ---------------------------------------------------------------------------
 # downweight via _cosine_score_items
 # ---------------------------------------------------------------------------

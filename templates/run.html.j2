@@ -303,7 +303,13 @@
         setProgress(stage, `Contacting ${payload.sources || "?"} sources`);
         markActive("ingest");
       } else if (stage === "ingest_done") {
-        annotateText("ingest", `Fetched ${payload.raw_items || 0} items from ${payload.sources || "?"} sources.`);
+        const emptyDeadlineSections = (payload.empty_deadline_sections || []).map(
+          (section) => section === "opportunities" ? "funding" : section
+        );
+        const emptyNote = emptyDeadlineSections.length
+          ? ` No qualifying ${emptyDeadlineSections.join(" or ")} records today.`
+          : "";
+        annotateText("ingest", `Fetched ${payload.raw_items || 0} items from ${payload.sources || "?"} sources.${emptyNote}`);
         setProgress(stage, `Fetched ${payload.raw_items || 0} raw items`);
       } else if (stage === "dedupe_done") {
         annotateText("dedupe", `Deduplicated to ${payload.english || payload.deduped || 0} items.`);

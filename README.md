@@ -283,11 +283,11 @@ votes, database, and settings as the browser app.
   preprint, and journal channels mean one failed feed normally does not stop a
   brew.
 - **No funding or events appear:** confirm the section is enabled and complete
-  its profile in Settings. A zero-result section means no official record passed
-  status, deadline, eligibility, and topic checks; DailyDigest does not pad it
-  with unrelated or closed calls. If every configured provider for an enabled
-  funding or events section fails, the brew stops and keeps the existing digest
-  rather than serving a partial slate.
+  its profile in Settings. A successful zero-result scan is reported separately
+  from a provider failure: it means no official record passed status, deadline,
+  eligibility, and topic checks. DailyDigest does not pad it with unrelated or
+  closed calls. If every configured provider for an enabled funding or events
+  section fails, the brew stops and keeps the existing digest.
 - **An API key does not work:** a chat subscription is not necessarily API
   access. Use Extractive mode while checking the provider's API account.
 

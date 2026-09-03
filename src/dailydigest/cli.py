@@ -1,4 +1,4 @@
-"""Typer CLI entry point: dd ingest|rank|send|run-all|prune."""
+"""Typer CLI entry point for brewing, serving, feedback, and maintenance."""
 
 from __future__ import annotations
 
@@ -149,7 +149,9 @@ def run_all_cmd(
     dry_run: bool = typer.Option(False, "--dry-run", help="Render to disk; do not email."),
     gate: bool = typer.Option(False, "--gate", help="Only run if local hour matches DIGEST_HOUR."),
     backfill: int = typer.Option(
-        0, "--backfill", help="Look back this many days when ranking (0 = use default of 2)."
+        0,
+        "--backfill",
+        help="Look back this many days when ranking (0 = choose automatically).",
     ),
 ) -> None:
     """Full pipeline with optional dry-run / time-gate / backfill."""

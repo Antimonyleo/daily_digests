@@ -594,7 +594,7 @@ def _apply_quality_adjustments_with_features(
         # cannot change low-impact eligibility or the final-score cutoff.
         attr = facet_attr[idx] if facet_attr is not None and idx < len(facet_attr) else None
         priority_bonus = float(getattr(attr, "priority_bonus", 0.0)) if attr is not None else 0.0
-        score_float = float(score)
+        score_float = max(0.0, min(1.0, float(score)))
         result.append(score_float)
         features[_row_feature_key(row)] = _feature_payload(
             row,
@@ -832,6 +832,7 @@ def pick_top_per_section(
     scored: list[tuple[ItemRow, float]],
     caps: dict[str, int],
     catch_up: bool = False,
+    score_features: ScoreFeatureMap | None = None,
 ) -> list[tuple[ItemRow, float]]:
     """Take up to caps[section] while protecting research source diversity.
 
@@ -840,7 +841,8 @@ def pick_top_per_section(
     they cannot consume most of the research section when high-quality journal
     articles are available. ``catch_up`` relaxes that balance so a post-gap
     backlog (which the date-backfilling preprint/aggregator sources dominate)
-    can fill the expanded section.
+    can fill the expanded section. When feature snapshots are available, the
+    low-impact gate uses their raw topic score rather than the fused rank.
     """
     out: list[tuple[ItemRow, float]] = []
     for section, cap in caps.items():
@@ -848,7 +850,14 @@ def pick_top_per_section(
             continue
         section_scored = [(row, score) for row, score in scored if (row.section or "") == section]
         if section == "research":
-            out.extend(_pick_research_balanced(section_scored, cap, catch_up=catch_up))
+            out.extend(
+                _pick_research_balanced(
+                    section_scored,
+                    cap,
+                    catch_up=catch_up,
+                    score_features=score_features,
+                )
+            )
         else:
             out.extend(_pick_news_balanced(section_scored, cap))
     out.sort(key=lambda t: t[1], reverse=True)
@@ -859,6 +868,7 @@ def _pick_research_balanced(
     scored: list[tuple[ItemRow, float]],
     cap: int,
     catch_up: bool = False,
+    score_features: ScoreFeatureMap | None = None,
 ) -> list[tuple[ItemRow, float]]:
     if not scored or cap <= 0:
         return []
@@ -895,7 +905,9 @@ def _pick_research_balanced(
         _low_impact_frac = float(_s.max_low_impact_research_frac)
         max_low_impact = int(cap * _low_impact_frac) if _low_impact_frac > 0 else 0
         low_impact_floor = float(_s.low_impact_relevance_floor)
-        if getattr(_s, "adaptive_relevance_floor", False):
+        # The calibrator is trained on final scores, so it is valid only for
+        # legacy callers that do not provide raw topic snapshots.
+        if score_features is None and getattr(_s, "adaptive_relevance_floor", False):
             from .calibrate import adaptive_relevance_floor as _adaptive_floor
 
             low_impact_floor = _adaptive_floor(low_impact_floor)
@@ -922,7 +934,9 @@ def _pick_research_balanced(
         if is_low_impact_research(row):
             # The frequency cap and relevance floor remain hard quality gates,
             # including during last-resort filling.
-            if float(score) < low_impact_floor:
+            feature = (score_features or {}).get(_row_feature_key(row), {})
+            topic_score = feature.get("topic_score", score)
+            if float(topic_score) < low_impact_floor:
                 return False
             if bucket_counts.get("low_impact_journal", 0) >= max_low_impact:
                 return False

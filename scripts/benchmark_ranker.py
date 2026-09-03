@@ -14,15 +14,16 @@ DIFFERENT things:
      ranking via RRF (see ``dailydigest.rank.ranker``). Treat this as a feature
      sanity probe, not a benchmark of what ships.
 
-  B. PRODUCTION-FAITHFUL EVALUATION (``run_production_benchmark``)
-     Mirrors deployment. It computes the graded kNN preference score for the
+  B. DEPLOYED-SCORER PROBE (``run_production_benchmark``)
+     Mirrors the deployed preference fusion, not the full serving pipeline. It
+     computes the graded kNN preference score for the
      held-out TEST research items from TRAIN-only vote exemplars
      (``votes._knn_scores``), then ranks them by RRF-fusing that with the
      topic-cosine ranking (``ranker._fuse_scores``) — exactly as
-     ``score_items_lr`` serves. The retired pairwise-LR fusion is reported as a
+     ``score_items_lr`` uses. The retired pairwise-LR fusion is reported as a
      comparison line. It reports pairwise accuracy AND nDCG@10 for BOTH the
      deployed-style fused ranker and the topic-only baseline. THIS is the
-     deployable-ranker signal:
+     preference-fusion signal:
      "does the shipped-style ranker beat topic-only on held-out votes?"
 
 Both modes are leakage-free in the same way:
@@ -439,10 +440,11 @@ def run_production_benchmark(
     profile_mat: np.ndarray | None = None,
     train_frac: float = 0.75,
 ) -> dict:
-    """PRODUCTION-FAITHFUL EVALUATION (mode B) — the deployable-ranker signal.
+    """DEPLOYED-SCORER PROBE (mode B) — the preference-fusion signal.
 
-    Mirrors deployment end to end, on RESEARCH items only (production ranks the
-    research section this way), excluding any item with no signed vote:
+    Mirrors the deployed preference scorer on RESEARCH items only, excluding
+    any item with no signed vote. It does not reproduce serving gates, Rocchio,
+    enrichment, or source balancing:
 
       1. Split TRAIN (older 75%) / TEST (newer 25%) chronologically.
       2. Compute the graded kNN preference score for the TEST items from
@@ -671,13 +673,13 @@ def main() -> int:
     print("-" * 68)
 
     # ------------------------------------------------------------------ #
-    # Mode B: PRODUCTION-FAITHFUL (graded kNN preference + RRF fuse), research only.
+    # Mode B: deployed-scorer probe (graded kNN preference + RRF), research only.
     # ------------------------------------------------------------------ #
     r_rows, r_labels, r_ts, r_grades = _load_signed_votes_chronological(research_only=True)
     rn = len(r_rows)
     rn_pos = sum(1 for v in r_labels if v > 0)
     rn_neg = rn - rn_pos
-    print("  [B] production-faithful  (graded kNN preference + RRF fuse, research items)")
+    print("  [B] deployed-scorer probe (graded kNN preference + RRF, research items)")
     print(f"      signed research votes: {rn}  (+{rn_pos} / -{rn_neg})")
 
     if rn < 8 or rn_pos < 2 or rn_neg < 2:

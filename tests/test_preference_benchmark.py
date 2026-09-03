@@ -6,7 +6,7 @@ embeddings (no model download), and asserts:
 
   1. the preference-feature probe's HELD-OUT pairwise accuracy beats the
      topic-cosine-only baseline on clearly-separable liked/disliked clusters;
-  2. the PRODUCTION-FAITHFUL mode (graded kNN preference + RRF fuse) also beats topic-only
+  2. the deployed-scorer probe (graded kNN preference + RRF) also beats topic-only
      on the same clusters and reports a defined nDCG@10;
   3. exemplar construction is leakage-free in BOTH modes — no test-set item id
      appears in the train exemplar id arrays; and

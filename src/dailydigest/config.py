@@ -78,9 +78,9 @@ class Settings(BaseSettings):
     # A low-impact-venue research item must clear this base topic relevance to be
     # eligible for the digest at all — so the few that appear are strongly on-topic.
     low_impact_relevance_floor: float = Field(default=0.72, ge=0.0, le=1.0)
-    # When a score calibrator has been fit from vote history, derive the
-    # low-impact floor from it (the score at which P(relevant) ~ 0.5), clamped
-    # near the configured default. Falls back to the default when uncalibrated.
+    # Compatibility fallback for callers without topic-score snapshots. The
+    # normal pipeline uses the fixed raw-topic floor above because its calibrator
+    # is trained on final rank scores, which are a different scale.
     adaptive_relevance_floor: bool = True
     # Max fraction of the research section that may be filled by low-impact-venue
     # items, so they cannot appear frequently even when many are related.

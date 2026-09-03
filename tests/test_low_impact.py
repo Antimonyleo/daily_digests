@@ -262,3 +262,31 @@ def test_low_impact_below_floor_never_bypasses_quality_gate_as_last_resort():
     ]
     result = pick_top_per_section(scored, {"research": 5})
     assert result == []
+
+
+def test_low_impact_floor_uses_topic_score_not_fused_rank(monkeypatch):
+    """A strong preference rank cannot rescue a weak topical match."""
+    from dailydigest import config as config_mod
+
+    below = _row("Weak topic, high fused rank", "Journal of Minor Results")
+    above = _row("Strong topic, low fused rank", "Journal of Minor Findings")
+    settings = SimpleNamespace(
+        max_preprint_research_frac=0.55,
+        max_low_impact_research_frac=1.0,
+        low_impact_relevance_floor=0.72,
+        adaptive_relevance_floor=False,
+        research_final_score_floor_frac=0.0,
+        research_final_score_min_keep=0,
+    )
+    monkeypatch.setattr(config_mod, "get_settings", lambda: settings)
+
+    result = pick_top_per_section(
+        [(below, 0.95), (above, 0.20)],
+        {"research": 1},
+        score_features={
+            id(below): {"topic_score": 0.70},
+            id(above): {"topic_score": 0.74},
+        },
+    )
+
+    assert [row for row, _score in result] == [above]

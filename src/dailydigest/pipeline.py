@@ -342,6 +342,7 @@ def ingest_all(
         if str(getattr(spec, "section", "") or "") in {"opportunities", "events"}
     }
     successful_deadline_sections: set[str] = set()
+    nonempty_deadline_sections: set[str] = set()
     raw_research_items = 0
 
     groups: dict[str, list[tuple[int, Any]]] = {}
@@ -397,6 +398,8 @@ def ingest_all(
         section = str(getattr(spec, "section", "") or "")
         if stat.ok and section in configured_deadline_sections:
             successful_deadline_sections.add(section)
+            if fetched:
+                nonempty_deadline_sections.add(section)
         fetched_research = sum(
             1
             for item in fetched
@@ -412,10 +415,22 @@ def ingest_all(
     except Exception as e:  # noqa: BLE001
         logger.warning("health.record failed: %s", e)
 
+    empty_deadline_sections = sorted(
+        successful_deadline_sections - nonempty_deadline_sections
+    )
+    for section in empty_deadline_sections:
+        logger.info(
+            "%s sources were healthy but returned no qualifying records",
+            "Funding" if section == "opportunities" else "Events",
+        )
     _emit(
         progress_callback,
         "ingest_done",
-        {"sources": len(specs), "raw_items": len(all_items)},
+        {
+            "sources": len(specs),
+            "raw_items": len(all_items),
+            "empty_deadline_sections": empty_deadline_sections,
+        },
     )
     if not all_items:
         raise RuntimeError(
@@ -1481,6 +1496,7 @@ def run_all(
             settings=section_settings,
         ),
         catch_up=window_days > 2,
+        score_features=score_features,
     )
 
     # Active-learning exploration: swap a few low-scored picks for high-quality
@@ -1664,13 +1680,14 @@ def run_all(
         _impressions: list[
             tuple[str, int, int, float | None, bool, str, float | None, float | None]
         ] = []
-        # `scored` is (row, score) sorted by final score desc; filter to research
-        # and cap the pool so the row count stays bounded.
+        # Use the latest feature score: optional enrichment updates that value
+        # after the original `scored` list is built.
         _research_scored = [
-            (row, score)
+            (row, float(_feature(row).get("final_score", score)))
             for row, score in scored
             if (getattr(row, "section", "") or "") == "research"
         ]
+        _research_scored.sort(key=lambda pair: pair[1], reverse=True)
         # Log the top-CAP research candidates by final score PLUS every selected
         # research item, even if it ranks below the cap (source balancing /
         # exploration / last-resort fill can select items past position CAP). This
