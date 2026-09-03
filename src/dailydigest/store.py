@@ -647,7 +647,8 @@ def exclude_known_items(rows: list[ItemRow]) -> list[ItemRow]:
     """Drop rows the reader manually flagged as known.
 
     Applied after ``exclude_previously_shown`` so it also overrides that
-    function's deliberate re-surfacing of opportunities whose details changed.
+    function's standing funding/events shortlist, which never hides an active
+    call merely because it was shown before.
     """
     ids = [int(r.id) for r in rows if r.id is not None]
     if not ids:

@@ -1141,8 +1141,9 @@ def run_all(
     # `lr_ranker.npz`'s mtime — a file nothing writes any more, so the check was
     # permanently true and refit the calibrator on EVERY brew, defeating the
     # 7-day staleness gate immediately below.
-    # Refit the score→probability calibrator when stale (> 7 days) so the
-    # adaptive relevance floor tracks recent feedback.
+    # Refit the score→probability calibrator when stale (> 7 days) so display
+    # confidence tracks recent feedback. (The brew's low-impact floor is fixed on
+    # raw topic scores and does not read this fit; see config.Settings.)
     try:
         from pathlib import Path as _Path
 

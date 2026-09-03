@@ -291,8 +291,10 @@ def eval_ranking(
 def calibrate() -> None:
     """Fit the score→probability calibrator from your vote history.
 
-    Maps ranking scores to P(relevant) so the relevance floor self-tunes to your
-    feedback. Needs a modest number of votes spanning both thumbs.
+    Maps final ranking scores to P(relevant) for display confidence and
+    evaluation. A normal brew gates low-impact papers on a fixed raw-topic floor
+    that this fit does not move. Needs a modest number of votes spanning both
+    thumbs.
     """
     from .rank.calibrate import MIN_VOTES_FOR_CALIBRATION, fit_calibrator
 
