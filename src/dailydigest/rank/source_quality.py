@@ -625,12 +625,13 @@ def source_bucket(row: Any) -> str:
         return "preprint_other"
 
     # Live venue-impact enrichment (when enabled) can flag an item whose actual
-    # publication venue is low impact — this is the only way to catch low-impact
-    # papers arriving through aggregators (OpenAlex/PubMed) whose source name
-    # hides the real journal. Honor it so the low-impact frequency cap applies.
-    # The preprint servers above already returned, so this can no longer relabel
-    # them (PubMed shares their "repository" tier, so tier cannot separate the
-    # two — only the explicit source match can).
+    # publication venue is low impact, or verify that an unlisted venue is
+    # materially high impact. Honor both flags ahead of the name-based policy so
+    # the low-impact frequency cap applies to the former and the latter is not
+    # capped merely for missing the curated lists. The preprint servers above
+    # already returned, so this can no longer relabel them (PubMed shares their
+    # "repository" tier, so tier cannot separate the two — only the explicit
+    # source match can).
     if getattr(row, "venue_low_impact", False) is True:
         return "low_impact_journal"
     if getattr(row, "venue_high_impact", False) is True:

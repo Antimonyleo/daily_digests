@@ -364,8 +364,8 @@ def enrich_scored(
                 # Center at 0.5: high-impact venues gain, low-impact venues lose.
                 score += venue_w * (vq - 0.5)
                 # Flag genuinely low-impact venues so the selection-stage
-                # frequency cap treats them as low_impact_journal even though
-                # their configured source (e.g. OpenAlex) hides the real venue.
+                # frequency cap treats them as low_impact_journal even when the
+                # ingest record carries no venue name to classify by.
                 # Only a materially high verified impact lifts an unlisted venue
                 # out of that gate; the middle band keeps the name-based policy.
                 row.venue_low_impact = vq < _LOW_VENUE_QUALITY

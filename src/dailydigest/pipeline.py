@@ -1218,8 +1218,8 @@ def run_all(
     after_reviewed = exclude_reviewed_items(recent_raw)
     after_shown = exclude_previously_shown(after_reviewed, exclude_digest_id=digest_id)
     # Manual "I already know this" flags win over every re-surfacing rule above,
-    # including the opportunity refresh that re-shows a grant whose official
-    # details changed.
+    # including the standing funding/events shortlist that never hides an active
+    # call merely because it was shown before.
     after_shown = exclude_known_items(after_shown)
     deduped_candidates = dedupe_ranking_candidates(after_shown)   # within-set dedupe FIRST
     # Cross-day content dedupe: drop items re-surfaced from a recent digest.

@@ -170,8 +170,9 @@ class KnownItemRow(Base):
     """Items the reader manually flagged as already known / handled.
 
     Only an explicit click writes here. Funding calls stay open for weeks and
-    are deliberately re-surfaced whenever their official details change, so
-    without a manual "I've seen this" signal the same grant keeps returning.
+    form a standing shortlist that prior display never retires (see
+    ``exclude_previously_shown``), so without a manual "I've seen this" signal
+    the same grant keeps returning.
     """
 
     __tablename__ = "known_items"
@@ -610,7 +611,7 @@ def set_item_known(item_id: int, known: bool) -> bool:
     """Idempotently flag/unflag an item as already known. False = no such item.
 
     Manual only: nothing in the pipeline writes this. A known item is dropped
-    from every future digest even if its official details change again.
+    from every future digest even while it stays open and actionable.
     """
     init_db()
     with session_scope() as s:
@@ -851,7 +852,8 @@ def upsert_items(items: Iterable[Item]) -> int:
                     row.published_at = it.published_at
                     row.metadata_json = metadata_json
                     # Verification keeps open records in the candidate window;
-                    # immutable snapshots below distinguish material changes.
+                    # immutable snapshots below record each official version for
+                    # ``opportunity_history``.
                     row.fetched_at = datetime.now(timezone.utc)
                     if content_changed:
                         row.summary = ""

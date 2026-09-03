@@ -855,9 +855,9 @@
                 <span class="bookmark-label">{{ 'Saved' if item.bookmarked else 'Save' }}</span>
               </button>
               {% if section.key in ("opportunities", "events") %}
-              {# Funding calls stay open for weeks and are re-shown whenever their
-                 official details change, so only an explicit "I know this" can
-                 retire one. Nothing automatic ever sets this flag. #}
+              {# Funding calls stay open for weeks and form a standing shortlist
+                 that may re-show an active call, so only an explicit "I know this"
+                 can retire one. Nothing automatic ever sets this flag. #}
               <button class="bookmark-btn known-btn{% if item.known %} active{% endif %}" type="button" aria-pressed="{{ 'true' if item.known else 'false' }}" aria-label="{{ 'Show this again in future digests' if item.known else 'Mark as known so it stops appearing' }}">
                 <span class="known-icon" aria-hidden="true">{{ '✓' if item.known else '⊘' }}</span>
                 <span class="known-label">{{ 'Known' if item.known else 'Mark known' }}</span>
