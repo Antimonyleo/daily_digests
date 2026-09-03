@@ -9,9 +9,10 @@ DIFFERENT things:
      engineered features (including the pos/neg affinity "memory" columns) and
      reads its probability directly. It answers: "do the affinity features let a
      simple pointwise model separate held-out liked vs. disliked items better
-     than topic-cosine alone?" It is NOT the deployed ranker: production trains
-     on PAIRWISE feature differences and fuses the LR MARGIN with the topic
-     ranking via RRF (see ``dailydigest.rank.ranker``). Treat this as a feature
+     than topic-cosine alone?" It is NOT the deployed ranker: the default
+     ``hybrid_knn`` mode fuses the graded kNN preference score with the topic
+     ranking via RRF (see ``dailydigest.rank.ranker``); pairwise LR survives
+     only as the retired/optional ``hybrid_lr`` mode. Treat this as a feature
      sanity probe, not a benchmark of what ships.
 
   B. DEPLOYED-SCORER PROBE (``run_production_benchmark``)
@@ -309,8 +310,10 @@ def run_benchmark(
     Trains a POINTWISE LogisticRegression on the v6 features and evaluates its
     probability directly. This measures whether the pos/neg affinity features
     help a simple pointwise model separate held-out liked/disliked items — a
-    feature sanity probe. Production trains PAIRWISE and fuses the LR margin with
-    topic-cosine via RRF; for that, use :func:`run_production_benchmark`.
+    feature sanity probe. The deployed default (``hybrid_knn``) fuses the graded
+    kNN preference score with topic-cosine via RRF, and pairwise LR is only the
+    retired/optional ``hybrid_lr`` mode; for the deployed-style measurement, use
+    :func:`run_production_benchmark`.
 
     ``rows`` are item-like objects (real ItemRow or SimpleNamespace with ``id``,
     ``title``, ``abstract``, ``published_at``), ``labels`` are +1/-1 per row,
@@ -496,8 +499,9 @@ def run_production_benchmark(
     if np.unique(y_train).size < 2:
         raise ValueError("train split has only one class; cannot fit pairwise LR")
 
-    # PAIRWISE training exactly as production (votes.vote_dataset) does, then fit
-    # the SAME standardized LRRanker production fits.
+    # PAIRWISE training as the retired/optional ``hybrid_lr`` mode does
+    # (votes.vote_dataset), then fit the same standardized LRRanker it uses. This
+    # feeds only the comparison line below; the deployed default is kNN fusion.
     pair_X, pair_y = _pairwise_training_matrix(X_train, y_train)
     ranker = LRRanker()
     ranker.fit(pair_X, pair_y, persist=False)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import threading
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -741,6 +742,108 @@ def test_run_all_enriches_only_candidates_that_clear_free_gates(
             for row in session.query(store_mod.ImpressionRow).all()
         }
     assert impressions[ids[0]].final_score == 0.73
+
+
+def test_run_all_author_boost_keeps_served_score_within_unit_range(
+    monkeypatch, tmp_path
+):
+    """A watchlist byline match must not push a top-ranked score above 1.0."""
+    from dailydigest import pipeline as pipeline_mod
+    from dailydigest import store as store_mod
+
+    _reset_store(tmp_path, monkeypatch)
+    with store_mod.session_scope() as session:
+        rows = [
+            store_mod.ItemRow(
+                source="Nature",
+                section="research",
+                external_id=name,
+                url=f"https://example.com/{name}",
+                title=f"Research candidate {name}",
+                abstract="Primary research with methods and results.",
+                authors=authors,
+                published_at=datetime.now(timezone.utc),
+            )
+            for name, authors in (
+                ("watched", "Doudna, Jennifer A.; Charpentier, Emmanuelle"),
+                ("unwatched", "Smith, Alex"),
+            )
+        ]
+        session.add_all(rows)
+        session.flush()
+        ids = [int(row.id) for row in rows]
+
+    def recent_items(days=2):
+        del days
+        with store_mod.session_scope() as session:
+            found = [session.get(store_mod.ItemRow, item_id) for item_id in ids]
+            for row in found:
+                session.expunge(row)
+            return found
+
+    def score(items, _profile, _downweight, attribution=None):
+        del attribution
+        scored = [(row, 1.0 if row.external_id == "watched" else 0.8) for row in items]
+        features = {
+            int(row.id): {
+                "topic_score": 0.9,
+                "confidence_score": value,
+                "final_score": value,
+            }
+            for row, value in scored
+        }
+        return scored, features
+
+    monkeypatch.setattr(pipeline_mod, "_digest_id", lambda: "2026-09-03")
+    monkeypatch.setattr(pipeline_mod, "ingest_all", lambda **_kwargs: 0)
+    monkeypatch.setattr(
+        pipeline_mod,
+        "load_profile",
+        lambda: SimpleNamespace(
+            bio="",
+            keywords=[],
+            downweight=[],
+            authors_of_interest=["Jennifer Doudna"],
+        ),
+    )
+    monkeypatch.setattr(
+        pipeline_mod,
+        "build_profile_matrix",
+        lambda _profile: __import__("numpy").zeros((1, 3)),
+    )
+    monkeypatch.setattr(pipeline_mod, "recent_items", recent_items)
+    monkeypatch.setattr(pipeline_mod, "_score_items_for_pipeline", score)
+    monkeypatch.setattr(pipeline_mod, "_build_neg_centroid", None)
+    monkeypatch.setattr(
+        pipeline_mod,
+        "summarize_items",
+        lambda selected, profile=None: {int(row.id): "summary" for row in selected},
+    )
+    monkeypatch.setattr(pipeline_mod, "send_digest", lambda *_args, **_kwargs: False)
+
+    pipeline_mod.run_all(dry_run=True)
+
+    with store_mod.session_scope() as session:
+        impressions = {
+            int(row.item_id): row
+            for row in session.query(store_mod.ImpressionRow).all()
+        }
+        digest_scores = {
+            int(row.item_id): float(row.score)
+            for row in session.query(store_mod.DigestItemRow).all()
+        }
+        features = {
+            int(row.item_id): (float(row.final_score), json.loads(row.features_json))
+            for row in session.query(store_mod.DigestItemFeatureRow).all()
+        }
+    watched, unwatched = ids
+    assert impressions[watched].final_score == 1.0
+    assert impressions[watched].position < impressions[unwatched].position
+    assert digest_scores[watched] == 1.0
+    persisted_score, persisted_features = features[watched]
+    assert persisted_score == 1.0
+    assert persisted_features["score"] == 1.0
+    assert persisted_features["rank_score"] == 1.0
 
 
 def test_run_all_gives_carryover_items_one_more_pass_then_consumes(monkeypatch, tmp_path):

@@ -1358,7 +1358,10 @@ def run_all(
                     _penalty_list.append(penalty)
 
                 # Apply penalties to scores
-                scored = [(row, score - _penalty_list[i]) for i, (row, score) in enumerate(scored)]
+                scored = [
+                    (row, max(0.0, float(score) - _penalty_list[i]))
+                    for i, (row, score) in enumerate(scored)
+                ]
 
                 # Update score_features using captured penalties
                 for i, (row, score) in enumerate(scored):
@@ -1367,7 +1370,7 @@ def run_all(
                         penalty = _penalty_list[i]
                         score_features[key]["negative_interest_penalty"] = round(penalty, 4)
                         score_features[key]["confidence_score"] = round(
-                            score_features[key]["confidence_score"] - penalty, 4
+                            max(0.0, score_features[key]["confidence_score"] - penalty), 4
                         )
                         score_features[key]["final_score"] = round(score, 4)
                 scored.sort(key=lambda t: t[1], reverse=True)
@@ -1387,7 +1390,7 @@ def run_all(
             for row, score in scored:
                 m = author_match_score(getattr(row, "authors", "") or "", _watchlist)
                 if m > 0:
-                    score = float(score) + _author_boost * m
+                    score = min(1.0, float(score) + _author_boost * m)
                     key = _row_feature_key(row)
                     if key in score_features:
                         score_features[key]["author_match"] = round(float(m), 4)

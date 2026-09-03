@@ -1020,8 +1020,9 @@ def quality_adjusted_score(row: Any, base_score: float) -> float:
     on-topic. Truly exceptional results (high relevance + novelty) are exempt.
 
     The returned score is clipped to [0, 1] so the absolute thresholds that gate
-    selection downstream (``adaptive_size_bar``, ``low_impact_relevance_floor``,
-    the exceptional-preprint cutoff) operate on a stable, bounded scale.
+    selection downstream (``adaptive_size_bar``, the exceptional-preprint cutoff)
+    operate on a stable, bounded scale. ``low_impact_relevance_floor`` is not
+    among them: it gates on the raw ``topic_score`` snapshot, not this score.
     """
     section = _row_section(row).lower()
     source_quality = infer_source_quality(_quality_source(row), section)
