@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -107,6 +108,30 @@ def test_hidden_top_pubmed_venue_keeps_published_journal_quality():
     assert is_low_impact_research(row) is False
 
 
+def test_hidden_preprint_venue_behind_aggregator_keeps_preprint_bucket():
+    # PubMed indexes NIH preprint-pilot records under the preprint server's own
+    # journal title; OpenAlex does the same for ChemRxiv. Those are preprints,
+    # not trivial journals, even though their venue tier is "repository".
+    for source, venue, expected in (
+        ("PubMed (your topics)", "bioRxiv : the preprint server for biology", "bio_med_preprint"),
+        ("OpenAlex (biotech)", "medRxiv", "bio_med_preprint"),
+        ("OpenAlex (chemistry)", "ChemRxiv", "preprint_other"),
+    ):
+        row = SimpleNamespace(
+            title="A structural DNA nanotechnology study",
+            abstract="Primary research with methods and results.",
+            section="research",
+            source=source,
+            metadata_json=json.dumps({"venue": venue}),
+            id=1,
+        )
+        assert source_bucket(row) == expected
+        assert is_low_impact_research(row) is False
+        row.venue_low_impact = True
+        assert source_bucket(row) == expected
+        assert is_low_impact_research(row) is False
+
+
 def test_low_impact_penalized_vs_top_at_equal_relevance():
     minor = _row("RNA delivery mechanism", "Journal of Minor Results")
     nature = _row("RNA delivery mechanism", "Nature")
@@ -177,6 +202,21 @@ def test_low_impact_journals_are_frequency_capped():
     low = sum(1 for row, _ in result if source_bucket(row) == "low_impact_journal")
     assert len(result) == 10
     assert low <= 1
+
+
+def test_low_impact_keeps_one_slot_on_small_days():
+    # A quiet day (cap under ten) must still admit one strongly on-topic
+    # low-impact paper instead of truncating the allowance to zero.
+    scored = _hq_pool(12)
+    scored += [
+        (_row(f"Minor paper {i}", f"Journal of Minor Results {i}"), 0.90 - i * 0.005)
+        for i in range(4)
+    ]
+    scored.sort(key=lambda pair: pair[1], reverse=True)
+    result = pick_top_per_section(scored, {"research": 5})
+    low = sum(1 for row, _ in result if source_bucket(row) == "low_impact_journal")
+    assert len(result) == 5
+    assert low == 1
 
 
 def test_low_impact_below_floor_is_excluded():

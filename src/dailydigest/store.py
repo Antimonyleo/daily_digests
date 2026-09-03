@@ -377,17 +377,6 @@ _SessionLocal = None
 _SESSION_LOCK = Lock()
 
 
-def _naive_utc(value: datetime) -> datetime:
-    """Normalize a timestamp to naive UTC.
-
-    SQLite drops the offset on write, so timestamps read back are naive UTC
-    while freshly built ones are aware. Comparing the two raises TypeError.
-    """
-    if value.tzinfo is None:
-        return value
-    return value.astimezone(timezone.utc).replace(tzinfo=None)
-
-
 def _engine():
     global _ENGINE
     if _ENGINE is not None:

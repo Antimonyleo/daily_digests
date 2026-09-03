@@ -892,14 +892,15 @@ def _pick_research_balanced(
         from ..config import get_settings
 
         _s = get_settings()
-        max_low_impact = int(cap * float(_s.max_low_impact_research_frac))
+        _low_impact_frac = float(_s.max_low_impact_research_frac)
+        max_low_impact = max(1, int(cap * _low_impact_frac)) if _low_impact_frac > 0 else 0
         low_impact_floor = float(_s.low_impact_relevance_floor)
         if getattr(_s, "adaptive_relevance_floor", False):
             from .calibrate import adaptive_relevance_floor as _adaptive_floor
 
             low_impact_floor = _adaptive_floor(low_impact_floor)
     except Exception:  # noqa: BLE001
-        max_low_impact = cap // 6
+        max_low_impact = max(1, cap // 6)
         low_impact_floor = 0.58
 
     selected: list[tuple[ItemRow, float]] = []

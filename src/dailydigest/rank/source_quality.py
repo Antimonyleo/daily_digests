@@ -588,6 +588,13 @@ def source_bucket(row: Any) -> str:
     section = _row_section(row).lower()
     if section != "research":
         return section or "other"
+    # Aggregator rows (OpenAlex/PubMed) hide the real venue behind the feed
+    # name. When the ingest record carries the venue, classify by it exactly
+    # as if that venue had arrived through a direct feed.
+    is_aggregator = "openalex" in source_lc or "pubmed" in source_lc
+    venue = _safe_str(_row_metadata(row).get("venue")).strip() if is_aggregator else ""
+    quality_source = venue or _row_source(row)
+    quality_source_lc = quality_source.lower()
     # Preprint servers classify themselves. They must be matched BEFORE the
     # venue-impact flag below: a preprint server's OpenAlex mean-citedness is
     # low by construction (bioRxiv scores ~0.30), so honoring the flag here
@@ -595,13 +602,13 @@ def source_bucket(row: Any) -> str:
     # the low-impact quota instead of the preprint budget — even though
     # the reader's own votes rate bioRxiv (0.27 hit rate) above most journals
     # they are shown. A preprint is unpublished, not trivial.
-    if is_arxiv_cs_source(source_lc):
+    if is_arxiv_cs_source(quality_source_lc):
         return "arxiv_cs"
-    if "arxiv" in source_lc and "chemrxiv" not in source_lc:
+    if "arxiv" in quality_source_lc and "chemrxiv" not in quality_source_lc:
         return "arxiv_other"
-    if "biorxiv" in source_lc or "medrxiv" in source_lc:
+    if "biorxiv" in quality_source_lc or "medrxiv" in quality_source_lc:
         return "bio_med_preprint"
-    if any(pattern in source_lc for pattern in PREPRINT_SERVER_PATTERNS):
+    if any(pattern in quality_source_lc for pattern in PREPRINT_SERVER_PATTERNS):
         return "preprint_other"
 
     # Live venue-impact enrichment (when enabled) can flag an item whose actual
@@ -614,16 +621,10 @@ def source_bucket(row: Any) -> str:
     if getattr(row, "venue_low_impact", False) is True:
         return "low_impact_journal"
 
-    if "openalex" in source_lc or "pubmed" in source_lc:
-        venue = _safe_str(_row_metadata(row).get("venue")).strip()
-        if venue:
-            quality = infer_source_quality(venue, section)
-            if quality.quality_tier in {"top", "high", "strong"}:
-                return "published_journal"
-            return "low_impact_journal"
+    if is_aggregator and not venue:
         return "aggregator" if "openalex" in source_lc else "published_database"
 
-    quality = infer_source_quality(_quality_source(row), section)
+    quality = infer_source_quality(quality_source, section)
     if quality.quality_tier in {"top", "high", "strong"}:
         return "published_journal"
     # Catch remaining preprint servers (ChemRxiv, SSRN, Research Square, …)
