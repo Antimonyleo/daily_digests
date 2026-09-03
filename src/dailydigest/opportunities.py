@@ -178,6 +178,7 @@ def assess_opportunity(
     if status in {"closed", "cancelled", "canceled", "archived"}:
         return OpportunityAssessment(False, "unknown", f"status is {status}")
 
+    section_type = str(metadata.get("record_type") or "opportunity").casefold()
     deadline = _iso_date(metadata.get("deadline"))
     if deadline is not None:
         days_left = (deadline - now).days
@@ -190,7 +191,19 @@ def assess_opportunity(
                 f"only {days_left} days remain; below preferred lead time",
             )
 
-    section_type = str(metadata.get("record_type") or "opportunity")
+    if section_type == "event":
+        event_start = _iso_date(metadata.get("event_start"))
+        if event_start is not None:
+            days_until = (event_start - now).days
+            if days_until < 0:
+                return OpportunityAssessment(False, "unknown", "event has passed")
+            if days_until < profile.minimum_lead_days:
+                return OpportunityAssessment(
+                    False,
+                    "unknown",
+                    f"only {days_until} days remain; below preferred lead time",
+                )
+
     selected_types = profile.event_types if section_type == "event" else profile.opportunity_types
     actual_type = metadata.get("event_type" if section_type == "event" else "opportunity_type")
     if not _selected_type_matches(selected_types, actual_type):
@@ -212,8 +225,11 @@ def assess_opportunity(
     if not tags:
         return OpportunityAssessment(True, "unknown", "verify official eligibility")
 
+    official = metadata.get("official") is True
     if any("unrestricted" in tag or "all applicant" in tag for tag in tags):
-        return OpportunityAssessment(True, "likely", "call is open to broad applicant types")
+        if official:
+            return OpportunityAssessment(True, "likely", "call is open to broad applicant types")
+        return OpportunityAssessment(True, "unknown", "verify eligibility on the official source")
     if all("other" in tag or "see text" in tag for tag in tags):
         return OpportunityAssessment(True, "unknown", "official eligibility text needs review")
 
@@ -243,6 +259,8 @@ def assess_opportunity(
     if any(marker in tag for marker in markers for tag in tags):
         if not is_us and not eligibility_text:
             return OpportunityAssessment(True, "unknown", "country eligibility needs review")
+        if not official:
+            return OpportunityAssessment(True, "unknown", "verify eligibility on the official source")
         return OpportunityAssessment(True, "likely", "institution type appears eligible")
     if any("individual" in tag for tag in tags):
         return OpportunityAssessment(True, "unknown", "individual eligibility needs review")

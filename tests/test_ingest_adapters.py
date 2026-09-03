@@ -478,6 +478,34 @@ def test_pubmed_preserves_journal_and_doi_metadata():
     }
 
 
+def test_pubmed_reads_doi_from_elocation_when_article_id_is_absent():
+    from defusedxml.ElementTree import fromstring
+
+    from dailydigest.ingest.pubmed import PubMedSource
+
+    article = fromstring(
+        """
+        <PubmedArticle>
+          <MedlineCitation>
+            <PMID>12346</PMID>
+            <Article>
+              <ArticleTitle>RNA topology</ArticleTitle>
+              <ELocationID EIdType="doi">10.1234/rna.2</ELocationID>
+              <Journal><Title>Nature Biotechnology</Title></Journal>
+            </Article>
+          </MedlineCitation>
+        </PubmedArticle>
+        """
+    )
+
+    item = PubMedSource()._parse_article(
+        article, _spec(name="PubMed (your topics)", kind="pubmed")
+    )
+
+    assert item is not None
+    assert item.metadata["doi"] == "10.1234/rna.2"
+
+
 def test_openalex_preserves_unrecognized_venue_metadata(monkeypatch):
     from dailydigest.ingest.openalex import OpenAlexSource
 

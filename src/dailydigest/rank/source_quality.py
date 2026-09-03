@@ -121,6 +121,7 @@ STRONG_TIER_PATTERNS = (
     "chem. soc. rev.",
     "energy and environmental science",
     "angew. chem.",
+    "angewandte chemie",
     "advanced materials",
     "advanced functional materials",
     "advanced science",
@@ -385,7 +386,9 @@ def _row_metadata(row: Any) -> dict[str, Any]:
 
 def display_source(row: Any) -> str:
     """Show an aggregator paper's actual venue when the ingest record has it."""
-    venue = _safe_str(_row_metadata(row).get("venue")).strip()
+    venue = _safe_str(getattr(row, "venue_name", "")).strip()
+    if not venue:
+        venue = _safe_str(_row_metadata(row).get("venue")).strip()
     return venue or _row_source(row)
 
 
@@ -474,6 +477,14 @@ def infer_source_quality(source: str, section: str) -> SourceQuality:
     return _infer_source_quality_by_name(source_lc, section_lc)
 
 
+def _is_strong_venue_name(value: str) -> bool:
+    return (
+        any(pattern in value for pattern in STRONG_TIER_PATTERNS)
+        or value == "small"
+        or value.startswith("small ")
+    )
+
+
 def recognized_research_venue(venue_name: str | None) -> str | None:
     """Return ``venue_name`` when it names a known top/high/strong research venue.
 
@@ -489,7 +500,7 @@ def recognized_research_venue(venue_name: str | None) -> str | None:
         return None
     if v in TOP_TIER_NAMES:
         return venue_name
-    if any(p in v for p in HIGH_TIER_PATTERNS) or any(p in v for p in STRONG_TIER_PATTERNS):
+    if any(p in v for p in HIGH_TIER_PATTERNS) or _is_strong_venue_name(v):
         return venue_name
     return None
 
@@ -504,7 +515,7 @@ def _infer_source_quality_by_name(source_lc: str, section_lc: str) -> SourceQual
             return SourceQuality(0.99, "top", 7.0)
         if any(pattern in source_lc for pattern in HIGH_TIER_PATTERNS):
             return SourceQuality(0.90, "high", 7.0)
-        if any(pattern in source_lc for pattern in STRONG_TIER_PATTERNS):
+        if _is_strong_venue_name(source_lc):
             return SourceQuality(0.76, "strong", 7.0)
         if any(
             pattern in source_lc
@@ -592,7 +603,9 @@ def source_bucket(row: Any) -> str:
     # name. When the ingest record carries the venue, classify by it exactly
     # as if that venue had arrived through a direct feed.
     is_aggregator = "openalex" in source_lc or "pubmed" in source_lc
-    venue = _safe_str(_row_metadata(row).get("venue")).strip() if is_aggregator else ""
+    venue = display_source(row) if is_aggregator else ""
+    if venue == _row_source(row):
+        venue = ""
     quality_source = venue or _row_source(row)
     quality_source_lc = quality_source.lower()
     # Preprint servers classify themselves. They must be matched BEFORE the
@@ -620,9 +633,11 @@ def source_bucket(row: Any) -> str:
     # two — only the explicit source match can).
     if getattr(row, "venue_low_impact", False) is True:
         return "low_impact_journal"
+    if getattr(row, "venue_quality_verified", False) is True:
+        return "published_journal"
 
     if is_aggregator and not venue:
-        return "aggregator" if "openalex" in source_lc else "published_database"
+        return "aggregator" if "openalex" in source_lc else "low_impact_journal"
 
     quality = infer_source_quality(quality_source, section)
     if quality.quality_tier in {"top", "high", "strong"}:

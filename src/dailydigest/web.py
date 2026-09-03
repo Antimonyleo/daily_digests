@@ -33,7 +33,6 @@ import hmac
 import json
 import logging
 import os
-import queue as std_queue
 import re
 import secrets
 import tempfile
@@ -143,10 +142,10 @@ templates = Jinja2Templates(
 # Per-section sort order so we can ORDER BY (section_order, label_number).
 _SECTION_RANK = {name: idx for idx, name in enumerate(SECTION_ORDER)}
 
-# Per-run progress queues.  Uses stdlib queue.Queue (thread-safe) so the
-# producer thread can put_nowait without needing the event loop reference.
-# The SSE consumer drains via asyncio.to_thread so it never blocks the loop.
-_RUN_QUEUES: dict[str, std_queue.Queue[dict[str, Any]]] = {}
+# Per-run progress event logs. They are retained until the bounded run cache
+# evicts them, so a refreshed page can replay the same brew instead of starting
+# another one or racing the old page for queue entries.
+_RUN_QUEUES: dict[str, list[dict[str, Any]]] = {}
 _RUN_STARTED: set[str] = set()
 _MAX_RETAINED_RUNS = 32
 _RUN_LOCK = threading.Lock()
@@ -500,7 +499,7 @@ def _recent_digest_ids(today_id: str, limit: int = 3) -> list[str]:
             for value in session.execute(
                 select(DigestRow.id)
                 .where(DigestRow.id <= today_id)
-                .order_by(DigestRow.id.desc())
+                .order_by(DigestRow.created_at.desc(), DigestRow.id.desc())
                 .limit(max(1, min(int(limit), 30)))
             ).scalars()
         ]
@@ -1906,11 +1905,11 @@ async def profile_name_post(request: Request) -> Response:
 # --- Run / brewing flow -----------------------------------------------------
 
 
-def _ensure_run(run_id: str) -> std_queue.Queue[dict[str, Any]]:
-    """Get-or-create the stdlib Queue for a run."""
+def _ensure_run(run_id: str) -> list[dict[str, Any]]:
+    """Get or create the retained progress-event log for a run."""
     with _RUN_LOCK:
-        q = _RUN_QUEUES.get(run_id)
-        if q is None:
+        events = _RUN_QUEUES.get(run_id)
+        if events is None:
             active_run = _BREW_JOB.get("run_id")
             while len(_RUN_QUEUES) >= _MAX_RETAINED_RUNS:
                 stale_id = next(
@@ -1921,18 +1920,19 @@ def _ensure_run(run_id: str) -> std_queue.Queue[dict[str, Any]]:
                     break
                 _RUN_QUEUES.pop(stale_id, None)
                 _RUN_STARTED.discard(stale_id)
-            q = std_queue.Queue()
-            _RUN_QUEUES[run_id] = q
-        return q
+            events = []
+            _RUN_QUEUES[run_id] = events
+        return events
 
 
 def _kick_off_run(run_id: str, reading_mode: str) -> None:
     """Run pipeline.run_all in a background thread; always emits a terminal event."""
 
     def _push(evt: dict[str, Any]) -> None:
-        q = _RUN_QUEUES.get(run_id)
-        if q is not None:
-            q.put_nowait(evt)
+        with _RUN_LOCK:
+            events = _RUN_QUEUES.get(run_id)
+            if events is not None:
+                events.append(evt)
 
     def _target() -> None:
         terminal_sent = False
@@ -2001,7 +2001,10 @@ def _kick_off_run(run_id: str, reading_mode: str) -> None:
 
 @app.get("/run", response_class=HTMLResponse)
 def run_get(
-    request: Request, reading_mode: str = "usual", autostart: bool = False
+    request: Request,
+    reading_mode: str = "usual",
+    autostart: bool = False,
+    run_id: str = "",
 ) -> Response:
     if not _profile_exists():
         return RedirectResponse(url="/setup", status_code=302)
@@ -2009,7 +2012,8 @@ def run_get(
         selected_mode = normalize_reading_mode(reading_mode)
     except ValueError:
         selected_mode = "usual"
-    run_id = uuid.uuid4().hex[:12]
+    if not _RUN_ID_RE.fullmatch(run_id):
+        run_id = uuid.uuid4().hex[:12]
     response = templates.TemplateResponse(
         request,
         "run.html.j2",
@@ -2018,6 +2022,10 @@ def run_get(
             "csrf_token": _CSRF_TOKEN,
             "reading_mode": selected_mode,
             "autostart": bool(autostart),
+            "resume_url": (
+                f"/run?reading_mode={selected_mode}&autostart=1&run_id={run_id}"
+            ),
+            "restart_url": f"/run?reading_mode={selected_mode}&autostart=1",
         },
     )
     response.headers["Cache-Control"] = "no-store"
@@ -2055,33 +2063,29 @@ async def run_stream(request: Request, run_id: str) -> StreamingResponse:
     if not _RUN_ID_RE.fullmatch(run_id):
         raise HTTPException(status_code=400, detail="invalid run id")
     with _RUN_LOCK:
-        q = _RUN_QUEUES.get(run_id)
-    if q is None:
+        events = _RUN_QUEUES.get(run_id)
+    if events is None:
         raise HTTPException(
             status_code=404,
             detail="brew run not found; it may have ended or the server restarted",
         )
 
     async def event_gen():
-        terminal_seen = False
-        try:
-            yield f"data: {json.dumps({'stage': 'connected', 'run_id': run_id})}\n\n"
-            terminal = {"done", "error"}
-            while True:
-                try:
-                    evt = await asyncio.to_thread(q.get, True, 5.0)
-                except Exception:  # queue.Empty or similar
-                    yield ": heartbeat\n\n"
-                    continue
+        yield f"data: {json.dumps({'stage': 'connected', 'run_id': run_id})}\n\n"
+        terminal = {"done", "error"}
+        cursor = 0
+        while True:
+            with _RUN_LOCK:
+                batch = list(events[cursor:])
+            if not batch:
+                await asyncio.sleep(1.0)
+                yield ": heartbeat\n\n"
+                continue
+            for evt in batch:
+                cursor += 1
                 yield f"data: {json.dumps(evt)}\n\n"
                 if evt.get("stage") in terminal:
-                    terminal_seen = True
-                    break
-        finally:
-            if terminal_seen:
-                with _RUN_LOCK:
-                    _RUN_QUEUES.pop(run_id, None)
-                    _RUN_STARTED.discard(run_id)
+                    return
 
     return StreamingResponse(
         event_gen(),

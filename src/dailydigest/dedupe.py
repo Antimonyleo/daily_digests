@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from datetime import datetime
 from typing import Any
@@ -57,10 +58,12 @@ def _canonical_doi(raw: str) -> str:
     """Normalize a DOI to bare lowercase form."""
     if not raw:
         return ""
-    s = raw.strip()
-    s = re.sub(r"^https?://(?:dx\.)?doi\.org/", "", s, flags=re.IGNORECASE)
-    s = re.sub(r"^doi:\s*", "", s, flags=re.IGNORECASE)
-    return s.lower()
+    value = raw.strip()
+    value = re.sub(
+        r"^https?://(?:dx\.)?doi\.org/", "", value, flags=re.IGNORECASE
+    )
+    value = re.sub(r"^doi:\s*", "", value, flags=re.IGNORECASE)
+    return value.lower()
 
 
 _DOI_RE = re.compile(r"\b10\.\d{4,9}/[-._;()/:A-Z0-9]+\b", re.IGNORECASE)
@@ -126,7 +129,7 @@ def dedupe_ranking_candidates[T](items: list[T]) -> list[T]:
     out: list[T] = []
 
     for it in items:
-        keys = _candidate_keys(it)
+        keys = candidate_identity_keys(it)
         matched_indices: list[int] = list(dict.fromkeys(
             key_to_index[k] for k in keys if k in key_to_index
         ))
@@ -201,14 +204,22 @@ def _candidate_representative_score(it: Any) -> float:
     )
 
 
-def _candidate_keys(it: Any) -> list[str]:
+def candidate_identity_keys(it: Any) -> list[str]:
+    """Return durable cross-source identity keys for an item-like object."""
     url = str(getattr(it, "url", "") or "")
     external_id = str(getattr(it, "external_id", "") or "")
     source = str(getattr(it, "source", "") or "").lower()
     title = str(getattr(it, "title", "") or "")
 
     keys: list[str] = []
-    doi = _extract_doi(external_id) or _extract_doi(url)
+    metadata = getattr(it, "metadata", None)
+    if not isinstance(metadata, dict):
+        try:
+            metadata = json.loads(str(getattr(it, "metadata_json", "") or "{}"))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            metadata = {}
+    metadata_doi = str(metadata.get("doi") or "") if isinstance(metadata, dict) else ""
+    doi = _extract_doi(metadata_doi, external_id, url)
     if doi:
         keys.append(f"doi:{doi}")
 

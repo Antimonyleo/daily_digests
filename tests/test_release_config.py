@@ -46,6 +46,7 @@ def test_example_config_keeps_live_citation_enrichment_opt_in():
     example_env = (ROOT / ".env.example").read_text()
 
     assert "CITATION_ENRICHMENT=false" in example_env
+    assert "LOW_IMPACT_RELEVANCE_FLOOR=0.72" in example_env
 
 
 def test_example_profile_respects_ten_core_topic_limit():

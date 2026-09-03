@@ -139,6 +139,37 @@ def test_ingest_all_records_adapter_exceptions_as_failed_health(monkeypatch):
     assert "network unavailable" in (recorded[0].error or "")
 
 
+def test_ingest_all_aborts_when_every_enabled_opportunity_provider_fails(monkeypatch):
+    """A healthy research fetch must not hide a failed funding scan."""
+    from dailydigest import pipeline as pipeline_mod
+
+    specs = [
+        SimpleNamespace(name="Research", kind="custom", section="research"),
+        SimpleNamespace(name="Funding A", kind="grants_gov", section="opportunities"),
+        SimpleNamespace(name="Funding B", kind="grants_gov", section="opportunities"),
+    ]
+
+    class Source:
+        def fetch(self, spec, days=2):
+            del days
+            if spec.section == "opportunities":
+                raise RuntimeError("official provider unavailable")
+            return [SimpleNamespace(section="research", url="https://example.com/paper")]
+
+    settings = SimpleNamespace(
+        include_opportunities=True,
+        top_opportunities=5,
+        top_research=10,
+    )
+    monkeypatch.setattr(pipeline_mod, "init_db", lambda: None)
+    monkeypatch.setattr(pipeline_mod, "load_sources", lambda: specs)
+    monkeypatch.setattr(pipeline_mod, "dispatch_source", lambda _spec: Source())
+    monkeypatch.setattr(pipeline_mod.health, "record", lambda _rows: None)
+
+    with pytest.raises(RuntimeError, match="Funding source coverage is degraded"):
+        pipeline_mod.ingest_all(days=2, section_settings=settings)
+
+
 def test_ingest_all_aborts_a_single_provider_partial_research_scan(monkeypatch):
     """Five OpenAlex rows must not replace a digest when redundant sources fail."""
     from dailydigest import pipeline as pipeline_mod

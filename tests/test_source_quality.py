@@ -315,6 +315,11 @@ def test_recognized_research_venue_matches_flagship_journals():
         == "Journal of the American Chemical Society"
     )
     assert recognized_research_venue("Nature Materials") == "Nature Materials"
+    assert recognized_research_venue("Small") == "Small"
+    assert (
+        recognized_research_venue("Angewandte Chemie International Edition")
+        == "Angewandte Chemie International Edition"
+    )
     # Unknown / low-impact venues keep their aggregator attribution (None).
     assert recognized_research_venue("ACS Omega") is None
     assert recognized_research_venue("Frontiers in Pharmacology") is None

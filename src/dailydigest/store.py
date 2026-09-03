@@ -654,7 +654,32 @@ def exclude_known_items(rows: list[ItemRow]) -> list[ItemRow]:
     known = known_item_ids(ids)
     if not known:
         return rows
-    return [r for r in rows if r.id is None or int(r.id) not in known]
+    return _exclude_identity_siblings(rows, known)
+
+
+def _exclude_identity_siblings(
+    rows: list[ItemRow], excluded_ids: set[int]
+) -> list[ItemRow]:
+    """Apply item-level feedback to duplicate rows from another provider."""
+    if not excluded_ids:
+        return rows
+    from .dedupe import candidate_identity_keys
+
+    excluded_keys = {
+        key
+        for row in rows
+        if row.id is not None and int(row.id) in excluded_ids
+        for key in candidate_identity_keys(row)
+    }
+    return [
+        row
+        for row in rows
+        if row.id is None
+        or (
+            int(row.id) not in excluded_ids
+            and not excluded_keys.intersection(candidate_identity_keys(row))
+        )
+    ]
 
 
 def add_carryover_items(
@@ -881,7 +906,7 @@ def upsert_items(items: Iterable[Item]) -> int:
                     row.url = it.url
                 old_metadata = item_metadata(row)
                 incoming_metadata = it.metadata or {}
-                merged_metadata = {**incoming_metadata, **old_metadata}
+                merged_metadata = {**old_metadata, **incoming_metadata}
                 if merged_metadata != old_metadata:
                     row.metadata_json = json.dumps(
                         merged_metadata,
@@ -983,7 +1008,7 @@ def exclude_reviewed_items(rows: list[ItemRow]) -> list[ItemRow]:
     }
     if not reviewed:
         return rows
-    return [r for r in rows if r.id is None or int(r.id) not in reviewed]
+    return _exclude_identity_siblings(rows, reviewed)
 
 
 def _latest_vote_values(item_ids: list[int]) -> dict[int, int]:

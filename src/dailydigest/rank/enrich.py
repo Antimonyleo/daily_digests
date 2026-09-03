@@ -346,6 +346,9 @@ def enrich_scored(
         entry = _entry_for(idx)
         if entry:
             score = float(score)
+            venue = str(entry.get("venue") or "").strip()
+            if venue:
+                row.venue_name = venue
             cs = citation_score(
                 entry.get("cited_by_count"), getattr(row, "published_at", None), now=now
             )
@@ -357,12 +360,11 @@ def enrich_scored(
                 # Flag genuinely low-impact venues so the selection-stage
                 # frequency cap treats them as low_impact_journal even though
                 # their configured source (e.g. OpenAlex) hides the real venue.
-                if vq < _LOW_VENUE_QUALITY:
-                    # Transient (non-persisted) marker read by source_bucket's
-                    # low-impact frequency cap. Setting a non-column attribute on
-                    # a mapped instance is safe; no swallowing so a real failure
-                    # (which would silently disable low-impact gating) surfaces.
-                    row.venue_low_impact = True
+                # Transient markers let the selection policy distinguish a
+                # verified journal from an unknown aggregator.
+                row.venue_quality_verified = True
+                row.venue_low_impact = vq < _LOW_VENUE_QUALITY
+            score = max(0.0, min(1.0, score))
         boosted.append((row, score))
     boosted.sort(key=lambda t: t[1], reverse=True)
     return boosted

@@ -72,10 +72,10 @@ def test_venue_low_impact_flag_never_relabels_a_preprint_server():
         assert source_bucket(row) == expected
         assert is_low_impact_research(row) is False
 
-    # The guard still does its real job: a hidden trivial venue behind an
-    # aggregator is still caught.
+    # Missing venue evidence is conservative, and the explicit enrichment flag
+    # reaches the same low-impact result.
     hidden = _row("A targeted therapeutics study", "PubMed (your topics)")
-    assert source_bucket(hidden) == "published_database"
+    assert source_bucket(hidden) == "low_impact_journal"
     hidden.venue_low_impact = True
     assert source_bucket(hidden) == "low_impact_journal"
 
@@ -87,6 +87,20 @@ def test_hidden_unknown_pubmed_venue_is_low_impact_without_live_enrichment():
         section="research",
         source="PubMed (your topics)",
         metadata_json='{"venue":"Journal of Minor Results"}',
+        id=1,
+    )
+
+    assert source_bucket(row) == "low_impact_journal"
+    assert is_low_impact_research(row) is True
+
+
+def test_pubmed_without_venue_evidence_is_not_promoted_as_a_journal():
+    row = SimpleNamespace(
+        title="A targeted therapeutics study",
+        abstract="Primary research with methods and results.",
+        section="research",
+        source="PubMed (your topics)",
+        metadata_json="{}",
         id=1,
     )
 
@@ -204,9 +218,9 @@ def test_low_impact_journals_are_frequency_capped():
     assert low <= 1
 
 
-def test_low_impact_keeps_one_slot_on_small_days():
-    # A quiet day (cap under ten) must still admit one strongly on-topic
-    # low-impact paper instead of truncating the allowance to zero.
+def test_low_impact_fraction_is_a_maximum_not_a_reserved_slot():
+    # Ten percent of a five-item serving rounds down to zero. A maximum must not
+    # manufacture a low-impact slot that the reader did not ask for.
     scored = _hq_pool(12)
     scored += [
         (_row(f"Minor paper {i}", f"Journal of Minor Results {i}"), 0.90 - i * 0.005)
@@ -216,11 +230,11 @@ def test_low_impact_keeps_one_slot_on_small_days():
     result = pick_top_per_section(scored, {"research": 5})
     low = sum(1 for row, _ in result if source_bucket(row) == "low_impact_journal")
     assert len(result) == 5
-    assert low == 1
+    assert low == 0
 
 
 def test_low_impact_below_floor_is_excluded():
-    # All low-impact items are below the 0.58 relevance floor → none selected when
+    # All low-impact items are below the relevance floor → none selected when
     # enough high-quality items exist to fill the section.
     scored = _hq_pool(12)
     scored += [
@@ -232,13 +246,11 @@ def test_low_impact_below_floor_is_excluded():
     assert low == 0
 
 
-def test_low_impact_used_as_last_resort_only_up_to_hard_minimum():
-    # Only low-impact items exist (below floor). The last-resort override fills just
-    # the small hard minimum (3), not the full cap — a short section of the least-bad
-    # items beats padding five weak slots (dynamic cutoff, see min_research/P8).
+def test_low_impact_below_floor_never_bypasses_quality_gate_as_last_resort():
+    # A hard-minimum fill must not bypass the explicit low-impact relevance floor.
     scored = [
         (_row(f"Minor paper {i}", f"Journal of Minor Results {i}"), 0.45 - i * 0.01)
         for i in range(6)
     ]
     result = pick_top_per_section(scored, {"research": 5})
-    assert len(result) == 3
+    assert result == []

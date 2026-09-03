@@ -77,7 +77,7 @@ class Settings(BaseSettings):
     topic_coverage_bonus_scale: float = Field(default=0.03, ge=0.0, le=0.2)
     # A low-impact-venue research item must clear this base topic relevance to be
     # eligible for the digest at all — so the few that appear are strongly on-topic.
-    low_impact_relevance_floor: float = Field(default=0.58, ge=0.0, le=1.0)
+    low_impact_relevance_floor: float = Field(default=0.72, ge=0.0, le=1.0)
     # When a score calibrator has been fit from vote history, derive the
     # low-impact floor from it (the score at which P(relevant) ~ 0.5), clamped
     # near the configured default. Falls back to the default when uncalibrated.

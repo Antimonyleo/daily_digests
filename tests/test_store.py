@@ -97,6 +97,14 @@ def test_reingest_backfills_missing_research_metadata(monkeypatch, tmp_path):
         row = session.query(store_mod.ItemRow).one()
         assert row.metadata_json == '{"doi":"10.1/x","venue":"Journal of Minor Results"}'
 
+    corrected = original.model_copy(
+        update={"metadata": {"venue": "Nature Biotechnology", "doi": "10.1/x"}}
+    )
+    assert store_mod.upsert_items([corrected]) == 0
+    with store_mod.session_scope() as session:
+        row = session.query(store_mod.ItemRow).one()
+        assert row.metadata_json == '{"doi":"10.1/x","venue":"Nature Biotechnology"}'
+
 
 def test_exclude_reviewed_items_removes_saved_feedback(monkeypatch, tmp_path):
     store_mod = _reset_store(tmp_path, monkeypatch)
@@ -127,6 +135,42 @@ def test_exclude_reviewed_items_removes_saved_feedback(monkeypatch, tmp_path):
     filtered = store_mod.exclude_reviewed_items(rows)
 
     assert {row.external_id for row in filtered} == {"fresh"}
+
+
+def test_reviewed_and_known_flags_suppress_cross_source_doi_siblings(monkeypatch, tmp_path):
+    from dailydigest.models import Item
+
+    store_mod = _reset_store(tmp_path, monkeypatch)
+    now = datetime.now(timezone.utc)
+    items = [
+        Item(
+            source=source,
+            section="research",
+            external_id=external_id,
+            url=url,
+            title=title,
+            published_at=now,
+            metadata={"doi": doi},
+        )
+        for source, external_id, url, title, doi in (
+            ("PubMed", "pm-1", "https://pubmed.example/1", "First title", "10.5555/reviewed"),
+            ("OpenAlex", "oa-1", "https://openalex.example/1", "Alternate title", "10.5555/reviewed"),
+            ("PubMed", "pm-2", "https://pubmed.example/2", "Second title", "10.5555/known"),
+            ("OpenAlex", "oa-2", "https://openalex.example/2", "Another title", "10.5555/known"),
+        )
+    ]
+    store_mod.upsert_items(items)
+    rows = store_mod.recent_items(days=2)
+    by_external = {row.external_id: row for row in rows}
+    with store_mod.session_scope() as session:
+        session.add(store_mod.VoteRow(item_id=by_external["pm-1"].id, value=0))
+    store_mod.set_item_known(int(by_external["pm-2"].id), True)
+
+    reviewed_kept = store_mod.exclude_reviewed_items(rows)
+    known_kept = store_mod.exclude_known_items(rows)
+
+    assert {row.external_id for row in reviewed_kept} == {"pm-2", "oa-2"}
+    assert {row.external_id for row in known_kept} == {"pm-1", "oa-1"}
 
 
 def _add_item(store_mod, external_id: str, section: str = "research") -> int:

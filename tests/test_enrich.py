@@ -169,7 +169,43 @@ def test_low_venue_impact_flags_item_for_cap():
     assert getattr(weak, "venue_low_impact", False) is True
     assert getattr(strong, "venue_low_impact", False) is False
     assert source_bucket(weak) == "low_impact_journal"
-    assert source_bucket(strong) == "aggregator"
+    assert source_bucket(strong) == "published_journal"
+
+
+def test_cached_enrichment_exposes_real_venue_and_keeps_scores_bounded():
+    now = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    url = "https://doi.org/10.1000/cached-venue"
+    iid = _insert_item_with_url("cached-venue", url)
+    save_enrichment(
+        {
+            iid: {
+                "cited_by_count": 500,
+                "venue_impact": 6.3,
+                "venue": "Computational and Structural Biotechnology Journal",
+            }
+        }
+    )
+    row = ItemRow(
+        id=iid,
+        source="PubMed (your topics)",
+        section="research",
+        external_id="cached-venue",
+        url=url,
+        title="RNA structure",
+        abstract="Methods and results.",
+        published_at=now - timedelta(days=10),
+        metadata_json="{}",
+    )
+
+    out = enrich_scored(
+        [(row, 0.98)], settings=_settings(citation_enrichment=True), now=now
+    )
+
+    from dailydigest.rank.source_quality import display_source, source_bucket
+
+    assert out[0][1] <= 1.0
+    assert display_source(row) == "Computational and Structural Biotechnology Journal"
+    assert source_bucket(row) == "published_journal"
 
 
 def test_enrich_no_dois_is_noop():

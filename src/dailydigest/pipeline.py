@@ -176,7 +176,8 @@ def _section_enabled(section: str, settings: Settings | None = None) -> bool:
 
 # Type alias for the optional progress callback used by run_all().
 # Stages emitted (in order): "ingest_start", "ingest_done", "dedupe_done",
-# "rank_done", "summarize_start", "summarize_done", "render_done", "done".
+# "rank_start", "rank_done", "summarize_start", "summarize_done",
+# "render_done", "done".
 ProgressCallback = Callable[[str, dict[str, Any]], None]
 
 
@@ -335,6 +336,12 @@ def ingest_all(
         if (family := _research_source_family(spec))
     }
     successful_research_families: set[str] = set()
+    configured_deadline_sections = {
+        str(getattr(spec, "section", "") or "")
+        for spec in specs
+        if str(getattr(spec, "section", "") or "") in {"opportunities", "events"}
+    }
+    successful_deadline_sections: set[str] = set()
     raw_research_items = 0
 
     groups: dict[str, list[tuple[int, Any]]] = {}
@@ -387,6 +394,9 @@ def ingest_all(
         spec, fetched, stat = fetched_by_index[index]
         stats.append(stat)
         all_items.extend(fetched)
+        section = str(getattr(spec, "section", "") or "")
+        if stat.ok and section in configured_deadline_sections:
+            successful_deadline_sections.add(section)
         fetched_research = sum(
             1
             for item in fetched
@@ -411,6 +421,13 @@ def ingest_all(
         raise RuntimeError(
             "No items were retrieved from any configured source; brew stopped "
             "to avoid stale recommendations. Check network/source health and retry."
+        )
+    for section in sorted(configured_deadline_sections - successful_deadline_sections):
+        label = "Funding" if section == "opportunities" else "Events"
+        raise RuntimeError(
+            f"{label} source coverage is degraded: every configured provider failed. "
+            "Brew stopped so a partial slate does not replace the current digest. "
+            "Check source health and retry."
         )
     # A handful of results from one surviving aggregator is not a healthy
     # research scan. Require both adequate supply and two independent provider
@@ -707,7 +724,14 @@ def _filter_actionable_opportunities(
         if (row.section or "") not in {"opportunities", "events"}:
             out.append((row, score))
             continue
-        assessment = assess_opportunity(item_metadata(row), opportunity_profile)
+        metadata = item_metadata(row)
+        if (row.section or "") == "events" and not metadata.get("record_type"):
+            metadata = {**metadata, "record_type": "event"}
+        assessment = assess_opportunity(
+            metadata,
+            opportunity_profile,
+            today=user_local_date(),
+        )
         if assessment.actionable:
             out.append((row, score))
         else:
@@ -1231,6 +1255,7 @@ def run_all(
         len(deduped_candidates) - len(near_dup_drops),
         days,
     )
+    _emit(progress_callback, "rank_start", {"candidates": len(items)})
     try:
         from .rank.profile import build_attribution_context
 
@@ -1370,20 +1395,12 @@ def run_all(
         from .rank.enrich import enrich_scored
 
         pickable = enrich_scored(pickable)
-        enriched_scores = {
-            _row_feature_key(row): float(score) for row, score in pickable
-        }
         for row, score in pickable:
             feature = score_features.get(_row_feature_key(row))
             if feature is not None:
                 feature["final_score"] = round(float(score), 4)
                 feature["confidence_score"] = round(float(score), 4)
                 feature["source_bucket"] = source_bucket(row)
-        scored = [
-            (row, enriched_scores.get(_row_feature_key(row), float(score)))
-            for row, score in scored
-        ]
-        scored.sort(key=lambda pair: pair[1], reverse=True)
     except Exception as _e:  # noqa: BLE001
         logger.warning("citation enrichment failed: %s", _e)
 

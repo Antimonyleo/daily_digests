@@ -183,6 +183,7 @@ def test_assessment_filters_ineligible_closed_and_too_soon_items():
         "status": "open",
         "opportunity_type": "grant",
         "deadline": "2026-09-15",
+        "official": True,
         "eligibility_tags": ["Public and State controlled institutions of higher education"],
     }
 
@@ -252,6 +253,74 @@ def test_assessment_filters_ineligible_closed_and_too_soon_items():
     outside_region = assess_opportunity(event, profile_with_region, today=date(2026, 8, 10))
     assert outside_region.actionable is False
     assert "location" in outside_region.reason
+
+
+def test_unofficial_opportunity_never_gets_affirmative_eligibility():
+    from dailydigest.opportunities import OpportunityProfile, assess_opportunity
+
+    profile = OpportunityProfile(**_profile_payload())
+    result = assess_opportunity(
+        {
+            "status": "open",
+            "official": False,
+            "opportunity_type": "fellowship",
+            "deadline": "2026-10-15",
+            "eligibility_tags": ["Unrestricted (open to any type of entity)"],
+        },
+        profile,
+        today=date(2026, 8, 10),
+    )
+
+    assert result.actionable is True
+    assert result.eligibility == "unknown"
+    assert "official" in result.reason
+
+
+def test_event_date_must_leave_enough_lead_time():
+    from dailydigest.opportunities import OpportunityProfile, assess_opportunity
+
+    profile = OpportunityProfile(**_profile_payload())
+    event = {
+        "record_type": "event",
+        "status": "open",
+        "official": True,
+        "event_type": "workshop",
+        "format": "online",
+        "event_start": "2026-08-15",
+    }
+
+    result = assess_opportunity(event, profile, today=date(2026, 8, 10))
+
+    assert result.actionable is False
+    assert "lead time" in result.reason
+
+
+def test_event_section_is_not_treated_as_an_opportunity_without_record_type(monkeypatch):
+    import json
+    from types import SimpleNamespace
+
+    from dailydigest import pipeline as pipeline_mod
+    from dailydigest.opportunities import OpportunityProfile
+
+    profile = OpportunityProfile(**_profile_payload())
+    row = SimpleNamespace(
+        id=1,
+        section="events",
+        metadata_json=json.dumps(
+            {
+                "status": "open",
+                "official": True,
+                "event_type": "workshop",
+                "format": "online",
+                "event_start": "2026-08-01",
+            }
+        ),
+    )
+    monkeypatch.setattr(pipeline_mod, "user_local_date", lambda: date(2026, 8, 10))
+
+    kept = pipeline_mod._filter_actionable_opportunities([(row, 0.8)], profile)
+
+    assert kept == []
 
 
 def test_structured_profile_affects_only_opportunity_ordering(monkeypatch):

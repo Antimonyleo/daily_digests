@@ -987,6 +987,36 @@ def test_index_time_machine_uses_latest_actual_brews_across_gaps(
     assert ">4 days ago<" in page
 
 
+def test_recent_digest_ids_are_ordered_by_actual_brew_time():
+    from dailydigest import web
+    from dailydigest.store import DigestRow, init_db, session_scope
+
+    init_db()
+    with session_scope() as session:
+        session.add_all(
+            [
+                DigestRow(
+                    id="2026-05-05",
+                    created_at=datetime(2026, 5, 5, tzinfo=timezone.utc),
+                ),
+                DigestRow(
+                    id="2026-05-03",
+                    created_at=datetime(2026, 5, 6, tzinfo=timezone.utc),
+                ),
+                DigestRow(
+                    id="2026-05-01",
+                    created_at=datetime(2026, 5, 4, tzinfo=timezone.utc),
+                ),
+            ]
+        )
+
+    assert web._recent_digest_ids("2026-05-06") == [
+        "2026-05-03",
+        "2026-05-05",
+        "2026-05-01",
+    ]
+
+
 def test_index_falls_back_to_today_outside_the_time_machine_window(
     tmp_path, monkeypatch
 ):
@@ -2502,6 +2532,41 @@ def test_run_start_defaults_to_usual_and_rejects_unknown_reading_mode(monkeypatc
     web._RUN_STARTED.clear()
 
 
+def test_run_stream_replays_progress_to_multiple_refreshes():
+    from dailydigest import web
+
+    run_id = "feedface1234"
+    web._RUN_QUEUES.clear()
+    web._RUN_STARTED.clear()
+    events = web._ensure_run(run_id)
+    events.extend(
+        [
+            {"stage": "rank_start", "payload": {"candidates": 42}},
+            {"stage": "done", "payload": {"digest_id": "2026-09-02"}},
+        ]
+    )
+
+    async def collect() -> str:
+        response = await web.run_stream(
+            _request("GET", f"/run/stream?run_id={run_id}"), run_id
+        )
+        chunks = []
+        async for chunk in response.body_iterator:
+            chunks.append(chunk.decode() if isinstance(chunk, bytes) else chunk)
+        return "".join(chunks)
+
+    async def collect_both() -> tuple[str, str]:
+        return await asyncio.gather(collect(), collect())
+
+    first, second = asyncio.run(collect_both())
+
+    assert '"stage": "rank_start"' in first
+    assert '"stage": "done"' in first
+    assert first == second
+    web._RUN_QUEUES.clear()
+    web._RUN_STARTED.clear()
+
+
 def test_abandoned_run_queues_are_bounded():
     from dailydigest import web
 
@@ -2535,6 +2600,25 @@ def test_run_page_asks_for_reading_depth_before_brewing(monkeypatch, tmp_path):
     assert "5 research picks + 1 per other section" in body
     assert body.index("How are we feeling today?") < body.index("Brew today’s digest")
     assert "morning tea" not in body.lower()
+
+
+def test_run_page_reuses_valid_run_id_so_refresh_reconnects(monkeypatch, tmp_path):
+    from dailydigest import web
+
+    profile_path = tmp_path / "profile.yaml"
+    profile_path.write_text("bio: Reader\nkeywords: []\ndownweight: []\n")
+    monkeypatch.setattr(web, "_get_profile_path", lambda: profile_path)
+
+    response = web.run_get(
+        _request("GET", "/run"),
+        reading_mode="usual",
+        autostart=True,
+        run_id="abcdef123456",
+    )
+    body = _text_payload(response)
+
+    assert 'const RUN_ID = "abcdef123456";' in body
+    assert "autostart=1\\u0026run_id=abcdef123456" in body
 
 
 def test_setup_and_completion_pages_use_time_neutral_copy(monkeypatch, tmp_path):

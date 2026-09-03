@@ -893,15 +893,15 @@ def _pick_research_balanced(
 
         _s = get_settings()
         _low_impact_frac = float(_s.max_low_impact_research_frac)
-        max_low_impact = max(1, int(cap * _low_impact_frac)) if _low_impact_frac > 0 else 0
+        max_low_impact = int(cap * _low_impact_frac) if _low_impact_frac > 0 else 0
         low_impact_floor = float(_s.low_impact_relevance_floor)
         if getattr(_s, "adaptive_relevance_floor", False):
             from .calibrate import adaptive_relevance_floor as _adaptive_floor
 
             low_impact_floor = _adaptive_floor(low_impact_floor)
     except Exception:  # noqa: BLE001
-        max_low_impact = max(1, cap // 6)
-        low_impact_floor = 0.58
+        max_low_impact = cap // 6
+        low_impact_floor = 0.72
 
     selected: list[tuple[ItemRow, float]] = []
     selected_ids: set[int] = set()
@@ -914,15 +914,14 @@ def _pick_research_balanced(
         score: float,
         *,
         enforce_source_cap: bool = True,
-        allow_low_impact_override: bool = False,
     ) -> bool:
         row_id = getattr(row, "id", None)
         key = int(row_id) if isinstance(row_id, int) else id(row)
         if key in selected_ids or len(selected) >= cap:
             return False
-        if not allow_low_impact_override and is_low_impact_research(row):
-            # Frequency cap + relevance floor: low-impact work is gated unless we
-            # are in the last-resort fill (override) to avoid a short section.
+        if is_low_impact_research(row):
+            # The frequency cap and relevance floor remain hard quality gates,
+            # including during last-resort filling.
             if float(score) < low_impact_floor:
                 return False
             if bucket_counts.get("low_impact_journal", 0) >= max_low_impact:
@@ -1041,17 +1040,15 @@ def _pick_research_balanced(
                     break
                 add(row, score)
 
-    # Last resort: fill only up to a small HARD MINIMUM (not the full cap) by
-    # overriding the low-impact frequency cap / relevance floor. A short section of
-    # genuinely strong items beats padding every slot with weak low-impact work —
-    # historically the padded tail slots had far lower positive-feedback rates. A
-    # quiet day should simply yield fewer papers, not fifteen mediocre ones.
+    # Last resort: fill only up to a small hard minimum while relaxing source
+    # diversity. Quality gates remain absolute; a short section is preferable to
+    # padding it with low-impact work below the configured floor.
     hard_min = min(3, cap)
     if len(selected) < hard_min:
         for row, score in scored:
             if len(selected) >= hard_min:
                 break
-            add(row, score, allow_low_impact_override=True)
+            add(row, score, enforce_source_cap=False)
 
     return _apply_final_score_cutoff(selected)
 

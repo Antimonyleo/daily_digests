@@ -155,6 +155,12 @@ class PubMedSource:
                 doi = (article_id.text or "").strip().lower()
                 if doi:
                     break
+        if not doi:
+            for location_id in art.findall(".//ELocationID"):
+                if str(location_id.attrib.get("EIdType") or "").lower() == "doi":
+                    doi = (location_id.text or "").strip().lower()
+                    if doi:
+                        break
 
         pub_dt: datetime | None = None
         pubdate = art.find(".//PubDate")
