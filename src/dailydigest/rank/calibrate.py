@@ -1,14 +1,15 @@
 """Platt calibration of ranking scores to P(relevant) from vote history.
 
-The quality-adjusted / fused ranking scores are not probabilities, so absolute
-thresholds (e.g. the low-impact relevance floor) are heuristics. This module
+The quality-adjusted / fused ranking scores are not probabilities. This module
 fits a logistic map ``P(relevant) = sigmoid(a*score + b)`` from the persisted
 (final_score, vote) pairs, which gives two things:
 
 * an interpretable confidence for display/eval, and
-* a self-tuning relevance floor: the score at which P(relevant) crosses a
-  target, so the floor adapts to the user's feedback instead of staying a
-  hardcoded constant.
+* ``adaptive_relevance_floor``: the score at which P(relevant) crosses a
+  target. Because the fit lives on the final-score scale, the normal brew does
+  not use it: its low-impact gate reads the raw ``topic_score`` snapshot against
+  the fixed ``low_impact_relevance_floor`` (see ``config.Settings``). Only
+  callers that rank without feature snapshots fall back to this floor.
 
 A monotonic (a > 0) calibrator does not reorder items, so this never changes
 ranking order — only the meaning of the score scale and the derived threshold.

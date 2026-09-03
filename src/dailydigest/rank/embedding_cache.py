@@ -68,30 +68,25 @@ def embed_item_rows(rows: list[ItemRow]) -> np.ndarray:
 
     model_name = active_embedding_signature()
     init_db()
+    item_ids = [item_id for item_id in ids if item_id is not None]
     with session_scope() as s:
-        item_ids = [item_id for item_id in ids if item_id is not None]
-        # Keep one active vector per item. Prefix/model changes should re-embed,
-        # not leave an unbounded trail of obsolete cache rows.
-        s.execute(
-            delete(ItemEmbeddingRow).where(
-                ItemEmbeddingRow.item_id.in_(item_ids),
-                ItemEmbeddingRow.model != model_name,
-            )
-        )
         cached_rows = s.execute(
             select(ItemEmbeddingRow).where(
                 ItemEmbeddingRow.item_id.in_(item_ids),
                 ItemEmbeddingRow.model == model_name,
             )
         ).scalars().all()
-        by_item_id = {int(row.item_id): row for row in cached_rows}
+        cached_by_item_id = {
+            int(row.item_id): (row.text_hash, int(row.dim), row.vector)
+            for row in cached_rows
+        }
 
         for idx, item_id in enumerate(ids):
             assert item_id is not None
-            cached = by_item_id.get(item_id)
+            cached = cached_by_item_id.get(item_id)
             vec = (
-                _deserialize(cached.vector, int(cached.dim))
-                if cached is not None and cached.text_hash == hashes[idx]
+                _deserialize(cached[2], cached[1])
+                if cached is not None and cached[0] == hashes[idx]
                 else None
             )
             if vec is not None:
@@ -99,10 +94,33 @@ def embed_item_rows(rows: list[ItemRow]) -> np.ndarray:
             else:
                 missing_indexes.append(idx)
 
-        if missing_indexes:
-            new_vecs = embed_texts([texts[idx] for idx in missing_indexes]).astype(
-                np.float32, copy=False
+    new_vecs = None
+    if missing_indexes:
+        new_vecs = embed_texts([texts[idx] for idx in missing_indexes]).astype(
+            np.float32, copy=False
+        )
+
+    with session_scope() as s:
+        # Keep one active vector per item. Prefix/model changes should re-embed,
+        # not leave an unbounded trail of obsolete cache rows. This write and
+        # the cache updates stay short; the expensive encoder ran above without
+        # holding a SQLite transaction open.
+        s.execute(
+            delete(ItemEmbeddingRow).where(
+                ItemEmbeddingRow.item_id.in_(item_ids),
+                ItemEmbeddingRow.model != model_name,
             )
+        )
+        if missing_indexes:
+            assert new_vecs is not None
+            missing_item_ids = [ids[idx] for idx in missing_indexes]
+            cached_rows = s.execute(
+                select(ItemEmbeddingRow).where(
+                    ItemEmbeddingRow.item_id.in_(missing_item_ids),
+                    ItemEmbeddingRow.model == model_name,
+                )
+            ).scalars().all()
+            by_item_id = {int(row.item_id): row for row in cached_rows}
             now = datetime.now(timezone.utc)
             for vec_offset, idx in enumerate(missing_indexes):
                 item_id = ids[idx]

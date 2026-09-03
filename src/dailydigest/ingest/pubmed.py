@@ -148,6 +148,20 @@ class PubMedSource:
                 authors_list.append(name)
         authors = ", ".join(authors_list)
 
+        venue = (art.findtext(".//Journal/Title") or "").strip()
+        doi = ""
+        for article_id in art.findall("./PubmedData/ArticleIdList/ArticleId"):
+            if str(article_id.attrib.get("IdType") or "").lower() == "doi":
+                doi = (article_id.text or "").strip().lower()
+                if doi:
+                    break
+        if not doi:
+            for location_id in art.findall(".//ELocationID"):
+                if str(location_id.attrib.get("EIdType") or "").lower() == "doi":
+                    doi = (location_id.text or "").strip().lower()
+                    if doi:
+                        break
+
         pub_dt: datetime | None = None
         pubdate = art.find(".//PubDate")
         if pubdate is not None:
@@ -177,4 +191,9 @@ class PubMedSource:
             abstract=abstract,
             authors=authors,
             published_at=pub_dt,
+            metadata={
+                key: value
+                for key, value in (("venue", venue), ("doi", doi))
+                if value
+            },
         )

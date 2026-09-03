@@ -35,6 +35,25 @@
     font-size: 15px; line-height: 1.55;
   }
   .actions { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 8px; }
+  .time-machine {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+    margin: -2px 0 14px;
+  }
+  .time-machine-label {
+    margin-right: 3px; color: var(--muted); font-size: 11px; font-weight: 800;
+    letter-spacing: 0.07em; text-transform: uppercase;
+  }
+  .time-machine-link {
+    display: inline-flex; align-items: baseline; gap: 5px; min-height: 30px;
+    padding: 5px 9px; border: 1px solid var(--border); border-radius: 999px;
+    background: var(--card); color: var(--text); font-size: 12px; font-weight: 720;
+    text-decoration: none;
+  }
+  .time-machine-link time { color: var(--muted); font-size: 10px; font-weight: 650; }
+  .time-machine-link:hover { border-color: var(--accent); color: var(--accent-strong); }
+  .time-machine-link.active {
+    border-color: var(--accent); background: var(--accent-soft); color: var(--accent-strong);
+  }
   .compact-brew-form { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0; }
   .compact-brew {
     display: flex; align-items: center; gap: 7px; min-height: 38px; padding: 5px 6px 5px 10px;
@@ -496,6 +515,10 @@
     display: none; padding: 30px 22px; color: var(--muted); text-align: center;
     border-top: 1px solid var(--border-soft); font-size: 14px;
   }
+  .empty-section-note {
+    padding: 18px 22px; color: var(--muted); font-size: 13px; line-height: 1.55;
+    border-top: 1px solid var(--border-soft);
+  }
   .empty { padding: 44px 22px; text-align: center; color: var(--muted); font-size: 14px; line-height: 1.6; }
   .toast {
     position: fixed; right: 18px; bottom: 62px; z-index: 20;
@@ -658,7 +681,7 @@
       <p class="subhead">Fresh research and the signals you chose, ranked against your profile.</p>
     </div>
     <div class="actions">
-      {% if not empty %}
+      {% if not empty and viewing_today %}
       <form class="compact-brew-form" action="/run" method="get">
         <input type="hidden" name="autostart" value="1">
         <label class="compact-brew" for="reading-mode-select">
@@ -676,6 +699,17 @@
       <button class="btn" onclick="window.location.href='/setup'" type="button">Settings</button>
     </div>
   </header>
+
+  {% if recent_brews %}
+  <nav class="time-machine" aria-label="Browse recent digests">
+    <span class="time-machine-label">Time Machine</span>
+    {% for brew in recent_brews %}
+    <a class="time-machine-link{% if brew.active %} active{% endif %}" href="{{ brew.href }}"{% if brew.active %} aria-current="page"{% endif %}>
+      <span>{{ brew.label }}</span><time datetime="{{ brew.id }}">{{ brew.date_label }}</time>
+    </a>
+    {% endfor %}
+  </nav>
+  {% endif %}
 
   {% if empty %}
   <form class="brew-choice" action="/run" method="get" aria-labelledby="brew-choice-title">
@@ -714,9 +748,9 @@
   {% endif %}
 
   {% if not empty %}
-  <section class="today-cup" aria-label="Today’s cup">
+  <section class="today-cup" aria-label="{{ cup_kicker | default("Today’s cup", true) }}">
     <div>
-      <div class="cup-kicker">Today’s cup</div>
+      <div class="cup-kicker">{{ cup_kicker | default("Today’s cup", true) }}</div>
       <div class="cup-time">≈ {{ overview.reading_minutes }} minute digest</div>
       <div class="cup-label">{{ overview.selected }} carefully selected entries</div>
     </div>
@@ -789,7 +823,7 @@
 	    {% if empty %}
 	    <div class="empty">
 	      {% if brewed %}
-	      A digest was brewed for today, but no matching items were found.<br>
+	      A digest was brewed for {{ "today" if viewing_today else digest_id }}, but no matching items were found.<br>
 	      Adjust section sizes or profile terms in Settings, then brew again.
 	      {% else %}
 	      No digest has been brewed for today yet.<br>
@@ -821,9 +855,9 @@
                 <span class="bookmark-label">{{ 'Saved' if item.bookmarked else 'Save' }}</span>
               </button>
               {% if section.key in ("opportunities", "events") %}
-              {# Funding calls stay open for weeks and are re-shown whenever their
-                 official details change, so only an explicit "I know this" can
-                 retire one. Nothing automatic ever sets this flag. #}
+              {# Funding calls stay open for weeks and form a standing shortlist
+                 that may re-show an active call, so only an explicit "I know this"
+                 can retire one. Nothing automatic ever sets this flag. #}
               <button class="bookmark-btn known-btn{% if item.known %} active{% endif %}" type="button" aria-pressed="{{ 'true' if item.known else 'false' }}" aria-label="{{ 'Show this again in future digests' if item.known else 'Mark as known so it stops appearing' }}">
                 <span class="known-icon" aria-hidden="true">{{ '✓' if item.known else '⊘' }}</span>
                 <span class="known-label">{{ 'Known' if item.known else 'Mark known' }}</span>
@@ -939,6 +973,21 @@
       {% endfor %}
       <div class="no-filter-results" id="no-filter-results">No items match this view.</div>
     {% endif %}
+    {% for section in empty_enabled_sections %}
+    <details class="section-block empty-section" data-section="{{ section.key }}">
+      <summary class="section-toggle">
+        <span class="section-heading"><span aria-hidden="true">{{ section.emoji }}</span>{{ section.title }}</span>
+        <span class="section-toggle-side"><span class="section-count">0</span><span class="section-chevron" aria-hidden="true">⌄</span></span>
+      </summary>
+      <div class="empty-section-note">
+        {% if section.key == "opportunities" %}
+        No qualified new funding calls were selected in this brew. Calls that do not pass the topic, deadline, official-source, and eligibility checks remain excluded.
+        {% else %}
+        No qualified new events were selected in this brew. Events that do not pass the topic, date, official-source, and eligibility checks remain excluded.
+        {% endif %}
+      </div>
+    </details>
+    {% endfor %}
 
     {% if overflow_audit %}
     <details class="overflow-shelf" id="overflow-shelf">
@@ -1475,7 +1524,9 @@
     });
     syncAllChip(state);
 
-    document.querySelectorAll(".section-block").forEach((sectionEl) => {
+    // Skip the zero-count placeholders: they hold no .item by construction, so
+    // this sweep would hide them on the first filter click and never restore them.
+    document.querySelectorAll(".section-block:not(.empty-section)").forEach((sectionEl) => {
       const hasVisibleItem = Array.from(sectionEl.querySelectorAll(".item")).some((itemEl) => !itemEl.hidden);
       sectionEl.hidden = !hasVisibleItem;
       if (hasVisibleItem && (state.priorityOnly || state.unreadOnly || state.activeSourceTypes.size > 0)) {

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import threading
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -137,6 +138,75 @@ def test_ingest_all_records_adapter_exceptions_as_failed_health(monkeypatch):
     assert len(recorded) == 1
     assert recorded[0].ok is False
     assert "network unavailable" in (recorded[0].error or "")
+
+
+def test_ingest_all_aborts_when_every_enabled_opportunity_provider_fails(monkeypatch):
+    """A healthy research fetch must not hide a failed funding scan."""
+    from dailydigest import pipeline as pipeline_mod
+
+    specs = [
+        SimpleNamespace(name="Research", kind="custom", section="research"),
+        SimpleNamespace(name="Funding A", kind="grants_gov", section="opportunities"),
+        SimpleNamespace(name="Funding B", kind="grants_gov", section="opportunities"),
+    ]
+
+    class Source:
+        def fetch(self, spec, days=2):
+            del days
+            if spec.section == "opportunities":
+                raise RuntimeError("official provider unavailable")
+            return [SimpleNamespace(section="research", url="https://example.com/paper")]
+
+    settings = SimpleNamespace(
+        include_opportunities=True,
+        top_opportunities=5,
+        top_research=10,
+    )
+    monkeypatch.setattr(pipeline_mod, "init_db", lambda: None)
+    monkeypatch.setattr(pipeline_mod, "load_sources", lambda: specs)
+    monkeypatch.setattr(pipeline_mod, "dispatch_source", lambda _spec: Source())
+    monkeypatch.setattr(pipeline_mod.health, "record", lambda _rows: None)
+
+    with pytest.raises(RuntimeError, match="Funding source coverage is degraded"):
+        pipeline_mod.ingest_all(days=2, section_settings=settings)
+
+
+def test_ingest_all_reports_healthy_empty_deadline_section(monkeypatch):
+    """No official matches are visible without being mislabeled as a failure."""
+    from dailydigest import pipeline as pipeline_mod
+
+    specs = [
+        SimpleNamespace(name="Research", kind="custom", section="research"),
+        SimpleNamespace(name="Funding", kind="grants_gov", section="opportunities"),
+    ]
+
+    class Source:
+        def fetch(self, spec, days=2):
+            del days
+            if spec.section == "opportunities":
+                return []
+            return [SimpleNamespace(section="research", url="https://example.com/paper")]
+
+    events = []
+    recorded = []
+    settings = SimpleNamespace(include_opportunities=True, top_opportunities=5, top_research=10)
+    monkeypatch.setattr(pipeline_mod, "init_db", lambda: None)
+    monkeypatch.setattr(pipeline_mod, "load_sources", lambda: specs)
+    monkeypatch.setattr(pipeline_mod, "dispatch_source", lambda _spec: Source())
+    monkeypatch.setattr(pipeline_mod.health, "record", lambda rows: recorded.extend(rows))
+    monkeypatch.setattr(pipeline_mod, "dedupe_by_url", lambda rows: rows)
+    monkeypatch.setattr(pipeline_mod, "filter_english", lambda rows: rows)
+    monkeypatch.setattr(pipeline_mod, "upsert_items", lambda rows: len(rows))
+
+    assert pipeline_mod.ingest_all(
+        days=2,
+        section_settings=settings,
+        progress_callback=lambda stage, payload: events.append((stage, payload)),
+    ) == 1
+    assert recorded[1].ok is True
+    assert recorded[1].items == 0
+    ingest_done = next(payload for stage, payload in events if stage == "ingest_done")
+    assert ingest_done["empty_deadline_sections"] == ["opportunities"]
 
 
 def test_ingest_all_aborts_a_single_provider_partial_research_scan(monkeypatch):
@@ -573,7 +643,7 @@ def test_run_all_persists_summaries_for_web_view(monkeypatch, tmp_path):
     monkeypatch.setattr(pipeline_mod, "build_profile_matrix", lambda _profile: __import__("numpy").zeros((1, 3)))
     monkeypatch.setattr(pipeline_mod, "recent_items", lambda days=2: [store_mod.session_factory()().get(store_mod.ItemRow, item_id)])
     monkeypatch.setattr(pipeline_mod, "score_items", lambda items, _pv, _downweight, reason_penalty_map=None: [(items[0], 0.9)])
-    monkeypatch.setattr(pipeline_mod, "pick_top_per_section", lambda scored, _caps, catch_up=False: scored)
+    monkeypatch.setattr(pipeline_mod, "pick_top_per_section", lambda scored, _caps, **_kwargs: scored)
     monkeypatch.setattr(pipeline_mod, "summarize_items", lambda rows, profile=None: {rows[0].id: "Persisted summary."})
     monkeypatch.setattr(pipeline_mod, "send_digest", lambda html, subject, dry_run=False: True)
 
@@ -585,6 +655,195 @@ def test_run_all_persists_summaries_for_web_view(monkeypatch, tmp_path):
     audit = store_mod.load_digest_audit(pipeline_mod._digest_id(), "candidate_funnel")
     assert audit
     assert audit[0]["after_cross_source_dedupe"] == 1
+
+
+def test_run_all_enriches_only_candidates_that_clear_free_gates(
+    monkeypatch, tmp_path
+):
+    """Optional network enrichment must not run for already-rejected papers."""
+    from dailydigest import pipeline as pipeline_mod
+    from dailydigest import store as store_mod
+    from dailydigest.rank import enrich as enrich_mod
+
+    _reset_store(tmp_path, monkeypatch)
+    with store_mod.session_scope() as session:
+        rows = [
+            store_mod.ItemRow(
+                source="Nature",
+                section="research",
+                external_id=name,
+                url=f"https://example.com/{name}",
+                title=f"Research candidate {name}",
+                abstract="Primary research with methods and results.",
+                published_at=datetime.now(timezone.utc),
+            )
+            for name in ("on-topic", "off-topic")
+        ]
+        session.add_all(rows)
+        session.flush()
+        ids = [int(row.id) for row in rows]
+
+    def recent_items(days=2):
+        del days
+        with store_mod.session_scope() as session:
+            found = [session.get(store_mod.ItemRow, item_id) for item_id in ids]
+            for row in found:
+                session.expunge(row)
+            return found
+
+    def score(items, _profile, _downweight, attribution=None):
+        del attribution
+        scored = [(row, 0.9 if row.external_id == "on-topic" else 0.8) for row in items]
+        features = {
+            int(row.id): {
+                "topic_score": 0.8 if row.external_id == "on-topic" else 0.2,
+                "confidence_score": value,
+                "final_score": value,
+            }
+            for row, value in scored
+        }
+        return scored, features
+
+    enriched_ids: list[int] = []
+
+    def enrich(scored, **_kwargs):
+        enriched_ids.extend(int(row.id) for row, _score in scored)
+        return [(row, 0.73) for row, _score in scored]
+
+    monkeypatch.setattr(pipeline_mod, "_digest_id", lambda: "2026-09-02")
+    monkeypatch.setattr(pipeline_mod, "ingest_all", lambda **_kwargs: 0)
+    monkeypatch.setattr(
+        pipeline_mod,
+        "load_profile",
+        lambda: SimpleNamespace(bio="", keywords=[], downweight=[]),
+    )
+    monkeypatch.setattr(
+        pipeline_mod,
+        "build_profile_matrix",
+        lambda _profile: __import__("numpy").zeros((1, 3)),
+    )
+    monkeypatch.setattr(pipeline_mod, "recent_items", recent_items)
+    monkeypatch.setattr(pipeline_mod, "_score_items_for_pipeline", score)
+    monkeypatch.setattr(pipeline_mod, "_build_neg_centroid", None)
+    monkeypatch.setattr(enrich_mod, "enrich_scored", enrich)
+    monkeypatch.setattr(
+        pipeline_mod,
+        "summarize_items",
+        lambda selected, profile=None: {int(row.id): "summary" for row in selected},
+    )
+    monkeypatch.setattr(pipeline_mod, "send_digest", lambda *_args, **_kwargs: False)
+
+    pipeline_mod.run_all(dry_run=True)
+
+    assert enriched_ids == [ids[0]]
+    with store_mod.session_scope() as session:
+        impressions = {
+            int(row.item_id): row
+            for row in session.query(store_mod.ImpressionRow).all()
+        }
+    assert impressions[ids[0]].final_score == 0.73
+
+
+def test_run_all_author_boost_keeps_served_score_within_unit_range(
+    monkeypatch, tmp_path
+):
+    """A watchlist byline match must not push a top-ranked score above 1.0."""
+    from dailydigest import pipeline as pipeline_mod
+    from dailydigest import store as store_mod
+
+    _reset_store(tmp_path, monkeypatch)
+    with store_mod.session_scope() as session:
+        rows = [
+            store_mod.ItemRow(
+                source="Nature",
+                section="research",
+                external_id=name,
+                url=f"https://example.com/{name}",
+                title=f"Research candidate {name}",
+                abstract="Primary research with methods and results.",
+                authors=authors,
+                published_at=datetime.now(timezone.utc),
+            )
+            for name, authors in (
+                ("watched", "Doudna, Jennifer A.; Charpentier, Emmanuelle"),
+                ("unwatched", "Smith, Alex"),
+            )
+        ]
+        session.add_all(rows)
+        session.flush()
+        ids = [int(row.id) for row in rows]
+
+    def recent_items(days=2):
+        del days
+        with store_mod.session_scope() as session:
+            found = [session.get(store_mod.ItemRow, item_id) for item_id in ids]
+            for row in found:
+                session.expunge(row)
+            return found
+
+    def score(items, _profile, _downweight, attribution=None):
+        del attribution
+        scored = [(row, 1.0 if row.external_id == "watched" else 0.8) for row in items]
+        features = {
+            int(row.id): {
+                "topic_score": 0.9,
+                "confidence_score": value,
+                "final_score": value,
+            }
+            for row, value in scored
+        }
+        return scored, features
+
+    monkeypatch.setattr(pipeline_mod, "_digest_id", lambda: "2026-09-03")
+    monkeypatch.setattr(pipeline_mod, "ingest_all", lambda **_kwargs: 0)
+    monkeypatch.setattr(
+        pipeline_mod,
+        "load_profile",
+        lambda: SimpleNamespace(
+            bio="",
+            keywords=[],
+            downweight=[],
+            authors_of_interest=["Jennifer Doudna"],
+        ),
+    )
+    monkeypatch.setattr(
+        pipeline_mod,
+        "build_profile_matrix",
+        lambda _profile: __import__("numpy").zeros((1, 3)),
+    )
+    monkeypatch.setattr(pipeline_mod, "recent_items", recent_items)
+    monkeypatch.setattr(pipeline_mod, "_score_items_for_pipeline", score)
+    monkeypatch.setattr(pipeline_mod, "_build_neg_centroid", None)
+    monkeypatch.setattr(
+        pipeline_mod,
+        "summarize_items",
+        lambda selected, profile=None: {int(row.id): "summary" for row in selected},
+    )
+    monkeypatch.setattr(pipeline_mod, "send_digest", lambda *_args, **_kwargs: False)
+
+    pipeline_mod.run_all(dry_run=True)
+
+    with store_mod.session_scope() as session:
+        impressions = {
+            int(row.item_id): row
+            for row in session.query(store_mod.ImpressionRow).all()
+        }
+        digest_scores = {
+            int(row.item_id): float(row.score)
+            for row in session.query(store_mod.DigestItemRow).all()
+        }
+        features = {
+            int(row.item_id): (float(row.final_score), json.loads(row.features_json))
+            for row in session.query(store_mod.DigestItemFeatureRow).all()
+        }
+    watched, unwatched = ids
+    assert impressions[watched].final_score == 1.0
+    assert impressions[watched].position < impressions[unwatched].position
+    assert digest_scores[watched] == 1.0
+    persisted_score, persisted_features = features[watched]
+    assert persisted_score == 1.0
+    assert persisted_features["score"] == 1.0
+    assert persisted_features["rank_score"] == 1.0
 
 
 def test_run_all_gives_carryover_items_one_more_pass_then_consumes(monkeypatch, tmp_path):
@@ -648,7 +907,7 @@ def test_run_all_gives_carryover_items_one_more_pass_then_consumes(monkeypatch, 
     monkeypatch.setattr(
         pipeline_mod,
         "pick_top_per_section",
-        lambda scored, _caps, catch_up=False: scored,
+        lambda scored, _caps, **_kwargs: scored,
     )
     monkeypatch.setattr(
         pipeline_mod,
@@ -727,7 +986,7 @@ def test_run_all_logs_research_candidate_pool_with_selected_flags(monkeypatch, t
 
     # pick_top_per_section returns only the top-scored item, so the other stays
     # in the scored candidate pool as an unpicked (selected=False) impression.
-    def pick_top_per_section(scored, _caps, catch_up=False):
+    def pick_top_per_section(scored, _caps, **_kwargs):
         return scored[:1]
 
     monkeypatch.setattr(
@@ -824,7 +1083,7 @@ def test_run_all_impressions_carry_primary_facet_and_topic_score(monkeypatch, tm
         }
         return scored, features
 
-    def pick_top_per_section(scored, _caps, catch_up=False):
+    def pick_top_per_section(scored, _caps, **_kwargs):
         return scored[:1]
 
     monkeypatch.setattr(
@@ -916,7 +1175,7 @@ def test_run_all_logs_selected_research_item_below_pool_cap(monkeypatch, tmp_pat
         by_id = {int(it.id): it for it in items}
         return [(by_id[i], 1.0 - idx * 0.001) for idx, i in enumerate(ids)]
 
-    def pick_top_per_section(scored, _caps, catch_up=False):
+    def pick_top_per_section(scored, _caps, **_kwargs):
         # Simulate exploration / last-resort fill selecting the lowest-scored item.
         return [t for t in scored if int(t[0].id) == tail_id]
 
@@ -1023,7 +1282,7 @@ def test_dry_run_after_sent_digest_refreshes_preview_and_preserves_sent_at(monke
     monkeypatch.setattr(pipeline_mod, "build_profile_matrix", lambda _profile: __import__("numpy").zeros((1, 3)))
     monkeypatch.setattr(pipeline_mod, "recent_items", recent_items)
     monkeypatch.setattr(pipeline_mod, "score_items", lambda items, _pv, _downweight, reason_penalty_map=None: [(items[0], 0.9)])
-    monkeypatch.setattr(pipeline_mod, "pick_top_per_section", lambda scored, _caps, catch_up=False: scored)
+    monkeypatch.setattr(pipeline_mod, "pick_top_per_section", lambda scored, _caps, **_kwargs: scored)
     monkeypatch.setattr(pipeline_mod, "summarize_items", lambda rows, profile=None: {rows[0].id: "New summary."})
     monkeypatch.setattr(pipeline_mod, "send_digest", lambda html, subject, dry_run=False: False)
 
@@ -1075,7 +1334,7 @@ def test_run_all_does_not_mark_sent_when_send_digest_returns_false(monkeypatch, 
     monkeypatch.setattr(pipeline_mod, "build_profile_matrix", lambda _profile: __import__("numpy").zeros((1, 3)))
     monkeypatch.setattr(pipeline_mod, "recent_items", recent_items)
     monkeypatch.setattr(pipeline_mod, "score_items", lambda items, _pv, _downweight, reason_penalty_map=None: [(items[0], 0.9)])
-    monkeypatch.setattr(pipeline_mod, "pick_top_per_section", lambda scored, _caps, catch_up=False: scored)
+    monkeypatch.setattr(pipeline_mod, "pick_top_per_section", lambda scored, _caps, **_kwargs: scored)
     monkeypatch.setattr(pipeline_mod, "summarize_items", lambda rows, profile=None: {rows[0].id: "Summary."})
     monkeypatch.setattr(pipeline_mod, "send_digest", lambda html, subject, dry_run=False: False)
 
@@ -1115,7 +1374,7 @@ def test_run_all_auto_backfill_when_days_missed(monkeypatch, tmp_path):
     monkeypatch.setattr(pipeline_mod, "build_profile_matrix", lambda _profile: __import__("numpy").zeros((1, 3)))
     monkeypatch.setattr(pipeline_mod, "recent_items", fake_recent_items)
     monkeypatch.setattr(pipeline_mod, "score_items", lambda items, _pv, _downweight, reason_penalty_map=None: [])
-    monkeypatch.setattr(pipeline_mod, "pick_top_per_section", lambda scored, _caps, catch_up=False: [])
+    monkeypatch.setattr(pipeline_mod, "pick_top_per_section", lambda scored, _caps, **_kwargs: [])
     monkeypatch.setattr(pipeline_mod, "summarize_items", lambda rows, profile=None: {})
     monkeypatch.setattr(pipeline_mod, "send_digest", lambda html, subject, dry_run=False: False)
 
@@ -1146,7 +1405,7 @@ def test_run_all_explicit_backfill_days_overrides_auto(monkeypatch, tmp_path):
     monkeypatch.setattr(pipeline_mod, "build_profile_matrix", lambda _profile: __import__("numpy").zeros((1, 3)))
     monkeypatch.setattr(pipeline_mod, "recent_items", fake_recent_items)
     monkeypatch.setattr(pipeline_mod, "score_items", lambda items, _pv, _downweight, reason_penalty_map=None: [])
-    monkeypatch.setattr(pipeline_mod, "pick_top_per_section", lambda scored, _caps, catch_up=False: [])
+    monkeypatch.setattr(pipeline_mod, "pick_top_per_section", lambda scored, _caps, **_kwargs: [])
     monkeypatch.setattr(pipeline_mod, "summarize_items", lambda rows, profile=None: {})
     monkeypatch.setattr(pipeline_mod, "send_digest", lambda html, subject, dry_run=False: False)
 
@@ -1174,7 +1433,7 @@ def test_run_all_empty_digest_emits_done_with_zero_items(monkeypatch, tmp_path):
     monkeypatch.setattr(pipeline_mod, "build_profile_matrix", lambda _profile: __import__("numpy").zeros((1, 3)))
     monkeypatch.setattr(pipeline_mod, "recent_items", lambda days=2: [])
     monkeypatch.setattr(pipeline_mod, "score_items", lambda items, _pv, _downweight, reason_penalty_map=None: [])
-    monkeypatch.setattr(pipeline_mod, "pick_top_per_section", lambda scored, _caps, catch_up=False: [])
+    monkeypatch.setattr(pipeline_mod, "pick_top_per_section", lambda scored, _caps, **_kwargs: [])
     monkeypatch.setattr(pipeline_mod, "summarize_items", lambda rows, profile=None: {})
     monkeypatch.setattr(pipeline_mod, "send_digest", lambda html, subject, dry_run=False: False)
     monkeypatch.setattr(

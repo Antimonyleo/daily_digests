@@ -77,14 +77,14 @@ class Settings(BaseSettings):
     topic_coverage_bonus_scale: float = Field(default=0.03, ge=0.0, le=0.2)
     # A low-impact-venue research item must clear this base topic relevance to be
     # eligible for the digest at all — so the few that appear are strongly on-topic.
-    low_impact_relevance_floor: float = Field(default=0.58, ge=0.0, le=1.0)
-    # When a score calibrator has been fit from vote history, derive the
-    # low-impact floor from it (the score at which P(relevant) ~ 0.5), clamped
-    # near the configured default. Falls back to the default when uncalibrated.
+    low_impact_relevance_floor: float = Field(default=0.72, ge=0.0, le=1.0)
+    # Compatibility fallback for callers without topic-score snapshots. The
+    # normal pipeline uses the fixed raw-topic floor above because its calibrator
+    # is trained on final rank scores, which are a different scale.
     adaptive_relevance_floor: bool = True
     # Max fraction of the research section that may be filled by low-impact-venue
     # items, so they cannot appear frequently even when many are related.
-    max_low_impact_research_frac: float = Field(default=0.15, ge=0.0, le=1.0)
+    max_low_impact_research_frac: float = Field(default=0.10, ge=0.0, le=1.0)
     # Share of research slots preprints may hold. Selection runs AFTER ranking on
     # one combined list, so this ceiling is the only thing that can drop a
     # high-ranked preprint in favour of a lower-ranked journal. It was an

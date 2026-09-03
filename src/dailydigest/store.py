@@ -170,8 +170,9 @@ class KnownItemRow(Base):
     """Items the reader manually flagged as already known / handled.
 
     Only an explicit click writes here. Funding calls stay open for weeks and
-    are deliberately re-surfaced whenever their official details change, so
-    without a manual "I've seen this" signal the same grant keeps returning.
+    form a standing shortlist that prior display never retires (see
+    ``exclude_previously_shown``), so without a manual "I've seen this" signal
+    the same grant keeps returning.
     """
 
     __tablename__ = "known_items"
@@ -610,7 +611,7 @@ def set_item_known(item_id: int, known: bool) -> bool:
     """Idempotently flag/unflag an item as already known. False = no such item.
 
     Manual only: nothing in the pipeline writes this. A known item is dropped
-    from every future digest even if its official details change again.
+    from every future digest even while it stays open and actionable.
     """
     init_db()
     with session_scope() as s:
@@ -646,7 +647,8 @@ def exclude_known_items(rows: list[ItemRow]) -> list[ItemRow]:
     """Drop rows the reader manually flagged as known.
 
     Applied after ``exclude_previously_shown`` so it also overrides that
-    function's deliberate re-surfacing of opportunities whose details changed.
+    function's standing funding/events shortlist, which never hides an active
+    call merely because it was shown before.
     """
     ids = [int(r.id) for r in rows if r.id is not None]
     if not ids:
@@ -654,7 +656,32 @@ def exclude_known_items(rows: list[ItemRow]) -> list[ItemRow]:
     known = known_item_ids(ids)
     if not known:
         return rows
-    return [r for r in rows if r.id is None or int(r.id) not in known]
+    return _exclude_identity_siblings(rows, known)
+
+
+def _exclude_identity_siblings(
+    rows: list[ItemRow], excluded_ids: set[int]
+) -> list[ItemRow]:
+    """Apply item-level feedback to duplicate rows from another provider."""
+    if not excluded_ids:
+        return rows
+    from .dedupe import candidate_identity_keys
+
+    excluded_keys = {
+        key
+        for row in rows
+        if row.id is not None and int(row.id) in excluded_ids
+        for key in candidate_identity_keys(row)
+    }
+    return [
+        row
+        for row in rows
+        if row.id is None
+        or (
+            int(row.id) not in excluded_ids
+            and not excluded_keys.intersection(candidate_identity_keys(row))
+        )
+    ]
 
 
 def add_carryover_items(
@@ -826,7 +853,8 @@ def upsert_items(items: Iterable[Item]) -> int:
                     row.published_at = it.published_at
                     row.metadata_json = metadata_json
                     # Verification keeps open records in the candidate window;
-                    # immutable snapshots below distinguish material changes.
+                    # immutable snapshots below record each official version for
+                    # ``opportunity_history``.
                     row.fetched_at = datetime.now(timezone.utc)
                     if content_changed:
                         row.summary = ""
@@ -881,7 +909,7 @@ def upsert_items(items: Iterable[Item]) -> int:
                     row.url = it.url
                 old_metadata = item_metadata(row)
                 incoming_metadata = it.metadata or {}
-                merged_metadata = {**incoming_metadata, **old_metadata}
+                merged_metadata = {**old_metadata, **incoming_metadata}
                 if merged_metadata != old_metadata:
                     row.metadata_json = json.dumps(
                         merged_metadata,
@@ -983,7 +1011,7 @@ def exclude_reviewed_items(rows: list[ItemRow]) -> list[ItemRow]:
     }
     if not reviewed:
         return rows
-    return [r for r in rows if r.id is None or int(r.id) not in reviewed]
+    return _exclude_identity_siblings(rows, reviewed)
 
 
 def _latest_vote_values(item_ids: list[int]) -> dict[int, int]:
@@ -1020,9 +1048,11 @@ def exclude_previously_shown(
 
     We now suppress on membership in ANY current digest or a viewed, selected
     browser impression within ``days_lookback`` (matching the 30-day item
-    retention). The append-only impression history matters after a same-day
-    rebrew replaces ``digest_items``. ``exclude_digest_id`` keeps re-brewing the
-    *current* day from hiding items already shown that day.
+    retention). Funding calls and events are standing, deadline-bound shortlists:
+    prior display alone never hides an otherwise active call. Their actionability,
+    topic, explicit feedback, and ``known`` gates still run on every brew.
+    ``exclude_digest_id`` keeps re-brewing the current day from hiding items
+    already shown that day.
     """
     ids = [int(r.id) for r in rows if r.id is not None]
     if not ids:
@@ -1053,76 +1083,13 @@ def exclude_previously_shown(
         shown_ids.update(
             int(item_id) for item_id in s.execute(impression_stmt).scalars()
         )
-        opportunity_ids = {
+        deadline_ids = {
             int(row.id)
             for row in rows
             if row.id is not None
             and (row.section or "") in {"opportunities", "events"}
-            and int(row.id) in shown_ids
         }
-        if opportunity_ids:
-            digest_shown_stmt = (
-                select(DigestItemRow.item_id, func.max(DigestItemRow.created_at))
-                .join(DigestRow, DigestRow.id == DigestItemRow.digest_id)
-                .where(
-                    DigestItemRow.item_id.in_(opportunity_ids),
-                    DigestRow.created_at >= cutoff,
-                )
-                .group_by(DigestItemRow.item_id)
-            )
-            impression_shown_stmt = (
-                select(ImpressionRow.item_id, func.max(ImpressionRow.created_at))
-                .where(
-                    ImpressionRow.item_id.in_(opportunity_ids),
-                    ImpressionRow.created_at >= cutoff,
-                    ImpressionRow.selected.is_(True),
-                    ImpressionRow.viewed.is_(True),
-                )
-                .group_by(ImpressionRow.item_id)
-            )
-            if exclude_digest_id is not None:
-                digest_shown_stmt = digest_shown_stmt.where(
-                    DigestItemRow.digest_id != exclude_digest_id
-                )
-                impression_shown_stmt = impression_shown_stmt.where(
-                    ImpressionRow.digest_id != exclude_digest_id
-                )
-            digest_shown_at = dict(
-                s.execute(digest_shown_stmt).all()
-            )
-            impression_shown_at = dict(
-                s.execute(impression_shown_stmt).all()
-            )
-            shown_at = {
-                item_id: max(
-                    timestamp
-                    for timestamp in (
-                        digest_shown_at.get(item_id),
-                        impression_shown_at.get(item_id),
-                    )
-                    if timestamp is not None
-                )
-                for item_id in opportunity_ids
-                if digest_shown_at.get(item_id) is not None
-                or impression_shown_at.get(item_id) is not None
-            }
-            changed_at = dict(
-                s.execute(
-                    select(
-                        OpportunitySnapshotRow.item_id,
-                        func.max(OpportunitySnapshotRow.observed_at),
-                    )
-                    .where(OpportunitySnapshotRow.item_id.in_(opportunity_ids))
-                    .group_by(OpportunitySnapshotRow.item_id)
-                ).all()
-            )
-            shown_ids -= {
-                item_id
-                for item_id in opportunity_ids
-                if changed_at.get(item_id) is not None
-                and shown_at.get(item_id) is not None
-                and changed_at[item_id] > shown_at[item_id]
-            }
+        shown_ids -= deadline_ids
     if not shown_ids:
         return rows
     return [r for r in rows if r.id is None or int(r.id) not in shown_ids]

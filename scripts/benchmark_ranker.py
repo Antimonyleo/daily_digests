@@ -9,20 +9,22 @@ DIFFERENT things:
      engineered features (including the pos/neg affinity "memory" columns) and
      reads its probability directly. It answers: "do the affinity features let a
      simple pointwise model separate held-out liked vs. disliked items better
-     than topic-cosine alone?" It is NOT the deployed ranker: production trains
-     on PAIRWISE feature differences and fuses the LR MARGIN with the topic
-     ranking via RRF (see ``dailydigest.rank.ranker``). Treat this as a feature
+     than topic-cosine alone?" It is NOT the deployed ranker: the default
+     ``hybrid_knn`` mode fuses the graded kNN preference score with the topic
+     ranking via RRF (see ``dailydigest.rank.ranker``); pairwise LR survives
+     only as the retired/optional ``hybrid_lr`` mode. Treat this as a feature
      sanity probe, not a benchmark of what ships.
 
-  B. PRODUCTION-FAITHFUL EVALUATION (``run_production_benchmark``)
-     Mirrors deployment. It computes the graded kNN preference score for the
+  B. DEPLOYED-SCORER PROBE (``run_production_benchmark``)
+     Mirrors the deployed preference fusion, not the full serving pipeline. It
+     computes the graded kNN preference score for the
      held-out TEST research items from TRAIN-only vote exemplars
      (``votes._knn_scores``), then ranks them by RRF-fusing that with the
      topic-cosine ranking (``ranker._fuse_scores``) — exactly as
-     ``score_items_lr`` serves. The retired pairwise-LR fusion is reported as a
+     ``score_items_lr`` uses. The retired pairwise-LR fusion is reported as a
      comparison line. It reports pairwise accuracy AND nDCG@10 for BOTH the
      deployed-style fused ranker and the topic-only baseline. THIS is the
-     deployable-ranker signal:
+     preference-fusion signal:
      "does the shipped-style ranker beat topic-only on held-out votes?"
 
 Both modes are leakage-free in the same way:
@@ -308,8 +310,10 @@ def run_benchmark(
     Trains a POINTWISE LogisticRegression on the v6 features and evaluates its
     probability directly. This measures whether the pos/neg affinity features
     help a simple pointwise model separate held-out liked/disliked items — a
-    feature sanity probe. Production trains PAIRWISE and fuses the LR margin with
-    topic-cosine via RRF; for that, use :func:`run_production_benchmark`.
+    feature sanity probe. The deployed default (``hybrid_knn``) fuses the graded
+    kNN preference score with topic-cosine via RRF, and pairwise LR is only the
+    retired/optional ``hybrid_lr`` mode; for the deployed-style measurement, use
+    :func:`run_production_benchmark`.
 
     ``rows`` are item-like objects (real ItemRow or SimpleNamespace with ``id``,
     ``title``, ``abstract``, ``published_at``), ``labels`` are +1/-1 per row,
@@ -439,10 +443,11 @@ def run_production_benchmark(
     profile_mat: np.ndarray | None = None,
     train_frac: float = 0.75,
 ) -> dict:
-    """PRODUCTION-FAITHFUL EVALUATION (mode B) — the deployable-ranker signal.
+    """DEPLOYED-SCORER PROBE (mode B) — the preference-fusion signal.
 
-    Mirrors deployment end to end, on RESEARCH items only (production ranks the
-    research section this way), excluding any item with no signed vote:
+    Mirrors the deployed preference scorer on RESEARCH items only, excluding
+    any item with no signed vote. It does not reproduce serving gates, Rocchio,
+    enrichment, or source balancing:
 
       1. Split TRAIN (older 75%) / TEST (newer 25%) chronologically.
       2. Compute the graded kNN preference score for the TEST items from
@@ -494,8 +499,9 @@ def run_production_benchmark(
     if np.unique(y_train).size < 2:
         raise ValueError("train split has only one class; cannot fit pairwise LR")
 
-    # PAIRWISE training exactly as production (votes.vote_dataset) does, then fit
-    # the SAME standardized LRRanker production fits.
+    # PAIRWISE training as the retired/optional ``hybrid_lr`` mode does
+    # (votes.vote_dataset), then fit the same standardized LRRanker it uses. This
+    # feeds only the comparison line below; the deployed default is kNN fusion.
     pair_X, pair_y = _pairwise_training_matrix(X_train, y_train)
     ranker = LRRanker()
     ranker.fit(pair_X, pair_y, persist=False)
@@ -671,13 +677,13 @@ def main() -> int:
     print("-" * 68)
 
     # ------------------------------------------------------------------ #
-    # Mode B: PRODUCTION-FAITHFUL (graded kNN preference + RRF fuse), research only.
+    # Mode B: deployed-scorer probe (graded kNN preference + RRF), research only.
     # ------------------------------------------------------------------ #
     r_rows, r_labels, r_ts, r_grades = _load_signed_votes_chronological(research_only=True)
     rn = len(r_rows)
     rn_pos = sum(1 for v in r_labels if v > 0)
     rn_neg = rn - rn_pos
-    print("  [B] production-faithful  (graded kNN preference + RRF fuse, research items)")
+    print("  [B] deployed-scorer probe (graded kNN preference + RRF, research items)")
     print(f"      signed research votes: {rn}  (+{rn_pos} / -{rn_neg})")
 
     if rn < 8 or rn_pos < 2 or rn_neg < 2:

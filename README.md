@@ -137,13 +137,15 @@ The digest starts with an estimated reading time and its main topics. Each
 section opens to a compact list of picks; expand an item’s **Details** only when
 you want its recommendation explanation and caveat. Use **Save for later** on
 any item, then open **Saved reading** to search your personal archive. Saved
-items are kept when old unsaved feed items are cleaned up.
+items are kept when old unsaved feed items are cleaned up. Use **Time Machine**
+at the top of the digest to revisit the three most recent saved brews, including
+across days when no digest was made.
 
-Funding calls and events stay open for weeks, and DailyDigest deliberately
-re-shows one when its official details change (a new deadline, amount, or
-eligibility). When you have seen enough of a call, press **Mark known** on it
-and it will not appear in any future digest. Nothing sets that flag
-automatically — press it again to undo.
+Funding calls and events stay open for weeks, so DailyDigest treats them as a
+standing shortlist and may re-show an active, relevant item while its deadline
+remains actionable. When you have seen enough of a call, press **Mark known**
+and it will not appear in any future digest. Nothing sets that flag automatically
+— press it again to undo.
 
 After each successful brew, DailyDigest removes expired digest history, old
 HTML previews, and unreferenced feed items according to `RETENTION_DAYS`
@@ -281,9 +283,11 @@ votes, database, and settings as the browser app.
   preprint, and journal channels mean one failed feed normally does not stop a
   brew.
 - **No funding or events appear:** confirm the section is enabled and complete
-  its profile in Settings. A zero-result section means no official record passed
-  status, deadline, eligibility, and topic checks; DailyDigest does not pad it
-  with unrelated or closed calls.
+  its profile in Settings. A successful zero-result scan is reported separately
+  from a provider failure: it means no official record passed status, deadline,
+  eligibility, and topic checks. DailyDigest does not pad it with unrelated or
+  closed calls. If every configured provider for an enabled funding or events
+  section fails, the brew stops and keeps the existing digest.
 - **An API key does not work:** a chat subscription is not necessarily API
   access. Use Extractive mode while checking the provider's API account.
 
@@ -297,7 +301,7 @@ Run the automated tests with:
 ```bash
 uv sync --frozen --group dev
 uv run pytest
-uv run ruff check --select F,B src tests
+uv run ruff check src tests
 ```
 
 DailyDigest is released under the [MIT License](LICENSE).

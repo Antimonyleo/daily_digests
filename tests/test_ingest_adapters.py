@@ -443,6 +443,144 @@ def test_openalex_profile_driven_upgrades_recognized_venue(monkeypatch):
     assert by_title["Something niche"] == "OpenAlex (your topics)"
 
 
+def test_pubmed_preserves_journal_and_doi_metadata():
+    from defusedxml.ElementTree import fromstring
+
+    from dailydigest.ingest.pubmed import PubMedSource
+
+    article = fromstring(
+        """
+        <PubmedArticle>
+          <MedlineCitation>
+            <PMID>12345</PMID>
+            <Article>
+              <ArticleTitle>RNA structure prediction</ArticleTitle>
+              <Journal><Title>Journal of Minor Results</Title></Journal>
+            </Article>
+          </MedlineCitation>
+          <PubmedData>
+            <ArticleIdList>
+              <ArticleId IdType="doi">10.1234/rna.1</ArticleId>
+            </ArticleIdList>
+          </PubmedData>
+        </PubmedArticle>
+        """
+    )
+
+    item = PubMedSource()._parse_article(
+        article, _spec(name="PubMed (your topics)", kind="pubmed")
+    )
+
+    assert item is not None
+    assert item.metadata == {
+        "venue": "Journal of Minor Results",
+        "doi": "10.1234/rna.1",
+    }
+
+
+def test_pubmed_never_takes_a_doi_from_the_reference_list():
+    from defusedxml.ElementTree import fromstring
+
+    from dailydigest.ingest.pubmed import PubMedSource
+
+    article = fromstring(
+        """
+        <PubmedArticle>
+          <MedlineCitation>
+            <PMID>12347</PMID>
+            <Article>
+              <ArticleTitle>RNA folding kinetics</ArticleTitle>
+              <Journal><Title>Journal of Minor Results</Title></Journal>
+            </Article>
+          </MedlineCitation>
+          <PubmedData>
+            <ArticleIdList>
+              <ArticleId IdType="pubmed">12347</ArticleId>
+              <ArticleId IdType="pii">S0000-0000(26)00001-2</ArticleId>
+            </ArticleIdList>
+            <ReferenceList>
+              <Reference>
+                <Citation>Cited paper. Nature. 2024.</Citation>
+                <ArticleIdList>
+                  <ArticleId IdType="doi">10.1038/cited-paper</ArticleId>
+                </ArticleIdList>
+              </Reference>
+            </ReferenceList>
+          </PubmedData>
+        </PubmedArticle>
+        """
+    )
+
+    item = PubMedSource()._parse_article(
+        article, _spec(name="PubMed (your topics)", kind="pubmed")
+    )
+
+    assert item is not None
+    assert item.metadata == {"venue": "Journal of Minor Results"}
+
+
+def test_pubmed_reads_doi_from_elocation_when_article_id_is_absent():
+    from defusedxml.ElementTree import fromstring
+
+    from dailydigest.ingest.pubmed import PubMedSource
+
+    article = fromstring(
+        """
+        <PubmedArticle>
+          <MedlineCitation>
+            <PMID>12346</PMID>
+            <Article>
+              <ArticleTitle>RNA topology</ArticleTitle>
+              <ELocationID EIdType="doi">10.1234/rna.2</ELocationID>
+              <Journal><Title>Nature Biotechnology</Title></Journal>
+            </Article>
+          </MedlineCitation>
+        </PubmedArticle>
+        """
+    )
+
+    item = PubMedSource()._parse_article(
+        article, _spec(name="PubMed (your topics)", kind="pubmed")
+    )
+
+    assert item is not None
+    assert item.metadata["doi"] == "10.1234/rna.2"
+
+
+def test_openalex_preserves_unrecognized_venue_metadata(monkeypatch):
+    from dailydigest.ingest.openalex import OpenAlexSource
+
+    work = {
+        "id": "https://openalex.org/W4",
+        "title": "A niche RNA result",
+        "doi": "https://doi.org/10.9999/obscure.2",
+        "primary_location": {
+            "source": {"display_name": "Journal of Obscure Results"}
+        },
+        "abstract_inverted_index": None,
+        "authorships": [],
+        "publication_date": "2026-07-06",
+    }
+    monkeypatch.setattr(
+        "dailydigest.ingest.openalex._get_json",
+        lambda url, params, headers: {
+            "results": [work],
+            "meta": {"next_cursor": None},
+        },
+    )
+
+    items = OpenAlexSource()._fetch_works(
+        _spec(name="OpenAlex (your topics)", kind="openalex"),
+        2,
+        {"User-Agent": "t"},
+        cap=10,
+        query="RNA",
+        upgrade_venue=True,
+    )
+
+    assert items[0].metadata["venue"] == "Journal of Obscure Results"
+
+
 # ---------------------------------------------------------------------------
 # Grants.gov — official structured opportunities
 # ---------------------------------------------------------------------------

@@ -1,19 +1,22 @@
 #!/usr/bin/env python
-"""Offline experiment (Phase 2): does a PER-FACET ranker beat the deployed ranker?
+"""Historical Phase 2 experiment: did a per-facet ranker beat the v6 ranker?
 
-Compares THREE rankers on a leakage-free, production-faithful, chronological,
+Retained only to reproduce that stopped experiment; this file does not describe
+the current deployed scorer.
+
+Compares THREE historical rankers on a leakage-free chronological,
 RESEARCH-ONLY held-out evaluation, then applies a deployment gate:
 
   1. topic-only (baseline)           — rank by ``_multi_cosine`` topic score.
-  2. current deployed v6 ranker      — the 8-feature pairwise LR
+  2. then-deployed v6 ranker         — the 8-feature pairwise LR
      (``votes.LR_FEATURE_NAMES``) fused with topic-cosine via RRF
-     (``ranker._fuse_scores``). Exactly what ships.
+     (``ranker._fuse_scores``). This is what shipped at the time.
   3. CANDIDATE per-facet ranker      — a regularized LR whose feature set is
      the item's cosine similarity to EACH core-keyword facet of the profile
      (one feature per ``profile.keywords`` entry, each facet row taken from
      ``build_profile_matrix`` and unit-normalized), OPTIONALLY plus the same
-     pos/neg affinity features the deployed ranker uses (TRAIN-only exemplars).
-     Trained the SAME way as production — PAIRWISE feature differences on the
+     pos/neg affinity features the v6 ranker used (TRAIN-only exemplars).
+     Trained the SAME way as v6 — PAIRWISE feature differences on the
      TRAIN split, standardized LogisticRegression (C=0.3, balanced, seed 0) —
      then ranked by RRF-fusing the LR margin with topic-cosine. This is an
      apples-to-apples swap of the LR's FEATURE SET only.
@@ -172,7 +175,7 @@ def _lr_margin(X: np.ndarray, coef, intercept, mean, scale) -> np.ndarray:
 
 
 # --------------------------------------------------------------------------- #
-# Deployed (v6) production-faithful ranker — mirrors benchmark_ranker mode B
+# Then-deployed v6 ranker — mirrors the historical benchmark mode B
 # --------------------------------------------------------------------------- #
 def eval_deployed(
     rows, labels, timestamps, grades, profile_mat, train_frac=0.75

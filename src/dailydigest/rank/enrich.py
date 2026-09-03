@@ -14,6 +14,7 @@ unit-testable offline, and any fetch failure degrades to a no-op.
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 import re
@@ -36,6 +37,12 @@ _VENUE_SCALE = 8.0
 # routes it into the low_impact_journal bucket (frequency-capped). 0.4 ~
 # 2yr_mean_citedness of ~1.4 — roughly a low-impact-factor journal.
 _LOW_VENUE_QUALITY = 0.4
+# Venue-quality score at or above this marks the item's venue as a verified
+# high-impact journal, exempting it from the low-impact gate even when its name
+# is not on the curated venue lists. 0.85 ~ 2yr_mean_citedness of ~5.5, above
+# the mega-journal band (PLOS ONE ~3, Scientific Reports ~4, most MDPI/Frontiers
+# titles ~4-5) that the curated lists deliberately leave under the cap.
+_HIGH_VENUE_QUALITY = 0.85
 _OPENALEX_URL = "https://api.openalex.org/works"
 _OPENALEX_SOURCES_URL = "https://api.openalex.org/sources"
 
@@ -76,6 +83,18 @@ def derive_doi(row: object) -> str | None:
             m = _DOI_RE.search(value)
             if m:
                 return m.group(0).rstrip(").").lower()
+    metadata = getattr(row, "metadata", None)
+    if not isinstance(metadata, dict):
+        raw = getattr(row, "metadata_json", "")
+        try:
+            metadata = json.loads(raw) if isinstance(raw, str) and raw else {}
+        except (TypeError, json.JSONDecodeError):
+            metadata = {}
+    value = metadata.get("doi") if isinstance(metadata, dict) else None
+    if isinstance(value, str):
+        match = _DOI_RE.search(value)
+        if match:
+            return match.group(0).rstrip(").").lower()
     return None
 
 
@@ -333,6 +352,9 @@ def enrich_scored(
         entry = _entry_for(idx)
         if entry:
             score = float(score)
+            venue = str(entry.get("venue") or "").strip()
+            if venue:
+                row.venue_name = venue
             cs = citation_score(
                 entry.get("cited_by_count"), getattr(row, "published_at", None), now=now
             )
@@ -342,14 +364,13 @@ def enrich_scored(
                 # Center at 0.5: high-impact venues gain, low-impact venues lose.
                 score += venue_w * (vq - 0.5)
                 # Flag genuinely low-impact venues so the selection-stage
-                # frequency cap treats them as low_impact_journal even though
-                # their configured source (e.g. OpenAlex) hides the real venue.
-                if vq < _LOW_VENUE_QUALITY:
-                    # Transient (non-persisted) marker read by source_bucket's
-                    # low-impact frequency cap. Setting a non-column attribute on
-                    # a mapped instance is safe; no swallowing so a real failure
-                    # (which would silently disable low-impact gating) surfaces.
-                    row.venue_low_impact = True
+                # frequency cap treats them as low_impact_journal even when the
+                # ingest record carries no venue name to classify by.
+                # Only a materially high verified impact lifts an unlisted venue
+                # out of that gate; the middle band keeps the name-based policy.
+                row.venue_low_impact = vq < _LOW_VENUE_QUALITY
+                row.venue_high_impact = vq >= _HIGH_VENUE_QUALITY
+            score = max(0.0, min(1.0, score))
         boosted.append((row, score))
     boosted.sort(key=lambda t: t[1], reverse=True)
     return boosted

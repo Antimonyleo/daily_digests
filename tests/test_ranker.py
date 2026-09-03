@@ -65,6 +65,16 @@ def _make_row(title: str, section: str = "research", abstract: str = "") -> Magi
     return row
 
 
+def _make_selectable_row(
+    title: str, section: str = "research", abstract: str = ""
+) -> MagicMock:
+    """Build a generic row whose research venue clears quality policy."""
+    row = _make_row(title, section, abstract)
+    if section == "research":
+        row.source = "Nature"
+    return row
+
+
 def _profile_vec(dim: int = 3) -> np.ndarray:
     v = np.ones(dim, dtype=np.float32)
     return v / np.linalg.norm(v)
@@ -74,6 +84,28 @@ def _current_lr_schema() -> tuple[str, int]:
     from dailydigest.votes import LR_FEATURE_DIM, LR_FEATURE_SCHEMA_VERSION
 
     return LR_FEATURE_SCHEMA_VERSION, LR_FEATURE_DIM
+
+
+def test_quality_adjustments_clip_after_freshness_bonus(monkeypatch):
+    """Every persisted confidence remains on the documented [0, 1] scale."""
+    from dailydigest.rank import ranker as ranker_mod
+
+    row = _make_selectable_row("Fresh high-confidence paper")
+    monkeypatch.setattr(ranker_mod, "quality_adjusted_score", lambda _row, _base: 1.0)
+    monkeypatch.setattr(ranker_mod, "_freshness_penalty", lambda _row: -0.05)
+
+    scores, features = _apply_quality_adjustments_with_features(
+        [row],
+        np.asarray([1.0], dtype=np.float32),
+        [],
+        learned_scores=np.asarray([0.5], dtype=np.float32),
+        hybrid_scores=np.asarray([1.0], dtype=np.float32),
+        scoring_mode="cosine",
+    )
+
+    assert scores == [1.0]
+    assert features[id(row)]["final_score"] == 1.0
+    assert features[id(row)]["confidence_score"] == 1.0
 
 
 # ---------------------------------------------------------------------------
@@ -754,11 +786,11 @@ class TestLRRankerPersistence:
 class TestPickTopPerSection:
     def test_respects_per_section_caps(self):
         scored = [
-            (_make_row("R1", "research"), 0.9),
-            (_make_row("R2", "research"), 0.8),
-            (_make_row("R3", "research"), 0.7),
-            (_make_row("I1", "industry"), 0.6),
-            (_make_row("I2", "industry"), 0.5),
+            (_make_selectable_row("R1", "research"), 0.9),
+            (_make_selectable_row("R2", "research"), 0.8),
+            (_make_selectable_row("R3", "research"), 0.7),
+            (_make_selectable_row("I1", "industry"), 0.6),
+            (_make_selectable_row("I2", "industry"), 0.5),
         ]
         caps = {"research": 2, "industry": 1}
         result = pick_top_per_section(scored, caps)
@@ -769,7 +801,7 @@ class TestPickTopPerSection:
     def test_unknown_section_skipped(self):
         scored = [
             (_make_row("X1", "unknown_section"), 0.99),
-            (_make_row("R1", "research"), 0.5),
+            (_make_selectable_row("R1", "research"), 0.5),
         ]
         caps = {"research": 2}
         result = pick_top_per_section(scored, caps)
@@ -779,9 +811,9 @@ class TestPickTopPerSection:
 
     def test_preserves_descending_score_order(self):
         scored = [
-            (_make_row("A", "research"), 0.9),
-            (_make_row("B", "research"), 0.7),
-            (_make_row("C", "research"), 0.5),
+            (_make_selectable_row("A", "research"), 0.9),
+            (_make_selectable_row("B", "research"), 0.7),
+            (_make_selectable_row("C", "research"), 0.5),
         ]
         caps = {"research": 3}
         result = pick_top_per_section(scored, caps)
@@ -799,11 +831,11 @@ class TestPickTopPerSection:
 
     def test_multiple_sections_mixed(self):
         scored = [
-            (_make_row("R1", "research"), 1.0),
-            (_make_row("I1", "industry"), 0.9),
-            (_make_row("R2", "research"), 0.8),
-            (_make_row("I2", "industry"), 0.7),
-            (_make_row("G1", "general"), 0.6),
+            (_make_selectable_row("R1", "research"), 1.0),
+            (_make_selectable_row("I1", "industry"), 0.9),
+            (_make_selectable_row("R2", "research"), 0.8),
+            (_make_selectable_row("I2", "industry"), 0.7),
+            (_make_selectable_row("G1", "general"), 0.6),
         ]
         caps = {"research": 2, "industry": 1, "general": 1}
         result = pick_top_per_section(scored, caps)

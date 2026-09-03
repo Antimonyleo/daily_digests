@@ -240,6 +240,31 @@ class TestDedupeRankingCandidates:
         assert len(result) == 1
         assert result[0].source == "PubMed"
 
+    def test_collapses_cross_source_duplicate_when_doi_is_only_in_metadata(self):
+        pub_dt = datetime(2026, 5, 10, tzinfo=timezone.utc)
+        pubmed = Item(
+            source="PubMed",
+            section="research",
+            external_id="12345678",
+            url="https://pubmed.ncbi.nlm.nih.gov/12345678/",
+            title="RNA nanostructure assembly",
+            published_at=pub_dt,
+            metadata={"doi": "10.5555/shared"},
+        )
+        openalex = Item(
+            source="OpenAlex",
+            section="research",
+            external_id="W123",
+            url="https://openalex.org/W123",
+            title="A differently punctuated title",
+            published_at=pub_dt,
+            metadata={"doi": "https://doi.org/10.5555/shared"},
+        )
+
+        result = dedupe_ranking_candidates([pubmed, openalex])
+
+        assert len(result) == 1
+
 
 # ---------------------------------------------------------------------------
 # cap_near_duplicates (within-day near-duplicate suppression)

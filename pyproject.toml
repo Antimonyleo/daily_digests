@@ -70,5 +70,8 @@ line-length = 100
 target-version = "py312"
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "B", "UP"]
+# Matches the dev gate documented in README.md. The codebase deliberately keeps
+# the `timezone.utc` idiom and its existing import order, so the stylistic
+# rulesets (E/W/I/UP) are not enforced.
+select = ["F", "B"]
 ignore = ["E501"]

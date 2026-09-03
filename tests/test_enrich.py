@@ -56,6 +56,13 @@ def test_derive_doi_from_url():
     assert derive_doi(row) == "10.1038/s41586-024-12345-6"
 
 
+def test_derive_doi_from_persisted_metadata():
+    row = _item("A", "https://pubmed.ncbi.nlm.nih.gov/12345/")
+    row.metadata_json = '{"doi":"10.1234/rna.1"}'
+
+    assert derive_doi(row) == "10.1234/rna.1"
+
+
 def test_derive_doi_none_when_absent():
     assert derive_doi(_item("A", "https://www.nature.com/articles/xyz")) is None
 
@@ -162,7 +169,76 @@ def test_low_venue_impact_flags_item_for_cap():
     assert getattr(weak, "venue_low_impact", False) is True
     assert getattr(strong, "venue_low_impact", False) is False
     assert source_bucket(weak) == "low_impact_journal"
-    assert source_bucket(strong) == "aggregator"
+    assert source_bucket(strong) == "published_journal"
+
+
+def test_mid_impact_venue_keeps_low_impact_policy_when_enriched():
+    now = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    pub = now - timedelta(days=30)
+    hidden = _item("HIDDEN", "https://doi.org/10.1000/hidden", published_at=pub)
+    hidden.source = "PubMed (your topics)"
+    hidden.metadata_json = '{"venue": "Journal of Minor Results"}'
+    direct = _item("DIRECT", "https://doi.org/10.1000/direct", published_at=pub)
+    direct.source = "Journal of Minor Results"
+    scored = [(hidden, 0.6), (direct, 0.6)]
+
+    def fake_fetch(dois, email):
+        return {
+            "10.1000/hidden": {
+                "cited_by_count": 3,
+                "venue_impact": 2.0,
+                "venue": "Journal of Minor Results",
+            },
+            "10.1000/direct": {"cited_by_count": 3, "venue_impact": 4.0},
+        }
+
+    enrich_scored(
+        scored, settings=_settings(citation_enrichment=True), fetcher=fake_fetch, now=now
+    )
+
+    from dailydigest.rank.source_quality import is_low_impact_research, source_bucket
+
+    for row in (hidden, direct):
+        assert getattr(row, "venue_low_impact", False) is False
+        assert getattr(row, "venue_high_impact", False) is False
+        assert source_bucket(row) == "low_impact_journal"
+        assert is_low_impact_research(row) is True
+
+
+def test_cached_enrichment_exposes_real_venue_and_keeps_scores_bounded():
+    now = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    url = "https://doi.org/10.1000/cached-venue"
+    iid = _insert_item_with_url("cached-venue", url)
+    save_enrichment(
+        {
+            iid: {
+                "cited_by_count": 500,
+                "venue_impact": 6.3,
+                "venue": "Computational and Structural Biotechnology Journal",
+            }
+        }
+    )
+    row = ItemRow(
+        id=iid,
+        source="PubMed (your topics)",
+        section="research",
+        external_id="cached-venue",
+        url=url,
+        title="RNA structure",
+        abstract="Methods and results.",
+        published_at=now - timedelta(days=10),
+        metadata_json="{}",
+    )
+
+    out = enrich_scored(
+        [(row, 0.98)], settings=_settings(citation_enrichment=True), now=now
+    )
+
+    from dailydigest.rank.source_quality import display_source, source_bucket
+
+    assert out[0][1] <= 1.0
+    assert display_source(row) == "Computational and Structural Biotechnology Journal"
+    assert source_bucket(row) == "published_journal"
 
 
 def test_enrich_no_dois_is_noop():

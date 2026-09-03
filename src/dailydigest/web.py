@@ -33,7 +33,6 @@ import hmac
 import json
 import logging
 import os
-import queue as std_queue
 import re
 import secrets
 import tempfile
@@ -79,7 +78,7 @@ from .opportunities import (
 )
 from .pipeline import _digest_id, normalize_reading_mode, run_all
 from .rank.embed import release_encoder
-from .rank.source_quality import display_breakdown, source_bucket
+from .rank.source_quality import display_breakdown, display_source, source_bucket
 from .store import (
     DigestItemRow,
     DigestRow,
@@ -143,10 +142,10 @@ templates = Jinja2Templates(
 # Per-section sort order so we can ORDER BY (section_order, label_number).
 _SECTION_RANK = {name: idx for idx, name in enumerate(SECTION_ORDER)}
 
-# Per-run progress queues.  Uses stdlib queue.Queue (thread-safe) so the
-# producer thread can put_nowait without needing the event loop reference.
-# The SSE consumer drains via asyncio.to_thread so it never blocks the loop.
-_RUN_QUEUES: dict[str, std_queue.Queue[dict[str, Any]]] = {}
+# Per-run progress event logs. They are retained until the bounded run cache
+# evicts them, so a refreshed page can replay the same brew instead of starting
+# another one or racing the old page for queue entries.
+_RUN_QUEUES: dict[str, list[dict[str, Any]]] = {}
 _RUN_STARTED: set[str] = set()
 _MAX_RETAINED_RUNS = 32
 _RUN_LOCK = threading.Lock()
@@ -318,19 +317,49 @@ def _summary_fields(summary: str) -> dict[str, str]:
     return out
 
 
-def _load_today(digest_id: str) -> tuple[list[dict], dict[int, int]]:
-    """Return (rendered_sections, current_vote_per_item)."""
+def _load_today(
+    digest_id: str, *, include_disabled_sections: bool = False
+) -> tuple[list[dict], dict[int, int]]:
+    """Return (rendered_sections, current_vote_per_item).
+
+    The slate comes from ``digest_items``, the authoritative per-digest record,
+    not from ``ItemRow.digest_id``: that back-pointer holds a single value and a
+    later brew reassigns it whenever it re-selects the same item, which would
+    silently rewrite an archived day. ``ItemRow.digest_id`` is only a fallback
+    for digests stored before ``digest_items`` recorded the slate.
+    ``include_disabled_sections`` renders an archived day as it was served, even
+    if the reader has since switched one of its sections off.
+    """
     init_db()
     with session_scope() as s:
-        rows = (
-            s.execute(select(ItemRow).where(ItemRow.digest_id == digest_id))
-            .scalars()
-            .all()
-        )
+        slate = s.execute(
+            select(
+                DigestItemRow.item_id,
+                DigestItemRow.item_label,
+                DigestItemRow.score,
+            ).where(DigestItemRow.digest_id == digest_id)
+        ).all()
+        slate_labels = {int(item_id): (label or "") for item_id, label, _ in slate}
+        slate_scores = {
+            int(item_id): score for item_id, _, score in slate if score is not None
+        }
+        if slate_labels:
+            rows = (
+                s.execute(select(ItemRow).where(ItemRow.id.in_(list(slate_labels))))
+                .scalars()
+                .all()
+            )
+        else:
+            rows = (
+                s.execute(select(ItemRow).where(ItemRow.digest_id == digest_id))
+                .scalars()
+                .all()
+            )
         if not rows:
             return [], {}
 
-        rows = [r for r in rows if section_enabled(SETTINGS, r.section or "")]
+        if not include_disabled_sections:
+            rows = [r for r in rows if section_enabled(SETTINGS, r.section or "")]
         if not rows:
             return [], {}
 
@@ -365,10 +394,16 @@ def _load_today(digest_id: str) -> tuple[list[dict], dict[int, int]]:
             except Exception:  # noqa: BLE001
                 pass
 
+        def _slate_label(row: ItemRow) -> str:
+            return slate_labels.get(int(row.id), row.item_label or "")
+
+        def _slate_score(row: ItemRow) -> float:
+            return float(slate_scores.get(int(row.id), row.score or 0.0) or 0.0)
+
         rows.sort(
             key=lambda r: (
                 _SECTION_RANK.get(r.section or "", 99),
-                _label_number(r.item_label),
+                _label_number(_slate_label(r)),
             )
         )
 
@@ -377,16 +412,17 @@ def _load_today(digest_id: str) -> tuple[list[dict], dict[int, int]]:
         by_section: dict[str, list[dict]] = {}
         for row in rows:
             key = row.section or "other"
+            source = display_source(row)
             ranking = _breakdown_payload(row, persisted_features.get(int(row.id)))
             confidence_score = _entry_confidence(
-                {"ranking": ranking, "score_raw": float(row.score or 0.0)}
+                {"ranking": ranking, "score_raw": _slate_score(row)}
             )
             reason = reason_line(
                 ranking.get("primary_facet"),
                 high_profile=_is_high_profile(
                     ranking.get("source_bucket"), ranking.get("tags") or []
                 ),
-                journal=row.source or "",
+                journal=source,
                 why_shown=ranking.get("why_shown") or [],
                 tags=ranking.get("tags") or [],
             )
@@ -404,14 +440,14 @@ def _load_today(digest_id: str) -> tuple[list[dict], dict[int, int]]:
             by_section[key].append(
                 {
                     "id": row.id,
-                    "label": row.item_label or "",
+                    "label": _slate_label(row),
                     "title": row.title or "",
                     "url": safe_url(row.url),
-                    "source": row.source or "",
+                    "source": source,
                     "published": _format_date(row),
                     "summary": row.summary or "",
                     "summary_fields": _summary_fields(row.summary or ""),
-                    "score_raw": float(row.score or 0.0),
+                    "score_raw": _slate_score(row),
                     "confidence_score": confidence_score,
                     "ranking": ranking,
                     "reason_line": reason,
@@ -452,6 +488,21 @@ def _digest_exists(digest_id: str) -> bool:
     init_db()
     with session_scope() as s:
         return s.get(DigestRow, digest_id) is not None
+
+
+def _recent_digest_ids(today_id: str, limit: int = 3) -> list[str]:
+    """Return the latest actual brews, so calendar gaps do not hide history."""
+    init_db()
+    with session_scope() as session:
+        return [
+            str(value)
+            for value in session.execute(
+                select(DigestRow.id)
+                .where(DigestRow.id <= today_id)
+                .order_by(DigestRow.created_at.desc(), DigestRow.id.desc())
+                .limit(max(1, min(int(limit), 30)))
+            ).scalars()
+        ]
 
 
 def _as_int(value: object) -> int | None:
@@ -1031,13 +1082,65 @@ def _bool_form(form: dict[str, str], key: str, default: bool) -> str:
 
 
 @app.get("/", response_class=HTMLResponse)
-def index(request: Request) -> Response:
+def index(request: Request, digest_id: str = "") -> Response:
     if not _profile_exists():
         return RedirectResponse(url="/setup", status_code=302)
-    digest_id = _digest_id()
+    today_id = _digest_id()
+    today_date = date.fromisoformat(today_id)
+    recent_brews = []
+    for brew_id in _recent_digest_ids(today_id, limit=3):
+        try:
+            brew_date = date.fromisoformat(brew_id)
+        except ValueError:
+            continue
+        offset = (today_date - brew_date).days
+        if offset == 0:
+            label, cup_kicker = "Today", "Today’s cup"
+        elif offset == 1:
+            label, cup_kicker = "Yesterday", "Yesterday’s cup"
+        else:
+            label, cup_kicker = f"{offset} days ago", f"Cup from {offset} days ago"
+        recent_brews.append(
+            {
+                "id": brew_id,
+                "label": label,
+                "cup_kicker": cup_kicker,
+                "date_label": brew_date.strftime("%b %d").replace(" 0", " "),
+                "href": "/" if offset == 0 else f"/?digest_id={brew_id}",
+            }
+        )
+    available_brew_ids = {str(brew["id"]) for brew in recent_brews}
+    if not digest_id or digest_id not in available_brew_ids:
+        digest_id = today_id
+    cup_kicker = "Today’s cup"
+    for brew in recent_brews:
+        brew["active"] = brew["id"] == digest_id
+        if brew["active"]:
+            cup_kicker = str(brew["cup_kicker"])
     tea_notes = daily_tea_deck(date.fromisoformat(digest_id))
-    sections, current_vote = _load_today(digest_id)
+    if digest_id == today_id:
+        sections, current_vote = _load_today(digest_id)
+    else:
+        sections, current_vote = _load_today(
+            digest_id, include_disabled_sections=True
+        )
     brewed = bool(sections) or _digest_exists(digest_id)
+    shown_section_keys = {str(section.get("key") or "") for section in sections}
+    empty_enabled_sections = []
+    if digest_id == today_id and brewed:
+        for section_key in ("opportunities", "events"):
+            if section_key in shown_section_keys or not section_enabled(
+                get_settings(), section_key
+            ):
+                continue
+            section_meta = SECTION_META[section_key]
+            empty_enabled_sections.append(
+                {
+                    "key": section_key,
+                    "title": section_meta["title"],
+                    "emoji": section_meta["emoji"],
+                }
+            )
     if brewed:
         # The reader is viewing this digest: flag its latest run's impressions as
         # viewed. Measurement-only; best-effort so a logging hiccup never blocks
@@ -1091,12 +1194,16 @@ def index(request: Request) -> Response:
         "digest_web.html.j2",
         {
             "digest_id": digest_id,
+            "viewing_today": digest_id == today_id,
+            "cup_kicker": cup_kicker,
             "profile_name": _profile_name(),
             "salutation": "Welcome back",
+            "recent_brews": recent_brews,
             "daily_note": tea_notes[0],
             "daily_notes": tea_notes,
             "summarizer_label": _summarizer_label(digest_id),
             "sections": sections,
+            "empty_enabled_sections": empty_enabled_sections,
             "overview": overview,
             "top_journal_audit": top_journal_audit,
             "overflow_audit": overflow_audit,
@@ -1798,11 +1905,11 @@ async def profile_name_post(request: Request) -> Response:
 # --- Run / brewing flow -----------------------------------------------------
 
 
-def _ensure_run(run_id: str) -> std_queue.Queue[dict[str, Any]]:
-    """Get-or-create the stdlib Queue for a run."""
+def _ensure_run(run_id: str) -> list[dict[str, Any]]:
+    """Get or create the retained progress-event log for a run."""
     with _RUN_LOCK:
-        q = _RUN_QUEUES.get(run_id)
-        if q is None:
+        events = _RUN_QUEUES.get(run_id)
+        if events is None:
             active_run = _BREW_JOB.get("run_id")
             while len(_RUN_QUEUES) >= _MAX_RETAINED_RUNS:
                 stale_id = next(
@@ -1813,18 +1920,19 @@ def _ensure_run(run_id: str) -> std_queue.Queue[dict[str, Any]]:
                     break
                 _RUN_QUEUES.pop(stale_id, None)
                 _RUN_STARTED.discard(stale_id)
-            q = std_queue.Queue()
-            _RUN_QUEUES[run_id] = q
-        return q
+            events = []
+            _RUN_QUEUES[run_id] = events
+        return events
 
 
 def _kick_off_run(run_id: str, reading_mode: str) -> None:
     """Run pipeline.run_all in a background thread; always emits a terminal event."""
 
     def _push(evt: dict[str, Any]) -> None:
-        q = _RUN_QUEUES.get(run_id)
-        if q is not None:
-            q.put_nowait(evt)
+        with _RUN_LOCK:
+            events = _RUN_QUEUES.get(run_id)
+            if events is not None:
+                events.append(evt)
 
     def _target() -> None:
         terminal_sent = False
@@ -1893,7 +2001,10 @@ def _kick_off_run(run_id: str, reading_mode: str) -> None:
 
 @app.get("/run", response_class=HTMLResponse)
 def run_get(
-    request: Request, reading_mode: str = "usual", autostart: bool = False
+    request: Request,
+    reading_mode: str = "usual",
+    autostart: bool = False,
+    run_id: str = "",
 ) -> Response:
     if not _profile_exists():
         return RedirectResponse(url="/setup", status_code=302)
@@ -1901,7 +2012,8 @@ def run_get(
         selected_mode = normalize_reading_mode(reading_mode)
     except ValueError:
         selected_mode = "usual"
-    run_id = uuid.uuid4().hex[:12]
+    if not _RUN_ID_RE.fullmatch(run_id):
+        run_id = uuid.uuid4().hex[:12]
     response = templates.TemplateResponse(
         request,
         "run.html.j2",
@@ -1910,6 +2022,10 @@ def run_get(
             "csrf_token": _CSRF_TOKEN,
             "reading_mode": selected_mode,
             "autostart": bool(autostart),
+            "resume_url": (
+                f"/run?reading_mode={selected_mode}&autostart=1&run_id={run_id}"
+            ),
+            "restart_url": f"/run?reading_mode={selected_mode}&autostart=1",
         },
     )
     response.headers["Cache-Control"] = "no-store"
@@ -1947,33 +2063,29 @@ async def run_stream(request: Request, run_id: str) -> StreamingResponse:
     if not _RUN_ID_RE.fullmatch(run_id):
         raise HTTPException(status_code=400, detail="invalid run id")
     with _RUN_LOCK:
-        q = _RUN_QUEUES.get(run_id)
-    if q is None:
+        events = _RUN_QUEUES.get(run_id)
+    if events is None:
         raise HTTPException(
             status_code=404,
             detail="brew run not found; it may have ended or the server restarted",
         )
 
     async def event_gen():
-        terminal_seen = False
-        try:
-            yield f"data: {json.dumps({'stage': 'connected', 'run_id': run_id})}\n\n"
-            terminal = {"done", "error"}
-            while True:
-                try:
-                    evt = await asyncio.to_thread(q.get, True, 5.0)
-                except Exception:  # queue.Empty or similar
-                    yield ": heartbeat\n\n"
-                    continue
+        yield f"data: {json.dumps({'stage': 'connected', 'run_id': run_id})}\n\n"
+        terminal = {"done", "error"}
+        cursor = 0
+        while True:
+            with _RUN_LOCK:
+                batch = list(events[cursor:])
+            if not batch:
+                await asyncio.sleep(1.0)
+                yield ": heartbeat\n\n"
+                continue
+            for evt in batch:
+                cursor += 1
                 yield f"data: {json.dumps(evt)}\n\n"
                 if evt.get("stage") in terminal:
-                    terminal_seen = True
-                    break
-        finally:
-            if terminal_seen:
-                with _RUN_LOCK:
-                    _RUN_QUEUES.pop(run_id, None)
-                    _RUN_STARTED.discard(run_id)
+                    return
 
     return StreamingResponse(
         event_gen(),

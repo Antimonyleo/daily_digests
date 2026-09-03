@@ -217,6 +217,8 @@
   const RUN_ID = {{ run_id|tojson }};
   const CSRF_TOKEN = {{ csrf_token|tojson }};
   const AUTOSTART = {{ autostart|tojson }};
+  const RESUME_URL = {{ resume_url|tojson }};
+  const RESTART_URL = {{ restart_url|tojson }};
   const form = document.getElementById("brew-form");
   const brewButton = document.getElementById("brew-button");
   const choicePanel = document.getElementById("choice-panel");
@@ -230,7 +232,7 @@
 
   const STAGE_MAP = {
     ingest_start: "ingest", ingest_done: "ingest", dedupe_done: "dedupe",
-    rank_done: "rank", summarize_start: "summarize", summarize_done: "summarize",
+    rank_start: "rank", rank_done: "rank", summarize_start: "summarize", summarize_done: "summarize",
     render_done: "render", done: "done", error: "error",
   };
   const COMPLETES_PREV = {
@@ -238,7 +240,7 @@
     summarize_done: "summarize", render_done: "summarize", done: "render",
   };
   const PROGRESS = {
-    connected: 6, ingest_start: 12, ingest_done: 36, dedupe_done: 46,
+    connected: 6, ingest_start: 12, ingest_done: 36, dedupe_done: 46, rank_start: 50,
     rank_done: 62, summarize_start: 70, summarize_done: 84, render_done: 94, done: 100,
   };
 
@@ -301,11 +303,21 @@
         setProgress(stage, `Contacting ${payload.sources || "?"} sources`);
         markActive("ingest");
       } else if (stage === "ingest_done") {
-        annotateText("ingest", `Fetched ${payload.raw_items || 0} items from ${payload.sources || "?"} sources.`);
+        const emptyDeadlineSections = (payload.empty_deadline_sections || []).map(
+          (section) => section === "opportunities" ? "funding" : section
+        );
+        const emptyNote = emptyDeadlineSections.length
+          ? ` No qualifying ${emptyDeadlineSections.join(" or ")} records today.`
+          : "";
+        annotateText("ingest", `Fetched ${payload.raw_items || 0} items from ${payload.sources || "?"} sources.${emptyNote}`);
         setProgress(stage, `Fetched ${payload.raw_items || 0} raw items`);
       } else if (stage === "dedupe_done") {
         annotateText("dedupe", `Deduplicated to ${payload.english || payload.deduped || 0} items.`);
         setProgress(stage, `Kept ${payload.english || payload.deduped || 0} English items`);
+        markActive("rank");
+      } else if (stage === "rank_start") {
+        annotateText("rank", `Ranking ${payload.candidates || 0} qualified candidates…`);
+        setProgress(stage, `Ranking ${payload.candidates || 0} qualified candidates`);
         markActive("rank");
       } else if (stage === "rank_done") {
         annotateText("rank", `Picked ${payload.picked || 0} top items.`);
@@ -339,6 +351,9 @@
   async function startBrew() {
     if (brewButton.disabled) return;
     const readingMode = new FormData(form).get("reading_mode") || "usual";
+    const resumeUrl = new URL(RESUME_URL, window.location.href);
+    resumeUrl.searchParams.set("reading_mode", readingMode);
+    window.history.replaceState(null, "", resumeUrl.pathname + resumeUrl.search);
     brewButton.disabled = true;
     choicePanel.hidden = true;
     progressPanel.hidden = false;
@@ -358,7 +373,7 @@
     event.preventDefault();
     startBrew();
   });
-  retryButton.addEventListener("click", () => window.location.reload());
+  retryButton.addEventListener("click", () => { window.location.href = RESTART_URL; });
   if (AUTOSTART) startBrew();
 })();
 </script>

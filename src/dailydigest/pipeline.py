@@ -176,7 +176,8 @@ def _section_enabled(section: str, settings: Settings | None = None) -> bool:
 
 # Type alias for the optional progress callback used by run_all().
 # Stages emitted (in order): "ingest_start", "ingest_done", "dedupe_done",
-# "rank_done", "summarize_start", "summarize_done", "render_done", "done".
+# "rank_start", "rank_done", "summarize_start", "summarize_done",
+# "render_done", "done".
 ProgressCallback = Callable[[str, dict[str, Any]], None]
 
 
@@ -335,6 +336,13 @@ def ingest_all(
         if (family := _research_source_family(spec))
     }
     successful_research_families: set[str] = set()
+    configured_deadline_sections = {
+        str(getattr(spec, "section", "") or "")
+        for spec in specs
+        if str(getattr(spec, "section", "") or "") in {"opportunities", "events"}
+    }
+    successful_deadline_sections: set[str] = set()
+    nonempty_deadline_sections: set[str] = set()
     raw_research_items = 0
 
     groups: dict[str, list[tuple[int, Any]]] = {}
@@ -387,6 +395,11 @@ def ingest_all(
         spec, fetched, stat = fetched_by_index[index]
         stats.append(stat)
         all_items.extend(fetched)
+        section = str(getattr(spec, "section", "") or "")
+        if stat.ok and section in configured_deadline_sections:
+            successful_deadline_sections.add(section)
+            if fetched:
+                nonempty_deadline_sections.add(section)
         fetched_research = sum(
             1
             for item in fetched
@@ -402,15 +415,34 @@ def ingest_all(
     except Exception as e:  # noqa: BLE001
         logger.warning("health.record failed: %s", e)
 
+    empty_deadline_sections = sorted(
+        successful_deadline_sections - nonempty_deadline_sections
+    )
+    for section in empty_deadline_sections:
+        logger.info(
+            "%s sources were healthy but returned no qualifying records",
+            "Funding" if section == "opportunities" else "Events",
+        )
     _emit(
         progress_callback,
         "ingest_done",
-        {"sources": len(specs), "raw_items": len(all_items)},
+        {
+            "sources": len(specs),
+            "raw_items": len(all_items),
+            "empty_deadline_sections": empty_deadline_sections,
+        },
     )
     if not all_items:
         raise RuntimeError(
             "No items were retrieved from any configured source; brew stopped "
             "to avoid stale recommendations. Check network/source health and retry."
+        )
+    for section in sorted(configured_deadline_sections - successful_deadline_sections):
+        label = "Funding" if section == "opportunities" else "Events"
+        raise RuntimeError(
+            f"{label} source coverage is degraded: every configured provider failed. "
+            "Brew stopped so a partial slate does not replace the current digest. "
+            "Check source health and retry."
         )
     # A handful of results from one surviving aggregator is not a healthy
     # research scan. Require both adequate supply and two independent provider
@@ -707,7 +739,14 @@ def _filter_actionable_opportunities(
         if (row.section or "") not in {"opportunities", "events"}:
             out.append((row, score))
             continue
-        assessment = assess_opportunity(item_metadata(row), opportunity_profile)
+        metadata = item_metadata(row)
+        if (row.section or "") == "events" and not metadata.get("record_type"):
+            metadata = {**metadata, "record_type": "event"}
+        assessment = assess_opportunity(
+            metadata,
+            opportunity_profile,
+            today=user_local_date(),
+        )
         if assessment.actionable:
             out.append((row, score))
         else:
@@ -1102,8 +1141,9 @@ def run_all(
     # `lr_ranker.npz`'s mtime — a file nothing writes any more, so the check was
     # permanently true and refit the calibrator on EVERY brew, defeating the
     # 7-day staleness gate immediately below.
-    # Refit the score→probability calibrator when stale (> 7 days) so the
-    # adaptive relevance floor tracks recent feedback.
+    # Refit the score→probability calibrator when stale (> 7 days) so display
+    # confidence tracks recent feedback. (The brew's low-impact floor is fixed on
+    # raw topic scores and does not read this fit; see config.Settings.)
     try:
         from pathlib import Path as _Path
 
@@ -1194,8 +1234,8 @@ def run_all(
     after_reviewed = exclude_reviewed_items(recent_raw)
     after_shown = exclude_previously_shown(after_reviewed, exclude_digest_id=digest_id)
     # Manual "I already know this" flags win over every re-surfacing rule above,
-    # including the opportunity refresh that re-shows a grant whose official
-    # details changed.
+    # including the standing funding/events shortlist that never hides an active
+    # call merely because it was shown before.
     after_shown = exclude_known_items(after_shown)
     deduped_candidates = dedupe_ranking_candidates(after_shown)   # within-set dedupe FIRST
     # Cross-day content dedupe: drop items re-surfaced from a recent digest.
@@ -1231,6 +1271,7 @@ def run_all(
         len(deduped_candidates) - len(near_dup_drops),
         days,
     )
+    _emit(progress_callback, "rank_start", {"candidates": len(items)})
     try:
         from .rank.profile import build_attribution_context
 
@@ -1318,7 +1359,10 @@ def run_all(
                     _penalty_list.append(penalty)
 
                 # Apply penalties to scores
-                scored = [(row, score - _penalty_list[i]) for i, (row, score) in enumerate(scored)]
+                scored = [
+                    (row, max(0.0, float(score) - _penalty_list[i]))
+                    for i, (row, score) in enumerate(scored)
+                ]
 
                 # Update score_features using captured penalties
                 for i, (row, score) in enumerate(scored):
@@ -1327,7 +1371,7 @@ def run_all(
                         penalty = _penalty_list[i]
                         score_features[key]["negative_interest_penalty"] = round(penalty, 4)
                         score_features[key]["confidence_score"] = round(
-                            score_features[key]["confidence_score"] - penalty, 4
+                            max(0.0, score_features[key]["confidence_score"] - penalty), 4
                         )
                         score_features[key]["final_score"] = round(score, 4)
                 scored.sort(key=lambda t: t[1], reverse=True)
@@ -1347,7 +1391,7 @@ def run_all(
             for row, score in scored:
                 m = author_match_score(getattr(row, "authors", "") or "", _watchlist)
                 if m > 0:
-                    score = float(score) + _author_boost * m
+                    score = min(1.0, float(score) + _author_boost * m)
                     key = _row_feature_key(row)
                     if key in score_features:
                         score_features[key]["author_match"] = round(float(m), 4)
@@ -1359,11 +1403,23 @@ def run_all(
     except Exception as _e:  # noqa: BLE001
         logger.warning("author match boost failed: %s", _e)
 
+    # Cheap deterministic gates run before optional network enrichment and
+    # within-day dedupe. Neither gate depends on citation data, so enriching
+    # rejected candidates only makes a brew slower without changing its slate.
+    pickable = _filter_actionable_opportunities(scored, opportunity_profile)
+    pickable = _filter_off_topic(pickable, score_features)
+
     # Optional live citation-velocity boost via OpenAlex (no-op unless enabled).
     try:
         from .rank.enrich import enrich_scored
 
-        scored = enrich_scored(scored)
+        pickable = enrich_scored(pickable)
+        for row, score in pickable:
+            feature = score_features.get(_row_feature_key(row))
+            if feature is not None:
+                feature["final_score"] = round(float(score), 4)
+                feature["confidence_score"] = round(float(score), 4)
+                feature["source_bucket"] = source_bucket(row)
     except Exception as _e:  # noqa: BLE001
         logger.warning("citation enrichment failed: %s", _e)
 
@@ -1387,7 +1443,7 @@ def run_all(
             )
             _wd_rows = [
                 row
-                for row, _ in scored
+                for row, _ in pickable
                 if (getattr(row, "section", "") or "") == "research"
             ]
             if len(_wd_rows) > 1:
@@ -1417,10 +1473,6 @@ def run_all(
     # Note: do NOT pre-truncate `scored` to a global top-K before per-section picking;
     # a single-domain profile (e.g. biotech-heavy) starves industry/regulatory/world.
     # `pick_top_per_section` already caps per-section, so summary cost is bounded.
-    # Hard-gate off-topic research/industry first so prestige can't fill a slot an
-    # item's topic relevance never earned, then size + pick from what remains.
-    pickable = _filter_actionable_opportunities(scored, opportunity_profile)
-    pickable = _filter_off_topic(pickable, score_features)
     # Apply the within-day near-dup decision to the selection candidates only.
     if _wd_drop_research_ids:
         pickable = [
@@ -1448,6 +1500,7 @@ def run_all(
             settings=section_settings,
         ),
         catch_up=window_days > 2,
+        score_features=score_features,
     )
 
     # Active-learning exploration: swap a few low-scored picks for high-quality
@@ -1631,13 +1684,14 @@ def run_all(
         _impressions: list[
             tuple[str, int, int, float | None, bool, str, float | None, float | None]
         ] = []
-        # `scored` is (row, score) sorted by final score desc; filter to research
-        # and cap the pool so the row count stays bounded.
+        # Use the latest feature score: optional enrichment updates that value
+        # after the original `scored` list is built.
         _research_scored = [
-            (row, score)
+            (row, float(_feature(row).get("final_score", score)))
             for row, score in scored
             if (getattr(row, "section", "") or "") == "research"
         ]
+        _research_scored.sort(key=lambda pair: pair[1], reverse=True)
         # Log the top-CAP research candidates by final score PLUS every selected
         # research item, even if it ranks below the cap (source balancing /
         # exploration / last-resort fill can select items past position CAP). This

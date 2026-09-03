@@ -134,36 +134,8 @@ def test_opportunity_metadata_updates_and_keeps_immutable_change_history():
     assert refreshed.summary_backend is None
 
 
-def test_material_change_can_resurface_a_previously_shown_opportunity():
-    from dailydigest.store import (
-        exclude_previously_shown,
-        recent_items,
-        upsert_items,
-        write_digest,
-    )
-
-    item = Item(
-        source="Grants.gov",
-        section="opportunities",
-        external_id="CHANGED-1",
-        url="https://grants.gov/opportunity/changed",
-        title="RNA research opportunity",
-        abstract="Support for RNA research and technology development.",
-        metadata={"status": "open", "deadline": "2026-10-01", "official": True},
-    )
-    upsert_items([item])
-    row = next(r for r in recent_items(days=2) if r.external_id == "CHANGED-1")
-    write_digest("2026-08-10", [("F1", int(row.id), 0.9)])
-    assert exclude_previously_shown([row]) == []
-
-    changed = item.model_copy(update={"metadata": {**item.metadata, "deadline": "2026-10-15"}})
-    upsert_items([changed])
-    refreshed = next(r for r in recent_items(days=2) if r.external_id == "CHANGED-1")
-    assert exclude_previously_shown([refreshed]) == [refreshed]
-
-
-def test_known_flag_beats_the_material_change_resurface():
-    """A manual "I know this" retires a call even when its details keep changing."""
+def test_known_flag_retires_an_active_standing_opportunity():
+    """A manual "I know this" wins over the standing-shortlist policy."""
     from dailydigest.store import (
         exclude_known_items,
         exclude_previously_shown,
@@ -185,17 +157,11 @@ def test_known_flag_beats_the_material_change_resurface():
     upsert_items([item])
     row = next(r for r in recent_items(days=2) if r.external_id == "KNOWN-1")
     write_digest("2026-08-11", [("F1", int(row.id), 0.9)])
+    assert exclude_previously_shown([row]) == [row]
+
     set_item_known(int(row.id), True)
 
-    changed = item.model_copy(
-        update={"metadata": {**item.metadata, "deadline": "2026-10-20"}}
-    )
-    upsert_items([changed])
-    refreshed = next(r for r in recent_items(days=2) if r.external_id == "KNOWN-1")
-    # The change alone would bring it back...
-    assert exclude_previously_shown([refreshed]) == [refreshed]
-    # ...but the manual flag is final.
-    assert exclude_known_items(exclude_previously_shown([refreshed])) == []
+    assert exclude_known_items(exclude_previously_shown([row])) == []
 
 
 def test_assessment_filters_ineligible_closed_and_too_soon_items():
@@ -217,6 +183,7 @@ def test_assessment_filters_ineligible_closed_and_too_soon_items():
         "status": "open",
         "opportunity_type": "grant",
         "deadline": "2026-09-15",
+        "official": True,
         "eligibility_tags": ["Public and State controlled institutions of higher education"],
     }
 
@@ -286,6 +253,74 @@ def test_assessment_filters_ineligible_closed_and_too_soon_items():
     outside_region = assess_opportunity(event, profile_with_region, today=date(2026, 8, 10))
     assert outside_region.actionable is False
     assert "location" in outside_region.reason
+
+
+def test_unofficial_opportunity_never_gets_affirmative_eligibility():
+    from dailydigest.opportunities import OpportunityProfile, assess_opportunity
+
+    profile = OpportunityProfile(**_profile_payload())
+    result = assess_opportunity(
+        {
+            "status": "open",
+            "official": False,
+            "opportunity_type": "fellowship",
+            "deadline": "2026-10-15",
+            "eligibility_tags": ["Unrestricted (open to any type of entity)"],
+        },
+        profile,
+        today=date(2026, 8, 10),
+    )
+
+    assert result.actionable is True
+    assert result.eligibility == "unknown"
+    assert "official" in result.reason
+
+
+def test_event_date_must_leave_enough_lead_time():
+    from dailydigest.opportunities import OpportunityProfile, assess_opportunity
+
+    profile = OpportunityProfile(**_profile_payload())
+    event = {
+        "record_type": "event",
+        "status": "open",
+        "official": True,
+        "event_type": "workshop",
+        "format": "online",
+        "event_start": "2026-08-15",
+    }
+
+    result = assess_opportunity(event, profile, today=date(2026, 8, 10))
+
+    assert result.actionable is False
+    assert "lead time" in result.reason
+
+
+def test_event_section_is_not_treated_as_an_opportunity_without_record_type(monkeypatch):
+    import json
+    from types import SimpleNamespace
+
+    from dailydigest import pipeline as pipeline_mod
+    from dailydigest.opportunities import OpportunityProfile
+
+    profile = OpportunityProfile(**_profile_payload())
+    row = SimpleNamespace(
+        id=1,
+        section="events",
+        metadata_json=json.dumps(
+            {
+                "status": "open",
+                "official": True,
+                "event_type": "workshop",
+                "format": "online",
+                "event_start": "2026-08-01",
+            }
+        ),
+    )
+    monkeypatch.setattr(pipeline_mod, "user_local_date", lambda: date(2026, 8, 10))
+
+    kept = pipeline_mod._filter_actionable_opportunities([(row, 0.8)], profile)
+
+    assert kept == []
 
 
 def test_structured_profile_affects_only_opportunity_ordering(monkeypatch):

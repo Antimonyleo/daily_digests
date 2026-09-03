@@ -9,6 +9,7 @@ stays local, fast, and reproducible.
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 from functools import lru_cache
@@ -16,7 +17,7 @@ from typing import Any
 
 from ..models import SourceSpec
 
-RANKER_VERSION = "2026-08-18-knn-preference-v7"
+RANKER_VERSION = "2026-09-02-deadline-venue-v8"
 
 _ARXIV_CS_RE = re.compile(r"\barxiv[\s:_\-]*cs[\s:./\-]", re.IGNORECASE)
 
@@ -120,6 +121,7 @@ STRONG_TIER_PATTERNS = (
     "chem. soc. rev.",
     "energy and environmental science",
     "angew. chem.",
+    "angewandte chemie",
     "advanced materials",
     "advanced functional materials",
     "advanced science",
@@ -368,6 +370,38 @@ def _row_source(row: Any) -> str:
     return _safe_str(getattr(row, "source", ""))
 
 
+def _row_metadata(row: Any) -> dict[str, Any]:
+    metadata = getattr(row, "metadata", None)
+    if isinstance(metadata, dict):
+        return metadata
+    raw = getattr(row, "metadata_json", "")
+    if not isinstance(raw, str) or not raw:
+        return {}
+    try:
+        value = json.loads(raw)
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def display_source(row: Any) -> str:
+    """Show an aggregator paper's actual venue when the ingest record has it."""
+    venue = _safe_str(getattr(row, "venue_name", "")).strip()
+    if not venue:
+        venue = _safe_str(_row_metadata(row).get("venue")).strip()
+    return venue or _row_source(row)
+
+
+def _quality_source(row: Any) -> str:
+    source = _row_source(row)
+    source_lc = source.lower()
+    if _row_section(row).lower() == "research" and (
+        "pubmed" in source_lc or "openalex" in source_lc
+    ):
+        return display_source(row)
+    return source
+
+
 def _row_section(row: Any) -> str:
     return _safe_str(getattr(row, "section", ""))
 
@@ -443,6 +477,14 @@ def infer_source_quality(source: str, section: str) -> SourceQuality:
     return _infer_source_quality_by_name(source_lc, section_lc)
 
 
+def _is_strong_venue_name(value: str) -> bool:
+    return (
+        any(pattern in value for pattern in STRONG_TIER_PATTERNS)
+        or value == "small"
+        or value.startswith("small ")
+    )
+
+
 def recognized_research_venue(venue_name: str | None) -> str | None:
     """Return ``venue_name`` when it names a known top/high/strong research venue.
 
@@ -458,7 +500,7 @@ def recognized_research_venue(venue_name: str | None) -> str | None:
         return None
     if v in TOP_TIER_NAMES:
         return venue_name
-    if any(p in v for p in HIGH_TIER_PATTERNS) or any(p in v for p in STRONG_TIER_PATTERNS):
+    if any(p in v for p in HIGH_TIER_PATTERNS) or _is_strong_venue_name(v):
         return venue_name
     return None
 
@@ -473,7 +515,7 @@ def _infer_source_quality_by_name(source_lc: str, section_lc: str) -> SourceQual
             return SourceQuality(0.99, "top", 7.0)
         if any(pattern in source_lc for pattern in HIGH_TIER_PATTERNS):
             return SourceQuality(0.90, "high", 7.0)
-        if any(pattern in source_lc for pattern in STRONG_TIER_PATTERNS):
+        if _is_strong_venue_name(source_lc):
             return SourceQuality(0.76, "strong", 7.0)
         if any(
             pattern in source_lc
@@ -522,7 +564,7 @@ def novelty_score(row: Any) -> float:
 
 def promotional_score(row: Any) -> float:
     text_lc = _row_text(row).lower()
-    source_quality = infer_source_quality(_row_source(row), _row_section(row))
+    source_quality = infer_source_quality(_quality_source(row), _row_section(row))
     if not text_lc:
         return _clip(source_quality.promo_risk)
 
@@ -557,38 +599,48 @@ def source_bucket(row: Any) -> str:
     section = _row_section(row).lower()
     if section != "research":
         return section or "other"
+    # Aggregator rows (OpenAlex/PubMed) hide the real venue behind the feed
+    # name. When the ingest record carries the venue, classify by it exactly
+    # as if that venue had arrived through a direct feed.
+    is_aggregator = "openalex" in source_lc or "pubmed" in source_lc
+    venue = display_source(row) if is_aggregator else ""
+    if venue == _row_source(row):
+        venue = ""
+    quality_source = venue or _row_source(row)
+    quality_source_lc = quality_source.lower()
     # Preprint servers classify themselves. They must be matched BEFORE the
     # venue-impact flag below: a preprint server's OpenAlex mean-citedness is
     # low by construction (bioRxiv scores ~0.30), so honoring the flag here
     # relabeled every enriched preprint a "trivial journal" and squeezed it into
-    # the 15% low-impact quota instead of the 20% preprint budget — even though
+    # the low-impact quota instead of the preprint budget — even though
     # the reader's own votes rate bioRxiv (0.27 hit rate) above most journals
     # they are shown. A preprint is unpublished, not trivial.
-    if is_arxiv_cs_source(source_lc):
+    if is_arxiv_cs_source(quality_source_lc):
         return "arxiv_cs"
-    if "arxiv" in source_lc and "chemrxiv" not in source_lc:
+    if "arxiv" in quality_source_lc and "chemrxiv" not in quality_source_lc:
         return "arxiv_other"
-    if "biorxiv" in source_lc or "medrxiv" in source_lc:
+    if "biorxiv" in quality_source_lc or "medrxiv" in quality_source_lc:
         return "bio_med_preprint"
-    if any(pattern in source_lc for pattern in PREPRINT_SERVER_PATTERNS):
+    if any(pattern in quality_source_lc for pattern in PREPRINT_SERVER_PATTERNS):
         return "preprint_other"
 
     # Live venue-impact enrichment (when enabled) can flag an item whose actual
-    # publication venue is low impact — this is the only way to catch low-impact
-    # papers arriving through aggregators (OpenAlex/PubMed) whose source name
-    # hides the real journal. Honor it so the low-impact frequency cap applies.
-    # The preprint servers above already returned, so this can no longer relabel
-    # them (PubMed shares their "repository" tier, so tier cannot separate the
-    # two — only the explicit source match can).
+    # publication venue is low impact, or verify that an unlisted venue is
+    # materially high impact. Honor both flags ahead of the name-based policy so
+    # the low-impact frequency cap applies to the former and the latter is not
+    # capped merely for missing the curated lists. The preprint servers above
+    # already returned, so this can no longer relabel them (PubMed shares their
+    # "repository" tier, so tier cannot separate the two — only the explicit
+    # source match can).
     if getattr(row, "venue_low_impact", False) is True:
         return "low_impact_journal"
+    if getattr(row, "venue_high_impact", False) is True:
+        return "published_journal"
 
-    if "openalex" in source_lc:
-        return "aggregator"
-    if "pubmed" in source_lc:
-        return "published_database"
+    if is_aggregator and not venue:
+        return "aggregator" if "openalex" in source_lc else "low_impact_journal"
 
-    quality = infer_source_quality(_row_source(row), section)
+    quality = infer_source_quality(quality_source, section)
     if quality.quality_tier in {"top", "high", "strong"}:
         return "published_journal"
     # Catch remaining preprint servers (ChemRxiv, SSRN, Research Square, …)
@@ -618,7 +670,7 @@ def is_published_journal_source(row: Any) -> bool:
 def is_high_quality_journal_source(row: Any) -> bool:
     if _row_section(row).lower() != "research":
         return False
-    quality = infer_source_quality(_row_source(row), "research")
+    quality = infer_source_quality(_quality_source(row), "research")
     return quality.quality_tier in {"top", "high", "strong"}
 
 
@@ -777,7 +829,7 @@ def score_breakdown(
     returned components are clipped to 0..1 so they work directly as bar widths.
     """
     section = _row_section(row).lower()
-    source_quality = infer_source_quality(_row_source(row), section)
+    source_quality = infer_source_quality(_quality_source(row), section)
     novelty = novelty_score(row)
     promo = promotional_score(row)
     access = access_friction_score(row)
@@ -947,7 +999,7 @@ def venue_relevance_credit(row: Any) -> float:
     """
     if _row_section(row).lower() != "research":
         return 0.0
-    quality = infer_source_quality(_row_source(row), "research")
+    quality = infer_source_quality(_quality_source(row), "research")
     # Preprints/aggregators do not get venue relevance credit even if their
     # nominal prestige sits above the low-impact line — the credit is a
     # peer-reviewed-venue signal.
@@ -968,11 +1020,12 @@ def quality_adjusted_score(row: Any, base_score: float) -> float:
     on-topic. Truly exceptional results (high relevance + novelty) are exempt.
 
     The returned score is clipped to [0, 1] so the absolute thresholds that gate
-    selection downstream (``adaptive_size_bar``, ``low_impact_relevance_floor``,
-    the exceptional-preprint cutoff) operate on a stable, bounded scale.
+    selection downstream (``adaptive_size_bar``, the exceptional-preprint cutoff)
+    operate on a stable, bounded scale. ``low_impact_relevance_floor`` is not
+    among them: it gates on the raw ``topic_score`` snapshot, not this score.
     """
     section = _row_section(row).lower()
-    source_quality = infer_source_quality(_row_source(row), section)
+    source_quality = infer_source_quality(_quality_source(row), section)
     novelty = novelty_score(row)
     promo = promotional_score(row)
     base = float(base_score)

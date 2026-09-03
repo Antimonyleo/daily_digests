@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -49,12 +51,20 @@ def test_venue_low_impact_flag_overrides_aggregator_bucket():
     assert is_low_impact_research(row) is True
 
 
+def test_venue_high_impact_flag_promotes_an_unlisted_journal():
+    row = _row("A targeted therapeutics study", "Journal of Minor Results")
+    assert source_bucket(row) == "low_impact_journal"
+    row.venue_high_impact = True
+    assert source_bucket(row) == "published_journal"
+    assert is_low_impact_research(row) is False
+
+
 def test_venue_low_impact_flag_never_relabels_a_preprint_server():
     """A preprint is unpublished, not trivial.
 
     Every preprint server has low OpenAlex mean-citedness by construction
     (bioRxiv ~0.30, under the low-venue threshold), so honoring the enrichment
-    flag for them squeezed preprints into the 15% low-impact quota instead of
+    flag for them squeezed preprints into the low-impact quota instead of
     the 20% preprint budget — while the reader's votes rate bioRxiv above most
     journals they are shown.
     """
@@ -70,12 +80,78 @@ def test_venue_low_impact_flag_never_relabels_a_preprint_server():
         assert source_bucket(row) == expected
         assert is_low_impact_research(row) is False
 
-    # The guard still does its real job: a hidden trivial venue behind an
-    # aggregator is still caught.
+    # Missing venue evidence is conservative, and the explicit enrichment flag
+    # reaches the same low-impact result.
     hidden = _row("A targeted therapeutics study", "PubMed (your topics)")
-    assert source_bucket(hidden) == "published_database"
+    assert source_bucket(hidden) == "low_impact_journal"
     hidden.venue_low_impact = True
     assert source_bucket(hidden) == "low_impact_journal"
+
+
+def test_hidden_unknown_pubmed_venue_is_low_impact_without_live_enrichment():
+    row = SimpleNamespace(
+        title="A niche RNA paper",
+        abstract="Primary research with methods and results.",
+        section="research",
+        source="PubMed (your topics)",
+        metadata_json='{"venue":"Journal of Minor Results"}',
+        id=1,
+    )
+
+    assert source_bucket(row) == "low_impact_journal"
+    assert is_low_impact_research(row) is True
+
+
+def test_pubmed_without_venue_evidence_is_not_promoted_as_a_journal():
+    row = SimpleNamespace(
+        title="A targeted therapeutics study",
+        abstract="Primary research with methods and results.",
+        section="research",
+        source="PubMed (your topics)",
+        metadata_json="{}",
+        id=1,
+    )
+
+    assert source_bucket(row) == "low_impact_journal"
+    assert is_low_impact_research(row) is True
+
+
+def test_hidden_top_pubmed_venue_keeps_published_journal_quality():
+    row = SimpleNamespace(
+        title="A major RNA paper",
+        abstract="Primary research with methods and results.",
+        section="research",
+        source="PubMed (your topics)",
+        metadata_json='{"venue":"Nature Biotechnology"}',
+        id=1,
+    )
+
+    assert source_bucket(row) == "published_journal"
+    assert is_low_impact_research(row) is False
+
+
+def test_hidden_preprint_venue_behind_aggregator_keeps_preprint_bucket():
+    # PubMed indexes NIH preprint-pilot records under the preprint server's own
+    # journal title; OpenAlex does the same for ChemRxiv. Those are preprints,
+    # not trivial journals, even though their venue tier is "repository".
+    for source, venue, expected in (
+        ("PubMed (your topics)", "bioRxiv : the preprint server for biology", "bio_med_preprint"),
+        ("OpenAlex (biotech)", "medRxiv", "bio_med_preprint"),
+        ("OpenAlex (chemistry)", "ChemRxiv", "preprint_other"),
+    ):
+        row = SimpleNamespace(
+            title="A structural DNA nanotechnology study",
+            abstract="Primary research with methods and results.",
+            section="research",
+            source=source,
+            metadata_json=json.dumps({"venue": venue}),
+            id=1,
+        )
+        assert source_bucket(row) == expected
+        assert is_low_impact_research(row) is False
+        row.venue_low_impact = True
+        assert source_bucket(row) == expected
+        assert is_low_impact_research(row) is False
 
 
 def test_low_impact_penalized_vs_top_at_equal_relevance():
@@ -138,7 +214,7 @@ def _hq_pool(n: int):
 
 
 def test_low_impact_journals_are_frequency_capped():
-    # Low-impact items score *higher* but must still be capped (int(10*0.15)=1).
+    # Low-impact items score *higher* but must still be capped to one of ten.
     scored = _hq_pool(12)
     scored += [
         (_row(f"Minor paper {i}", f"Journal of Minor Results {i}"), 0.90 - i * 0.005)
@@ -150,8 +226,23 @@ def test_low_impact_journals_are_frequency_capped():
     assert low <= 1
 
 
+def test_low_impact_fraction_is_a_maximum_not_a_reserved_slot():
+    # Ten percent of a five-item serving rounds down to zero. A maximum must not
+    # manufacture a low-impact slot that the reader did not ask for.
+    scored = _hq_pool(12)
+    scored += [
+        (_row(f"Minor paper {i}", f"Journal of Minor Results {i}"), 0.90 - i * 0.005)
+        for i in range(4)
+    ]
+    scored.sort(key=lambda pair: pair[1], reverse=True)
+    result = pick_top_per_section(scored, {"research": 5})
+    low = sum(1 for row, _ in result if source_bucket(row) == "low_impact_journal")
+    assert len(result) == 5
+    assert low == 0
+
+
 def test_low_impact_below_floor_is_excluded():
-    # All low-impact items are below the 0.58 relevance floor → none selected when
+    # All low-impact items are below the relevance floor → none selected when
     # enough high-quality items exist to fill the section.
     scored = _hq_pool(12)
     scored += [
@@ -163,13 +254,39 @@ def test_low_impact_below_floor_is_excluded():
     assert low == 0
 
 
-def test_low_impact_used_as_last_resort_only_up_to_hard_minimum():
-    # Only low-impact items exist (below floor). The last-resort override fills just
-    # the small hard minimum (3), not the full cap — a short section of the least-bad
-    # items beats padding five weak slots (dynamic cutoff, see min_research/P8).
+def test_low_impact_below_floor_never_bypasses_quality_gate_as_last_resort():
+    # A hard-minimum fill must not bypass the explicit low-impact relevance floor.
     scored = [
         (_row(f"Minor paper {i}", f"Journal of Minor Results {i}"), 0.45 - i * 0.01)
         for i in range(6)
     ]
     result = pick_top_per_section(scored, {"research": 5})
-    assert len(result) == 3
+    assert result == []
+
+
+def test_low_impact_floor_uses_topic_score_not_fused_rank(monkeypatch):
+    """A strong preference rank cannot rescue a weak topical match."""
+    from dailydigest import config as config_mod
+
+    below = _row("Weak topic, high fused rank", "Journal of Minor Results")
+    above = _row("Strong topic, low fused rank", "Journal of Minor Findings")
+    settings = SimpleNamespace(
+        max_preprint_research_frac=0.55,
+        max_low_impact_research_frac=1.0,
+        low_impact_relevance_floor=0.72,
+        adaptive_relevance_floor=False,
+        research_final_score_floor_frac=0.0,
+        research_final_score_min_keep=0,
+    )
+    monkeypatch.setattr(config_mod, "get_settings", lambda: settings)
+
+    result = pick_top_per_section(
+        [(below, 0.95), (above, 0.20)],
+        {"research": 1},
+        score_features={
+            id(below): {"topic_score": 0.70},
+            id(above): {"topic_score": 0.74},
+        },
+    )
+
+    assert [row for row, _score in result] == [above]
