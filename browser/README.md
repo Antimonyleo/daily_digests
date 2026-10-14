@@ -14,6 +14,8 @@ Unavailable or limited feeds remain visible, including after a failed brew.
 
 The **Compute** menu defaults to one CPU core. GPU acceleration is an explicit,
 per-device opt-in and falls back to CPU if initialization or inference fails.
+Device-loss signals are watched directly because a lost GPU can leave the
+runtime's inference promise pending without rejecting it.
 It uses a checksum-pinned, unfused float32 export of the same BGE model because
 the native optimized graph has an attention mask unsupported by this WebGPU
 runtime. Hardware availability is checked before choosing the session's export.

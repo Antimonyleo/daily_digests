@@ -1,7 +1,7 @@
 import { loadPyodide } from './node_modules/pyodide/pyodide.mjs';
 import { AutoTokenizer, AutoModel, Tensor, env } from './node_modules/@huggingface/transformers/dist/transformers.min.js';
 import { prepareBertBatch } from './bge-tokenizer.mjs';
-import { computeCapabilities, computeSelection, createEmbeddingEngine, formatComputeProgress } from './compute.mjs';
+import { computeCapabilities, computeSelection, createEmbeddingEngine, formatComputeProgress, guardGPUModel } from './compute.mjs';
 
 let companion = null;
 let boot, state, database, jobRunning = false, stateReplacing = false, computeMode = 'cpu';
@@ -125,10 +125,11 @@ async function initialize() {
     const engine = createEmbeddingEngine({ mode: computeMode, capabilities, env: env.backends.onnx,
       loadTokenizer: options => AutoTokenizer.from_pretrained('bge-small', { local_files_only: true, ...options }),
       loadModel: async ({ exportKind, ...options }) => {
-        return AutoModel.from_pretrained(exportKind === 'gpu' ? 'bge-small-webgpu' : 'bge-small', {
+        const model = await AutoModel.from_pretrained(exportKind === 'gpu' ? 'bge-small-webgpu' : 'bge-small', {
           local_files_only: true, ...options,
           ...(exportKind === 'gpu' ? { session_options: { graphOptimizationLevel: 'disabled' } } : {}),
         });
+        return options.device === 'webgpu' ? guardGPUModel(model, env.backends.onnx.webgpu.device) : model;
       },
       prepareBatch: prepareBertBatch, makeTensor: (data, dims) => new Tensor('int64', data, dims),
       shouldCancel: () => Boolean(state.py.globals.get('browser_cancelled')()),

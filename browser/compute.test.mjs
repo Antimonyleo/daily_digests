@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { computeCapabilities, computeSelection, createEmbeddingEngine, formatComputeProgress } from './compute.mjs';
+import { computeCapabilities, computeSelection, createEmbeddingEngine, formatComputeProgress, guardGPUModel } from './compute.mjs';
 import { prepareBertBatch } from '../prototypes/browser-compute/bge-tokenizer.mjs';
 
 test('compute choices depend on browser capabilities across operating systems', () => {
@@ -12,6 +12,18 @@ test('compute choices depend on browser capabilities across operating systems', 
   assert.equal(computeSelection('multicore', caps).threads, 4);
   assert.equal(computeSelection('gpu', { gpu: false }).device, 'wasm');
   assert.throws(() => computeSelection('invalid', caps), /Unknown compute/);
+});
+
+test('GPU loss rejects a hung inference and skips broken-session disposal', async () => {
+  let loseDevice;
+  const model = () => new Promise(() => {});
+  model.dispose = () => { throw new Error('Broken disposal must not block recovery'); };
+  const guarded = guardGPUModel(model, { lost: new Promise(resolve => { loseDevice = resolve; }) });
+  const pending = guarded({});
+  loseDevice({ reason: 'destroyed' });
+  await assert.rejects(pending, /GPU device lost/);
+  await guarded.dispose();
+  await assert.rejects(guarded({}), /GPU device lost/);
 });
 
 function harness(mode = 'cpu', overrides = {}) {

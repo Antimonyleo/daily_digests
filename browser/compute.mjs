@@ -14,6 +14,22 @@ export function computeSelection(mode, capabilities) {
   };
 }
 
+export function guardGPUModel(model, device) {
+  let lost = false;
+  const failure = device.lost.then(() => {
+    lost = true;
+    throw new Error('GPU device lost');
+  });
+  // Loss can occur while idle; the next call must still receive the failure.
+  failure.catch(() => {});
+  const run = inputs => lost ? Promise.reject(new Error('GPU device lost'))
+    : Promise.race([model(inputs), failure]);
+  // The destroyed device has already invalidated its buffers. Session disposal
+  // can itself hang after loss, so let CPU recovery proceed in that case.
+  run.dispose = () => lost ? Promise.resolve() : model.dispose?.();
+  return run;
+}
+
 function duration(ms) {
   const seconds = Math.max(0, Math.floor(ms / 1000));
   return seconds >= 60 ? `${Math.floor(seconds / 60)}m ${seconds % 60}s` : `${seconds}s`;
