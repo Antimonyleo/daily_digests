@@ -5,6 +5,8 @@ The private token is written to a file; only its path is printed. State sync is
 disabled unless --state-dir selects a separate companion store. --schedule
 explicitly brews an uploaded browser snapshot in an isolated native workspace;
 browser requests never forward brewing or ranking to this service.
+Browsers may also require the user to grant Local Network Access permission
+before the HTTPS website can connect to this explicitly configured companion.
 """
 from __future__ import annotations
 
@@ -301,7 +303,7 @@ def create_app(*, token, allowed_origin="https://antimonyleo.github.io", setting
     app.add_middleware(CORSMiddleware, allow_origins=[allowed_origin],
                        allow_methods=["GET", "POST", "PUT"],
                        allow_headers=["Content-Type", "X-DailyDigest-Token"],
-                       allow_credentials=False)
+                       allow_credentials=False, allow_private_network=True)
 
     @app.middleware("http")
     async def authorized(request: Request, call_next):

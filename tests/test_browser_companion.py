@@ -70,6 +70,24 @@ def test_strict_preflight_allows_token_header_but_not_unknown_headers(settings):
         assert http.request("OPTIONS", "/summarize", headers=headers).status_code == 403
 
 
+def test_private_network_preflight_allows_only_the_configured_origin(settings):
+    with client(settings) as http:
+        headers = {"Origin": ORIGIN, "Access-Control-Request-Method": "POST",
+                   "Access-Control-Request-Headers": "content-type,x-dailydigest-token",
+                   "Access-Control-Request-Private-Network": "true"}
+        response = http.request("OPTIONS", "/summarize", headers=headers)
+        assert response.status_code == 200
+        assert response.headers["access-control-allow-private-network"] == "true"
+        assert response.headers["access-control-allow-origin"] == ORIGIN
+        headers["Origin"] = "https://other.example"
+        denied = http.request("OPTIONS", "/summarize", headers=headers)
+        assert denied.status_code == 403
+        assert "access-control-allow-private-network" not in denied.headers
+        # Granting the preflight does not authorize the actual operation.
+        assert http.request("POST", "/summarize", headers={"Origin": ORIGIN},
+                            json={"items": []}).status_code == 401
+
+
 def test_selected_metadata_and_short_profile_use_native_summarizer(settings, monkeypatch):
     from dailydigest import summarize as native
 
