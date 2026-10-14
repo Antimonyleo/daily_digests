@@ -12,6 +12,13 @@ export function routeFromHash(hash) {
   catch { return '/'; }
 }
 
+export function browserSupportError(environment = globalThis) {
+  if (!environment.WebAssembly?.Suspending || !environment.WebAssembly?.promising || !environment.navigator?.locks) {
+    return 'This browser is missing features DailyDigest needs. Try a current desktop Chrome browser.';
+  }
+  return null;
+}
+
 export class WorkerClient {
   constructor(worker) {
     this.worker = worker;
@@ -157,6 +164,8 @@ export function renderedDocument(html, token, path) {
 }
 
 async function boot() {
+  const supportError = browserSupportError();
+  if (supportError) throw new Error(supportError);
   const frame = document.getElementById('app');
   const startup = document.getElementById('startup');
   const status = document.getElementById('status');
@@ -188,7 +197,23 @@ async function boot() {
   let ready = false;
   let navigation = 0;
   let activePath = '/';
-  const report = (error) => { setStatus(error.message || String(error)); document.getElementById('retry').hidden = false; };
+  const errorPanel = document.getElementById('app-error');
+  let errorFocus;
+  const dismissError = () => { errorPanel.hidden = true; errorFocus?.focus(); };
+  document.getElementById('reload-app').onclick = () => location.reload();
+  document.getElementById('dismiss-error').onclick = dismissError;
+  errorPanel.addEventListener('keydown', event => {
+    if (event.key === 'Escape') { event.preventDefault(); dismissError(); }
+  });
+  const report = (error) => {
+    const message = error.message || String(error);
+    if (!ready) { setStatus(message); document.getElementById('retry').hidden = false; return; }
+    setStatus('Action needs attention');
+    if (errorPanel.hidden) errorFocus = document.activeElement;
+    document.getElementById('app-error-message').textContent = message;
+    errorPanel.hidden = false;
+    document.getElementById('dismiss-error').focus();
+  };
   const companionStatus = document.getElementById('companion-status');
   const companionEndpoint = document.getElementById('companion-endpoint');
   const companionToken = document.getElementById('companion-token');
@@ -320,7 +345,7 @@ async function boot() {
       const response = await client.call({ type: 'import', body, overwrite: true });
       if (response.status >= 400) throw new Error(response.body);
       location.reload();
-    } catch (error) { report(error); }
+    } catch (error) { report(new Error(`Backup import failed: ${error.message}`)); }
     finally { event.target.value = ''; }
   };
   document.getElementById('companion-form').onsubmit = async (event) => {

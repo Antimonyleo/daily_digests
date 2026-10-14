@@ -1,7 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { runInNewContext } from 'node:vm';
-import { localPath, routeFromHash, renderedDocument, WorkerClient } from './app.mjs';
+import { localPath, routeFromHash, renderedDocument, WorkerClient, browserSupportError } from './app.mjs';
+
+test('startup identifies missing browser capabilities before downloading the worker', () => {
+  const supported = { WebAssembly: { Suspending() {}, promising() {} }, navigator: { locks: {} } };
+  assert.equal(browserSupportError(supported), null);
+  assert.match(browserSupportError({}), /current desktop Chrome/);
+  assert.ok(browserSupportError({ ...supported, navigator: {} }));
+  assert.ok(browserSupportError({ ...supported, WebAssembly: { promising() {} } }));
+});
 
 class FakeWorker extends EventTarget {
   sent = [];

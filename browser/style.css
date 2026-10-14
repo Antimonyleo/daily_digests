@@ -14,6 +14,8 @@ summary { cursor: pointer; padding: 8px; }
 button, .file-button { display: inline-block; font: inherit; border: 1px solid #dde3dc; border-radius: 6px; padding: 10px; background: #e8f3ec; color: #174d39; cursor: pointer; margin: 4px 4px 4px 0; }
 button:disabled, .file-button:has(input:disabled) { opacity: .5; cursor: default; }
 .file-button input { width: 1px; height: 1px; position: absolute; opacity: 0; }
+.app-error { position: fixed; top: 16px; left: 50%; transform: translateX(-50%); width: min(680px, calc(100vw - 24px)); max-height: calc(100dvh - 96px); overflow-y: auto; padding: 16px; background: #fff; border: 2px solid #256f52; border-radius: 8px; box-shadow: 0 12px 36px #15221b22; z-index: 110; }
+.app-error p { margin: 0 0 8px; overflow-wrap: anywhere; line-height: 1.5; }
 #companion-menu { margin-left: auto; }
 .browser-bar > button { padding: 6px 9px; margin: 0; flex-shrink: 0; }
 #companion-form label { display: block; margin: 8px 0 4px; }
@@ -21,6 +23,6 @@ button:disabled, .file-button:has(input:disabled) { opacity: .5; cursor: default
 .companion-actions { display: flex; flex-direction: column; align-items: stretch; }
 .data-tools { max-height: calc(100dvh - 92px); overflow-y: auto; }
 :is(button, summary, .file-button):focus-visible, .file-button:focus-within { outline: 2px solid #256f52; outline-offset: 3px; }
-@media (prefers-color-scheme: dark) { :root { color: #edf4ef; background: #0e1511; color-scheme: dark; } .browser-bar, .data-tools { background: #151f19; border-color: #314038; } button, .file-button { background: #1b3426; border-color: #314038; color: #92d2ac; } .eyebrow { color: #92d2ac; } }
+@media (prefers-color-scheme: dark) { :root { color: #edf4ef; background: #0e1511; color-scheme: dark; } .browser-bar, .data-tools, .app-error { background: #151f19; border-color: #314038; } button, .file-button { background: #1b3426; border-color: #314038; color: #92d2ac; } .eyebrow { color: #92d2ac; } }
 @media (pointer: coarse) { summary, button, .file-button { min-height: 44px; } .browser-bar { height: 60px; } #app { height: calc(100dvh - 60px); } }
 @media (max-width: 680px) { .browser-bar .data-tools { position: fixed; right: 12px; bottom: 72px; } }

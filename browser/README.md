@@ -113,3 +113,14 @@ It also reads the published public snapshot through the actual browser HTTPX
 transport, checking that browser-decoded responses are not decompressed twice.
 Mobile viewport checks establish layout only; production-scale latency and
 actual Android/iOS or other browser engines still need separate verification.
+
+The 400-paper frozen replay (328 public records and 72 controlled scope cases)
+matched the native ten-paper slate and ordering; maximum score drift was below
+0.00015. On the desktop test machine, native cold/warm brewing took 22/2.4 seconds
+and browser cold/warm brewing took 99/5.1 seconds. UI timer delays remained low
+during processing. These are single-run development measurements with an
+isolated fictional profile, not phone benchmarks or scientific-quality labels.
+The replay also selected an uncertain controlled paper in both implementations;
+matching native behavior does not settle contribution classification.
+The 100 recorded ranking candidates also matched membership, selection flags
+and primary facets; their maximum recorded score drift was 0.0002.

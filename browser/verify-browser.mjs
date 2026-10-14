@@ -501,6 +501,34 @@ try {
     assert.equal(evidence.content_length, evidence.decoded_bytes);
     return evidence;
   });
+  await check('visible-backup-error-and-keyboard-recovery', async () => {
+    const before = await digestIdentity();
+    const dataMenu = page.locator('.browser-bar > details:has(#export)');
+    if (await dataMenu.getAttribute('open') === null) await dataMenu.locator('summary').click();
+    await page.locator('#export').focus();
+    await page.locator('#import').setInputFiles({ name: 'invalid-backup.json', mimeType: 'application/json', buffer: Buffer.from('{invalid') });
+    await page.locator('#app-error').waitFor({ state: 'visible' });
+    assert.match(await page.locator('#app-error-message').textContent(), /Backup import failed/);
+    await page.locator('#dismiss-error').press('Escape');
+    await page.locator('#app-error').waitFor({ state: 'hidden' });
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'export');
+    assert.equal(await digestIdentity(), before);
+    return { visibleError: true, keyboardDismissed: true, focusRestored: true, savedDigestPreserved: true };
+  });
+  await check('unsupported-browser-explained-before-runtime-download', async () => {
+    const unsupported = await browser.newContext();
+    const testPage = await unsupported.newPage();
+    const workerRequests = [];
+    testPage.on('request', request => { if (request.url().includes('/worker.mjs')) workerRequests.push(request.url()); });
+    await testPage.addInitScript(() => Object.defineProperty(WebAssembly, 'Suspending', { value: undefined, configurable: true }));
+    try {
+      await testPage.goto(base, { waitUntil: 'domcontentloaded' });
+      await testPage.locator('#retry').waitFor({ state: 'visible' });
+      assert.match(await testPage.locator('#startup-status').textContent(), /current desktop Chrome/);
+      assert.equal(workerRequests.length, 0);
+      return { simulatedMissingCapability: true, clearMessage: true, runtimeNotDownloaded: true };
+    } finally { await unsupported.close(); }
+  });
 } catch (error) { report.fatal = error.stack; console.error(error.message); }
 finally {
   report.workerEvents = await page.evaluate(() => window.__workerEvents).catch(() => []);

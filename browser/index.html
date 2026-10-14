@@ -13,14 +13,20 @@
   <main id="startup" aria-labelledby="startup-title">
     <p class="eyebrow">DailyDigest in your browser</p>
     <h1 id="startup-title">Your reading desk, locally.</h1>
-    <p>The full DailyDigest interface runs with Python in this browser. Your profile, feedback and saved reading stay in this browser’s storage.</p>
-    <p>First launch downloads the Python runtime and application. Brewing uses public feed snapshots and contacts the sources you select. Sources that block browser access may be unavailable.</p>
-    <p id="startup-status" role="status">Starting Python…</p>
+    <p>Get a reading list matched to your research interests. Your profile, ratings and saved papers are stored in this browser.</p>
+    <p>The first visit downloads what the app needs. A large first brew can take a minute or more; later brews reuse saved calculations. Keep this tab open while brewing. Some sources may be unavailable if they block browser access.</p>
+    <p>Use <strong>Browser data</strong> to back up your reading desk or move it to another device. Optional services are available through <strong>Companion</strong>.</p>
+    <p id="startup-status" role="status">Opening your reading desk…</p>
     <button id="retry" hidden type="button">Retry startup</button>
   </main>
   <iframe id="app" title="DailyDigest reading desk" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-downloads" hidden></iframe>
+  <aside id="app-error" class="app-error" role="alert" hidden>
+    <p id="app-error-message"></p>
+    <button id="reload-app" type="button">Reload app</button>
+    <button id="dismiss-error" type="button">Dismiss</button>
+  </aside>
   <footer class="browser-bar">
-    <span id="status" role="status">Starting Python…</span>
+    <span id="status" role="status">Opening your reading desk…</span>
     <button id="install" type="button" hidden title="Install a DailyDigest browser app shortcut">Install</button>
     <details id="companion-menu">
       <summary>Companion</summary>
