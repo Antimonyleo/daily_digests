@@ -5,6 +5,13 @@ execution in a browser worker. The existing FastAPI interface renders pages in
 memory; no listening Python server or remote ranking request is involved.
 HTML forms, feedback, history and live brew progress use that same interface.
 
+Setup shows muted research examples, which visitors can explicitly load and edit
+before saving. Startup and brewing use tea animations and messages tied to real
+processing stages; reduced-motion settings keep animations still. The digest's
+source card shows the latest attempted check, source response coverage and
+available public-feed update times separately from paper publication dates.
+Unavailable or limited feeds remain visible, including after a failed brew.
+
 ## Architecture and feature transfer
 
 * Native Python: all enabled ranking stages, profile weights/negative interests,

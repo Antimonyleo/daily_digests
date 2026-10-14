@@ -12,11 +12,12 @@
 <body>
   <main id="startup" aria-labelledby="startup-title">
     <p class="eyebrow">DailyDigest in your browser</p>
-    <h1 id="startup-title">Your reading desk, locally.</h1>
+    <div class="tea-cup" aria-hidden="true"><span class="steam s1"></span><span class="steam s2"></span><span class="steam s3"></span><span class="cup-bowl"></span><span class="cup-handle"></span></div>
+    <h1 id="startup-title">Putting the kettle on…</h1>
     <p>Get a reading list matched to your research interests. Your profile, ratings and saved papers are stored in this browser.</p>
     <p>The first visit downloads what the app needs. A large first brew can take a minute or more; later brews reuse saved calculations. Keep this tab open while brewing. Some sources may be unavailable if they block browser access.</p>
     <p>Use <strong>Browser data</strong> to back up your reading desk or move it to another device. Optional services are available through <strong>Companion</strong>.</p>
-    <p id="startup-status" role="status">Opening your reading desk…</p>
+    <p id="startup-status" role="status">Warming up your reading desk. A fresh cup is on its way.</p>
     <button id="retry" hidden type="button">Retry startup</button>
   </main>
   <iframe id="app" title="DailyDigest reading desk" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-downloads" hidden></iframe>

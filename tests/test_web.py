@@ -2951,3 +2951,21 @@ def test_opportunity_calendar_export_uses_structured_dates(tmp_path, monkeypatch
     assert "DTSTART;VALUE=DATE:20260910" in text
     assert "DTEND;VALUE=DATE:20260913" in text
     assert "RNA design workshop\\, practical session" in text
+
+
+def test_setup_research_examples_are_placeholders_and_keep_saved_values(monkeypatch, tmp_path):
+    from dailydigest import web
+
+    monkeypatch.setattr(web, '_get_profile_path', lambda: tmp_path/'missing-profile.yaml')
+    rendered = web.setup_get(_request('GET', '/setup')).body.decode()
+    assert 'placeholder="DNA nanotechnology' in rendered
+    assert 'id="use-example-profile"' in rendered
+    assert 'superlattice materials' in rendered
+    assert 'id="topics"' in rendered and 'superlattice materials</textarea>' not in rendered
+    path = tmp_path/'profile.yaml'
+    path.write_text('bio: My own interests\nkeywords: [Custom topic]\n')
+    monkeypatch.setattr(web, '_get_profile_path', lambda: path)
+    rendered = web.setup_get(_request('GET', '/setup')).body.decode()
+    assert 'Custom topic | 1</textarea>' in rendered
+    assert 'My own interests</textarea>' in rendered
+    assert 'id="use-example-profile"' not in rendered

@@ -1332,6 +1332,7 @@ def index(request: Request, digest_id: str = "") -> Response:
             "sections": sections,
             "empty_enabled_sections": empty_enabled_sections,
             "overview": overview,
+            "source_coverage": health.coverage_summary(),
             "top_journal_audit": top_journal_audit,
             "overflow_audit": overflow_audit,
             "overflow_saved": overflow_saved,

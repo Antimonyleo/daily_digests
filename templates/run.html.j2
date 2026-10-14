@@ -134,6 +134,9 @@
     .mode-card, .progress-bar { transition: none; }
     .cup .steam, ul.stages li.active .marker::before { animation: none; }
   }
+  #progress-panel[data-state="paused"] .cup .steam { animation: none; opacity: 0; }
+  #progress-panel[data-state="paused"] ul.stages li.active .marker::before { animation: none; }
+  .brew-whisper { color: var(--muted); font-size: 14px; margin: 0 0 18px; }
   html[data-theme="dark"] .mode-option input:checked + .mode-card {
     background: linear-gradient(160deg, var(--panel), var(--accent-soft));
   }
@@ -189,8 +192,9 @@
       <div class="steam s1"></div><div class="steam s2"></div><div class="steam s3"></div>
       <div class="body"></div><div class="handle"></div>
     </div>
-    <h1>Brewing today’s digest</h1>
-    <p class="lede">Fetching fresh sources, ranking them against your profile, and preparing your chosen serving.</p>
+    <h1 id="brew-title">Brewing your cup of research</h1>
+    <p class="brew-whisper" id="brew-whisper">Putting the kettle on. Your interests make this blend yours.</p>
+    <p class="lede">We’ll gather the sources, steep them in your interests, and serve your best matches. A large first brew can take a minute or more.</p>
 
     <div class="progress-shell" id="progress-shell" role="progressbar" aria-label="Brewing progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="6">
       <div class="progress-bar" id="progress-bar"></div>
@@ -239,6 +243,11 @@
   const detailEl = document.getElementById("detail");
   const progressBar = document.getElementById("progress-bar");
   const progressShell = document.getElementById("progress-shell");
+  const whisper = document.getElementById("brew-whisper");
+  const friendlyStages = {ingestion: "Gathering the tea leaves from your sources…",
+    calibration: "Getting your blend ready…", profile_encoding: "Getting to know your research taste…",
+    deduplication: "Picking out repeated leaves…", ranking: "Letting your interests steep…",
+    summary: "Preparing the highlights for your cup…", publication: "Saving your brew…", render: "Setting your reading desk…"};
 
   const STAGE_MAP = {
     ingest_start: "ingest", ingest_done: "ingest", dedupe_done: "dedupe",
@@ -277,6 +286,9 @@
     if (item) item.textContent = text;
   }
   function showError(message, reconnect = false) {
+    progressPanel.dataset.state = "paused";
+    document.getElementById("brew-title").textContent = reconnect ? "Let’s check on your brew" : "This brew needs attention";
+    whisper.textContent = "Your latest saved digest is still available below.";
     errEl.hidden = false;
     errEl.textContent = message;
     retryButton.hidden = reconnect;
@@ -286,6 +298,8 @@
 
   let stream;
   function connectStream() {
+    progressPanel.dataset.state = "brewing";
+    document.getElementById("brew-title").textContent = "Brewing your cup of research";
     if (stream) stream.close();
     errEl.hidden = true;
     reconnectButton.hidden = true;
@@ -313,8 +327,9 @@
         return;
       }
       if (stage === "stage_start" || stage === "stage_done") {
+        if (stage === "stage_start" && friendlyStages[payload.name]) whisper.textContent = friendlyStages[payload.name];
         const names = {ingestion: "Fetching sources", calibration: "Loading feedback",
-          profile_encoding: "Encoding your interests", deduplication: "Merging duplicate records",
+          profile_encoding: "Understanding your interests", deduplication: "Merging repeated items",
           ranking: "Ranking qualified candidates", summary: "Preparing summaries",
           publication: "Saving the digest", render: "Preparing the preview"};
         const name = names[payload.name] || payload.name;
@@ -367,18 +382,19 @@
         setProgress(stage, `Selected ${payload.picked || 0} top entries`);
         markActive("summarize");
       } else if (stage === "summarize_start") {
-        annotateText("summarize", `Summarizing ${payload.items || 0} items via ${payload.backend || "extractive"}…`);
-        setProgress(stage, `Summarizing with ${payload.backend || "extractive"}`);
+        annotateText("summarize", `Preparing short notes for ${payload.items || 0} picks…`);
+        setProgress(stage, "Preparing your reading notes");
         markActive("summarize");
       } else if (stage === "summarize_done") {
         annotateText("summarize", `Summarized ${payload.items || 0} items.`);
         setProgress(stage, `Summarized ${payload.items || 0} entries`);
         markActive("render");
       } else if (stage === "render_done") {
-        annotateText("render", `Rendered ${(payload.html_bytes || 0).toLocaleString()} bytes.`);
-        setProgress(stage, "Rendering the final page");
+        annotateText("render", "Your reading desk is ready.");
+        setProgress(stage, "Setting the table for your reading");
         markActive("done");
       } else if (stage === "done") {
+        whisper.textContent = "Your cup is ready. Enjoy your reading.";
         setProgress(stage, "Ready");
         setStage("done", "done");
         es.close();

@@ -19,6 +19,17 @@ export function browserSupportError(environment = globalThis) {
   return null;
 }
 
+export function friendlyLoadingStatus(stage, detail = '') {
+  const messages = {
+    'Loading Python': 'Putting the kettle on… Getting your reading desk ready.',
+    'Loading embedding model': 'Preparing the tea leaves… First-time setup takes a little longer.',
+    'Computing embeddings': 'Steeping your research interests…',
+    'Embeddings complete': 'Tea leaves ready. Choosing your best matches…',
+    'Ready': 'Your reading desk is ready.',
+  };
+  return messages[stage] ? messages[stage] + (stage === 'Computing embeddings' && detail ? ` ${detail}` : '') : [stage, detail].filter(Boolean).join(' · ');
+}
+
 export class WorkerClient {
   constructor(worker) {
     this.worker = worker;
@@ -207,7 +218,7 @@ async function boot() {
   });
   const report = (error) => {
     const message = error.message || String(error);
-    if (!ready) { setStatus(message); document.getElementById('retry').hidden = false; return; }
+    if (!ready) { startup.dataset.state = 'error'; document.getElementById('startup-title').textContent = 'Couldn’t open your reading desk'; setStatus(message); document.getElementById('retry').hidden = false; return; }
     setStatus('Action needs attention');
     if (errorPanel.hidden) errorFocus = document.activeElement;
     document.getElementById('app-error-message').textContent = message;
@@ -290,7 +301,7 @@ async function boot() {
       token = crypto.randomUUID();
       frame.srcdoc = renderedDocument(response.body, token, path);
       frame.hidden = false; startup.hidden = true;
-      setStatus('Python ready · data stays in this browser');
+      setStatus('Your reading desk · saved in this browser');
     } catch (error) { if (version === navigation) report(error); }
   }
   worker.addEventListener('message', ({ data }) => {
@@ -301,7 +312,7 @@ async function boot() {
       document.getElementById('companion-connect').disabled = false;
       refreshCompanion();
       navigate(routeFromHash(location.hash));
-    } else if (data.type === 'progress') setStatus(data.message || [data.stage, data.detail].filter(Boolean).join(' · ') || 'Loading Python…');
+    } else if (data.type === 'progress') setStatus(data.message || friendlyLoadingStatus(data.stage, data.detail) || 'Putting the kettle on…');
     else if (data.type === 'error' && !data.id) report(new Error(data.message || data.error || 'Python startup failed'));
   });
   worker.addEventListener('error', () => report(new Error('Python worker stopped. Reload to reconnect.')));
@@ -387,6 +398,8 @@ async function boot() {
 }
 
 if (typeof document !== 'undefined') boot().catch(error => {
+  document.getElementById('startup').dataset.state = 'error';
+  document.getElementById('startup-title').textContent = 'Couldn’t open your reading desk';
   document.getElementById('startup-status').textContent = error.message;
   document.getElementById('status').textContent = error.message;
   document.getElementById('retry').hidden = false;

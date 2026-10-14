@@ -16,7 +16,9 @@
   }
   textarea { min-height: 110px; resize: vertical; line-height: 1.5; }
   .hint { font-size: 11px; color: var(--muted); margin-top: 4px; }
-  #topics { min-height: 130px; font-size: 15px; }
+  #topics { min-height: 245px; font-size: 15px; }
+  textarea::placeholder, input::placeholder { color: var(--muted); opacity: 1; }
+  .example-note { color: var(--muted); font-size: 12px; line-height: 1.5; margin: 8px 0; }
   .settings-disclosure {
     border-top: 1px solid var(--border); margin-top: 20px; padding-top: 16px;
   }
@@ -145,7 +147,9 @@
     <div class="step">
       <h2>Your research interests</h2>
       <label for="topics">What would you like to read about?</label>
-      <textarea id="topics" name="topics" required aria-describedby="topics-hint" placeholder="RNA delivery&#10;Protein design&#10;Hydrogels">{{ form.topics }}</textarea>
+      <textarea id="topics" name="topics" required aria-describedby="topics-hint example-profile-note" placeholder="DNA nanotechnology&#10;RNA nanotechnology&#10;nucleic acid delivery&#10;mRNA therapeutics&#10;gene therapy&#10;protein engineering&#10;protein structure prediction&#10;colloidal self-assembly&#10;superlattice materials&#10;machine learning for biomolecular design">{{ form.topics }}</textarea>
+      <p class="example-note" id="example-profile-note">The gray text is a research profile example. Add your own interests, or use the example and edit it before saving.</p>
+      {% if not form.topics %}<button class="btn" id="use-example-profile" type="button">Use example interests</button>{% endif %}
       <div class="hint" id="topics-hint">Add 1–10 specific interests, one per line. Optional: use <code>RNA delivery | 3</code> to give a topic extra weight. Plain topics have weight 1; saved weights are preserved. Use the optional bio below to describe what makes a paper useful to you.</div>
 
       <details class="settings-disclosure" id="profile-options"{% if errors %} open{% endif %}>
@@ -159,15 +163,15 @@
           </div>
         </div>
         <label for="bio">A short bio (optional)</label>
-        <textarea id="bio" name="bio" aria-describedby="bio-hint" placeholder="What do you research? What topics matter most to you?">{{ form.bio }}</textarea>
+        <textarea id="bio" name="bio" aria-describedby="bio-hint" placeholder="I research DNA and RNA nanotechnology, biomolecular delivery, protein engineering and self-assembling materials. Prioritize new engineering methods, transferable design rules and prediction tools. Keep clinical trials and biotech developments as background context.">{{ form.bio }}</textarea>
         <div class="hint" id="bio-hint">Describe your priorities in your own words: new methods, engineered systems, mechanisms, applications, or reviews and synthesis. This context helps match papers and news to your interests.</div>
 
         <label for="dw-text">Topics to see less often</label>
         <div class="chip-input" id="dw-input">
-          <input type="text" id="dw-text" placeholder="Type and press comma or Enter…">
+          <input type="text" id="dw-text" placeholder="e.g. cryptocurrency, stock market predictions" aria-describedby="downweight-hint">
         </div>
         <input type="hidden" name="downweight" id="dw-hidden" value="{{ form.downweight }}">
-        <div class="hint">Picks mentioning these topics appear less often.</div>
+        <div class="hint" id="downweight-hint">Type a topic and press comma or Enter. Picks mentioning these topics appear less often. Examples are not saved automatically.</div>
       </details>
     </div>
     <div class="step">
@@ -443,6 +447,20 @@
 {% block scripts %}
 <script>
 (function () {
+  const exampleButton = document.getElementById("use-example-profile");
+  if (exampleButton) {
+    const topics = document.getElementById("topics");
+    topics.addEventListener("input", () => { exampleButton.disabled = Boolean(topics.value.trim()); });
+    exampleButton.addEventListener("click", () => {
+      if (topics.value.trim()) return;
+      topics.value = topics.getAttribute("placeholder");
+      const bio = document.getElementById("bio");
+      if (!bio.value.trim()) bio.value = bio.getAttribute("placeholder");
+      exampleButton.disabled = true;
+      document.getElementById("example-profile-note").textContent = "Example loaded. Make it your own, then save when you’re ready.";
+      topics.focus();
+    });
+  }
   const timezoneInput = document.getElementById("user-timezone");
   try {
     const browserTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;

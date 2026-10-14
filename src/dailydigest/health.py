@@ -136,6 +136,55 @@ def latest_snapshot() -> list[dict]:
     return list(latest) if isinstance(latest, list) else []
 
 
+def coverage_summary() -> dict:
+    """Describe the last attempted source check, not the saved digest's quality."""
+    data = _load_existing(_health_path())
+    if not isinstance(data, dict):
+        data = {}
+    checked = _parse_iso(data.get("updated_at"))
+    checked = checked.astimezone(timezone.utc) if checked else None
+    rows = data.get("latest") if isinstance(data.get("latest"), list) else []
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+    summary = {"total": 0, "responded": 0, "unavailable": 0, "limited": 0,
+               "unknown": 0, "checked_at": checked.isoformat() if checked else "",
+               "checked_label": checked.strftime("%b %d, %Y %H:%M UTC") if checked else "Time not recorded",
+               "checked_stale": bool(checked and checked < cutoff),
+               "public_oldest_label": "", "public_stale": False, "rows": []}
+    public_times = []
+    for row in rows:
+        row = row if isinstance(row, dict) else {}
+        diagnostics = row.get("diagnostics") if isinstance(row.get("diagnostics"), dict) else {}
+        queries = diagnostics.get("queries") if isinstance(diagnostics.get("queries"), list) else []
+        limited = bool(diagnostics.get("truncated") or diagnostics.get("snapshot_refresh_error")
+                       or diagnostics.get("author_resolution_complete") is False
+                       or any(q.get("failure") or q.get("truncated") for q in queries if isinstance(q, dict)))
+        if row.get("ok") is True:
+            summary["responded"] += 1
+            status = "Limited results" if limited else "No items returned" if not row.get("items") else "Responded"
+            summary["limited"] += int(limited)
+        elif row.get("ok") is False:
+            status = "Unavailable"
+            summary["unavailable"] += 1
+        else:
+            status = "Status unknown"
+            summary["unknown"] += 1
+        if diagnostics.get("transport") == "public_snapshot":
+            fetched = _parse_iso(diagnostics.get("snapshot_fetched_at"))
+            fetched = fetched.astimezone(timezone.utc) if fetched else None
+            if fetched:
+                public_times.append(fetched)
+            freshness = f"Public feed: {fetched.strftime('%b %d, %Y %H:%M UTC')}" if fetched else "Public feed time not recorded"
+        else:
+            freshness = f"Checked: {summary['checked_label']}"
+        summary["rows"].append({"name": row.get("source") or "Unnamed source",
+                                "status": status, "freshness": freshness})
+    summary["total"] = len(summary["rows"])
+    if public_times:
+        summary["public_oldest_label"] = min(public_times).strftime("%b %d, %Y %H:%M UTC")
+        summary["public_stale"] = min(public_times) < cutoff
+    return summary
+
+
 def should_show(summary: list[dict]) -> bool:
     """Heuristic: include the footer only when at least one source had >=1
     failure in the last 7 days. Keeps successful weeks visually clean."""

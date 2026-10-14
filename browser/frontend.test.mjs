@@ -1,7 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { runInNewContext } from 'node:vm';
-import { localPath, routeFromHash, renderedDocument, WorkerClient, browserSupportError } from './app.mjs';
+import { localPath, routeFromHash, renderedDocument, WorkerClient, browserSupportError, friendlyLoadingStatus } from './app.mjs';
+
+test('waiting messages describe real stages without a made-up countdown', () => {
+  assert.match(friendlyLoadingStatus('Loading Python'), /kettle/);
+  assert.match(friendlyLoadingStatus('Computing embeddings', '4 / 20'), /Steeping.*4 \/ 20/);
+  assert.match(friendlyLoadingStatus('Loading embedding model'), /First-time/);
+  assert.equal(friendlyLoadingStatus('Other stage', 'actual detail'), 'Other stage · actual detail');
+});
 
 test('startup identifies missing browser capabilities before downloading the worker', () => {
   const supported = { WebAssembly: { Suspending() {}, promising() {} }, navigator: { locks: {} } };

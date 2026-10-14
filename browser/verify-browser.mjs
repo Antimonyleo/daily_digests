@@ -172,11 +172,34 @@ let itemId;
 try {
   await page.goto(base + '#/setup');
   initialReady = Boolean(await check('startup-and-deep-setup', async () => {
+    await page.locator('#startup .tea-cup').waitFor({ state: 'visible' });
+    await page.screenshot({ path: `${output}/warming-kettle.png`, fullPage: true });
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    assert.equal(await page.locator('#startup .steam').first().evaluate(node => getComputedStyle(node).animationName), 'none');
+    await page.emulateMedia({ reducedMotion: 'no-preference' });
     const evidence = await startup();
     await frame().locator('#topics').waitFor();
     return evidence;
   }));
   if (!initialReady) throw new Error('Startup failed; dependent acceptance checks cannot run.');
+  await check('muted-research-examples-require-explicit-use-and-save', async () => {
+    const topics = frame().locator('#topics');
+    assert.equal(await topics.inputValue(), '');
+    assert.match(await topics.getAttribute('placeholder'), /RNA nanotechnology/);
+    assert.equal(await frame().locator('#bio').inputValue(), '');
+    await page.screenshot({ path: `${output}/research-placeholders.png`, fullPage: true });
+    await frame().locator('#use-example-profile').click();
+    assert.equal((await topics.inputValue()).split('\n').length, 10);
+    assert.match(await frame().locator('#bio').inputValue(), /transferable design rules/);
+    const beforeSave = await snapshot();
+    assert.equal(Object.hasOwn(beforeSave.files, 'data/profile.yaml'), false);
+    await page.screenshot({ path: `${output}/research-example.png`, fullPage: true });
+    await topics.fill('');
+    await frame().locator('#profile-options > summary').click();
+    await frame().locator('#bio').fill('');
+    await frame().locator('#profile-options > summary').click();
+    return { examplesOnlyUntilChosen: true, tenResearchTopics: true, noProfileWrittenUntilSave: true };
+  });
   await check('setup-native-form', async () => {
     await frame().locator('#topics').fill('RNA delivery\nProtein design\nHydrogels');
     await frame().locator('details:has(#name) > summary').click();
@@ -298,8 +321,11 @@ try {
     await frame().locator('#cancel-button').click();
     await frame().locator('#err').waitFor({ state: 'visible', timeout: 300000 });
     assert.match(await frame().locator('#err').textContent(), /stop|cancel/i);
+    assert.equal(await frame().locator('#progress-panel').getAttribute('data-state'), 'paused');
+    assert.equal(await frame().locator('.cup .steam').first().evaluate(node => getComputedStyle(node).animationName), 'none');
+    assert.match(await frame().locator('#brew-title').textContent(), /needs attention/);
     const after = await digestIdentity(); assert.equal(after, before);
-    return { before, after };
+    return { before, after, waitingAnimationStopped: true };
   });
   await check('brew-status-reconnect-without-starting-a-new-brew', async () => {
     const sourcesBefore = report.fixtureRequests.length;
@@ -329,6 +355,15 @@ try {
     await page.screenshot({ path: `${output}/brewed-digest.png`, fullPage: true });
     return { digest: await digestIdentity(), selected: await frame().locator('.item[data-item-id]').count(), slate, fixtureRequests: report.fixtureRequests.length };
   });
+  await check('source-coverage-reports-the-readers-latest-check', async () => {
+    const coverage = frame().locator('.source-coverage');
+    assert.match(await coverage.textContent(), /1 of 1 sources responded/);
+    assert.match(await coverage.textContent(), /Checked.*UTC/s);
+    await coverage.locator('summary').click();
+    assert.match(await coverage.locator('li').first().textContent(), /Nature.*Responded.*Checked/s);
+    await page.screenshot({ path: `${output}/source-coverage.png`, fullPage: true });
+    return { selectedSourceCountOnly: true, checkTimestampVisible: true, sourceDetailsAvailable: true };
+  });
   await check('degraded-research-preserves-last-digest', async () => {
     const before = await digestIdentity(); sourceMode = 'failure';
     await route('/run?reading_mode=minimal', '#brew-button');
@@ -337,7 +372,8 @@ try {
     const message = await frame().locator('#err').textContent();
     assert.match(message, /research|source|coverage|fetch|ingest/i);
     const after = await digestIdentity(); assert.equal(after, before);
-    sourceMode = 'success'; return { before, after, message };
+    assert.match(await frame().locator('.source-coverage').textContent(), /0 of 1 sources responded.*1 unavailable/s);
+    sourceMode = 'success'; return { before, after, message, unavailableCoverageVisible: true };
   });
   await check('backup-download-and-import-confirmation', async () => {
     const exported = await snapshot();
