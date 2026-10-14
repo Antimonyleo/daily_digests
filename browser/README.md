@@ -16,9 +16,10 @@ The **Compute** menu defaults to one CPU core. GPU acceleration is an explicit,
 per-device opt-in and falls back to CPU if initialization or inference fails.
 It uses a checksum-pinned, unfused float32 export of the same BGE model because
 the native optimized graph has an attention mask unsupported by this WebGPU
-runtime. The GPU export has a separate cache signature. If inference moves to
-CPU after returning GPU vectors, it keeps that export and signature for the
-rest of the worker session. The 133 MB export is downloaded by the browser
+runtime. Hardware availability is checked before choosing the session's export.
+That export and cache signature stay fixed even if inference later moves to
+CPU, including when cached feedback vectors have already been read. The
+133 MB export is downloaded by the browser
 only when GPU acceleration is used. Physical GPU
 performance and browser/device support vary; this remains experimental.
 Multicore CPU uses at most four cores and is offered only with cross-origin

@@ -299,7 +299,7 @@ async function boot() {
       document.getElementById('compute-support').textContent =
         `${result.capabilities.gpu ? 'WebGPU is exposed by this browser; device availability is checked when used.' : 'GPU acceleration is unavailable in this browser.'} ${result.capabilities.multicore ? `Up to ${result.capabilities.threads} CPU cores are available.` : 'Multiple CPU cores require an isolated host and are unavailable here.'}`;
       document.getElementById('compute-status').textContent = result.mode === 'gpu'
-        ? 'GPU acceleration selected (experimental). If it cannot run, this device will use CPU.'
+        ? result.device === 'webgpu' ? 'GPU acceleration selected (experimental). If it cannot run, this device will use CPU.' : 'GPU hardware is unavailable here; using CPU.'
         : result.threads > 1 ? `CPU · up to ${result.threads} cores.` : 'CPU · one core. GPU acceleration is opt-in.';
       document.getElementById('compute-apply').disabled = false;
     } catch (error) { document.getElementById('compute-status').textContent = error.message; }

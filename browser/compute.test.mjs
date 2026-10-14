@@ -104,6 +104,26 @@ test('fallback preserves the export after returning profile vectors on GPU', asy
   assert.equal(configs.at(-1).exportKind, 'gpu');
 });
 
+test('cached vectors pin the export even before the first inference succeeds', async () => {
+  const baseline = harness(), configs = [];
+  const h = harness('gpu', { loadModel: async config => {
+    configs.push(config);
+    if (config.device === 'webgpu') throw new Error('GPU initialization failed');
+    return baseline.options.loadModel(config);
+  } });
+  const cachedSignature = h.engine.cacheBackend;
+  await h.engine.embed(['new profile']);
+  assert.equal(h.engine.cacheBackend, cachedSignature);
+  assert.equal(configs.at(-1).exportKind, 'gpu');
+});
+
+test('an unavailable GPU uses the original CPU export from the start', async () => {
+  const h = harness('gpu', { capabilities: { gpu: false, multicore: false, threads: 1 } });
+  await h.engine.embed(['profile']);
+  assert.equal(h.engine.cacheBackend, harness().engine.cacheBackend);
+  assert.deepEqual(h.loads, [{ device: 'wasm', dtype: 'fp32' }]);
+});
+
 test('CPU failures are reported rather than inventing successful vectors', async () => {
   const h = harness('cpu', { loadModel: async () => async () => { throw new Error('Inference failed'); } });
   await assert.rejects(h.engine.embed(['x']), /Inference failed/);

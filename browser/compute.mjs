@@ -37,7 +37,7 @@ export function createEmbeddingEngine({ mode, capabilities, env, loadTokenizer, 
   const selection = computeSelection(mode, capabilities);
   env.wasm.numThreads = selection.threads;
   let device = selection.device, tokenizer, model, task = 0;
-  let exportKind = device === 'webgpu' ? 'gpu' : 'cpu';
+  const exportKind = device === 'webgpu' ? 'gpu' : 'cpu';
   const stats = { calls: 0, completedInputs: 0, encodingMs: 0, cpuFallbacks: 0 };
   const backend = () => device === 'webgpu' ? 'GPU' : selection.threads > 1 ? `CPU · ${selection.threads} cores` : 'CPU · one core';
   const report = (phase, fields = {}) => progress({ phase, task, backend: backend(), ...fields });
@@ -50,9 +50,8 @@ export function createEmbeddingEngine({ mode, capabilities, env, loadTokenizer, 
     try { await model?.dispose?.(); } catch { /* failed GPU session */ }
     model = null;
     device = 'wasm';
-    // Before any vectors escape, the original CPU export is safe and reuses
-    // existing caches. Otherwise keep the export used for the profile/history.
-    if (!stats.completedInputs) exportKind = 'cpu';
+    // Cached profile/history vectors may already have been read before the
+    // first inference call. Keep one export for this entire worker session.
     stats.cpuFallbacks++;
     report('fallback', { message: 'GPU acceleration was unavailable or stopped. Continuing locally on CPU.' });
     model = await loadModel({ device, exportKind, dtype: 'fp32', progress_callback: downloadProgress });

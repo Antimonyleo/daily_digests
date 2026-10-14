@@ -114,14 +114,17 @@ async function initialize() {
     env.backends.onnx.wasm.wasmPaths = new URL('./node_modules/onnxruntime-web/dist/', self.location.href).href;
     env.backends.onnx.wasm.proxy = false;
     computeMode = ['cpu', 'gpu', 'multicore'].includes(savedCompute) ? savedCompute : 'cpu';
-    const engine = createEmbeddingEngine({ mode: computeMode, capabilities: computeCapabilities(), env: env.backends.onnx,
+    const capabilities = computeCapabilities();
+    if (computeMode === 'gpu' && capabilities.gpu) {
+      progress('Checking GPU', 'Checking hardware acceleration on this device…');
+      let adapter;
+      try { adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' }); } catch { /* unavailable device */ }
+      capabilities.gpu = Boolean(adapter && !adapter.info?.isFallbackAdapter);
+      if (capabilities.gpu) env.backends.onnx.webgpu.adapter = adapter;
+    }
+    const engine = createEmbeddingEngine({ mode: computeMode, capabilities, env: env.backends.onnx,
       loadTokenizer: options => AutoTokenizer.from_pretrained('bge-small', { local_files_only: true, ...options }),
       loadModel: async ({ exportKind, ...options }) => {
-        if (options.device === 'webgpu') {
-          const adapter = await navigator.gpu?.requestAdapter({ powerPreference: 'high-performance' });
-          if (!adapter || adapter.info?.isFallbackAdapter) throw new Error('Hardware GPU acceleration is unavailable');
-          env.backends.onnx.webgpu.adapter = adapter;
-        }
         return AutoModel.from_pretrained(exportKind === 'gpu' ? 'bge-small-webgpu' : 'bge-small', {
           local_files_only: true, ...options,
           ...(exportKind === 'gpu' ? { session_options: { graphOptimizationLevel: 'disabled' } } : {}),
@@ -132,7 +135,7 @@ async function initialize() {
       progress: info => self.postMessage({ type: 'progress', stage: info.phase === 'loading' ? 'Loading embedding model'
         : info.phase === 'complete' ? 'Embeddings complete' : 'Computing embeddings', message: formatComputeProgress(info), compute: info }),
     });
-    state = { py, engine };
+    state = { py, engine, capabilities };
     globalThis.browserYield = () => new Promise(resolve => setTimeout(resolve, 0));
     globalThis.browserEmbed = texts => engine.embed(texts);
     globalThis.browserEmbeddingBackend = () => engine.cacheBackend;
@@ -173,7 +176,7 @@ self.onmessage = async ({ data }) => {
       return;
     }
     if (data.type === 'compute-status') {
-      self.postMessage(response(data.id, JSON.stringify({ mode: computeMode, capabilities: computeCapabilities(),
+      self.postMessage(response(data.id, JSON.stringify({ mode: computeMode, capabilities: state.capabilities,
         device: state.engine.device, threads: state.engine.threads })));
       return;
     }
