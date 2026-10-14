@@ -227,8 +227,8 @@ def test_companion_text_limits_and_timeout_match_service_contract(runtime):
     assert payload['timeout'] == 120
     with pytest.raises(ValueError, match='request limit'):
         runtime.companion_text_payload('system', 'x' * 32001, 'codex_cli')
-    with pytest.raises(ValueError, match='configured CLI'):
-        runtime.companion_text_payload('system', 'text', 'api')
+    with pytest.raises(ValueError, match='configured online'):
+        runtime.companion_text_payload('system', 'text', 'extractive')
 
 
 def test_worker_first_companion_connection_and_url_boundaries():
@@ -415,6 +415,267 @@ vm.runInContext(`
   assert.deepEqual(events, ['fetch', 'apply', 'abort']);
   assert.equal(posted[1].status, 500);
   assert.match(posted[1].body, /IndexedDB failed/);
+})().catch(error => {console.error(error); process.exitCode = 1;});
+'''
+    result = subprocess.run(['node', '-e', script, str(worker)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.fixture
+def companion_provider_module(monkeypatch):
+    from dailydigest import summarize
+
+    for name in ('effective_summary_backend', '_call_llm', '_call_anthropic', '_call_cli',
+                 '_summarize_via_provider_with_provenance', '_llm_text', 'summary_signature'):
+        monkeypatch.setattr(summarize, name, getattr(summarize, name))
+    monkeypatch.setattr(summarize, '_extractive', lambda row: f'Local summary {row.id}')
+    return summarize
+
+
+def _provider_rows(count):
+    from dailydigest.store import ItemRow
+
+    return [ItemRow(id=index, title=f'Paper {index}', abstract='selected article ' * 150,
+                    source='fixture', section='research', authors='Public Author',
+                    url=f'https://example.org/paper/{index}') for index in range(1, count + 1)]
+
+
+@pytest.mark.parametrize('backend', ['api', 'anthropic'])
+def test_advertised_companion_api_uses_server_credentials_and_actual_provenance(
+    runtime, companion_provider_module, backend,
+):
+    from dailydigest.config import get_settings
+
+    module, calls = companion_provider_module, []
+    settings = get_settings().model_copy(update={'llm_backend': backend, 'llm_api_key': ''})
+
+    def call(path, payload, timeout):
+        calls.append((path, payload, timeout))
+        return {'summaries': {'1': 'Provider summary', '2': 'Local summary 2',
+                              '999': 'Unrequested article'},
+                'provenance': {'1': backend, '2': 'extractive_fallback'},
+                'diagnostics': {'provider_calls': 1, 'fallback_items': 1}}
+
+    runtime.install_companion_providers(module, lambda chosen: chosen == backend, call)
+    profile = SimpleNamespace(bio='reader biography ' * 100,
+                              keywords=[f'topic {index}' for index in range(30)],
+                              canonical_facets={})
+    diagnostics = {}
+    generated, provenance = module.summarize_items_with_provenance(
+        _provider_rows(2), profile, settings=settings, diagnostics=diagnostics,
+    )
+    assert module.effective_summary_backend(settings=settings) == backend
+    assert generated == {1: 'Provider summary', 2: 'Local summary 2'}
+    assert provenance == {1: backend, 2: 'extractive_fallback'}
+    assert diagnostics['fallback_items'] == 1
+    assert calls[0][0] == '/summarize'
+    payload = calls[0][1]
+    assert payload['backend'] == backend
+    assert len(payload['items'][0]['abstract']) == 1500
+    assert len(payload['profile']['bio']) == 400
+    assert len(payload['profile']['keywords']) == 20
+    assert set(payload) == {'backend', 'items', 'profile', 'timeout'}
+    assert 'llm_api_key' not in json.dumps(payload)
+    assert 'token' not in payload
+
+
+def test_companion_failure_retains_native_api_budget_and_extractive_fallback(
+    runtime, companion_provider_module, monkeypatch,
+):
+    from dailydigest.config import get_settings
+
+    module, clock, calls = companion_provider_module, [0.0], []
+    monkeypatch.setattr(module.time, 'monotonic', lambda: clock[0])
+    settings = get_settings().model_copy(update={
+        'llm_backend': 'api', 'llm_api_key': '', 'llm_summary_budget_seconds': 1.0,
+        'llm_summary_max_failures': 2,
+    })
+
+    def unavailable(_path, payload, timeout):
+        calls.append((payload, timeout))
+        clock[0] = 2.0
+        raise OSError('companion provider unavailable')
+
+    runtime.install_companion_providers(module, lambda backend: backend == 'api', unavailable)
+    diagnostics = {}
+    generated, provenance = module.summarize_items_with_provenance(
+        _provider_rows(7), settings=settings, diagnostics=diagnostics,
+    )
+    assert len(calls) == 1
+    assert calls[0][1] == 1.0
+    assert set(provenance.values()) == {'extractive_fallback'}
+    assert len(generated) == 7
+    assert diagnostics['provider_calls'] == 1
+    assert diagnostics['provider_stopped'] is True
+    assert diagnostics['fallback_items'] == 7
+
+
+def test_nonadvertised_backend_preserves_direct_provider_and_key_requirement(
+    runtime, companion_provider_module, monkeypatch,
+):
+    from dailydigest.config import get_settings
+
+    module, direct = companion_provider_module, []
+
+    def direct_api(batch, *, settings, timeout):
+        direct.append(settings.llm_api_key)
+        return {row.id: 'Direct provider summary' for row in batch}
+
+    monkeypatch.setattr(module, '_call_llm', direct_api)
+
+    def unauthorized_companion(*_args):
+        raise AssertionError('nonadvertised backend must not contact companion')
+
+    runtime.install_companion_providers(module, lambda backend: backend == 'anthropic',
+                                       unauthorized_companion)
+    settings = get_settings().model_copy(update={'llm_backend': 'api', 'llm_api_key': ''})
+    generated, provenance = module.summarize_items_with_provenance(_provider_rows(1), settings=settings)
+    assert provenance == {1: 'extractive'}
+    assert generated == {1: 'Local summary 1'}
+    assert direct == []
+    settings.llm_api_key = 'browser-only-secret'
+    generated, provenance = module.summarize_items_with_provenance(_provider_rows(1), settings=settings)
+    assert generated == {1: 'Direct provider summary'}
+    assert provenance == {1: 'api'}
+    assert direct == ['browser-only-secret']
+
+
+def test_setup_waives_only_api_key_for_explicit_advertised_backend(runtime):
+    errors = ['API backend requires an API key.', 'API backend requires a model name.',
+              'API key cannot contain line breaks.', 'Add at least one research interest.']
+    validate = lambda _form: list(errors)
+    assert runtime.validate_companion_setup(validate, {'llm_backend': 'api'},
+                                            lambda backend: backend == 'api') == errors[1:]
+    assert runtime.validate_companion_setup(validate, {'llm_backend': 'api'},
+                                            lambda backend: backend == 'anthropic') == errors
+
+
+@pytest.mark.parametrize('backend,timeout,expected', [
+    ('api', None, 60.0), ('anthropic', 0.25, 0.25), ('claude_cli', None, 120.0),
+])
+def test_advertised_companion_text_uses_native_backend_timeout_without_browser_key(
+    runtime, companion_provider_module, backend, timeout, expected,
+):
+    from dailydigest.config import get_settings
+
+    module, calls = companion_provider_module, []
+    settings = get_settings().model_copy(update={'llm_backend': backend, 'llm_api_key': ''})
+
+    def call(path, payload, request_timeout):
+        calls.append((path, payload, request_timeout))
+        return {'text': 'Companion-generated catch-up'}
+
+    runtime.install_companion_providers(module, lambda chosen: chosen == backend, call)
+    assert module._llm_text('system', 'selected article titles', settings=settings,
+                            timeout=timeout) == 'Companion-generated catch-up'
+    assert calls[0][0] == '/text'
+    assert calls[0][1] == {'backend': backend, 'system': 'system',
+                          'user': 'selected article titles', 'timeout': expected}
+    assert calls[0][2] == expected + 5
+
+
+def test_unadvertised_text_preserves_native_direct_path(runtime, companion_provider_module, monkeypatch):
+    from dailydigest.config import get_settings
+
+    module, direct = companion_provider_module, []
+
+    def direct_text(system, user, *, settings, timeout):
+        direct.append((system, user, settings.llm_api_key, timeout))
+        return 'Direct completion'
+
+    monkeypatch.setattr(module, '_llm_text', direct_text)
+    runtime.install_companion_providers(module, lambda _backend: False,
+                                       lambda *_args: pytest.fail('unexpected companion call'))
+    settings = get_settings().model_copy(update={'llm_backend': 'api', 'llm_api_key': 'direct-key'})
+    assert module._llm_text('system', 'user', settings=settings, timeout=0.25) == 'Direct completion'
+    assert direct == [('system', 'user', 'direct-key', 0.25)]
+
+
+def test_pipeline_aliases_use_companion_credentials_and_identity_for_cached_summaries(
+    runtime, companion_provider_module, monkeypatch,
+):
+    from dailydigest import pipeline
+    from dailydigest.config import get_settings
+
+    module, identity, calls = companion_provider_module, ['endpoint|model-one'], []
+    for name in ('effective_summary_backend', 'summary_signature'):
+        monkeypatch.setattr(pipeline, name, getattr(pipeline, name))
+
+    def call(path, payload, _timeout):
+        calls.append((path, payload))
+        return {'summaries': {'1': 'Companion summary'}, 'provenance': {'1': 'api'}}
+
+    runtime.install_companion_providers(module, lambda backend: backend == 'api', call,
+                                       lambda _backend: identity[0], pipeline=pipeline)
+    settings = get_settings().model_copy(update={'llm_backend': 'api', 'llm_api_key': ''})
+    rows = _provider_rows(1)
+    assert pipeline.effective_summary_backend is module.effective_summary_backend
+    assert pipeline.summary_signature is module.summary_signature
+    backend = pipeline.effective_summary_backend(settings=settings)
+    assert backend == 'api'
+    signature = pipeline.summary_signature(rows[0], backend=backend, settings=settings)
+    generated, provenance = pipeline.summarize_items_with_provenance(rows, settings=settings)
+    assert generated == {1: 'Companion summary'}
+    assert provenance == {1: 'api'}
+    assert calls[0][0] == '/summarize'
+    assert pipeline.summary_signature(rows[0], backend=backend, settings=settings) == signature
+    identity[0] = 'endpoint|model-two'
+    assert pipeline.summary_signature(rows[0], backend=backend, settings=settings) != signature
+
+
+def test_worker_refreshes_provider_identity_before_brew_and_preserves_digest_on_health_failure():
+    import shutil
+    import subprocess
+
+    if not shutil.which('node'):
+        pytest.skip('Node is required to exercise the worker host adapter')
+    worker = Path(__file__).parents[1] / 'browser/worker.mjs'
+    script = r'''
+const fs = require('node:fs'), vm = require('node:vm'), assert = require('node:assert/strict');
+const events = [], posted = [];
+let failHealth = false;
+const context = vm.createContext({URL, setTimeout, AbortSignal,
+  self: {postMessage: message => posted.push(message)},
+  fetch: async url => {
+    assert.ok(url.endsWith('/health')); events.push('health');
+    if (failHealth) throw new Error('companion health unavailable');
+    return {ok: true, text: async () => JSON.stringify({ok: true,
+      capabilities: {summarize: ['api']}, provider_identities: {api: 'new-model-fingerprint'}})};
+  },
+});
+vm.runInContext(fs.readFileSync(process.argv[1], 'utf8').replace(/^import .*$/gm, ''), context);
+context.request = {callPromising: async message => {
+  events.push('native-request');
+  assert.equal(vm.runInContext('companion.provider_identities.api', context), 'new-model-fingerprint');
+  return JSON.stringify({id: JSON.parse(message).id, type: 'response', status: 200, headers: {}, body: '{}'});
+}};
+context.transaction = () => {
+  const transaction = {objectStore: () => ({put: (_value, key) => {
+    events.push(`save-${key}`); setTimeout(() => transaction.oncomplete(), 0);
+  }})};
+  return transaction;
+};
+vm.runInContext(`
+  boot = Promise.resolve({}); companion = {endpoint: 'https://companion.example', token: 'explicit',
+    capabilities: {summarize: ['api']}, provider_identities: {api: 'old-model-fingerprint'}};
+  globalThis.browserCompanionSupports = backend => companion.capabilities.summarize.includes(backend);
+  state = {py: {globals: {get: name => {
+    if (name === 'selected_browser_backend') return () => 'api';
+    if (name === 'handle_request') return request;
+    if (name === 'export_snapshot') return () => 'existing digest snapshot';
+    return () => false;
+  }}}};
+  database = {transaction};
+`, context);
+(async () => {
+  await context.self.onmessage({data: {id: 1, type: 'request', method: 'POST', path: '/run/start', body: '{}'}});
+  assert.deepEqual(events, ['health', 'save-companion', 'native-request', 'save-snapshot']);
+  assert.equal(posted[0].status, 200);
+  events.length = 0; failHealth = true;
+  await context.self.onmessage({data: {id: 2, type: 'request', method: 'POST', path: '/run/start', body: '{}'}});
+  assert.deepEqual(events, ['health']);
+  assert.equal(posted[1].status, 500);
+  assert.match(posted[1].body, /companion health unavailable/);
 })().catch(error => {console.error(error); process.exitCode = 1;});
 '''
     result = subprocess.run(['node', '-e', script, str(worker)], capture_output=True, text=True)

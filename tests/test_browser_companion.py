@@ -115,6 +115,55 @@ def test_selected_metadata_and_short_profile_use_native_summarizer(settings, mon
     assert "private-provider-key" not in response.text
 
 
+@pytest.mark.parametrize("timeout", [0.25, 20, 1000, None])
+@pytest.mark.parametrize("backend", ["api", "codex_cli"])
+def test_summary_budget_is_bounded_and_diagnostics_exclude_private_details(settings, monkeypatch, timeout, backend):
+    from dailydigest import summarize as native
+
+    settings.llm_backend, settings.llm_api_key = "api", "private-provider-key"
+    settings.llm_summary_budget_seconds = 60
+    original_cli_budget = native._CLI_TOTAL_BUDGET
+    budgets = []
+    monkeypatch.setattr(companion.shutil, "which", lambda command: "/fixture/" + command)
+
+    def summarize(rows, profile, *, settings, diagnostics):
+        budgets.append((settings.llm_summary_budget_seconds, native._CLI_TOTAL_BUDGET))
+        diagnostics.update(provider_stopped=True, secret_error="private-provider-key")
+        return {4: "Native fallback"}, {4: "extractive_fallback"}
+
+    monkeypatch.setattr(native, "summarize_items_with_provenance", summarize)
+    with client(settings) as http:
+        payload = {"backend": backend, "items": [{"id": 4, "title": "Selected article"}]}
+        if timeout is not None:
+            payload["timeout"] = timeout
+        response = request(http, "POST", "/summarize", json=payload)
+    expected_budget = min(original_cli_budget if backend == "codex_cli" else 60,
+                          timeout if timeout is not None else 3600)
+    expected_cli = expected_budget if backend == "codex_cli" else original_cli_budget
+    assert budgets == [(expected_budget, expected_cli)]
+    assert response.json()["diagnostics"] == {"fallback_items": 1, "provider_stopped": True}
+    assert "private-provider-key" not in response.text
+    assert native._CLI_TOTAL_BUDGET == original_cli_budget
+
+
+def test_summary_budget_restored_after_provider_failure(settings, monkeypatch):
+    from dailydigest import summarize as native
+
+    original = native._CLI_TOTAL_BUDGET
+    monkeypatch.setattr(companion.shutil, "which", lambda command: "/fixture/" + command)
+
+    def failed(*args, **kwargs):
+        raise RuntimeError("private-provider-error")
+
+    monkeypatch.setattr(native, "summarize_items_with_provenance", failed)
+    with client(settings) as http:
+        response = request(http, "POST", "/summarize", json={"backend": "codex_cli",
+                           "timeout": 0.5, "items": []})
+    assert response.status_code == 502
+    assert "private-provider-error" not in response.text
+    assert native._CLI_TOTAL_BUDGET == original
+
+
 def test_unconfigured_backend_does_not_contact_provider(settings, monkeypatch):
     from dailydigest import summarize as native
 
@@ -403,6 +452,65 @@ def test_bounded_cli_text_reuses_native_sandbox(settings, monkeypatch):
                            "system": "Selected context only", "user": "Short profile", "timeout": 20})
     assert response.json() == {"text": "Generated tea note"}
     assert calls == [("Selected context only", "Short profile", "codex_cli", 20)]
+
+
+@pytest.mark.parametrize("backend", ["api", "anthropic"])
+@pytest.mark.parametrize("timeout", [0.25, 20])
+def test_bounded_provider_text_reuses_native_helper_and_server_credentials(settings, monkeypatch, backend, timeout):
+    from dailydigest import summarize as native
+
+    settings.llm_backend, settings.llm_api_key = backend, "private-provider-key"
+    calls = []
+
+    def text(system, user, *, settings, timeout):
+        calls.append((system, user, settings.llm_backend, settings.llm_api_key, timeout))
+        return "Generated provider tea note"
+
+    monkeypatch.setattr(native, "_llm_text", text)
+    with client(settings) as http:
+        response = request(http, "POST", "/text", json={"backend": backend,
+                           "system": "Selected context", "user": "Short profile", "timeout": timeout})
+    assert response.json() == {"text": "Generated provider tea note"}
+    assert calls == [("Selected context", "Short profile", backend, "private-provider-key", timeout)]
+    assert "private-provider-key" not in response.text
+
+
+def test_unconfigured_text_backend_does_not_contact_provider(settings, monkeypatch):
+    from dailydigest import summarize as native
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("Unconfigured provider must not be contacted")
+
+    monkeypatch.setattr(native, "_llm_text", forbidden)
+    with client(settings) as http:
+        response = request(http, "POST", "/text", json={"backend": "api",
+                           "system": "Selected context", "user": "Short profile"})
+    assert response.status_code == 409
+
+
+def test_health_provider_identities_change_with_configuration_and_exclude_credentials(settings, monkeypatch):
+    monkeypatch.setattr(companion.shutil, "which", lambda command: "/fixture/" + command)
+    settings.llm_backend, settings.llm_api_key = "api", "private-provider-key"
+    settings.llm_model = "configured-model"
+    settings.llm_base_url = "https://private-user:private-password@provider.test/v1?token=private-query"
+    with client(settings) as http:
+        response = request(http, "GET", "/health")
+        identities = response.json()["provider_identities"]
+        assert set(identities) == set(response.json()["capabilities"]["summarize"])
+        assert all(len(value) == 64 for value in identities.values())
+        assert "private-" not in response.text
+        settings.llm_api_key = "rotated-private-provider-key"
+        settings.llm_base_url = "https://rotated-user:rotated-password@provider.test/v1?token=rotated-query"
+        assert request(http, "GET", "/health").json()["provider_identities"] == identities
+        settings.llm_model = "new-model"
+        changed_model = request(http, "GET", "/health").json()["provider_identities"]
+        assert changed_model["api"] != identities["api"]
+        assert changed_model["codex_cli"] != identities["codex_cli"]
+        assert changed_model["extractive"] == identities["extractive"]
+        settings.llm_base_url = "https://different-provider.test/v1"
+        changed_provider = request(http, "GET", "/health").json()["provider_identities"]
+        assert changed_provider["api"] != changed_model["api"]
+        assert changed_provider["codex_cli"] == changed_model["codex_cli"]
 
 
 def test_cli_token_is_private_and_never_printed(settings, tmp_path, monkeypatch, capsys):

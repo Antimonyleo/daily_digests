@@ -3,6 +3,7 @@
 import assert from 'node:assert/strict';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { chromium } from '../prototypes/browser-compute/node_modules/playwright-core/index.mjs';
 
 const base = process.env.DAILYDIGEST_BROWSER_URL || 'http://127.0.0.1:8767/daily_digests/';
@@ -15,6 +16,10 @@ const scopeCorpus = JSON.parse(await readFile(new URL('../tests/fixtures/researc
 const fixtureLabels = new Map(scopeCorpus.map(row => [row.title, row.label]));
 const companionRequests = [];
 let companionSnapshot = '';
+let companionBackends = ['claude_cli'];
+let companionProviderIdentity = 'a'.repeat(64);
+let companionSummaryMarker = 'Mock API A summary';
+let providerSnapshotSequence = 0;
 const browser = await chromium.launch({ executablePath: process.env.CHROME_PATH || '/usr/bin/google-chrome', headless: true, args: ['--no-sandbox', '--enable-experimental-webassembly-jspi'] });
 const context = await browser.newContext({ viewport: { width: 1360, height: 900 }, acceptDownloads: true });
 let sourceMode = 'success';
@@ -31,7 +36,12 @@ await context.route('**/*', async route => {
     assert.equal(request.headers()['x-dailydigest-token'], 'fictional-acceptance-token', 'Companion requests require the configured authentication token.');
     companionRequests.push({ path, method: request.method(), body: request.postData() });
     let result = { ok: true };
-    if (path === '/health') result = { ok: true, capabilities: { summarize: ['claude_cli'], email: true, inbound: true, state: true, scheduler: false } };
+    if (path === '/health') result = { ok: true, capabilities: { summarize: companionBackends, email: true, inbound: true, state: true, scheduler: false }, provider_identities: Object.fromEntries(companionBackends.map(backend => [backend, companionProviderIdentity])) };
+    if (path === '/summarize') {
+      const payload = JSON.parse(request.postData());
+      result = { summaries: Object.fromEntries(payload.items.map(row => [row.id, `Key finding: ${companionSummaryMarker} ${row.id}.\nWhy read: Fictional acceptance metadata.\nCaveat: Mocked provider response.`])), provenance: Object.fromEntries(payload.items.map(row => [row.id, payload.backend])), diagnostics: { provider_calls: 1, fallback_items: 0 } };
+    }
+    if (path === '/text') result = { text: 'Mocked acceptance overview.' };
     if (path === '/email') result = { ok: true, sent: true };
     if (path === '/inbound') {
       const email = companionRequests.find(row => row.path === '/email');
@@ -126,9 +136,36 @@ async function openSection(section) {
   const details = frame().locator(`details.section-block[data-section="${section}"]`);
   if (await details.getAttribute('open') === null) await details.locator('summary.section-toggle').click();
 }
+async function openCompanionMenu() {
+  if (await page.locator('#companion-menu').getAttribute('open') === null) await page.locator('#companion-menu > summary').click();
+}
 async function digestIdentity() {
   await route('/', '.digest-date');
   return (await frame().locator('.digest-date').textContent()).trim();
+}
+async function selectedStoredSummaries() {
+  const exported = await snapshot();
+  const directory = `${output}/provider-state-${report.started.replace(/\D/g, '')}-${++providerSnapshotSequence}`;
+  await mkdir(directory, { recursive: true });
+  for (const suffix of ['', '-wal', '-shm']) {
+    const encoded = exported.files[`data/digest.db${suffix}`];
+    if (encoded) await writeFile(`${directory}/digest.db${suffix}`, Buffer.from(encoded, 'base64'));
+  }
+  const digest = await digestIdentity();
+  const result = spawnSync(new URL('../.venv/bin/python', import.meta.url).pathname, ['-c', `import sqlite3,json,sys
+connection=sqlite3.connect(sys.argv[1])
+rows=connection.execute("SELECT i.id,i.summary_backend,i.summary_signature,i.summary FROM items i JOIN digest_items d ON i.id=d.item_id WHERE d.digest_id=? AND i.section='research' ORDER BY d.item_label",(sys.argv[2],)).fetchall()
+print(json.dumps([dict(zip(['id','backend','signature','summary'],row)) for row in rows]))`, `${directory}/digest.db`, digest], { encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  return JSON.parse(result.stdout);
+}
+async function successfulBrew(mode = 'full') {
+  await route(`/run?reading_mode=${mode}`, '#brew-button');
+  await frame().locator('#brew-button').click();
+  await page.waitForFunction(() => location.hash.startsWith('#/done') || document.querySelector('#app')?.contentDocument?.querySelector('#err:not([hidden])'), undefined, { timeout: 300000 });
+  assert.ok((await page.evaluate(() => location.hash)).startsWith('#/done'), await frame().locator('#err').textContent().catch(() => 'Brew did not finish'));
+  await frame().locator('a.cta').click();
+  await frame().locator('.item[data-section="research"]').first().waitFor();
 }
 let initialReady = false;
 let itemId;
@@ -244,7 +281,7 @@ try {
     });
     assert.ok(overflow.scrollWidth <= overflow.width + 1, JSON.stringify(overflow));
     assert.ok(overflow.outerScrollWidth <= overflow.outerWidth + 1, JSON.stringify(overflow));
-    await page.locator('#companion-menu > summary').click();
+    await openCompanionMenu();
     const companionBox = await page.locator('#companion-menu .data-tools').boundingBox();
     assert.ok(companionBox.x >= 0 && companionBox.x + companionBox.width <= 390, JSON.stringify(companionBox));
     await page.locator('#companion-menu > summary').press('Escape');
@@ -324,7 +361,7 @@ try {
   });
   await check('optional-companion-explicit-actions', async () => {
     assert.equal(companionRequests.length, 0, 'No companion contact should occur before explicit setup.');
-    await page.locator('#companion-menu > summary').click();
+    await openCompanionMenu();
     await page.locator('#companion-endpoint').fill('http://127.0.0.1:8768');
     await page.locator('#companion-token').fill('fictional-acceptance-token');
     await page.locator('#companion-connect').click();
@@ -352,7 +389,7 @@ try {
     const reload = page.waitForEvent('framenavigated', { predicate: changedFrame => changedFrame === page.mainFrame() });
     await page.locator('#companion-pull').click(); await confirmation;
     await reload; await startup();
-    await page.locator('#companion-menu > summary').click();
+    await openCompanionMenu();
     await page.locator('#companion-disconnect').click();
     await page.waitForFunction(() => document.getElementById('companion-status').textContent.includes('No companion'));
     assert.equal(await page.locator('#companion-email').isDisabled(), true);
@@ -376,6 +413,58 @@ try {
     await page.waitForFunction(() => document.getElementById('install').hidden);
     assert.equal(await page.evaluate(() => window.__installPromptCalled), true);
     return { ...evidence, mockedInstallPrompt: true, promptInvokedByClick: true };
+  });
+  await check('companion-api-dispatch-provenance-and-provider-cache', async () => {
+    sourceMode = 'success'; companionBackends = ['api'];
+    await openCompanionMenu();
+    await page.locator('#companion-endpoint').fill('http://127.0.0.1:8768');
+    await page.locator('#companion-token').fill('fictional-acceptance-token');
+    await page.locator('#companion-connect').click();
+    await page.waitForFunction(() => document.getElementById('companion-status').textContent.includes('Connected'));
+    await page.locator('#companion-menu > summary').press('Escape');
+    await route('/setup', '#topics');
+    await frame().locator('details:has(input[name="llm_backend"]) > summary').click();
+    await frame().locator('input[name="llm_backend"][value="api"]').check();
+    await frame().locator('#llm_api_key').fill('');
+    await frame().locator('#llm_model').fill('fictional-companion-model');
+    await frame().locator('form[action="/setup"] button[type="submit"]').click();
+    await page.waitForFunction(() => document.querySelector('#app')?.contentWindow?.ddLocation?.startsWith('http://127.0.0.1:8765/run'));
+    const configured = await snapshot();
+    assert.match(Buffer.from(configured.files['.env'], 'base64').toString(), /LLM_BACKEND=api/);
+    const initialRequests = companionRequests.filter(row => row.path === '/summarize').length;
+    await successfulBrew();
+    const first = await selectedStoredSummaries();
+    assert.ok(first.length > 0);
+    for (const row of first) { assert.equal(row.backend, 'api'); assert.match(row.summary, /Mock API A summary/); }
+    const dispatched = companionRequests.filter(row => row.path === '/summarize').slice(initialRequests);
+    assert.ok(dispatched.length > 0, 'Native browser API selection must dispatch through its advertised companion without a browser key.');
+    for (const request of dispatched) {
+      const payload = JSON.parse(request.body);
+      assert.deepEqual(Object.keys(payload).sort(), ['backend', 'items', 'profile', 'timeout']);
+      assert.equal(payload.backend, 'api');
+      assert.ok(payload.timeout > 0 && payload.timeout <= 60);
+      assert.deepEqual(Object.keys(payload.profile).sort(), ['bio', 'keywords']);
+      assert.ok(payload.profile.bio.length <= 400 && payload.profile.keywords.length <= 20);
+      assert.ok(payload.items.every(row => row.abstract.length <= 1500 && first.some(selected => selected.id === row.id)));
+      assert.doesNotMatch(request.body, /fictional-acceptance-token|llm_api_key|digest\.db/);
+    }
+    companionProviderIdentity = 'b'.repeat(64); companionSummaryMarker = 'Mock API B summary';
+    const firstCalls = companionRequests.filter(row => row.path === '/summarize').length;
+    await successfulBrew();
+    const second = await selectedStoredSummaries();
+    assert.ok(companionRequests.filter(row => row.path === '/summarize').length > firstCalls, 'Changed server provider identity must invalidate cached browser summaries.');
+    assert.deepEqual(second.map(row => row.id), first.map(row => row.id));
+    for (const row of second) { assert.equal(row.backend, 'api'); assert.match(row.summary, /Mock API B summary/); assert.notEqual(row.signature, first.find(prior => prior.id === row.id).signature); }
+    await route('/setup', '#topics');
+    await frame().locator('details:has(input[name="llm_backend"]) > summary').click();
+    await frame().locator('input[name="llm_backend"][value="extractive"]').check();
+    await frame().locator('form[action="/setup"] button[type="submit"]').click();
+    await page.waitForFunction(() => document.querySelector('#app')?.contentWindow?.ddLocation?.startsWith('http://127.0.0.1:8765/run'));
+    const restored = await snapshot();
+    assert.match(Buffer.from(restored.files['.env'], 'base64').toString(), /LLM_BACKEND=extractive/);
+    await openCompanionMenu();
+    await page.locator('#companion-disconnect').click();
+    return { nativeApiWithNoBrowserKey: true, providerSummaryBackend: 'api', selectedItemsOnly: first.length, serverIdentityInvalidatesCache: true, extractiveRestored: true };
   });
 } catch (error) { report.fatal = error.stack; console.error(error.message); }
 finally {

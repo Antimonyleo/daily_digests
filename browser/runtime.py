@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import inspect
+import hashlib
 import json
 import sqlite3
 import tempfile
@@ -272,12 +273,20 @@ def companion_summary_payload(items, backend, bio='', keywords=()):
 
 
 def companion_text_payload(system, user, backend, timeout=120.0):
-    if backend not in {'claude_cli', 'codex_cli'}:
-        raise ValueError('Companion text requests require a configured CLI backend')
+    if backend not in {'api', 'anthropic', 'claude_cli', 'codex_cli'}:
+        raise ValueError('Companion text requests require a configured online backend')
     if len(system) > 8000 or len(user) > 32000:
         raise ValueError('Selected text exceeds the companion request limit')
+    if float(timeout) <= 0:
+        raise ValueError('Companion text timeout must be positive')
     return {'backend': backend, 'system': system, 'user': user,
-            'timeout': max(1.0, min(float(timeout), 120.0))}
+            'timeout': min(float(timeout), 120.0)}
+
+
+def selected_browser_backend():
+    from dailydigest.config import get_settings
+
+    return (get_settings().llm_backend or 'extractive').lower()
 
 
 def companion_email_payload():
@@ -302,6 +311,114 @@ def companion_email_sent(digest_id):
     mark_sent(digest_id)
 
 
+def validate_companion_setup(validate, form, supports):
+    errors = validate(form)
+    backend = form.get('llm_backend', 'extractive')
+    if supports(backend):
+        errors = [error for error in errors if error != 'API backend requires an API key.']
+    provider_error = browser_provider_error(backend, supports(backend))
+    if provider_error:
+        errors.append(provider_error)
+    return errors
+
+
+def install_companion_providers(summarize, supports, call, identity=lambda _backend: '', *, pipeline=None):
+    """Change provider transport while retaining native budgets and fallback."""
+    original_provider = summarize._summarize_via_provider_with_provenance
+    original_effective = summarize.effective_summary_backend
+    original_text = summarize._llm_text
+    original_signature = summarize.summary_signature
+    original_api, original_anthropic = summarize._call_llm, summarize._call_anthropic
+    companion_provenance = {}
+    companion_diagnostics = []
+
+    def selected_backend(*, settings=None):
+        if settings is None:
+            from dailydigest.config import get_settings
+            settings = get_settings()
+        backend = (settings.llm_backend or 'extractive').lower()
+        return backend if supports(backend) else original_effective(settings=settings)
+
+    def companion_batch(batch, backend, *, timeout=180.0):
+        if not supports(backend):
+            raise RuntimeError(f'The connected companion does not advertise {backend} summaries')
+        payload = companion_summary_payload(
+            batch, backend, summarize._READER_CONTEXT, summarize._READER_KEYWORDS,
+        )
+        payload['timeout'] = float(timeout)
+        result = call('/summarize', payload, timeout)
+        allowed = {int(row.id) for row in batch if row.id is not None}
+        generated = {int(key): value for key, value in result.get('summaries', {}).items()
+                     if int(key) in allowed and isinstance(value, str) and value.strip()}
+        companion_provenance.update({int(key): value
+                                     for key, value in result.get('provenance', {}).items()
+                                     if int(key) in generated})
+        companion_diagnostics.append(result.get('diagnostics', {}))
+        return generated
+
+    def companion_api(batch, *, settings=None, timeout=60.0):
+        if supports('api'):
+            return companion_batch(batch, 'api', timeout=timeout)
+        return original_api(batch, settings=settings, timeout=timeout)
+
+    def companion_anthropic(batch, *, settings=None, timeout=60.0):
+        if supports('anthropic'):
+            return companion_batch(batch, 'anthropic', timeout=timeout)
+        return original_anthropic(batch, settings=settings, timeout=timeout)
+
+    def companion_cli(batch, backend, *, settings=None, timeout=180.0):
+        return companion_batch(batch, backend, timeout=timeout)
+
+    def companion_provider(items, backend, *, settings=None, diagnostics=None):
+        companion_provenance.clear()
+        companion_diagnostics.clear()
+        generated, provenance = original_provider(items, backend, settings=settings,
+                                                   diagnostics=diagnostics)
+        provenance.update(companion_provenance)
+        if diagnostics is not None:
+            diagnostics['fallback_items'] = sum(value == 'extractive_fallback'
+                                                for value in provenance.values())
+            if companion_diagnostics:
+                diagnostics['companion'] = list(companion_diagnostics)
+                diagnostics['provider_stopped'] = diagnostics.get('provider_stopped', False) or any(
+                    row.get('provider_stopped', False) for row in companion_diagnostics)
+        return generated, provenance
+
+    def companion_text(system, user, *, settings=None, timeout=None):
+        if settings is None:
+            from dailydigest.config import get_settings
+            settings = get_settings()
+        backend = (settings.llm_backend or 'extractive').lower()
+        if not supports(backend):
+            return original_text(system, user, settings=settings, timeout=timeout)
+        limit = summarize._CLI_TIMEOUT if backend in {'claude_cli', 'codex_cli'} else summarize._TIMEOUT
+        requested = min(limit, timeout) if timeout is not None else limit
+        payload = companion_text_payload(system, user, backend, requested)
+        result = call('/text', payload, payload['timeout'] + 5)
+        if not isinstance(result.get('text'), str):
+            raise ValueError('Companion returned no text response')
+        return result['text']
+
+    def companion_signature(row, profile=None, *, backend=None, settings=None):
+        selected = backend or selected_backend(settings=settings)
+        original = original_signature(row, profile, backend=selected, settings=settings)
+        binding = identity(selected) if supports(selected) else ''
+        if not binding:
+            return original
+        return hashlib.sha256(f'companion-summary-v1\0{original}\0{binding}'.encode()).hexdigest()
+
+    summarize._llm_text = companion_text
+    summarize.summary_signature = companion_signature
+    summarize.effective_summary_backend = selected_backend
+    summarize._call_llm = companion_api
+    summarize._call_anthropic = companion_anthropic
+    summarize._call_cli = companion_cli
+    summarize._summarize_via_provider_with_provenance = companion_provider
+    if pipeline is not None:
+        pipeline.summary_signature = companion_signature
+        pipeline.effective_summary_backend = selected_backend
+
+
 def install_browser():
     global _WEB
     import threading
@@ -312,7 +429,8 @@ def install_browser():
     import starlette.responses
     from filelock import SoftFileLock
     from pyodide.ffi import run_sync, to_js
-    from js import browserEmbed, browserYield, browserCompanion, browserCompanionConfigured
+    from js import (browserEmbed, browserYield, browserCompanion, browserCompanionSupports,
+                    browserCompanionIdentity)
     import numpy as np
     from dailydigest import job_lock
     from dailydigest.rank import embed
@@ -353,47 +471,20 @@ def install_browser():
     original_validate = web._validate_setup
 
     def validate_browser_setup(form):
-        errors = original_validate(form)
-        provider_error = browser_provider_error(form.get('llm_backend', 'extractive'), browserCompanionConfigured())
-        if provider_error:
-            errors.append(provider_error)
-        return errors
+        return validate_companion_setup(original_validate, form, browserCompanionSupports)
 
     web._validate_setup = validate_browser_setup
     from dailydigest import summarize
-    original_provider = summarize._summarize_via_provider_with_provenance
-    companion_provenance = {}
 
-    def companion_cli(batch, backend, *, timeout=180.0, settings=None):
-        if not browserCompanionConfigured():
-            raise RuntimeError(browser_provider_error(backend))
-        payload = companion_summary_payload(
-            batch, backend, summarize._READER_CONTEXT, summarize._READER_KEYWORDS,
-        )
-        result = json.loads(run_sync(browserCompanion('/summarize', json.dumps(payload),
-                                                     'POST', timeout)))
-        allowed = {int(row.id) for row in batch if row.id is not None}
-        generated = {int(key): str(value) for key, value in result.get('summaries', {}).items()
-                     if int(key) in allowed and isinstance(value, str) and value.strip()}
-        companion_provenance.update({int(key): value
-                                     for key, value in result.get('provenance', {}).items()
-                                     if int(key) in generated})
-        return generated
+    def companion_call(path, payload, timeout):
+        return json.loads(run_sync(browserCompanion(path, json.dumps(payload), 'POST', timeout)))
 
-    def companion_provider(items, backend, *, settings=None, diagnostics=None):
-        companion_provenance.clear()
-        generated, provenance = original_provider(items, backend, settings=settings,
-                                                   diagnostics=diagnostics)
-        if backend in {'claude_cli', 'codex_cli'}:
-            provenance.update(companion_provenance)
-            if diagnostics is not None:
-                diagnostics['fallback_items'] = sum(value == 'extractive_fallback'
-                                                    for value in provenance.values())
-        return generated, provenance
+    install_companion_providers(summarize, browserCompanionSupports, companion_call,
+                                browserCompanionIdentity, pipeline=pipeline)
 
     def companion_text(system, user, backend, *, timeout=180.0, settings=None):
-        if not browserCompanionConfigured():
-            raise RuntimeError(browser_provider_error(backend))
+        if not browserCompanionSupports(backend):
+            raise RuntimeError(f'The connected companion does not advertise {backend} text generation')
         payload = companion_text_payload(system, user, backend, timeout)
         result = json.loads(run_sync(browserCompanion('/text', json.dumps(payload),
                                                      'POST', payload['timeout'] + 5)))
@@ -403,12 +494,10 @@ def install_browser():
         return text
 
     summarize._cli_text = companion_text
-    summarize._call_cli = companion_cli
-    summarize._summarize_via_provider_with_provenance = companion_provider
     original_run = web.run_all
 
     def browser_run(*args, **kwargs):
-        provider_error = browser_provider_error(web.get_settings().llm_backend, browserCompanionConfigured())
+        provider_error = browser_provider_error(web.get_settings().llm_backend, browserCompanionSupports(web.get_settings().llm_backend))
         if provider_error:
             raise ValueError(provider_error)
         callback = kwargs.get('progress_callback')

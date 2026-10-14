@@ -59,12 +59,16 @@ browser backup export/import also works without one. Default extractive
 summaries are local. Optional HTTP model services require explicit configuration
 and usable CORS; provider secrets are never built into the public application.
 
-Local CLI summaries, email delivery, inbound feedback and private state transfer
+API, Anthropic and local CLI summaries, email delivery, inbound feedback and private state transfer
 are implemented through `browser/companion.py`, enabled only when explicitly
 configured. The browser applies email reply votes to its own dated digest before
 acknowledging the mailbox. Tests mock providers, email and inboxes; live credential
 and provider behavior remains unverified. Optional local Ollama uses its HTTP
 provider configuration and needs a usable browser/companion network path.
+An explicitly connected companion advertises its configured summary providers;
+their credentials stay on that server. The browser retains the native summary
+budgets and extractive fallback, and invalidates cached summaries when the
+companion's provider identity changes.
 
 ```bash
 uv run python browser/companion.py --allowed-origin https://antimonyleo.github.io

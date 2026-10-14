@@ -75,6 +75,7 @@ class SummaryInput(Input):
     backend: BACKENDS = "extractive"
     items: list[Article] = Field(max_length=80)
     profile: Reader = Field(default_factory=Reader)
+    timeout: float = Field(default=3600, gt=0, le=3600)
 
 
 class EmailInput(Input):
@@ -92,10 +93,10 @@ class InboundAck(Input):
 
 
 class TextInput(Input):
-    backend: Literal["claude_cli", "codex_cli"]
+    backend: BACKENDS
     system: str = Field(max_length=8000)
     user: str = Field(max_length=32000)
-    timeout: float = Field(default=90, ge=1, le=120)
+    timeout: float = Field(default=90, gt=0, le=120)
 
 
 def validate_snapshot(payload):
@@ -345,17 +346,31 @@ def create_app(*, token, allowed_origin="https://antimonyleo.github.io", setting
                 available.append(name)
         return available
 
+    def provider_identity(backend):
+        identity = {"backend": backend}
+        if backend != "extractive":
+            identity["model"] = getattr(settings, "llm_model", "")
+        if backend in {"api", "anthropic"}:
+            base = urlsplit(getattr(settings, "llm_base_url", ""))
+            # Credentials never participate: remove URL userinfo, query, and
+            # fragment as well as omitting the server's API key entirely.
+            identity["base_url"] = (base.scheme.lower() + "://" +
+                                    base.netloc.rsplit("@", 1)[-1].lower() + base.path.rstrip("/"))
+        return hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
+
     @app.get("/health")
     def health():
+        available = backends()
         return {"ok": True, "capabilities": {
-            "summarize": backends(),
+            "summarize": available,
             "email": bool(getattr(settings, "resend_api_key", "") and
                           getattr(settings, "digest_to", "")),
             "inbound": bool(getattr(settings, "imap_user", "") and
                             getattr(settings, "imap_password", "")),
             "state": store is not None, "scheduler": schedule,
             "scheduler_mode": "uploaded_browser_state" if schedule else "disabled",
-        }, "scheduler_status": dict(schedule_status)}
+        }, "scheduler_status": dict(schedule_status),
+                "provider_identities": {backend: provider_identity(backend) for backend in available}}
 
     @app.post("/summarize")
     def summarize(payload: SummaryInput):
@@ -370,34 +385,52 @@ def create_app(*, token, allowed_origin="https://antimonyleo.github.io", setting
 
         rows = [ItemRow(**item.model_dump(exclude={"metadata"}),
                         metadata_json=json.dumps(item.metadata)) for item in payload.items]
-        configured = settings.model_copy(update={"llm_backend": payload.backend})
+        is_cli = payload.backend in {"claude_cli", "codex_cli"}
         diagnostics = {}
         try:
             with lock:
-                summaries, provenance = native.summarize_items_with_provenance(
-                    rows, SimpleNamespace(**payload.profile.model_dump()),
-                    settings=configured, diagnostics=diagnostics,
-                )
+                budget = min(native._CLI_TOTAL_BUDGET if is_cli else settings.llm_summary_budget_seconds,
+                             payload.timeout)
+                configured = settings.model_copy(update={"llm_backend": payload.backend,
+                                                         "llm_summary_budget_seconds": budget})
+                # Native CLI batching uses its own total-budget constant. Bound
+                # it for this serialized request and restore it afterwards;
+                # process invocation and sandbox behavior remain native.
+                cli_budget = native._CLI_TOTAL_BUDGET
+                try:
+                    if is_cli:
+                        native._CLI_TOTAL_BUDGET = budget
+                    summaries, provenance = native.summarize_items_with_provenance(
+                        rows, SimpleNamespace(**payload.profile.model_dump()),
+                        settings=configured, diagnostics=diagnostics,
+                    )
+                finally:
+                    native._CLI_TOTAL_BUDGET = cli_budget
         except Exception as exc:
             raise HTTPException(502, "Configured summarizer failed") from exc
         # Preserve actual per-item fallback provenance without provider exception
         # strings, which can contain configured endpoints or sensitive details.
         return {"summaries": summaries, "provenance": provenance,
-                "diagnostics": {"fallback_items": sum(v != payload.backend for v in provenance.values())}}
+                "diagnostics": {"fallback_items": sum(v != payload.backend for v in provenance.values()),
+                                "provider_stopped": bool(diagnostics.get("provider_stopped", False))}}
 
     @app.post("/text")
     def text(payload: TextInput):
         if payload.backend not in backends():
-            raise HTTPException(409, "CLI backend is not configured on the companion")
+            raise HTTPException(409, "Text backend is not configured on the companion")
         from dailydigest import summarize as native
 
         configured = settings.model_copy(update={"llm_backend": payload.backend})
         try:
             with lock:
-                output = native._cli_text(payload.system, payload.user, payload.backend,
-                                          timeout=payload.timeout, settings=configured)
+                if payload.backend in {"claude_cli", "codex_cli"}:
+                    output = native._cli_text(payload.system, payload.user, payload.backend,
+                                              timeout=payload.timeout, settings=configured)
+                else:
+                    output = native._llm_text(payload.system, payload.user,
+                                              timeout=payload.timeout, settings=configured)
         except Exception as exc:
-            raise HTTPException(502, "Configured CLI text generation failed") from exc
+            raise HTTPException(502, "Configured text generation failed") from exc
         return {"text": output}
 
     @app.post("/email")

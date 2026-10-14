@@ -117,7 +117,9 @@ async function initialize() {
     globalThis.browserYield = () => new Promise(resolve => setTimeout(resolve, 0));
     globalThis.browserEmbed = embed;
     companion = savedCompanion || null;
-    globalThis.browserCompanionConfigured = () => Boolean(companion?.endpoint);
+    globalThis.browserCompanionSupports = backend => Boolean(companion?.endpoint && ['api', 'anthropic', 'claude_cli', 'codex_cli'].includes(backend) && companion.capabilities?.summarize?.includes(backend));
+    globalThis.browserCompanionIdentity = backend => globalThis.browserCompanionSupports(backend)
+      ? JSON.stringify([companion.endpoint, companion.provider_identities?.[backend] || 'legacy-provider']) : '';
     globalThis.browserCompanion = companionCall;
     py.globals.get('install_browser')();
     progress('Ready', 'Your profile, votes and reading history stay in browser storage.');
@@ -197,6 +199,7 @@ self.onmessage = async ({ data }) => {
         const health = JSON.parse(await companionCall('/health', null, 'GET', 20, next));
         if (health.ok !== true) throw new Error('Companion health check did not confirm availability.');
         next.capabilities = health.capabilities || {};
+        next.provider_identities = health.provider_identities || {};
         await saveSnapshot(next, 'companion');
         companion = next;
       }
@@ -261,6 +264,20 @@ self.onmessage = async ({ data }) => {
       return;
     }
     if (data.type !== 'request') throw new Error('Unknown browser request type.');
+    if (data.method?.toUpperCase() === 'POST' && ['/run/start', '/refresh'].includes(data.path.split('?')[0])) {
+      const backend = state.py.globals.get('selected_browser_backend')();
+      if (globalThis.browserCompanionSupports(backend)) {
+        const health = JSON.parse(await companionCall('/health', null, 'GET', 20));
+        if (health.ok !== true || !health.capabilities?.summarize?.includes(backend)) {
+          throw new Error(`The companion no longer advertises ${backend}. Reconnect or choose an available summary provider before brewing.`);
+        }
+        if (typeof health.provider_identities?.[backend] !== 'string' || !health.provider_identities[backend]) {
+          throw new Error('The companion must provide summary model identity before brewing. Update and reconnect the companion.');
+        }
+        const next = { ...companion, capabilities: health.capabilities, provider_identities: health.provider_identities };
+        await saveSnapshot(next, 'companion'); companion = next;
+      }
+    }
     const result = await state.py.globals.get('handle_request').callPromising(JSON.stringify(data), emit);
     if (!jobRunning && data.path.split('?')[0] !== '/run/stream') await persist();
     emit(result);
