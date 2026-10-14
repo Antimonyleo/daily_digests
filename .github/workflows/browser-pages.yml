@@ -53,7 +53,9 @@ jobs:
         run: |
           mkdir -p browser/.build-cache/preview
           ln -s "$GITHUB_WORKSPACE/browser/dist" browser/.build-cache/preview/daily_digests
-          uv run python -m http.server 8767 --bind 127.0.0.1 --directory browser/.build-cache/preview > browser/.build-cache/preview-server.log 2>&1 &
+          .venv/bin/python -m http.server 8767 --bind 127.0.0.1 --directory browser/.build-cache/preview > browser/.build-cache/preview-server.log 2>&1 &
+          task_preview_pid=$!
+          trap 'kill "$task_preview_pid" 2>/dev/null || true' EXIT
           node browser/verify-browser.mjs
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
