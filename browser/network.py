@@ -149,19 +149,35 @@ def install_public_source_fallback(snapshot_url, *, loader=None, now=None):
             if (parsed.scheme, parsed.netloc) != (current.scheme, current.netloc):
                 raise RuntimeError("Public source snapshot must have the worker's origin")
             with httpx.Client(follow_redirects=False, timeout=20) as client:
-                response = client.get(target)
+                response = client.get(target, headers={"Cache-Control": "no-cache"})
                 response.raise_for_status()
                 return json.loads(response.content)
 
     clock = now or (lambda: datetime.now(timezone.utc))
     cached = None
+    cache_attempted_at = None
+    refresh_error = None
 
     def snapshot_items(spec, days):
-        nonlocal cached
+        nonlocal cached, cache_attempted_at, refresh_error
+        instant = clock()
+        if (cache_attempted_at is None or instant < cache_attempted_at
+                or instant - cache_attempted_at >= timedelta(minutes=5)):
+            # Bound both successful and failed refresh attempts across the
+            # entire source list. A failed refresh can reuse a still-fresh
+            # snapshot, but never changes the collection timestamp below.
+            cache_attempted_at = instant
+            try:
+                refreshed = loader()
+                if (not isinstance(refreshed, dict) or refreshed.get("version") != 1
+                        or refreshed.get("public_only") is not True
+                        or not isinstance(refreshed.get("sources"), dict)):
+                    raise RuntimeError("Invalid public source snapshot manifest")
+                cached, refresh_error = refreshed, None
+            except Exception as exc:
+                refresh_error = f"{type(exc).__name__}: {exc}"[:500]
         if cached is None:
-            cached = loader()
-        if cached.get("version") != 1 or cached.get("public_only") is not True:
-            raise RuntimeError("Invalid public source snapshot manifest")
+            raise RuntimeError(f"Public source snapshot unavailable: {refresh_error}")
         record = cached.get("sources", {}).get(spec.name)
         if not record or record.get("status") != "ok":
             raise RuntimeError(f"Public source snapshot missing or failed for {spec.name}")
@@ -171,7 +187,7 @@ def install_public_source_fallback(snapshot_url, *, loader=None, now=None):
         fetched = datetime.fromisoformat(record["fetched_at"])
         if fetched.tzinfo is None:
             raise RuntimeError("Public source snapshot timestamp has no timezone")
-        age = clock() - fetched
+        age = instant - fetched
         if age > timedelta(hours=24) or age < -timedelta(minutes=5):
             raise RuntimeError(f"Public source snapshot stale or future-dated for {spec.name}")
         requested_cap = None
@@ -205,10 +221,14 @@ def install_public_source_fallback(snapshot_url, *, loader=None, now=None):
                     "snapshot_generated_at": cached.get("generated_at"),
                     "snapshot_window_days": record["days"],
                 }
+                if refresh_error:
+                    self.last_fetch_diagnostics["snapshot_refresh_error"] = refresh_error
                 return items
             except Exception as snapshot_error:
                 self.last_fetch_diagnostics = {"snapshot_error": str(snapshot_error)[:500],
                                                "transport": "direct"}
+                if refresh_error:
+                    self.last_fetch_diagnostics["snapshot_refresh_error"] = refresh_error
                 try:
                     return original(self, spec, days=days)
                 except Exception as direct_error:

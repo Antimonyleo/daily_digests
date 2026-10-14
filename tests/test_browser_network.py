@@ -1,6 +1,7 @@
 """Fixture-only transport checks: no public or configured services contacted."""
 
 import importlib.util
+from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import json
@@ -156,6 +157,66 @@ def test_public_snapshot_restores_items_without_attempting_direct_fetch(snapshot
     assert len(loads) == 1
 
 
+@pytest.fixture
+def refreshable_snapshot(snapshot):
+    source, spec, manifest, instant, loads = snapshot
+    clock = {"now": instant}
+    response = {"value": manifest}
+    calls = []
+
+    def loader():
+        calls.append(clock["now"])
+        value = response["value"]
+        if isinstance(value, Exception):
+            raise value
+        return deepcopy(value)
+
+    network.install_public_source_fallback("/assets/public-sources.json", loader=loader,
+                                           now=lambda: clock["now"])
+    return source, spec, response, clock, calls
+
+
+def test_snapshot_short_reuse_then_daily_refresh_gets_new_articles(refreshable_snapshot):
+    source, spec, response, clock, calls = refreshable_snapshot
+    assert source.fetch(spec)[0].title == "Public article"
+    clock["now"] += timedelta(minutes=4)
+    assert source.fetch(spec)[0].title == "Public article"
+    assert len(calls) == 1
+    clock["now"] += timedelta(hours=12)
+    updated = response["value"]["sources"][spec.name]
+    updated["fetched_at"] = clock["now"].isoformat()
+    updated["items"][0]["title"] = "New daily article"
+    assert source.fetch(spec)[0].title == "New daily article"
+    assert len(calls) == 2
+    assert source.last_fetch_diagnostics["snapshot_fetched_at"] == clock["now"].isoformat()
+
+
+@pytest.mark.parametrize("refresh", ["failed", "invalid"])
+def test_failed_refresh_retains_only_fresh_cache_and_records_error(refreshable_snapshot, refresh):
+    source, spec, response, clock, calls = refreshable_snapshot
+    source.fetch(spec)
+    clock["now"] += timedelta(hours=12)
+    response["value"] = RuntimeError("Snapshot refresh unavailable") if refresh == "failed" else {}
+    assert source.fetch(spec)[0].title == "Public article"
+    assert source.last_fetch_diagnostics["snapshot_refresh_error"]
+    assert source.last_fetch_diagnostics["transport"] == "public_snapshot"
+    source.fetch(spec)
+    assert len(calls) == 2  # a failed refresh must not download once per source
+
+
+@pytest.mark.parametrize("refresh", ["failed", "stale"])
+def test_daily_refresh_cannot_bless_a_stale_snapshot(refreshable_snapshot, refresh):
+    source, spec, response, clock, calls = refreshable_snapshot
+    source.fetch(spec)
+    clock["now"] += timedelta(hours=25)
+    if refresh == "failed":
+        response["value"] = RuntimeError("Snapshot refresh unavailable")
+    with pytest.raises(RuntimeError, match="stale or future-dated"):
+        source.fetch(spec)
+    assert source.last_fetch_diagnostics["direct_error"] == "RuntimeError: CORS blocked"
+    assert len(calls) == 2
+
+
 def test_arxiv_uses_the_same_validated_public_snapshot(snapshot):
     from dailydigest.ingest.arxiv import ArxivSource
 
@@ -224,14 +285,26 @@ def test_successful_direct_fetch_when_snapshot_is_unavailable(monkeypatch):
     monkeypatch.setattr(RSSSource, "fetch", lambda self, spec, days: [])
     monkeypatch.setattr(ArxivSource, "fetch", ArxivSource.fetch)
 
+    attempts = []
+    clock = {"now": datetime(2026, 10, 13, tzinfo=timezone.utc)}
+
     def unavailable_snapshot():
+        attempts.append(True)
         raise RuntimeError("Snapshot asset not found")
 
-    network.install_public_source_fallback("/assets/public-sources.json", loader=unavailable_snapshot)
+    network.install_public_source_fallback("/assets/public-sources.json", loader=unavailable_snapshot,
+                                           now=lambda: clock["now"])
     source = RSSSource()
-    assert source.fetch(SourceSpec(name="Public feed", kind="rss")) == []
+    spec = SourceSpec(name="Public feed", kind="rss")
+    assert source.fetch(spec) == []
     assert source.last_fetch_diagnostics["transport"] == "direct"
-    assert source.last_fetch_diagnostics["snapshot_error"] == "Snapshot asset not found"
+    assert "Snapshot asset not found" in source.last_fetch_diagnostics["snapshot_error"]
+    clock["now"] += timedelta(minutes=4)
+    source.fetch(spec)
+    assert len(attempts) == 1
+    clock["now"] += timedelta(minutes=1)
+    source.fetch(spec)
+    assert len(attempts) == 2
 
 
 def test_genuine_empty_snapshot_does_not_attempt_direct_fetch(snapshot):
