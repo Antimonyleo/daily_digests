@@ -55,3 +55,32 @@ def test_build_refuses_to_overwrite_existing_output(tmp_path):
     with pytest.raises(ValueError, match="new or empty"):
         build.build(tmp_path)
     assert (tmp_path / "existing.txt").read_text() == "Keep me"
+
+
+def test_gpu_export_is_pinned_and_copies_only_model_configuration(tmp_path, monkeypatch):
+    model = tmp_path / "model"
+    model.mkdir()
+    names = ("config.json", "tokenizer.json", "tokenizer_config.json", "special_tokens_map.json")
+    for name in names:
+        (model / name).write_text('{}')
+    (model / '.env').write_text('PRIVATE_SENTINEL')
+    calls = []
+
+    def download(url, target, sha256):
+        calls.append((url, sha256))
+        target.parent.mkdir(parents=True)
+        target.write_bytes(b'public model fixture')
+        return target
+
+    monkeypatch.setattr(build, 'download', download)
+    output = tmp_path / 'output'
+    build.gpu_model_files(model, output, tmp_path / 'cache')
+    assert calls == [(f'https://huggingface.co/Xenova/bge-small-en-v1.5/resolve/{build.GPU_MODEL_REVISION}/onnx/model.onnx', build.GPU_MODEL_SHA256)]
+    assert {str(path.relative_to(output)) for path in output.rglob('*') if path.is_file()} == {*names, 'onnx/model.onnx'}
+
+
+def test_cached_dependency_checksum_mismatch_is_rejected(tmp_path):
+    path = tmp_path / 'model.onnx'
+    path.write_bytes(b'damaged cached graph')
+    with pytest.raises(ValueError, match='checksum mismatch'):
+        build.download('https://unused.invalid/model', path, '0' * 64)

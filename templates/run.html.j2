@@ -187,6 +187,7 @@
     </form>
   </section>
 
+  <p class="serving-note" id="browser-compute-notice" hidden></p>
   <section id="progress-panel" hidden>
     <div class="cup" aria-hidden="true">
       <div class="steam s1"></div><div class="steam s2"></div><div class="steam s3"></div>
@@ -200,6 +201,8 @@
       <div class="progress-bar" id="progress-bar"></div>
     </div>
     <div class="detail" id="detail" aria-live="polite">Starting the kettle...</div>
+    <p id="compute-current" aria-live="polite" hidden></p>
+    <p class="serving-note" id="completed-stage" hidden></p>
     <p class="serving-note">Stages show actual work; their duration varies with the source and model.</p>
 
     <ul class="stages" id="stages" aria-live="polite">
@@ -244,6 +247,13 @@
   const progressBar = document.getElementById("progress-bar");
   const progressShell = document.getElementById("progress-shell");
   const whisper = document.getElementById("brew-whisper");
+  const computeCurrent = document.getElementById("compute-current");
+  const completedStage = document.getElementById("completed-stage");
+  window.addEventListener("dd-compute-progress", event => {
+    if (progressPanel.hidden || progressPanel.dataset.state === "paused") return;
+    computeCurrent.hidden = false;
+    computeCurrent.textContent = event.detail.message;
+  });
   const friendlyStages = {ingestion: "Gathering the tea leaves from your sources…",
     calibration: "Getting your blend ready…", profile_encoding: "Getting to know your research taste…",
     deduplication: "Picking out repeated leaves…", ranking: "Letting your interests steep…",
@@ -286,7 +296,9 @@
     if (item) item.textContent = text;
   }
   function showError(message, reconnect = false) {
+    window.dispatchEvent(new Event("dd-compute-stop"));
     progressPanel.dataset.state = "paused";
+    computeCurrent.hidden = true;
     document.getElementById("brew-title").textContent = reconnect ? "Let’s check on your brew" : "This brew needs attention";
     whisper.textContent = "Your latest saved digest is still available below.";
     errEl.hidden = false;
@@ -333,9 +345,13 @@
           ranking: "Ranking qualified candidates", summary: "Preparing summaries",
           publication: "Saving the digest", render: "Preparing the preview"};
         const name = names[payload.name] || payload.name;
-        detailEl.textContent = stage === "stage_done"
-          ? `${name}: ${(Number(payload.duration_ms || 0) / 1000).toFixed(1)} s`
-          : `${name}…`;
+        if (stage === "stage_done") {
+          completedStage.hidden = false;
+          completedStage.textContent = `Completed: ${name} · ${(Number(payload.duration_ms || 0) / 1000).toFixed(1)} s`;
+        } else {
+          detailEl.textContent = `${name}…`;
+          computeCurrent.hidden = true;
+        }
         return;
       }
       if (stage === "cancelled") {

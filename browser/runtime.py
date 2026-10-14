@@ -67,6 +67,14 @@ def has_jobs():
     return bool(_JOBS)
 
 
+def browser_cancelled():
+    """Allow long embedding calls to stop at their next completed batch."""
+    if _WEB is None:
+        return False
+    event = _WEB._RUN_CANCEL.get(_WEB._BREW_JOB.get('run_id'))
+    return bool(event and event.is_set())
+
+
 def run_job():
     target, args, kwargs = _JOBS.popleft()
     return target(*args, **kwargs)
@@ -431,6 +439,11 @@ def install_browser():
     from pyodide.ffi import run_sync, to_js
     from js import (browserEmbed, browserYield, browserCompanion, browserCompanionSupports,
                     browserCompanionIdentity)
+    try:
+        from js import browserEmbeddingBackend
+    except ImportError:
+        # Previously cached CPU-only workers can still load the new runtime.
+        browserEmbeddingBackend = lambda: 'browser-onnx'
     import numpy as np
     from dailydigest import job_lock
     from dailydigest.rank import embed
@@ -454,15 +467,23 @@ def install_browser():
             raise ValueError('The browser bundle contains only BAAI/bge-small-en-v1.5')
 
         def encoder(texts):
-            result = run_sync(browserEmbed(to_js(texts)))
+            from dailydigest.pipeline import BrewCancelled
+            if browser_cancelled():
+                raise BrewCancelled('Brew stopped before publication.')
+            try:
+                result = run_sync(browserEmbed(to_js(texts)))
+            except Exception:
+                if browser_cancelled():
+                    raise BrewCancelled('Brew stopped before publication.') from None
+                raise
             return np.asarray(result.to_py(), dtype=np.float32)
 
-        encoder.embedding_backend = 'browser-onnx'
+        encoder.embedding_backend = browserEmbeddingBackend()
         return encoder
 
     embed._build_encoder = build_encoder
     # Keep browser vectors distinct from imported native cache backends.
-    embed._resolved_backend_name = lambda: 'browser-onnx'
+    embed._resolved_backend_name = lambda: str(browserEmbeddingBackend())
 
     from dailydigest import pipeline, web
     pipeline.ThreadPoolExecutor = BrowserExecutor

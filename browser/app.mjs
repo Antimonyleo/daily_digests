@@ -1,4 +1,5 @@
 const LOCAL_ORIGIN = 'http://127.0.0.1:8765';
+import { formatComputeProgress } from './compute.mjs';
 
 // Only app-local routes can enter the Python request bridge.
 export function localPath(value, base = '/') {
@@ -90,6 +91,15 @@ function frameBridge(token, path, origin) {
   };
   window.addEventListener('message', ({ source, data }) => {
     if (source !== parent || data?.token !== token) return;
+    if (data.type === 'compute-progress') {
+      window.dispatchEvent(new CustomEvent('dd-compute-progress', { detail: data.compute }));
+      return;
+    }
+    if (data.type === 'compute-config') {
+      const notice = document.getElementById('browser-compute-notice');
+      if (notice) { notice.hidden = false; notice.textContent = data.message; }
+      return;
+    }
     const request = pending.get(data.id);
     if (!request) return;
     if (data.type === 'stream') request.chunk?.(data.body);
@@ -139,6 +149,7 @@ function frameBridge(token, path, origin) {
     close() { this.readyState = 2; this.request.cancel(); }
   }
   window.EventSource = LocalEventSource;
+  window.addEventListener('dd-compute-stop', () => notify({ type: 'compute-stop' }));
   document.addEventListener('click', (event) => {
     const anchor = event.target.closest?.('a[href]');
     if (!anchor || event.defaultPrevented || event.button || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
@@ -202,12 +213,25 @@ async function boot() {
       .catch(error => { status.textContent = `App shortcut unavailable: ${error.message}`; });
   }
   let token = crypto.randomUUID();
-  const worker = new Worker(new URL('./worker.mjs', import.meta.url), { type: 'module' });
+  const worker = new Worker(new URL('./worker.mjs?compute=v1', import.meta.url), { type: 'module' });
   const client = new WorkerClient(worker);
   const streams = new Map();
   let ready = false;
   let navigation = 0;
   let activePath = '/';
+  let computeTimer, latestCompute, computeReceivedAt;
+  const computeNotice = 'Brewing uses this device’s processor and memory, and can increase heat, fan noise and battery use. Thousands of new articles may take 20 minutes or more on one CPU core. Choose optional acceleration in Compute. Keep this tab open until the brew finishes to save its calculations.';
+  frame.addEventListener('load', () => {
+    frame.contentWindow.postMessage({ type: 'compute-config', token, message: computeNotice }, '*');
+  });
+  const displayCompute = () => {
+    if (!latestCompute) return;
+    const info = { ...latestCompute };
+    if (info.phase === 'encoding') info.elapsed_ms += performance.now() - computeReceivedAt;
+    info.message = formatComputeProgress(info);
+    setStatus(info.message);
+    frame.contentWindow.postMessage({ type: 'compute-progress', token, compute: info }, '*');
+  };
   const errorPanel = document.getElementById('app-error');
   let errorFocus;
   const dismissError = () => { errorPanel.hidden = true; errorFocus?.focus(); };
@@ -243,8 +267,8 @@ async function boot() {
   async function companionCall(payload) {
     const response = await client.call(payload);
     let result;
-    try { result = JSON.parse(response.body); } catch { throw new Error('Companion returned an unreadable response.'); }
-    if (response.status >= 400) throw new Error(result.detail || result.message || `Companion HTTP ${response.status}`);
+    try { result = JSON.parse(response.body); } catch { throw new Error('The application returned an unreadable response.'); }
+    if (response.status >= 400) throw new Error(result.detail || result.message || `Request HTTP ${response.status}`);
     return result;
   }
   async function refreshCompanion() {
@@ -265,6 +289,28 @@ async function boot() {
       companionStatus.textContent = configured ? `Connected to ${result.endpoint}. Available: ${names.join(', ') || 'no optional services'}.` : 'No companion configured.';
     } catch (error) { companionStatus.textContent = error.message; }
   }
+  async function refreshCompute() {
+    try {
+      const result = await companionCall({ type: 'compute-status' });
+      const select = document.getElementById('compute-mode');
+      select.value = result.mode;
+      select.querySelector('[value="gpu"]').disabled = !result.capabilities.gpu;
+      select.querySelector('[value="multicore"]').disabled = !result.capabilities.multicore;
+      document.getElementById('compute-support').textContent =
+        `${result.capabilities.gpu ? 'WebGPU is exposed by this browser; device availability is checked when used.' : 'GPU acceleration is unavailable in this browser.'} ${result.capabilities.multicore ? `Up to ${result.capabilities.threads} CPU cores are available.` : 'Multiple CPU cores require an isolated host and are unavailable here.'}`;
+      document.getElementById('compute-status').textContent = result.mode === 'gpu'
+        ? 'GPU acceleration selected (experimental). If it cannot run, this device will use CPU.'
+        : result.threads > 1 ? `CPU · up to ${result.threads} cores.` : 'CPU · one core. GPU acceleration is opt-in.';
+      document.getElementById('compute-apply').disabled = false;
+    } catch (error) { document.getElementById('compute-status').textContent = error.message; }
+  }
+  document.getElementById('compute-form').onsubmit = async event => {
+    event.preventDefault();
+    try {
+      await companionCall({ type: 'configure-compute', mode: document.getElementById('compute-mode').value });
+      location.reload();
+    } catch (error) { document.getElementById('compute-status').textContent = error.message; }
+  };
   const download = (body, type, filename) => {
     const url = URL.createObjectURL(new Blob([body], { type }));
     const anchor = document.createElement('a'); anchor.href = url; anchor.download = filename; anchor.click();
@@ -297,6 +343,7 @@ async function boot() {
       }
       if (!(headers.get('content-type') || '').includes('text/html')) throw new Error('Expected a DailyDigest page.');
       activePath = path;
+      clearInterval(computeTimer); latestCompute = null;
       history.replaceState(null, '', '#' + path);
       token = crypto.randomUUID();
       frame.srcdoc = renderedDocument(response.body, token, path);
@@ -311,14 +358,23 @@ async function boot() {
       document.getElementById('import').disabled = false;
       document.getElementById('companion-connect').disabled = false;
       refreshCompanion();
+      refreshCompute();
       navigate(routeFromHash(location.hash));
-    } else if (data.type === 'progress') setStatus(data.message || friendlyLoadingStatus(data.stage, data.detail) || 'Putting the kettle on…');
+    } else if (data.type === 'progress') {
+      if (data.compute) {
+        clearInterval(computeTimer); latestCompute = data.compute; computeReceivedAt = performance.now();
+        displayCompute();
+        if (data.compute.phase === 'encoding') computeTimer = setInterval(displayCompute, 1000);
+        if (data.compute.phase === 'fallback') document.getElementById('compute-status').textContent = data.compute.message;
+      } else setStatus(data.message || friendlyLoadingStatus(data.stage, data.detail) || 'Putting the kettle on…');
+    }
     else if (data.type === 'error' && !data.id) report(new Error(data.message || data.error || 'Python startup failed'));
   });
   worker.addEventListener('error', () => report(new Error('Python worker stopped. Reload to reconnect.')));
   window.addEventListener('hashchange', () => { if (ready) navigate(routeFromHash(location.hash)); });
   window.addEventListener('message', async ({ source, data }) => {
     if (source !== frame.contentWindow || data?.token !== token) return;
+    if (data.type === 'compute-stop') { clearInterval(computeTimer); latestCompute = null; setStatus('Brew needs attention'); return; }
     const reply = (payload) => source.postMessage({ ...payload, token: data.token, id: data.id }, '*');
     try {
       if (data.type === 'navigate') {

@@ -36,7 +36,7 @@ jobs:
       - name: Python regression checks
         run: uv run pytest tests/test_browser_build.py tests/test_browser_runtime.py tests/test_browser_network.py tests/test_browser_companion.py tests/test_browser_compute_prototype.py tests/test_quality_gate_invariants.py tests/test_pipeline_persistence.py tests/test_feedback_recovery.py tests/test_publication_version_cooldown.py -q
       - name: Browser bridge checks
-        run: node --test --test-isolation=none browser/frontend.test.mjs
+        run: node --test --test-isolation=none browser/frontend.test.mjs browser/compute.test.mjs
       - name: Install browser dependencies
         working-directory: prototypes/browser-compute
         run: npm ci --ignore-scripts

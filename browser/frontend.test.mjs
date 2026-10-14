@@ -28,13 +28,22 @@ function bridgedFrame() {
   const messages = [];
   const listeners = {};
   const parent = { postMessage: data => messages.push(data) };
-  const window = { addEventListener: (name, handler) => { listeners[name] = handler; } };
-  const document = { addEventListener() {} };
+  const events = [];
+  const window = { addEventListener: (name, handler) => { listeners[name] = handler; }, dispatchEvent: event => events.push(event) };
+  const document = { addEventListener() {}, getElementById() {} };
   const html = renderedDocument('<html><head></head></html>', 'token', '/run');
   const script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
-  runInNewContext(script, { parent, window, document, URL, URLSearchParams, FormData, Headers, Request, Response, EventTarget, Event, MessageEvent });
-  return { window, messages, deliver: data => listeners.message({ source: parent, data: { ...data, token: 'token' } }) };
+  runInNewContext(script, { parent, window, document, URL, URLSearchParams, FormData, Headers, Request, Response, EventTarget, Event, MessageEvent, CustomEvent });
+  return { window, messages, events, deliver: data => listeners.message({ source: parent, data: { ...data, token: 'token' } }) };
 }
+
+test('live compute progress reaches the brew panel independently of stream polling', () => {
+  const frame = bridgedFrame();
+  frame.deliver({ type: 'compute-progress', compute: { completed: 4, total: 2340, message: 'Comparing research text' } });
+  assert.equal(frame.events.length, 1);
+  assert.equal(frame.events[0].type, 'dd-compute-progress');
+  assert.equal(frame.events[0].detail.completed, 4);
+});
 
 test('frame fetch uses worker responses and blocks arbitrary external requests', async () => {
   const frame = bridgedFrame();

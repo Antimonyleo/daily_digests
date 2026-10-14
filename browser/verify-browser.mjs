@@ -182,6 +182,26 @@ try {
     return evidence;
   }));
   if (!initialReady) throw new Error('Startup failed; dependent acceptance checks cannot run.');
+  await check('explicit-compute-controls-and-device-warning', async () => {
+    const current = await page.evaluate(async () => JSON.parse((await window.__rpc({ type: 'compute-status' })).body));
+    await page.locator('#compute-menu > summary').click();
+    assert.equal(await page.locator('#compute-mode').inputValue(), 'cpu');
+    assert.equal(await page.locator('#compute-mode option[value="multicore"]').isDisabled(), !current.capabilities.multicore);
+    assert.equal(await page.locator('#compute-mode option[value="gpu"]').isDisabled(), !current.capabilities.gpu);
+    assert.match(await page.locator('#compute-menu').textContent(), /heat, fan noise and battery use/);
+    if (current.capabilities.gpu) {
+      await page.locator('#compute-mode').selectOption('gpu');
+      await Promise.all([page.waitForEvent('load'), page.locator('#compute-apply').click()]);
+      await startup();
+      await page.waitForFunction(() => document.querySelector('#compute-mode').value === 'gpu');
+      await page.locator('#compute-menu > summary').click();
+      await page.locator('#compute-mode').selectOption('cpu');
+      await Promise.all([page.waitForEvent('load'), page.locator('#compute-apply').click()]);
+      await startup();
+    } else await page.locator('#compute-menu > summary').click();
+    await frame().locator('#topics').waitFor();
+    return { optInPersistsAcrossReload: current.capabilities.gpu, unsupportedChoicesDisabled: true, deviceWarning: true, cpuDefault: true };
+  });
   await check('muted-research-examples-require-explicit-use-and-save', async () => {
     const topics = frame().locator('#topics');
     assert.equal(await topics.inputValue(), '');
@@ -317,6 +337,8 @@ try {
   await check('brew-cancellation-preserves-digest', async () => {
     const before = await digestIdentity();
     await route('/run?reading_mode=usual', '#brew-button');
+    await frame().locator('#browser-compute-notice').waitFor({ state: 'visible' });
+    assert.match(await frame().locator('#browser-compute-notice').textContent(), /20 minutes.*CPU core/);
     await frame().locator('#brew-button').click();
     await frame().locator('#cancel-button').click();
     await frame().locator('#err').waitFor({ state: 'visible', timeout: 300000 });
@@ -364,6 +386,22 @@ try {
     await page.screenshot({ path: `${output}/source-coverage.png`, fullPage: true });
     return { selectedSourceCountOnly: true, checkTimestampVisible: true, sourceDetailsAvailable: true };
   });
+  await check('gpu-opt-in-runs-locally-or-recovers-on-cpu', async () => {
+    const status = await page.evaluate(async () => JSON.parse((await window.__rpc({ type: 'compute-status' })).body));
+    if (!status.capabilities.gpu) return { unavailableChoiceDisabled: true };
+    const configured = await page.evaluate(() => window.__rpc({ type: 'configure-compute', mode: 'gpu' }));
+    assert.equal(configured.status, 200, configured.body);
+    await page.reload(); await startup();
+    await successfulBrew();
+    const active = await page.evaluate(async () => JSON.parse((await window.__rpc({ type: 'compute-status' })).body));
+    const fallback = await page.evaluate(() => window.__workerEvents.some(event => event.type === 'progress' && event.stage === 'Computing embeddings' && /CPU/.test(event.message || '')));
+    assert.ok(active.device === 'webgpu' || (active.device === 'wasm' && fallback));
+    const restored = await page.evaluate(() => window.__rpc({ type: 'configure-compute', mode: 'cpu' }));
+    assert.equal(restored.status, 200, restored.body);
+    await page.reload(); await startup();
+    await route('/', '.item[data-item-id]');
+    return { selectedMode: 'gpu', actualDevice: active.device, cpuFallbackVisible: active.device === 'wasm' && fallback, cpuRestored: true };
+  });
   await check('degraded-research-preserves-last-digest', async () => {
     const before = await digestIdentity(); sourceMode = 'failure';
     await route('/run?reading_mode=minimal', '#brew-button');
@@ -378,7 +416,7 @@ try {
   await check('backup-download-and-import-confirmation', async () => {
     const exported = await snapshot();
     await writeFile(`${output}/exported-backup.json`, JSON.stringify(exported));
-    await page.locator('.browser-bar > details:not(#companion-menu) > summary').click();
+    await page.locator('#browser-data-menu > summary').click();
     const downloadEvent = page.waitForEvent('download'); await page.locator('#export').click();
     const download = await downloadEvent; await download.saveAs(`${output}/downloaded-backup.json`);
     const downloaded = JSON.parse(await readFile(`${output}/downloaded-backup.json`, 'utf8'));

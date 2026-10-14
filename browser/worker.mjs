@@ -1,9 +1,10 @@
 import { loadPyodide } from './node_modules/pyodide/pyodide.mjs';
 import { AutoTokenizer, AutoModel, Tensor, env } from './node_modules/@huggingface/transformers/dist/transformers.min.js';
 import { prepareBertBatch } from './bge-tokenizer.mjs';
+import { computeCapabilities, computeSelection, createEmbeddingEngine, formatComputeProgress } from './compute.mjs';
 
 let companion = null;
-let boot, state, database, jobRunning = false, stateReplacing = false;
+let boot, state, database, jobRunning = false, stateReplacing = false, computeMode = 'cpu';
 const progress = (stage, detail) => self.postMessage({ type: 'progress', stage, detail });
 const emit = text => self.postMessage(JSON.parse(text));
 const response = (id, body, status = 200) => ({ id, type: 'response', status, headers: { 'content-type': 'application/json' }, body });
@@ -90,9 +91,9 @@ async function initialize() {
     await ownStorage();
     database = await openDatabase();
     progress('Loading Python', 'The full DailyDigest application runs in this browser.');
-    const [bundle, source, dependencies, snapshot, savedCompanion] = await Promise.all([
-      fetchAsset('./assets/app.zip', 'arrayBuffer'), fetchAsset('./assets/runtime.py', 'text'),
-      fetchAsset('./assets/dependencies.json', 'json'), readSnapshot(), readSnapshot('companion'),
+    const [bundle, source, dependencies, snapshot, savedCompanion, savedCompute] = await Promise.all([
+      fetchAsset('./assets/app.zip?compute=v1', 'arrayBuffer'), fetchAsset('./assets/runtime.py?compute=v1', 'text'),
+      fetchAsset('./assets/dependencies.json', 'json'), readSnapshot(), readSnapshot('companion'), readSnapshot('compute'),
     ]);
     const py = await loadPyodide({ indexURL: new URL('./node_modules/pyodide/', self.location.href).href });
     await py.loadPackage(['micropip', ...dependencies.pyodide]);
@@ -110,12 +111,31 @@ async function initialize() {
     env.allowRemoteModels = false;
     env.allowLocalModels = true;
     env.localModelPath = new URL('./assets/models/', self.location.href).href;
-    env.backends.onnx.wasm.numThreads = 1;
     env.backends.onnx.wasm.wasmPaths = new URL('./node_modules/onnxruntime-web/dist/', self.location.href).href;
     env.backends.onnx.wasm.proxy = false;
-    state = { py, tokenizer: null, model: null };
+    computeMode = ['cpu', 'gpu', 'multicore'].includes(savedCompute) ? savedCompute : 'cpu';
+    const engine = createEmbeddingEngine({ mode: computeMode, capabilities: computeCapabilities(), env: env.backends.onnx,
+      loadTokenizer: options => AutoTokenizer.from_pretrained('bge-small', { local_files_only: true, ...options }),
+      loadModel: async options => {
+        if (options.device === 'webgpu') {
+          const adapter = await navigator.gpu?.requestAdapter({ powerPreference: 'high-performance' });
+          if (!adapter || adapter.info?.isFallbackAdapter) throw new Error('Hardware GPU acceleration is unavailable');
+          env.backends.onnx.webgpu.adapter = adapter;
+        }
+        return AutoModel.from_pretrained(options.device === 'webgpu' ? 'bge-small-webgpu' : 'bge-small', {
+          local_files_only: true, ...options,
+          ...(options.device === 'webgpu' ? { session_options: { graphOptimizationLevel: 'disabled' } } : {}),
+        });
+      },
+      prepareBatch: prepareBertBatch, makeTensor: (data, dims) => new Tensor('int64', data, dims),
+      shouldCancel: () => Boolean(state.py.globals.get('browser_cancelled')()),
+      progress: info => self.postMessage({ type: 'progress', stage: info.phase === 'loading' ? 'Loading embedding model'
+        : info.phase === 'complete' ? 'Embeddings complete' : 'Computing embeddings', message: formatComputeProgress(info), compute: info }),
+    });
+    state = { py, engine };
     globalThis.browserYield = () => new Promise(resolve => setTimeout(resolve, 0));
-    globalThis.browserEmbed = embed;
+    globalThis.browserEmbed = texts => engine.embed(texts);
+    globalThis.browserEmbeddingBackend = () => engine.device === 'webgpu' ? 'browser-onnx-webgpu-v1' : 'browser-onnx';
     companion = savedCompanion || null;
     globalThis.browserCompanionSupports = backend => Boolean(companion?.endpoint && ['api', 'anthropic', 'claude_cli', 'codex_cli'].includes(backend) && companion.capabilities?.summarize?.includes(backend));
     globalThis.browserCompanionIdentity = backend => globalThis.browserCompanionSupports(backend)
@@ -127,39 +147,6 @@ async function initialize() {
     return state;
   })();
   return boot;
-}
-async function embed(texts) {
-  const started = performance.now();
-  if (!state.model) {
-    progress('Loading embedding model', 'BGE runs locally with ONNX WebAssembly.');
-    state.tokenizer = await AutoTokenizer.from_pretrained('bge-small', { local_files_only: true });
-    state.model = await AutoModel.from_pretrained('bge-small', { device: 'wasm', dtype: 'fp32', local_files_only: true });
-  }
-  const ordered = Array.from(texts).map((text, index) => ({ text, index })).sort((a, b) => Array.from(a.text).length - Array.from(b.text).length);
-  const vectors = Array(ordered.length);
-  for (let start = 0; start < ordered.length; start += 4) {
-    const batch = ordered.slice(start, start + 4);
-    progress('Computing embeddings', `${Math.min(start + 4, ordered.length)} / ${ordered.length}`);
-    const raw = await state.tokenizer(batch.map(row => row.text), { padding: false, truncation: false, return_tensor: false });
-    const prepared = prepareBertBatch(raw, { padId: state.tokenizer.pad_token_id, sepId: state.tokenizer.sep_token_id });
-    const inputs = Object.fromEntries(Object.entries(prepared.encoded).map(([key, rows]) =>
-      [key, new Tensor('int64', BigInt64Array.from(rows.flat().map(BigInt)), prepared.dims)]));
-    const output = await state.model(inputs);
-    const hidden = output.last_hidden_state;
-    if (!hidden || hidden.dims.length !== 3 || hidden.dims[2] !== 384) throw new Error('Unexpected BGE model output; ranking cannot continue.');
-    const [, sequence, dimension] = hidden.dims;
-    for (let row = 0; row < batch.length; row++) {
-      const offset = row * sequence * dimension;
-      const vector = Array.from(hidden.data.slice(offset, offset + dimension));
-      const norm = Math.sqrt(vector.reduce((sum, value) => sum + value * value, 0));
-      if (!Number.isFinite(norm) || !norm) throw new Error('Invalid BGE embedding; ranking cannot continue.');
-      vectors[batch[row].index] = vector.map(value => value / norm);
-    }
-    for (const tensor of Object.values(output)) tensor?.dispose?.();
-    for (const tensor of Object.values(inputs)) tensor?.dispose?.();
-  }
-  progress('Embeddings complete', `${Math.round(performance.now() - started)} ms`);
-  return vectors;
 }
 async function persist() {
   await saveSnapshot(state.py.globals.get('export_snapshot')());
@@ -183,6 +170,19 @@ self.onmessage = async ({ data }) => {
     if (data.type === 'cancel-request') { state.py.globals.get('cancel_request')(data.id); return; }
     if (stateReplacing) {
       self.postMessage(response(data.id, JSON.stringify({ detail: 'Backup import is replacing browser state. Wait for the page to reload.' }), 409));
+      return;
+    }
+    if (data.type === 'compute-status') {
+      self.postMessage(response(data.id, JSON.stringify({ mode: computeMode, capabilities: computeCapabilities(),
+        device: state.engine.device, threads: state.engine.threads })));
+      return;
+    }
+    if (data.type === 'configure-compute') {
+      if (jobRunning || state.py.globals.get('has_jobs')()) throw new Error('Wait for the current brew before changing compute settings.');
+      const selection = computeSelection(data.mode, computeCapabilities());
+      if (selection.fallback) throw new Error(selection.fallback);
+      await saveSnapshot(data.mode, 'compute');
+      self.postMessage(response(data.id, JSON.stringify({ ok: true, reload: true })));
       return;
     }
     if (data.type === 'companion-status') {

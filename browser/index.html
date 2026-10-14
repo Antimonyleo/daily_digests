@@ -16,6 +16,7 @@
     <h1 id="startup-title">Putting the kettle on…</h1>
     <p>Get a reading list matched to your research interests. Your profile, ratings and saved papers are stored in this browser.</p>
     <p>The first visit downloads what the app needs. A large first brew can take a minute or more; later brews reuse saved calculations. Keep this tab open while brewing. Some sources may be unavailable if they block browser access.</p>
+    <p>Brewing uses your device’s processor and memory, and may increase heat, fan noise and battery use. A first brew with thousands of articles can take 20 minutes or more on one CPU core. Choose optional acceleration in <strong>Compute</strong>.</p>
     <p>Use <strong>Browser data</strong> to back up your reading desk or move it to another device. Optional services are available through <strong>Companion</strong>.</p>
     <p id="startup-status" role="status">Warming up your reading desk. A fresh cup is on its way.</p>
     <button id="retry" hidden type="button">Retry startup</button>
@@ -29,6 +30,25 @@
   <footer class="browser-bar">
     <span id="status" role="status">Opening your reading desk…</span>
     <button id="install" type="button" hidden title="Install a DailyDigest browser app shortcut">Install</button>
+    <details id="compute-menu">
+      <summary>Compute</summary>
+      <div class="data-tools">
+        <p>Brewing runs on this device. It can increase heat, fan noise and battery use. Thousands of new articles can take 20 minutes or more on one CPU core; later brews reuse saved calculations.</p>
+        <form id="compute-form">
+          <label for="compute-mode">Local computation</label>
+          <select id="compute-mode" aria-describedby="compute-support">
+            <option value="cpu">CPU · one core (default)</option>
+            <option value="gpu">Use GPU acceleration (experimental, opt-in)</option>
+            <option value="multicore">CPU · up to four cores</option>
+          </select>
+          <p id="compute-support">Checking this browser’s capabilities…</p>
+          <button id="compute-apply" disabled type="submit">Apply and reload</button>
+        </form>
+        <p id="compute-status" role="status">CPU · one core. GPU acceleration is optional and may vary by device.</p>
+        <p>Switching between CPU and GPU can require recalculating saved text comparisons.</p>
+        <p>First-time GPU setup downloads a separate model export, about 133 MB.</p>
+      </div>
+    </details>
     <details id="companion-menu">
       <summary>Companion</summary>
       <div class="data-tools">
@@ -52,7 +72,7 @@
         </div>
       </div>
     </details>
-    <details>
+    <details id="browser-data-menu">
       <summary>Browser data</summary>
       <div class="data-tools">
         <p>Data is private to this browser and site. Export a backup before clearing browser storage. Imported backups replace this browser’s DailyDigest data.</p>
@@ -61,6 +81,6 @@
       </div>
     </details>
   </footer>
-  <script type="module" src="./app.mjs"></script>
+  <script type="module" src="./app.mjs?compute=v1"></script>
 </body>
 </html>

@@ -12,6 +12,25 @@ source card shows the latest attempted check, source response coverage and
 available public-feed update times separately from paper publication dates.
 Unavailable or limited feeds remain visible, including after a failed brew.
 
+The **Compute** menu defaults to one CPU core. GPU acceleration is an explicit,
+per-device opt-in and falls back to CPU if initialization or inference fails.
+It uses a checksum-pinned, unfused float32 export of the same BGE model because
+the native optimized graph has an attention mask unsupported by this WebGPU
+runtime. GPU caches use a separate backend signature. The extra 133 MB model
+is downloaded by the browser only when GPU acceleration is used. Physical GPU
+performance and browser/device support vary; this remains experimental.
+Multicore CPU uses at most four cores and is offered only with cross-origin
+isolation and SharedArrayBuffer support. GitHub Pages currently does not provide
+the required isolation headers, so that option is unavailable there. Detection
+uses browser capabilities on macOS, Windows and Linux, with no OS allowlist.
+
+Brewing notices explain processor, memory, heat and battery use. The main brew
+panel displays completed embedding counts and elapsed time independently of
+Python's stage stream; remaining time is a rough estimate from recent batches.
+Completed stage durations are displayed separately from the active work.
+Cancellation is checked between embedding batches, preserving the native
+publication gates and the previously saved digest.
+
 ## Architecture and feature transfer
 
 * Native Python: all enabled ranking stages, profile weights/negative interests,
@@ -55,7 +74,7 @@ The positive build allowlist is covered by privacy regression tests.
 Use a browser supporting WebAssembly JavaScript Promise Integration and Web
 Locks; runtime startup checks both. This implementation has been tested in
 Chrome. Safari/Firefox and real phone performance are not claimed verified.
-The static package is approximately 140 MB including public metadata; model files
+The static package is approximately 276 MB including public metadata and both exports; model files
 are downloaded lazily for the first embedding job. Normal browser HTTP caching
 applies; a storage-eviction-proof offline installation is not promised.
 
@@ -112,7 +131,7 @@ parity is not evidence of improved scientific relevance or article quality.
 8. Record unsupported integrations and browser/device limitations honestly.
 
 Run the full native suite before release. Browser bridge tests run with
-`node --test --test-isolation=none browser/frontend.test.mjs`. Real-browser
+`node --test --test-isolation=none browser/frontend.test.mjs browser/compute.test.mjs`. Real-browser
 acceptance is `node browser/verify-browser.mjs`; it expects isolated fictional
 backup and feed artifacts and blocks arbitrary external services. It is not a
 live brew against the reader's database or configured providers.
@@ -121,7 +140,7 @@ transport, checking that browser-decoded responses are not decompressed twice.
 Mobile viewport checks establish layout only; production-scale latency and
 actual Android/iOS or other browser engines still need separate verification.
 
-The 400-paper frozen replay (328 public records and 72 controlled scope cases)
+The earlier 400-paper frozen replay (328 public records and 72 controlled scope cases)
 matched the native ten-paper slate and ordering; maximum score drift was below
 0.00015. On the desktop test machine, native cold/warm brewing took 22/2.4 seconds
 and browser cold/warm brewing took 99/5.1 seconds. UI timer delays remained low
@@ -131,3 +150,17 @@ The replay also selected an uncertain controlled paper in both implementations;
 matching native behavior does not settle contribution classification.
 The 100 recorded ranking candidates also matched membership, selection flags
 and primary facets; their maximum recorded score drift was 0.0002.
+
+The larger 2,340-record replay (2,268 public records plus 72 controlled cases)
+stored 2,331 unique items and encoded 1,424 qualified article inputs. Single-core
+browser brewing took 22m 21s cold, 28s warm and 28s after reopening the site.
+All three runs matched the native ten-paper slate and order, and all 1,474
+recorded candidates matched membership, selection flags and primary facets.
+The compatible GPU export, replayed through native ONNX CPU over that same pool,
+also preserved those selections and facets; maximum candidate score drift was
+0.00125. A bounded software-WebGPU check validated numerical agreement, while a
+64-input software-GPU run exceeded its ten-minute limit. Production rejects
+software adapters and uses CPU instead. A 64-input isolated-host CPU comparison
+took 53s on one core versus 19s on four cores with identical vectors. These
+development measurements do not establish physical GPU speed on macOS, Windows
+or Linux; GPU mode remains experimental and opt-in.

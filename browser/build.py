@@ -13,6 +13,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 HERE = ROOT / "browser"
 PROTO = ROOT / "prototypes/browser-compute"
+GPU_MODEL_REVISION = "ea104dacec62c0de699686887e3f920caeb4f3e3"
+GPU_MODEL_SHA256 = "828e1496d7fabb79cfa4dcd84fa38625c0d3d21da474a00f08db0f559940cf35"
 PYODIDE_PACKAGES = [
     "numpy", "scipy", "scikit-learn", "pydantic", "sqlalchemy", "pyyaml", "jinja2",
     "tzdata", "httpx", "anyio", "httpcore", "certifi", "idna", "python-dateutil",
@@ -98,6 +100,16 @@ def source_archive(output: Path, wheels: list[Path]) -> dict[str, str]:
     return manifest
 
 
+def gpu_model_files(model_root: Path, output: Path, cache: Path) -> None:
+    """Pin the unfused float32 BGE export; the CPU export has GPU-incompatible attention."""
+    graph = download(f"https://huggingface.co/Xenova/bge-small-en-v1.5/resolve/{GPU_MODEL_REVISION}/onnx/model.onnx",
+                     cache / "gpu-model.onnx", GPU_MODEL_SHA256)
+    (output / "onnx").mkdir(parents=True, exist_ok=True)
+    for name in ("config.json", "tokenizer.json", "tokenizer_config.json", "special_tokens_map.json"):
+        shutil.copyfile(model_root / name, output / name)
+    shutil.copyfile(graph, output / "onnx/model.onnx")
+
+
 def build(output: Path) -> dict:
     if output.exists() and any(output.iterdir()):
         raise ValueError("Output must be a new or empty directory; choose --output")
@@ -111,7 +123,7 @@ def build(output: Path) -> dict:
     cache = HERE / ".build-cache"
     wheels = list(pure_package_files(cache / "wheels"))
     manifest = source_archive(assets / "app.zip", wheels)
-    for name in ("index.html", "app.mjs", "style.css", "worker.mjs", "manifest.webmanifest",
+    for name in ("index.html", "app.mjs", "compute.mjs", "style.css", "worker.mjs", "manifest.webmanifest",
                  "app-icon.svg", "sw.js"):
         shutil.copyfile(HERE / name, output / name)
     shutil.copyfile(HERE / "runtime.py", assets / "runtime.py")
@@ -141,6 +153,7 @@ def build(output: Path) -> dict:
     if not model_root.is_dir():
         raise ValueError("Prepare prototype model assets with npm run prepare-fixture first")
     shutil.copytree(model_root, assets / "models/bge-small")
+    gpu_model_files(model_root, assets / "models/bge-small-webgpu", cache)
     public_snapshot = cache / "public-sources.json"
     if public_snapshot.is_file():
         snapshot = json.loads(public_snapshot.read_text())
@@ -152,6 +165,8 @@ def build(output: Path) -> dict:
     total = sum(p.stat().st_size for p in output.rglob("*") if p.is_file())
     report = {"schema_version": 1, "private_data_included": False,
               "source_hashes": manifest, "pyodide": "0.28.3", "bytes": total,
+              "gpu_model": {"publisher": "Xenova/bge-small-en-v1.5", "revision": GPU_MODEL_REVISION,
+                            "sha256": GPU_MODEL_SHA256, "dtype": "fp32", "graph_optimization": "disabled"},
               "python_dependencies": (HERE / "requirements-browser.txt").read_text().splitlines()}
     (assets / "build-manifest.json").write_text(json.dumps(report, indent=2) + "\n")
     return report

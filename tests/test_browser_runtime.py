@@ -59,6 +59,19 @@ def test_threads_queue_native_target_until_host_starts_job(runtime):
     assert not runtime.has_jobs()
 
 
+def test_browser_cancel_signal_tracks_only_the_active_brew(runtime):
+    import threading
+
+    event = threading.Event()
+    assert runtime.browser_cancelled() is False
+    runtime._WEB = SimpleNamespace(_BREW_JOB={'run_id': 'active'}, _RUN_CANCEL={'active': event})
+    assert runtime.browser_cancelled() is False
+    event.set()
+    assert runtime.browser_cancelled() is True
+    runtime._WEB._BREW_JOB['run_id'] = 'another'
+    assert runtime.browser_cancelled() is False
+
+
 def test_asgi_preserves_query_body_and_streams_without_buffering(runtime):
     scopes, emitted = [], []
 

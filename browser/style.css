@@ -17,6 +17,12 @@ h1 { font-size: clamp(28px, 5vw, 44px); line-height: 1.15; }
 [hidden] { display: none !important; }
 .browser-bar { height: 48px; display: flex; gap: 12px; justify-content: space-between; align-items: center; padding: 8px 16px; background: #fff; border-top: 1px solid #dde3dc; font-size: 12px; }
 #status { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#compute-mode { width: 100%; font: inherit; padding: 8px; }
+@media (max-width: 720px) {
+  .browser-bar { gap: 4px; padding-inline: 8px; }
+  .browser-bar summary { padding-inline: 5px; }
+  .browser-bar .data-tools { position: fixed; bottom: 58px; right: 12px; max-height: calc(100dvh - 86px); overflow-y: auto; }
+}
 details { position: relative; flex-shrink: 0; }
 summary { cursor: pointer; padding: 8px; }
 .data-tools { position: absolute; bottom: 38px; right: 0; width: 320px; max-width: calc(100vw - 24px); padding: 16px; background: #fff; border: 1px solid #dde3dc; border-radius: 8px; box-shadow: 0 12px 36px #15221b22; z-index: 100; line-height: 1.5; }
