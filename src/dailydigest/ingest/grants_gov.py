@@ -51,7 +51,9 @@ def _date(value: object) -> date | None:
         return date_parser.parse(
             text,
             fuzzy=True,
-            tzinfos={"EST": -18000, "EDT": -14400, "CST": -21600, "CDT": -18000},
+            # Preserve the source's calendar deadline; no timezone conversion
+            # is needed, including for generic abbreviations such as "ET".
+            ignoretz=True,
         ).date()
     except (ValueError, TypeError, OverflowError):
         return None
@@ -128,7 +130,10 @@ class GrantsGovSource:
                     "oppStatuses": "forecasted|posted",
                 },
             )
-            for hit in (payload.get("data") or {}).get("oppHits") or []:
+            search_data = payload.get("data")
+            if not isinstance(search_data, dict) or not isinstance(search_data.get("oppHits"), list):
+                raise RuntimeError(f"{spec.name} returned invalid Grants.gov search results")
+            for hit in search_data["oppHits"]:
                 identifier = str(hit.get("id") or hit.get("number") or "").strip()
                 if identifier:
                     hits.setdefault(identifier, hit)
@@ -142,17 +147,24 @@ class GrantsGovSource:
         items: list[Item] = []
         for hit in hits.values():
             hit_deadline = _date(hit.get("closeDate"))
-            if hit_deadline is not None and not (today <= hit_deadline <= horizon):
-                continue
-            detail = _post_json(self.DETAIL_URL, {"opportunityId": hit.get("id")}).get("data") or {}
+            detail = _post_json(self.DETAIL_URL, {"opportunityId": hit.get("id")}).get("data")
+            if not isinstance(detail, dict) or not detail:
+                raise RuntimeError(f"{spec.name} returned missing Grants.gov opportunity details")
             synopsis = detail.get("synopsis") or detail.get("forecast") or {}
-            deadline = hit_deadline or _date(
-                synopsis.get("responseDateDesc")
-                or synopsis.get("responseDate")
-                or synopsis.get("estApplicationResponseDate")
-                or synopsis.get("estApplicationResponseDateStr")
-                or detail.get("originalDueDateDesc")
-            )
+            # The search index may lag an extension or correction. Verify the
+            # current detail deadline before applying the date horizon.
+            deadline = hit_deadline
+            for value in (
+                synopsis.get("responseDateDesc"),
+                synopsis.get("responseDate"),
+                synopsis.get("estApplicationResponseDate"),
+                synopsis.get("estApplicationResponseDateStr"),
+                detail.get("originalDueDateDesc"),
+            ):
+                parsed_deadline = _date(value)
+                if parsed_deadline is not None:
+                    deadline = parsed_deadline
+                    break
             if deadline is not None and not (today <= deadline <= horizon):
                 continue
             number = str(

@@ -16,6 +16,22 @@
   }
   textarea { min-height: 110px; resize: vertical; line-height: 1.5; }
   .hint { font-size: 11px; color: var(--muted); margin-top: 4px; }
+  #topics { min-height: 130px; font-size: 15px; }
+  .settings-disclosure {
+    border-top: 1px solid var(--border); margin-top: 20px; padding-top: 16px;
+  }
+  .settings-disclosure > summary {
+    cursor: pointer; color: var(--text); font-size: 14px; font-weight: 600;
+    line-height: 1.6;
+  }
+  .settings-disclosure > summary::marker { color: var(--accent); }
+  .settings-disclosure > summary:focus-visible {
+    outline: 3px solid var(--accent); outline-offset: 4px; border-radius: 3px;
+  }
+  .disclosure-note { display: block; color: var(--muted); font-size: 12px; font-weight: 400; }
+  .settings-disclosure[open] > summary { margin-bottom: 14px; }
+  .section-required .section-desc { margin-left: 0; }
+  .always-included { font-size: 11px; color: var(--muted); }
   .chip-input {
     border: 1px solid var(--border); border-radius: 6px; padding: 6px;
     background: var(--card); display: flex; flex-wrap: wrap; gap: 4px; align-items: center;
@@ -44,7 +60,7 @@
                               background: var(--panel); border-radius: 6px;
                               border: 1px dashed var(--border); }
   .api-fields[hidden] { display: none; }
-  .field-grid, .size-grid {
+  .field-grid {
     display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px;
   }
   .section-options { display: grid; gap: 10px; margin-top: 12px; }
@@ -106,7 +122,7 @@
   html[data-theme="dark"] .chip:hover,
   html[data-theme="dark"] .chip:focus { background: var(--surface-muted); }
   @media (max-width: 720px) {
-    .field-grid, .size-grid, .section-option { grid-template-columns: 1fr; }
+    .field-grid, .section-option { grid-template-columns: 1fr; }
   }
 {% endblock %}
 {% block body %}
@@ -115,7 +131,7 @@
     <a class="btn" href="/">← Back to today’s digest</a>
   </nav>
   <h1>DailyDigest settings</h1>
-  <p class="lede">Tune the profile, summarizer, and section sizes used when brewing a new digest.</p>
+  <p class="lede">Start with what you want to read. Adjust your sections and summary preferences when you need to.</p>
 
   {% if errors %}
 	  <div class="errors" role="alert" aria-live="assertive" tabindex="-1">
@@ -127,103 +143,50 @@
 	    <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
       <input type="hidden" id="user-timezone" name="user_tz" value="{{ form.user_tz }}">
     <div class="step">
-      <h2>1 &middot; About you</h2>
-      <div class="field-grid">
-        <div>
-          <label for="name">First name</label>
-	          <input id="name" name="name" type="text" autocomplete="given-name" placeholder="Ada" value="{{ form.name }}">
+      <h2>Your research interests</h2>
+      <label for="topics">What would you like to read about?</label>
+      <textarea id="topics" name="topics" required aria-describedby="topics-hint" placeholder="RNA delivery&#10;Protein design&#10;Hydrogels">{{ form.topics }}</textarea>
+      <div class="hint" id="topics-hint">Add 1–10 specific interests, one per line. Optional: use <code>RNA delivery | 3</code> to give a topic extra weight. Plain topics have weight 1; saved weights are preserved. Use the optional bio below to describe what makes a paper useful to you.</div>
+
+      <details class="settings-disclosure" id="profile-options"{% if errors %} open{% endif %}>
+        <summary>Personal details &amp; topics to see less often
+          <span class="disclosure-note">Optional context to help refine your picks.</span>
+        </summary>
+        <div class="field-grid">
+          <div>
+            <label for="name">First name</label>
+            <input id="name" name="name" type="text" autocomplete="given-name" placeholder="Ada" value="{{ form.name }}">
+          </div>
         </div>
-      </div>
-      <label for="bio">Your bio (3–6 sentences)</label>
-      <textarea id="bio" name="bio" placeholder="What do you research? What topics matter most to you?">{{ form.bio }}</textarea>
-      <div class="hint">Used to build a vector that ranks items against your interests.</div>
+        <label for="bio">A short bio (optional)</label>
+        <textarea id="bio" name="bio" aria-describedby="bio-hint" placeholder="What do you research? What topics matter most to you?">{{ form.bio }}</textarea>
+        <div class="hint" id="bio-hint">Describe your priorities in your own words: new methods, engineered systems, mechanisms, applications, or reviews and synthesis. This context helps match papers and news to your interests.</div>
 
-      <label for="topics">Research interests and relative weights</label>
-      <textarea id="topics" name="topics" required placeholder="RNA nanotechnology | 17&#10;DNA nanotechnology | 15&#10;Gene therapy | 10">{{ form.topics }}</textarea>
-      <div class="hint">Add 1–10 specific interests, one per line. Weights are relative (for example 18, 15, 10), not daily quotas.</div>
-
-      <label for="dw-text">Downweight terms (push these down)</label>
-      <div class="chip-input" id="dw-input">
-        <input type="text" id="dw-text" placeholder="Type and press comma or Enter…">
-      </div>
-      <input type="hidden" name="downweight" id="dw-hidden" value="{{ form.downweight }}">
-      <div class="hint">Soft penalty applied at ranking time.</div>
-    </div>
-
-    <div class="step">
-      <h2>2 &middot; Summarizer backend</h2>
-      <div class="backends">
-        <label class="backend-opt" data-value="extractive">
-          <input type="radio" name="llm_backend" value="extractive"
-                 {% if form.llm_backend == "extractive" %}checked{% endif %}>
-          <strong>Extractive</strong> — recommended for the first run.
-          <div class="desc">Free. No account, API key, or paid AI subscription.</div>
-        </label>
-
-        <label class="backend-opt" data-value="api">
-          <input type="radio" name="llm_backend" value="api"
-                 {% if form.llm_backend == "api" %}checked{% endif %}>
-          <strong>OpenAI-compatible API</strong> — optional richer summaries.
-          <div class="desc">OpenAI, OpenRouter, Ollama, vLLM, or another compatible endpoint. Online providers use separate API billing.</div>
-        </label>
-
-        <label class="backend-opt" data-value="anthropic">
-          <input type="radio" name="llm_backend" value="anthropic"
-                 {% if form.llm_backend == "anthropic" %}checked{% endif %}>
-          <strong>Anthropic Claude API</strong> — native Messages API.
-          <div class="desc">Uses an Anthropic Console API key and API billing; a Claude chat subscription is not an API key.</div>
-        </label>
-
-        <label class="backend-opt" data-value="claude_cli">
-          <input type="radio" name="llm_backend" value="claude_cli"
-                 {% if form.llm_backend == "claude_cli" %}checked{% endif %}>
-          <strong>Signed-in Claude Code</strong> — use your local Claude login.
-          <div class="desc">Requires the <code>claude</code> command to be installed and signed in. Tools and session persistence are disabled for summaries.</div>
-        </label>
-
-        <label class="backend-opt" data-value="codex_cli">
-          <input type="radio" name="llm_backend" value="codex_cli"
-                 {% if form.llm_backend == "codex_cli" %}checked{% endif %}>
-          <strong>Signed-in Codex</strong> — use your local ChatGPT/Codex login.
-          <div class="desc">Requires the <code>codex</code> command to be installed and signed in. Runs ephemerally, read-only, with agent tools disabled.</div>
-        </label>
-      </div>
-
-      <p class="hint">AI-backed summaries send selected article metadata and your short reader profile to the provider you choose. Extractive stays local.</p>
-
-      <div class="api-fields" id="api-fields" hidden>
-        <div id="api-auth-fields">
-          <label for="llm_base_url">Base URL</label>
-          <input type="url" id="llm_base_url" name="llm_base_url"
-                 placeholder="https://api.openai.com/v1" value="{{ form.llm_base_url }}">
-          <label for="llm_api_key">API key</label>
-          <input type="password" id="llm_api_key" name="llm_api_key"
-                 placeholder="Provider API key" value="{{ form.llm_api_key }}">
-          {% if form.llm_api_key %}
-          <label class="hint" for="remove_llm_api_key">
-            <input type="checkbox" id="remove_llm_api_key" name="remove_llm_api_key"
-                   value="true" {% if form.remove_llm_api_key == "true" %}checked{% endif %}>
-            Remove the saved API key
-          </label>
-          {% endif %}
+        <label for="dw-text">Topics to see less often</label>
+        <div class="chip-input" id="dw-input">
+          <input type="text" id="dw-text" placeholder="Type and press comma or Enter…">
         </div>
-        <label for="llm_model">Model</label>
-        <input type="text" id="llm_model" name="llm_model"
-               placeholder="gpt-4o-mini" value="{{ form.llm_model }}">
-        <div class="hint" id="provider-hint"></div>
-      </div>
+        <input type="hidden" name="downweight" id="dw-hidden" value="{{ form.downweight }}">
+        <div class="hint">Picks mentioning these topics appear less often.</div>
+      </details>
     </div>
-
     <div class="step">
-      <h2>3 &middot; Digest sections</h2>
+      <h2>What’s in your digest</h2>
       <p class="hint">Research is always included. Choose which additional sections you want to read.</p>
-      <div class="size-grid">
-        <div>
-          <label for="top_research">Research</label>
-          <input id="top_research" name="top_research" type="number" min="1" max="30" required value="{{ form.top_research }}">
-        </div>
-      </div>
       <div class="section-options">
+        <div class="section-option section-required">
+          <div>
+            <div class="section-heading">
+              <strong class="section-name">Research</strong>
+              <span class="always-included">Always included</span>
+            </div>
+            <p class="section-desc">Papers and findings matched to your research interests.</p>
+          </div>
+          <div class="count-field">
+            <label for="top_research">Maximum items</label>
+            <input id="top_research" name="top_research" type="number" min="1" max="30" required value="{{ form.top_research }}">
+          </div>
+        </div>
         <div class="section-option">
           <div>
             <div class="section-heading">
@@ -348,7 +311,7 @@
       <div class="opportunity-profile" id="opportunity-profile"
            {% if form.include_opportunities != "true" and form.include_events != "true" %}hidden{% endif %}>
         <h3>About you for opportunity matching</h3>
-        <p class="hint">These details are stored only in your local <code>data/</code> folder. Your weighted research interests above are reused for topical matching, so you do not need to describe your research again.</p>
+        <p class="hint">These details stay on this device. Your research interests above are reused for matching, so you do not need to describe your research again.</p>
         <div class="field-grid">
           <div>
             <label for="opportunity-career-stage">Career stage</label>
@@ -371,7 +334,7 @@
                    data-opportunity-required placeholder="Fellow or co-investigator" value="{{ form.opportunity_applicant_role }}">
           </div>
         </div>
-        <details class="opportunity-advanced">
+        <details class="opportunity-advanced"{% if errors %} open{% endif %}>
           <summary>Optional matching preferences</summary>
           <p class="hint">Add only constraints or preferences that apply to you.</p>
           <div class="field-grid">
@@ -405,6 +368,73 @@
       </div>
       <div class="hint">Item counts are caps; DailyDigest will show fewer when there are not enough strong candidates.</div>
     </div>
+
+    <details class="step settings-disclosure" id="summary-options"{% if errors %} open{% endif %}>
+      {% set summary_labels = {"extractive": "Local extractive", "api": "OpenAI-compatible API", "anthropic": "Anthropic Claude API", "claude_cli": "Signed-in Claude Code", "codex_cli": "Signed-in Codex"} %}
+      <summary>How to summarize
+        <span class="disclosure-note">Current choice: <span id="summary-current">{{ summary_labels.get(form.llm_backend, "Local extractive") }}</span></span>
+      </summary>
+      <div class="backends">
+        <label class="backend-opt" data-value="extractive">
+          <input type="radio" name="llm_backend" value="extractive"
+                 {% if form.llm_backend == "extractive" %}checked{% endif %}>
+          <strong>Extractive</strong> — recommended for the first run.
+          <div class="desc">Free. No account, API key, or paid AI subscription.</div>
+        </label>
+
+        <label class="backend-opt" data-value="api">
+          <input type="radio" name="llm_backend" value="api"
+                 {% if form.llm_backend == "api" %}checked{% endif %}>
+          <strong>OpenAI-compatible API</strong> — optional richer summaries.
+          <div class="desc">OpenAI, OpenRouter, Ollama, vLLM, or another compatible endpoint. Online providers use separate API billing.</div>
+        </label>
+
+        <label class="backend-opt" data-value="anthropic">
+          <input type="radio" name="llm_backend" value="anthropic"
+                 {% if form.llm_backend == "anthropic" %}checked{% endif %}>
+          <strong>Anthropic Claude API</strong> — native Messages API.
+          <div class="desc">Uses an Anthropic Console API key and API billing; a Claude chat subscription is not an API key.</div>
+        </label>
+
+        <label class="backend-opt" data-value="claude_cli">
+          <input type="radio" name="llm_backend" value="claude_cli"
+                 {% if form.llm_backend == "claude_cli" %}checked{% endif %}>
+          <strong>Signed-in Claude Code</strong> — use your local Claude login.
+          <div class="desc">Requires the <code>claude</code> command to be installed and signed in. Tools and session persistence are disabled for summaries.</div>
+        </label>
+
+        <label class="backend-opt" data-value="codex_cli">
+          <input type="radio" name="llm_backend" value="codex_cli"
+                 {% if form.llm_backend == "codex_cli" %}checked{% endif %}>
+          <strong>Signed-in Codex</strong> — use your local ChatGPT/Codex login.
+          <div class="desc">Requires the <code>codex</code> command to be installed and signed in. Runs ephemerally, read-only, with agent tools disabled.</div>
+        </label>
+      </div>
+
+      <p class="hint">AI-backed summaries send selected article metadata and your short reader profile to the provider you choose. Extractive stays local.</p>
+
+      <div class="api-fields" id="api-fields"{% if form.llm_backend == "extractive" %} hidden{% endif %}>
+        <div id="api-auth-fields"{% if form.llm_backend not in ["api", "anthropic"] %} hidden{% endif %}>
+          <label for="llm_base_url">Base URL</label>
+          <input type="url" id="llm_base_url" name="llm_base_url"
+                 placeholder="https://api.openai.com/v1" value="{{ form.llm_base_url }}">
+          <label for="llm_api_key">API key</label>
+          <input type="password" id="llm_api_key" name="llm_api_key"
+                 placeholder="Provider API key" value="{{ form.llm_api_key }}">
+          {% if form.llm_api_key %}
+          <label class="hint" for="remove_llm_api_key">
+            <input type="checkbox" id="remove_llm_api_key" name="remove_llm_api_key"
+                   value="true" {% if form.remove_llm_api_key == "true" %}checked{% endif %}>
+            Remove the saved API key
+          </label>
+          {% endif %}
+        </div>
+        <label for="llm_model">Model</label>
+        <input type="text" id="llm_model" name="llm_model"
+               placeholder="gpt-4o-mini" value="{{ form.llm_model }}">
+        <div class="hint" id="provider-hint"></div>
+      </div>
+    </details>
 
     <button class="brew" type="submit">Save settings and choose today’s digest</button>
   </form>
@@ -467,12 +497,22 @@
 	  const errors = document.querySelector(".errors");
 	  if (errors) errors.focus();
 
+  // Reveal invalid fields before native validation focuses them.
+  const settingsForm = document.querySelector('form[action="/setup"]');
+  settingsForm.addEventListener("invalid", (event) => {
+    for (let node = event.target.parentElement; node && node !== settingsForm; node = node.parentElement) {
+      if (node.tagName === "DETAILS") node.open = true;
+      if (node.hidden) node.hidden = false;
+    }
+  }, true);
+
   // Backend reveal logic.
   const apiFields = document.getElementById("api-fields");
   const apiAuthFields = document.getElementById("api-auth-fields");
   const baseUrlInput = document.getElementById("llm_base_url");
   const modelInput = document.getElementById("llm_model");
   const providerHint = document.getElementById("provider-hint");
+  const summaryCurrent = document.getElementById("summary-current");
   const radios = document.querySelectorAll('input[name="llm_backend"]');
   const providerDefaults = {
     extractive: { base: "https://api.openai.com/v1", model: "gpt-4o-mini" },
@@ -488,6 +528,7 @@
     const v = sel ? sel.value : "extractive";
     const isApi = v === "api" || v === "anthropic";
     const isCli = v === "claude_cli" || v === "codex_cli";
+    summaryCurrent.textContent = v === "extractive" ? "Local extractive" : sel.closest("label").querySelector("strong").textContent;
     apiFields.hidden = !(isApi || isCli);
     apiAuthFields.hidden = !isApi;
     if (v === "anthropic") {

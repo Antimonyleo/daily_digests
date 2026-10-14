@@ -18,7 +18,7 @@ from tenacity import (
 
 from ..dedupe import _canonical_doi
 from ..models import Item, SourceSpec
-from ._terms import profile_search_terms, watched_author_names
+from ._terms import profile_search_term_groups, watched_author_names
 
 logger = logging.getLogger(__name__)
 
@@ -144,6 +144,9 @@ class OpenAlexSource:
     PROFILE_PER_TERM = 20
     PROFILE_MAX_ITEMS = 180
 
+    def __init__(self) -> None:
+        self.last_fetch_diagnostics: dict[str, Any] = {"queries": []}
+
     def _headers(self, spec: SourceSpec) -> dict[str, str]:
         ua = "dailydigest/0.1"
         if spec.polite_email:
@@ -151,26 +154,67 @@ class OpenAlexSource:
         return {"User-Agent": ua}
 
     def fetch(self, spec: SourceSpec, days: int = 2) -> list[Item]:
+        self.last_fetch_diagnostics = {"queries": [], "returned_count": 0}
         headers = self._headers(spec)
         if spec.profile_driven:
-            terms = profile_search_terms(self.PROFILE_MAX_TERMS)
-            if not terms:
-                terms = [spec.query] if spec.query else []
+            core, context = profile_search_term_groups(
+                self.PROFILE_MAX_TERMS, canonical_order=True
+            )
+            if not core and not context and spec.query:
+                core = [spec.query]
+            terms = core + context
+            # One bounded page per term. All core queries share the item budget
+            # before context gets a turn. More than the soft limit of core terms
+            # requires one request per core, matching the all-core contract.
+            self.last_fetch_diagnostics.update(
+                item_budget=self.PROFILE_MAX_ITEMS,
+                request_budget=max(self.PROFILE_MAX_TERMS, len(core)),
+                planned_terms=terms,
+                core_term_count=len(core),
+                # Transport retries are independently bounded by _get_json.
+                request_count_includes_retries=False,
+            )
+            if len(core) > self.PROFILE_MAX_ITEMS:
+                raise RuntimeError(
+                    f"{spec.name}: {len(core)} core queries exceed the "
+                    f"{self.PROFILE_MAX_ITEMS}-item retrieval budget"
+                )
             out: list[Item] = []
             seen: set[str] = set()
-            for term in terms:
-                if len(out) >= self.PROFILE_MAX_ITEMS:
-                    break
-                for item in self._fetch_works(
-                    spec, days, headers, cap=self.PROFILE_PER_TERM, query=term,
-                    upgrade_venue=True,
-                ):
+            remaining = self.PROFILE_MAX_ITEMS
+            for index, term in enumerate(terms):
+                group_remaining = (len(core) if index < len(core) else len(terms)) - index
+                cap = min(self.PROFILE_PER_TERM, remaining // group_remaining)
+                if remaining % group_remaining:
+                    cap = min(self.PROFILE_PER_TERM, cap + 1)
+                if not cap:
+                    self.last_fetch_diagnostics["queries"].append({
+                        "query": term, "attempted": False, "request_count": 0,
+                        "fetched_count": 0, "returned_count": 0, "unique_yield": 0,
+                        "exhausted": False, "truncated": True,
+                        "stop_reason": "item_budget", "failure": None,
+                    })
+                    continue
+                fetched = self._fetch_works(
+                    spec, days, headers, cap=cap, query=term,
+                    upgrade_venue=True, max_pages=1,
+                )
+                diagnostic = self.last_fetch_diagnostics["queries"][-1]
+                # Count raw rows, including duplicates/invalid records: otherwise
+                # duplicate-heavy queries could silently expand API work.
+                remaining -= min(cap, diagnostic["fetched_count"])
+                before = len(out)
+                for item in fetched:
                     if item.external_id not in seen:
                         seen.add(item.external_id)
                         out.append(item)
+                diagnostic["unique_yield"] = len(out) - before
+                self.last_fetch_diagnostics["returned_count"] = len(out)
             logger.debug("%s: profile-driven fetched %d items over %d terms", spec.name, len(out), len(terms))
             return out
-        return self._fetch_works(spec, days, headers, cap=self.MAX_ITEMS, query=spec.query or "")
+        out = self._fetch_works(spec, days, headers, cap=self.MAX_ITEMS, query=spec.query or "")
+        self.last_fetch_diagnostics["returned_count"] = len(out)
+        return out
 
     def _fetch_works(
         self,
@@ -183,7 +227,18 @@ class OpenAlexSource:
         extra_filter: str = "",
         use_venue_source: bool = False,
         upgrade_venue: bool = False,
+        max_pages: int = 15,
     ) -> list[Item]:
+        diagnostic: dict[str, Any] = {
+            "query": query, "attempted": True, "request_count": 0,
+            "fetched_count": 0, "returned_count": 0, "unique_yield": 0,
+            "total_available": None, "exhausted": False, "truncated": False,
+            "stop_reason": None, "failure": None,
+            "oldest_publication_date": None, "newest_publication_date": None,
+            "request_count_includes_retries": False,
+            "indexing_delay": None,
+        }
+        self.last_fetch_diagnostics["queries"].append(diagnostic)
         # Lazy import: pulling ``rank.source_quality`` at module top would trigger
         # ``rank/__init__`` → sentence-transformers on the ingest hot path.
         if upgrade_venue:
@@ -200,9 +255,10 @@ class OpenAlexSource:
         )
         if extra_filter:
             filter_str = f"{filter_str},{extra_filter}"
+        diagnostic.update(filter=filter_str, item_cap=cap, page_budget=max_pages)
         base_params: dict[str, str] = {
             "filter": filter_str,
-            "per-page": str(self.PER_PAGE),
+            "per-page": str(min(self.PER_PAGE, cap)),
             "cursor": "*",
             "sort": "publication_date:desc",
         }
@@ -212,29 +268,34 @@ class OpenAlexSource:
         out: list[Item] = []
         params = dict(base_params)
         pages = 0
-        prev_cursor = None
-        while len(out) < cap and pages < 15:
+        seen_cursors = {"*"}
+        while len(out) < cap and pages < max_pages:
+            params["per-page"] = str(min(self.PER_PAGE, cap - len(out)))
+            diagnostic["request_count"] += 1
             try:
                 payload = _get_json(self.BASE, params, headers)
             except Exception as e:
+                diagnostic.update(stop_reason="failure", failure=type(e).__name__, truncated=True)
                 name = getattr(spec, "name", "OpenAlexSource")
-                if out:
-                    logger.warning(
-                        "%s pagination stopped after %d items: %s: %s",
-                        name,
-                        len(out),
-                        type(e).__name__,
-                        str(e)[:200],
-                    )
-                    break
                 raise RuntimeError(
                     f"{name} fetch failed: {type(e).__name__}: {str(e)[:200]}"
                 ) from e
-            if not payload:
-                break
-
-            results: list[dict[str, Any]] = payload.get("results") or []
+            if not isinstance(payload, dict) or not isinstance(payload.get("results"), list):
+                diagnostic.update(stop_reason="failure", failure="invalid_response", truncated=True)
+                raise RuntimeError(f"{spec.name} returned an invalid OpenAlex response")
+            results: list[dict[str, Any]] = payload["results"]
+            diagnostic["fetched_count"] += len(results)
+            meta = payload.get("meta") or {}
+            if not isinstance(meta, dict) or any(not isinstance(work, dict) for work in results):
+                diagnostic.update(stop_reason="failure", failure="invalid_response", truncated=True)
+                raise RuntimeError(f"{spec.name} returned an invalid OpenAlex response")
+            if isinstance(meta.get("count"), int):
+                diagnostic["total_available"] = meta["count"]
             if not results:
+                if diagnostic["total_available"] is not None and diagnostic["total_available"] > diagnostic["fetched_count"]:
+                    diagnostic.update(stop_reason="failure", failure="inconsistent_empty_page", truncated=True)
+                    raise RuntimeError(f"{spec.name} returned an unexpectedly empty OpenAlex page")
+                diagnostic.update(exhausted=True, stop_reason="exhausted")
                 break
 
             for work in results:
@@ -285,6 +346,11 @@ class OpenAlexSource:
                     recognized = recognized_research_venue(venue)
                     if recognized:
                         item_source = recognized
+                publication_metadata: dict[str, Any] = {}
+                if isinstance(work.get("type"), str) and work["type"].strip():
+                    publication_metadata["work_type"] = work["type"].strip()
+                if isinstance(work.get("is_retracted"), bool):
+                    publication_metadata["is_retracted"] = work["is_retracted"]
                 out.append(
                     Item(
                         source=item_source,
@@ -296,22 +362,39 @@ class OpenAlexSource:
                         authors=authors,
                         published_at=pub,
                         metadata={
-                            key: value
-                            for key, value in (("venue", venue), ("doi", bare_doi))
-                            if value
+                            **{key: value for key, value in (("venue", venue), ("doi", bare_doi)) if value},
+                            **publication_metadata,
                         },
                     )
                 )
 
             pages += 1
-            meta = payload.get("meta") or {}
             next_cursor = meta.get("next_cursor")
-            if not next_cursor or next_cursor == prev_cursor:
+            diagnostic["returned_count"] = len(out)
+            diagnostic["unique_yield"] = len({item.external_id for item in out})
+            if len(out) >= cap:
+                # Hitting a cap is incomplete evidence of recall even when the
+                # upstream omits its next cursor or reports an estimated total.
+                diagnostic.update(truncated=True, stop_reason="item_cap")
                 break
-            prev_cursor = next_cursor
+            if not next_cursor:
+                if diagnostic["total_available"] is not None and diagnostic["total_available"] > diagnostic["fetched_count"]:
+                    diagnostic.update(truncated=True, stop_reason="missing_cursor")
+                else:
+                    diagnostic.update(exhausted=True, stop_reason="exhausted")
+                break
+            if next_cursor in seen_cursors:
+                diagnostic.update(truncated=True, stop_reason="repeated_cursor")
+                break
+            seen_cursors.add(next_cursor)
             params = dict(base_params)
             params["cursor"] = next_cursor
 
+        if diagnostic["stop_reason"] is None:
+            diagnostic.update(truncated=True, stop_reason="request_budget")
+        dates = [item.published_at.date().isoformat() for item in out if item.published_at]
+        if dates:
+            diagnostic.update(oldest_publication_date=min(dates), newest_publication_date=max(dates))
         return out
 
 
@@ -328,15 +411,20 @@ class OpenAlexVenuesSource:
 
     MAX_ITEMS = 120
 
+    def __init__(self) -> None:
+        self.last_fetch_diagnostics: dict[str, Any] = {"queries": []}
+
     def fetch(self, spec: SourceSpec, days: int = 2) -> list[Item]:
+        self.last_fetch_diagnostics = {"queries": [], "returned_count": 0}
         venue_ids = [v for v in (spec.venue_ids or []) if v]
         if not venue_ids:
             logger.debug("%s: no venue_ids configured", spec.name)
             return []
         works = OpenAlexSource()
+        self.last_fetch_diagnostics = works.last_fetch_diagnostics
         headers = works._headers(spec)
         extra_filter = "primary_location.source.id:" + "|".join(venue_ids)
-        return works._fetch_works(
+        out = works._fetch_works(
             spec,
             days,
             headers,
@@ -344,6 +432,8 @@ class OpenAlexVenuesSource:
             extra_filter=extra_filter,
             use_venue_source=True,
         )
+        self.last_fetch_diagnostics["returned_count"] = len(out)
+        return out
 
 
 class OpenAlexAuthorsSource:
@@ -360,36 +450,68 @@ class OpenAlexAuthorsSource:
     MAX_AUTHORS = 25
     MAX_ITEMS = 120
 
+    def __init__(self) -> None:
+        self.last_fetch_diagnostics: dict[str, Any] = {"queries": []}
+
     def fetch(self, spec: SourceSpec, days: int = 2) -> list[Item]:
+        self.last_fetch_diagnostics = {"queries": [], "returned_count": 0}
         names = watched_author_names(self.MAX_AUTHORS)
         if not names:
             return []
         works = OpenAlexSource()
+        self.last_fetch_diagnostics = works.last_fetch_diagnostics
         headers = works._headers(spec)
         author_ids: list[str] = []
         for name in names:
             aid = self._resolve_author_id(name, headers)
             if aid:
                 author_ids.append(aid)
+        failed = any(query["failure"] for query in self.last_fetch_diagnostics.get("author_queries", []))
+        self.last_fetch_diagnostics.update(
+            author_resolution_complete=not failed, truncated=failed,
+        )
         if not author_ids:
+            if failed:
+                raise RuntimeError(f"{spec.name}: author resolution failed; no author works query possible")
             logger.debug("%s: no watched-author ids resolved", spec.name)
             return []
         extra_filter = "author.id:" + "|".join(author_ids)
-        return works._fetch_works(
-            spec, days, headers, cap=self.MAX_ITEMS, extra_filter=extra_filter
-        )
+        try:
+            out = works._fetch_works(
+                spec, days, headers, cap=self.MAX_ITEMS, extra_filter=extra_filter
+            )
+        finally:
+            self.last_fetch_diagnostics["truncated"] = failed or any(
+                query["truncated"] for query in self.last_fetch_diagnostics["queries"]
+            )
+        self.last_fetch_diagnostics["returned_count"] = len(out)
+        return out
 
     def _resolve_author_id(self, name: str, headers: dict[str, str]) -> str | None:
+        diagnostic: dict[str, Any] = {
+            "query": name, "attempted": True, "request_count": 1,
+            "request_count_includes_retries": False,
+            "failure": None, "stop_reason": None, "resolved_id": None,
+        }
+        self.last_fetch_diagnostics.setdefault("author_queries", []).append(diagnostic)
         try:
             payload = _get_json(
                 self.AUTHORS_URL, {"search": name, "per-page": "1"}, headers
             )
+            if not isinstance(payload, dict) or not isinstance(payload.get("results"), list):
+                raise RuntimeError("Invalid OpenAlex author response")
+            results = payload["results"]
+            if not results:
+                diagnostic["stop_reason"] = "no_match"
+                return None
+            raw_id = str(results[0].get("id") or "")
+            # id is a URL like https://openalex.org/A5023888391 → keep the bare id.
+            author_id = raw_id.rstrip("/").rsplit("/", 1)[-1] or None
+            if not author_id:
+                raise RuntimeError("OpenAlex author match has no id")
+            diagnostic.update(stop_reason="matched", resolved_id=author_id)
+            return author_id
         except Exception as e:  # noqa: BLE001
+            diagnostic.update(failure=type(e).__name__, stop_reason="failure")
             logger.warning("author resolve failed for %r: %s", name, e)
             return None
-        results = (payload or {}).get("results") or []
-        if not results:
-            return None
-        raw_id = str(results[0].get("id") or "")
-        # id is a URL like https://openalex.org/A5023888391 → keep the bare id.
-        return raw_id.rstrip("/").rsplit("/", 1)[-1] or None

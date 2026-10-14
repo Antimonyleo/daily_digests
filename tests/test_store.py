@@ -173,6 +173,55 @@ def test_reviewed_and_known_flags_suppress_cross_source_doi_siblings(monkeypatch
     assert {row.external_id for row in known_kept} == {"pm-1", "oa-1"}
 
 
+@pytest.mark.parametrize("feedback", ["known", "dismissed"])
+def test_feedback_suppresses_sibling_when_original_is_outside_candidate_pool(
+    monkeypatch, tmp_path, feedback
+):
+    from dailydigest.models import Item
+
+    store_mod = _reset_store(tmp_path, monkeypatch)
+    now = datetime.now(timezone.utc)
+    store_mod.upsert_items([
+        Item(
+            source="PubMed", section="research", external_id="original",
+            url="https://pubmed.example/original", title="Previously reviewed paper",
+            published_at=now - timedelta(days=20), metadata={"doi": "10.5555/reviewed"},
+        ),
+        Item(
+            source="OpenAlex", section="research", external_id="sibling",
+            url="https://openalex.example/sibling", title="Alternate provider title",
+            published_at=now, metadata={"doi": "10.5555/reviewed"},
+        ),
+        Item(
+            source="OpenAlex", section="research", external_id="unrelated",
+            url="https://openalex.example/unrelated", title="Unrelated new paper",
+            published_at=now, metadata={"doi": "10.5555/unrelated"},
+        ),
+    ])
+    with store_mod.session_scope() as session:
+        original_id = int(session.query(store_mod.ItemRow).filter_by(
+            external_id="original"
+        ).one().id)
+        if feedback == "dismissed":
+            session.add(store_mod.VoteRow(item_id=original_id, value=-1))
+    if feedback == "known":
+        store_mod.set_item_known(original_id, True)
+        apply_filter = store_mod.exclude_known_items
+    else:
+        apply_filter = store_mod.exclude_reviewed_items
+
+    candidates = store_mod.recent_items(days=2)
+    assert {row.external_id for row in candidates} == {"sibling", "unrelated"}
+    assert {row.external_id for row in apply_filter(candidates)} == {"unrelated"}
+
+    if feedback == "known":
+        store_mod.set_item_known(original_id, False)
+    else:
+        with store_mod.session_scope() as session:
+            session.query(store_mod.VoteRow).filter_by(item_id=original_id).one().value = 1
+    assert {row.external_id for row in apply_filter(candidates)} == {"sibling", "unrelated"}
+
+
 def _add_item(store_mod, external_id: str, section: str = "research") -> int:
     with store_mod.session_scope() as s:
         row = store_mod.ItemRow(
@@ -397,6 +446,36 @@ def test_prune_preserves_items_referenced_by_retained_digest(monkeypatch, tmp_pa
     assert store_mod.prune(5) == 0
     with store_mod.session_scope() as s:
         assert s.get(store_mod.ItemRow, item_id) is not None
+
+
+@pytest.mark.parametrize("selected", [True, False])
+def test_prune_preserves_impression_history_until_its_digest_expires(
+    monkeypatch, tmp_path, selected
+):
+    store_mod = _reset_store(tmp_path, monkeypatch)
+    historical_id = _add_item(store_mod, "historical-candidate")
+    current_id = _add_item(store_mod, "current-slate")
+    old_time = datetime.now(timezone.utc) - timedelta(days=10)
+    with store_mod.session_scope() as session:
+        session.get(store_mod.ItemRow, historical_id).fetched_at = old_time
+    digest_id = "2099-01-01"
+    store_mod.write_digest(digest_id, [("R1", historical_id)] if selected else [])
+    store_mod.write_impressions(
+        digest_id, [("research", historical_id, 0, 0.8, selected)]
+    )
+    store_mod.write_digest(digest_id, [("R1", current_id)])
+
+    assert store_mod.prune(5) == 0
+    with store_mod.session_scope() as session:
+        assert session.get(store_mod.ItemRow, historical_id) is not None
+        assert session.query(store_mod.ImpressionRow).one().item_id == historical_id
+        session.get(store_mod.DigestRow, digest_id).created_at = old_time
+
+    assert store_mod.prune_old_digests(5) == 1
+    assert store_mod.prune(5) == 1
+    with store_mod.session_scope() as session:
+        assert session.get(store_mod.ItemRow, historical_id) is None
+        assert session.query(store_mod.ImpressionRow).count() == 0
 
 
 def test_duplicate_upsert_refreshes_richer_metadata_and_invalidates_summary(

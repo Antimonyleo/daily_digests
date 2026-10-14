@@ -29,6 +29,10 @@ class Settings(BaseSettings):
     llm_model: str = "gpt-4o-mini"
     # Summarizer: extractive | api | anthropic | claude_cli | codex_cli
     llm_backend: str = "extractive"
+    # Stop starting optional HTTP summary batches once this per-run budget is
+    # spent, or after repeated provider failures. Remaining items stay local.
+    llm_summary_budget_seconds: float = Field(default=180.0, gt=0, le=3600)
+    llm_summary_max_failures: int = Field(default=2, ge=1, le=10)
 
     resend_api_key: str = ""
     digest_from: str = "onboarding@resend.dev"
@@ -66,6 +70,14 @@ class Settings(BaseSettings):
     # (prestige is a mild tie-breaker). Higher values reward high-quality AND
     # relevant work more and suppress low-impact venues harder.
     research_quality_weight: float = Field(default=1.4, ge=0.0, le=5.0)
+    # Optional local contribution-evidence ordering; zero preserves current
+    # ordering. This leaves raw relevance/quality scores and eligibility intact.
+    contribution_order_strength: float = Field(default=0.0, ge=0.0, le=0.1)
+    # Explicit local learned reranker. Empty paths keep normal ranking unchanged.
+    # Provision an evaluated artifact and its exact encoder assets together.
+    contribution_reranker_path: str = ''
+    contribution_encoder_dir: str = ''
+    contribution_reranker_weight: float = Field(default=0.7, ge=0.0, le=1.0)
     # Scale of the topic-priority selection nudge. Multiplied by a normalized
     # per-interest priority (0..1) after the relevance and quality gates. It
     # never changes stored final scores or eligibility. Max nudge = scale*1.0.
@@ -133,8 +145,9 @@ class Settings(BaseSettings):
     citation_polite_email: str = ""
 
     # Cross-day near-duplicate suppression: drop a candidate whose embedding is
-    # within `threshold` cosine of an item shown in a sent digest over the last
-    # `days` days — catches the same paper/story re-syndicated via another source.
+    # within `threshold` cosine of an item in a published local/email digest or
+    # viewed selection over the last `days` days. Research identity/version
+    # matches additionally use a 14-day cooldown without changing cosine gates.
     cross_day_dedupe: bool = True
     cross_day_dedupe_days: int = Field(default=7, ge=1, le=60)
     cross_day_dedupe_threshold: float = Field(default=0.93, ge=0.5, le=1.0)
@@ -253,6 +266,7 @@ class Settings(BaseSettings):
     imap_port: int = 993
     imap_user: str = ""
     imap_password: str = ""
+    imap_mailbox: str = "INBOX"
 
     @field_validator("top_research", mode="before")
     @classmethod

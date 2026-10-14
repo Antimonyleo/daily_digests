@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>DailyDigest · Browser computation prototype</title>
+<style>
+  :root{color-scheme:light dark;font:16px/1.55 system-ui,sans-serif;background:#f4f3ef;color:#25332f}
+  body{max-width:1000px;margin:40px auto;padding:0 22px}h1{font-size:2rem;line-height:1.2;margin-bottom:10px}
+  h2{font-size:1.25rem}p{max-width:780px}.badge{font-size:.8rem;font-weight:700;letter-spacing:.08em;color:#567267}
+  button{font:inherit;padding:10px 16px;border:1px solid #b6c5bd;border-radius:7px;background:#fff;color:#25332f;cursor:pointer;margin:0 8px 8px 0}
+  button.primary{background:#285b48;color:white;border-color:#285b48}button:disabled{opacity:.5;cursor:default}
+  .panel{background:white;border:1px solid #dde2dc;border-radius:12px;padding:18px 22px;margin:20px 0}
+  .metrics{display:flex;flex-wrap:wrap;gap:20px}.metric{min-width:120px}.metric strong{display:block;font-size:1.35rem}
+  .muted{color:#627369;font-size:.9rem}.pass{color:#236441}.fail{color:#9a382e}.chips{font-size:.85rem;color:#567267}
+  article{padding:16px 0;border-bottom:1px solid #e5e8e3}article:last-child{border:0}article h3{margin:2px 0;font-size:1.05rem}
+  article p{margin:8px 0;font-size:.94rem}details{margin:18px 0}pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:.78rem;max-height:460px;overflow:auto}
+  #candidates{overflow-x:auto}th,td{overflow-wrap:anywhere}
+  a{color:#285b48}table{width:100%;border-collapse:collapse;font-size:.9rem}th,td{text-align:left;padding:7px;border-bottom:1px solid #e5e8e3}
+  @media(prefers-color-scheme:dark){:root{background:#17221e;color:#e8eee9}.panel,button{background:#22352b;color:#e8eee9;border-color:#3f5547}.muted,.chips,.badge{color:#b2c5b8}.pass{color:#9ad5ad}.fail{color:#ffaca1}a{color:#b2dbc2}}
+</style>
+<body>
+<div class="badge">EXPERIMENTAL · FICTIONAL PAPERS · NO BACKEND COMPUTATION</div>
+<h1>Can your browser brew a research digest?</h1>
+<p>This prototype runs a local embedding model and existing Python ranking rules in your browser. It compares the result with a prepared Python reference. All papers and interests are development fixtures; this is a runtime-parity experiment, not a claim of improved recommendations.</p>
+<p class="muted">The first load includes a 66 MB model plus Python/WebAssembly dependencies. The serving process only supplies files. No live papers, personal profile, ratings, or database are loaded.</p>
+<button id="brew" class="primary">Brew fixture in this browser</button>
+<button id="download" disabled>Download evaluation</button>
+<button id="reset">Reset browser experiment</button>
+<section class="panel" aria-live="polite">
+  <h2 id="status">Ready to test</h2><p id="progress">Press Brew to load the runtimes and compute the fixture.</p>
+  <div class="metrics" id="metrics"></div>
+</section>
+<section class="panel" id="comparison" hidden><h2>Comparison with Python</h2><div id="checks"></div>
+  <p class="muted">Exact policy checks use identical vectors in both runtimes. Inference checks use newly calculated browser vectors. A completed brew can still fail parity.</p></section>
+<section class="panel" id="digest" hidden><h2>Selected fictional papers</h2><div id="papers"></div></section>
+<details id="audit" hidden><summary>Every candidate and its selection decision</summary><div id="candidates"></div></details>
+<details id="raw" hidden><summary>Full evaluation record</summary><pre id="report"></pre></details>
+<script type="module">
+let worker, currentReport;
+const $ = id => document.getElementById(id);
+const text = (tag, value, className='') => { const el=document.createElement(tag);el.textContent=value;el.className=className;return el; };
+function newWorker(){ worker?.terminate();$('brew').disabled=true;worker=new Worker('./worker.mjs',{type:'module'});worker.onmessage=handle;worker.onerror=e=>fail(e.message); }
+function fail(message){ message=message||'Browser worker could not load; inspect the browser console';$('status').textContent='Experiment failed';$('status').className='fail';$('progress').textContent=message;$('brew').disabled=false;window.prototypeError=message; }
+function metric(label,value){ const box=text('div','', 'metric');box.append(text('strong',value),text('span',label,'muted'));return box; }
+function handle({data}){
+  if(data.type==='ready'){ $('brew').disabled=false;return; }
+  if(data.type==='progress'){ $('status').textContent=data.stage;$('progress').textContent=data.detail;return; }
+  if(data.type==='error'){ fail(data.message);return; }
+  if(data.type!=='result')return;
+  const {fixture,ranking,report}=data;currentReport=report;window.prototypeResult=data;
+  $('brew').disabled=false;$('download').disabled=false;$('status').className=report.verdict.passed?'pass':'fail';
+  $('status').textContent=report.verdict.passed?'Browser brew matches the fixture reference':'Brew complete; parity differences need review';
+  $('progress').textContent='Calculation finished in this device. Inspect both policy and inference results below.';
+  $('metrics').replaceChildren(metric('papers evaluated',report.paperCount),metric('selected',ranking.selected_ids.length),metric('embedding seconds',(report.timings.inferenceMs/1000).toFixed(2)),metric('ranking milliseconds',report.timings.rankingMs.toFixed(1)));
+  const policy=report.policy, embedding=report.browser, checks=$('checks');checks.replaceChildren();
+  for(const [label,value,passed] of [
+    ['Existing Python policy',policy.selectionMatches?'Same selected order':'Different selection',report.verdict.policyPass],
+    ['Adversarial policy fixtures',report.stressCases.filter(test=>test.passed).length+' / '+report.stressCases.length+' match',report.verdict.stressPass],
+    ['Browser inference decisions',embedding.ranking.selectionMatches?'Same selected order':'Different selection',report.verdict.inferencePass],
+    ['Smallest embedding agreement',Math.min(embedding.documents.minCosine,embedding.queries.minCosine).toFixed(7),Math.min(embedding.documents.minCosine,embedding.queries.minCosine)>=.9999],
+    ['Largest final-score difference',embedding.ranking.maxScoreDifference.toFixed(7),embedding.ranking.maxScoreDifference<=.002]]) {
+      checks.append(text('p',label+': '+value,passed?'pass':'fail'));
+  }
+  const byId=new Map(fixture.papers.map(row=>[row.id,row])), scored=new Map(ranking.candidates.map(row=>[row.id,row]));
+  $('papers').replaceChildren();
+  for(const id of ranking.selected_ids){ const row=byId.get(id), score=scored.get(id), card=document.createElement('article');
+    card.append(text('div',row.source+' · fictional fixture '+id,'chips'),text('h3',row.title),text('p',row.abstract),text('div','Topic '+score.topic_score.toFixed(3)+' · Final '+score.final_score.toFixed(3)+' · '+score.source_bucket,'muted'));$('papers').append(card);
+  }
+  if(!ranking.selected_ids.length)$('papers').append(text('p','No fixture papers qualified. The prototype does not fill empty slots with rejected content.'));
+  const table=document.createElement('table'), head=document.createElement('tr');for(const col of ['Paper','Source','Decision','Topic'])head.append(text('th',col));table.append(head);
+  for(const score of ranking.candidates){const row=byId.get(score.id),tr=document.createElement('tr');for(const value of [row.title,row.source,score.status+(score.reason?' · '+score.reason:''),score.topic_score.toFixed(3)])tr.append(text('td',value));table.append(tr);}
+  $('candidates').replaceChildren(table);$('report').textContent=JSON.stringify(report,null,2);
+  for(const id of ['comparison','digest','audit','raw'])$(id).hidden=false;
+}
+$('brew').onclick=()=>{currentReport=null;window.prototypeResult=null;window.prototypeError=null;$('download').disabled=true;$('brew').disabled=true;$('status').className='';worker.postMessage({type:'brew'});};
+$('reset').onclick=()=>{newWorker();currentReport=null;window.prototypeResult=null;window.prototypeError=null;$('download').disabled=true;$('status').className='';$('status').textContent='Ready to test';$('progress').textContent='In-memory experiment reset. Your production app is unchanged.';$('metrics').replaceChildren();for(const id of ['comparison','digest','audit','raw'])$(id).hidden=true;};
+$('download').onclick=()=>{const url=URL.createObjectURL(new Blob([JSON.stringify(currentReport,null,2)],{type:'application/json'}));const link=document.createElement('a');link.href=url;link.download='browser-compute-evaluation.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);};
+newWorker();
+</script>
+</body></html>

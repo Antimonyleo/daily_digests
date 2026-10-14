@@ -1,0 +1,785 @@
+{
+  "schema_version": 1,
+  "provenance": {
+    "kind": "synthetic",
+    "description": "Hand-authored fictional titles and abstracts for a contribution-level scope stress test. Created independently of classifier output and frozen before scoring. These are not actual papers, user votes, usefulness labels, or evidence of production accuracy. Calibration and evaluation describe different synthetic study families. Labels encode proposed scope boundaries, including uncertainty when available text is insufficient; they require reader validation before being treated as personal relevance ground truth."
+  },
+  "definitions": {
+    "core": {
+      "DNA nanotechnology": [
+        "The contribution is a method for designing, constructing, or characterizing programmable DNA nanostructures and their engineered mechanical or functional behavior.",
+        "DNA origami, strand-displacement devices, and DNA-mediated nanoscale organization are core when their designed architecture or operating principle is the subject of the work."
+      ],
+      "RNA nanotechnology": [
+        "The contribution is the design or engineering of RNA building blocks, nanostructures, switches, or assemblies with deliberately specified geometry or function.",
+        "Designed RNA folding and modular RNA devices are core; merely detecting RNA, describing its expression, or studying a native RNA pathway does not establish this contribution."
+      ],
+      "Colloidal self-assembly": [
+        "The contribution establishes how designed particle interactions, particle shapes, or external control produce programmable colloidal organization.",
+        "Colloidal crystals and particle assemblies are core when assembly rules, controllable structure, or an engineered collective property are central."
+      ],
+      "Protein engineering and design": [
+        "The contribution designs or engineers protein sequences, structures, activities, binding properties, or functions and evaluates the resulting designed proteins.",
+        "General protein design methods and experimental engineering of enzymes, binders, or protein devices are core even when demonstrated in a disease-related application."
+      ],
+      "Protein structure and function prediction": [
+        "The contribution develops or meaningfully evaluates a computational method that predicts protein structure, conformational behavior, interactions, or molecular function.",
+        "A transferable protein structure or function prediction method is core; an isolated descriptive account of one native protein can instead be contextual."
+      ],
+      "Machine learning for biomolecular design": [
+        "The contribution develops a machine-learning method that generates, optimizes, or evaluates designed biomolecular sequences, structures, interactions, or functions.",
+        "Learning-guided molecular design and predictive models used to choose engineered biomolecules are core; generic biological image or document understanding is not sufficient."
+      ],
+      "Gene and RNA therapeutic engineering": [
+        "The contribution engineers nucleic acid therapeutic molecules, delivery systems, stability, targeting, or controllable activity with evidence about the engineering mechanism.",
+        "Design principles for RNA or DNA therapeutics are core even in a specific disease application; treatment outcomes without an engineering contribution are contextual."
+      ],
+      "Self-assembled functional materials": [
+        "The contribution designs molecular or supramolecular components whose self-assembly produces an intended material structure and measurable function.",
+        "Engineered peptide, protein, polymer, or hybrid assemblies are core when controllable assembly and the resulting material properties are central."
+      ]
+    },
+    "context": [
+      "A mechanistic study describes the structure or function of a naturally occurring protein, RNA, or complex without introducing a transferable prediction or design method.",
+      "A study characterizes native chromatin or cellular condensates to understand biological regulation rather than engineering programmable assembly.",
+      "An analytical method measures nucleic acids or proteins but does not engineer a molecular device or establish biomolecular design principles.",
+      "A clinical study evaluates the outcomes or tolerability of an existing nucleic acid treatment without contributing molecular or delivery engineering.",
+      "A broad artificial-intelligence method for research documents, figures, or scientific workflows may be useful context but is not itself a biomolecular design method.",
+      "A regulatory decision, financing announcement, or company development is contextual news rather than a core research contribution.",
+      "A single-cell atlas describes cellular states or developmental trajectories without engineering biomolecules or introducing relevant molecular prediction.",
+      "A synthesis or perspective discusses the field broadly without enough specific technical evidence to establish a new core contribution."
+    ],
+    "off_interest": [
+      "The main contribution is a diagnostic biomarker association or disease classification based on measured RNA, protein, or spectral signals.",
+      "The main contribution is a descriptive pathology, population-genetics association, or clinical risk correlation without relevant molecular engineering.",
+      "The main contribution concerns electronic or neuromorphic computing hardware, even if it contains molecular materials or uses biological metaphors.",
+      "The main contribution is the optimization of a nonbiological industrial or environmental process with no relevant programmable assembly or biomolecular design.",
+      "The main contribution is medical image classification, patient record prediction, or epidemiological forecasting rather than molecular structure or function prediction.",
+      "The main contribution is agricultural trait association or ecological observation without relevant design, engineering, or programmable assembly.",
+      "The main contribution is consumer product preference or economic behavior and the biological terminology is incidental.",
+      "The main contribution is the detection of environmental contamination by measuring naturally occurring molecules without a designed molecular architecture."
+    ]
+  },
+  "examples": [
+    {
+      "id": "c01",
+      "family_id": "dna_hinge",
+      "split": "calibration",
+      "title": "Geometry-controlled hinges in DNA origami",
+      "abstract": "We introduce a modular DNA origami hinge whose opening distribution is specified by its connector architecture. Imaging and mechanical measurements relate design choices to the resulting motion, providing a reusable rule for nanoscale device construction.",
+      "label": "core",
+      "facet": "DNA nanotechnology",
+      "rationale": "The contribution is a designed DNA device and a structure-to-motion engineering rule."
+    },
+    {
+      "id": "c02",
+      "family_id": "dna_surface_array",
+      "split": "calibration",
+      "title": "Addressable DNA tiles organize enzymes on a surface",
+      "abstract": "A DNA tile architecture positions enzyme attachments at prescribed separations. The study compares assembly fidelity and function across layouts and identifies constraints on programmable nanoscale organization.",
+      "label": "core",
+      "facet": "DNA nanotechnology",
+      "rationale": "Engineered DNA architecture and spatial organization are central, independently of the enzyme application."
+    },
+    {
+      "id": "c03",
+      "family_id": "rna_corner",
+      "split": "calibration",
+      "title": "Modular RNA corners for shape-programmed nanoparticles",
+      "abstract": "We develop RNA junction modules that assemble into prescribed polygonal structures. Structural measurements test how junction choices control geometry and robustness across several designed objects.",
+      "label": "core",
+      "facet": "RNA nanotechnology",
+      "rationale": "The work engineers RNA building blocks and verifies designed assembly geometry."
+    },
+    {
+      "id": "c04",
+      "family_id": "rna_switch",
+      "split": "calibration",
+      "title": "An RNA conformational switch with tunable mechanical output",
+      "abstract": "Designed RNA folds couple recognition to a change in device conformation. The paper presents a modular architecture and evaluates how alternate structural layouts tune switching behavior.",
+      "label": "core",
+      "facet": "RNA nanotechnology",
+      "rationale": "RNA serves as an engineered structural device rather than a measured biomarker."
+    },
+    {
+      "id": "c05",
+      "family_id": "patchy_particles",
+      "split": "calibration",
+      "title": "Valence control in patchy-particle crystal assembly",
+      "abstract": "Particles bearing patterned interaction sites are designed to favor selected local coordination. Assembly experiments and a physical model connect particle valence to crystal structure and defect formation.",
+      "label": "core",
+      "facet": "Colloidal self-assembly",
+      "rationale": "Designed particle interactions govern programmable colloidal order."
+    },
+    {
+      "id": "c06",
+      "family_id": "colloid_field",
+      "split": "calibration",
+      "title": "Reversible colloidal lattices under programmable field sequences",
+      "abstract": "A controllable external field steers colloidal particles between distinct lattice arrangements. The contribution is an experimentally tested control strategy for choosing collective structure without changing particle chemistry.",
+      "label": "core",
+      "facet": "Colloidal self-assembly",
+      "rationale": "The method programs colloidal organization through an engineered control input."
+    },
+    {
+      "id": "c07",
+      "family_id": "enzyme_design",
+      "split": "calibration",
+      "title": "Redesigning an enzyme binding pocket for a new substrate class",
+      "abstract": "The authors engineer a set of enzyme variants guided by a structural model and evaluate changes in selectivity. Comparisons between intended and measured behavior reveal transferable constraints for functional protein redesign.",
+      "label": "core",
+      "facet": "Protein engineering and design",
+      "rationale": "Protein sequence-to-function engineering is the main contribution."
+    },
+    {
+      "id": "c08",
+      "family_id": "binder_autoimmunity",
+      "split": "calibration",
+      "title": "Designed protein binders distinguish related immune receptors",
+      "abstract": "A protein design strategy produces binders with intentionally differentiated receptor recognition. Structural and binding measurements assess the design mechanism in an autoimmune disease application.",
+      "label": "core",
+      "facet": "Protein engineering and design",
+      "rationale": "Disease context does not negate a clear experimentally evaluated protein design method."
+    },
+    {
+      "id": "c09",
+      "family_id": "protein_ensemble",
+      "split": "calibration",
+      "title": "Predicting protein conformational ensembles from sequence constraints",
+      "abstract": "A computational method estimates multiple accessible structures rather than one static protein fold. Evaluation on held-out proteins tests whether predicted conformations recover experimentally observed alternatives.",
+      "label": "core",
+      "facet": "Protein structure and function prediction",
+      "rationale": "The contribution is a transferable protein conformational prediction method."
+    },
+    {
+      "id": "c10",
+      "family_id": "protein_function_transfer",
+      "split": "calibration",
+      "title": "Structure-aware transfer of enzyme function annotations",
+      "abstract": "We introduce an algorithm that predicts molecular function from local structural environments. Benchmarks separate homologous families between training and evaluation and test generalization to poorly annotated proteins.",
+      "label": "core",
+      "facet": "Protein structure and function prediction",
+      "rationale": "Protein function prediction and independent validation are central."
+    },
+    {
+      "id": "c11",
+      "family_id": "ml_peptide_search",
+      "split": "calibration",
+      "title": "Uncertainty-guided learning for peptide design",
+      "abstract": "An active-learning model chooses candidate peptide sequences to improve a target material property. The study compares design efficiency and prospective experimental outcomes with fixed search strategies.",
+      "label": "core",
+      "facet": "Machine learning for biomolecular design",
+      "rationale": "Machine learning selects new biomolecular designs and is assessed prospectively."
+    },
+    {
+      "id": "c12",
+      "family_id": "ml_molecular_constraints",
+      "split": "calibration",
+      "title": "Constraint-aware generation of biomolecular building blocks",
+      "abstract": "A generative model proposes molecular building blocks subject to specified binding geometry and chemical feasibility. A held-out evaluation measures whether generated designs satisfy the requested molecular constraints.",
+      "label": "core",
+      "facet": "Machine learning for biomolecular design",
+      "rationale": "The learning task directly generates and evaluates designed biomolecules."
+    },
+    {
+      "id": "c13",
+      "family_id": "rna_delivery_design",
+      "split": "calibration",
+      "title": "Mapping carrier architecture to messenger RNA delivery",
+      "abstract": "The authors vary the architecture of a delivery material and connect its physical properties to RNA protection and cellular delivery. Mechanistic comparisons identify engineering tradeoffs for nucleic acid therapeutic formulations.",
+      "label": "core",
+      "facet": "Gene and RNA therapeutic engineering",
+      "rationale": "Delivery-system engineering and mechanistic design rules are central."
+    },
+    {
+      "id": "c14",
+      "family_id": "antisense_stability",
+      "split": "calibration",
+      "title": "Engineering antisense molecules for stability and selective activity",
+      "abstract": "A comparative design study examines how molecular architecture changes antisense stability and intended target activity. The results establish engineering tradeoffs relevant to therapeutic development rather than reporting patient outcomes.",
+      "label": "core",
+      "facet": "Gene and RNA therapeutic engineering",
+      "rationale": "The paper engineers therapeutic nucleic acid properties."
+    },
+    {
+      "id": "c15",
+      "family_id": "peptide_hydrogel",
+      "split": "calibration",
+      "title": "Sequence-programmed peptide gels with adjustable stress relaxation",
+      "abstract": "Peptide building blocks are designed to form supramolecular networks with distinct mechanical responses. Assembly characterization connects molecular choices to tunable material relaxation and recovery.",
+      "label": "core",
+      "facet": "Self-assembled functional materials",
+      "rationale": "Designed self-assembly produces a measured functional material property."
+    },
+    {
+      "id": "c16",
+      "family_id": "polymer_coacervate",
+      "split": "calibration",
+      "title": "Selective partitioning in designed polymer coacervates",
+      "abstract": "The study designs polymer interactions to control which molecular guests partition into assembled droplets. Systematic material comparisons identify a relationship between component design, assembly, and selective function.",
+      "label": "core",
+      "facet": "Self-assembled functional materials",
+      "rationale": "Programmable material assembly and selectivity are the engineering contribution."
+    },
+    {
+      "id": "c17",
+      "family_id": "native_condensate",
+      "split": "calibration",
+      "title": "Chromatin condensation during native cell-state transitions",
+      "abstract": "Live-cell measurements describe how chromatin-associated proteins form and dissolve condensates during differentiation. The study explains an endogenous regulatory process and does not introduce designed assemblies or engineered components.",
+      "label": "context",
+      "facet": "",
+      "rationale": "Native condensate biology is adjacent context, not automatically programmable colloidal assembly."
+    },
+    {
+      "id": "c18",
+      "family_id": "native_receptor_md",
+      "split": "calibration",
+      "title": "Dynamics of a native receptor at a membrane interface",
+      "abstract": "Molecular simulations characterize how a particular receptor couples motions across its membrane-spanning and cytoplasmic regions. The paper offers a mechanism for this protein but no new prediction algorithm or engineered variant.",
+      "label": "context",
+      "facet": "",
+      "rationale": "Single-target native structural biology can be useful context without establishing a design or prediction-method contribution."
+    },
+    {
+      "id": "c19",
+      "family_id": "primer_measurement",
+      "split": "calibration",
+      "title": "Improving transcript quantification with junction-aware primer selection",
+      "abstract": "An analytical workflow reduces ambiguous quantification of closely related transcript isoforms. The experiments validate measurement specificity without constructing RNA nanostructures or a programmable molecular device.",
+      "label": "context",
+      "facet": "",
+      "rationale": "Useful nucleic acid measurement is distinct from structural RNA engineering."
+    },
+    {
+      "id": "c20",
+      "family_id": "figure_qa",
+      "split": "calibration",
+      "title": "A benchmark for answering questions about biological figures",
+      "abstract": "A dataset tests whether multimodal systems can answer questions about charts and diagrams in biology papers. Evaluation concerns document understanding rather than prediction or design of molecular structures and functions.",
+      "label": "context",
+      "facet": "",
+      "rationale": "Scientific AI is contextual here; the benchmark does not perform biomolecular design."
+    },
+    {
+      "id": "c21",
+      "family_id": "existing_therapy_trial",
+      "split": "calibration",
+      "title": "Long-term follow-up of an established RNA medicine",
+      "abstract": "A multicenter study reports clinical outcomes and tolerability after treatment with an existing RNA therapeutic. It does not modify the molecule or delivery system and presents no new engineering method.",
+      "label": "context",
+      "facet": "",
+      "rationale": "Clinical evidence is relevant context but does not meet therapeutic engineering scope."
+    },
+    {
+      "id": "c22",
+      "family_id": "single_cell_atlas",
+      "split": "calibration",
+      "title": "A single-cell atlas of tissue regeneration",
+      "abstract": "Transcriptomic profiling maps cell populations and state transitions during repair. The main result is a descriptive resource rather than biomolecular design, molecular prediction, or engineered assembly.",
+      "label": "context",
+      "facet": "",
+      "rationale": "Single-cell profiling belongs to contextual coverage under this research profile."
+    },
+    {
+      "id": "c23",
+      "family_id": "regulatory_approval",
+      "split": "calibration",
+      "title": "Regulatory assessment of a nucleic acid treatment",
+      "abstract": "The article summarizes an official regulatory decision and the clinical evidence considered by the agency. It discusses access and monitoring requirements but adds no new molecular engineering results.",
+      "label": "context",
+      "facet": "",
+      "rationale": "Regulatory developments are context and should not be forced into a core research facet."
+    },
+    {
+      "id": "c24",
+      "family_id": "design_perspective",
+      "split": "calibration",
+      "title": "A perspective on standards for molecular design reporting",
+      "abstract": "Researchers discuss reproducibility and reporting practices across molecular engineering fields. The article proposes community recommendations but does not introduce or validate a new design method.",
+      "label": "context",
+      "facet": "",
+      "rationale": "A field perspective can be useful context without demonstrating a core research contribution."
+    },
+    {
+      "id": "c25",
+      "family_id": "rna_spectral_diagnosis",
+      "split": "calibration",
+      "title": "Spectral classification of disease-associated RNA signatures",
+      "abstract": "Measured spectral signals from clinical RNA samples are used to distinguish patient groups. The contribution is diagnostic classification; no RNA structure or therapeutic molecule is designed.",
+      "label": "off_interest",
+      "facet": "",
+      "rationale": "Shared RNA vocabulary masks a diagnostic biomarker task."
+    },
+    {
+      "id": "c26",
+      "family_id": "silicon_neuromorphic",
+      "split": "calibration",
+      "title": "Molecular silicon elements for neuromorphic memory",
+      "abstract": "Electronic devices containing silicon-based molecular components emulate memory responses. Performance is evaluated as computing hardware, without biomolecular sequence design or programmed self-assembly.",
+      "label": "off_interest",
+      "facet": "",
+      "rationale": "Molecular terminology and brain-inspired function do not establish biomolecular design relevance."
+    },
+    {
+      "id": "c27",
+      "family_id": "pathology_signature",
+      "split": "calibration",
+      "title": "Protein staining signatures associated with tumor stage",
+      "abstract": "Tissue staining measurements are correlated with disease stage and survival in a retrospective cohort. The work does not engineer proteins or predict their molecular structure or function.",
+      "label": "off_interest",
+      "facet": "",
+      "rationale": "Descriptive pathology and clinical association are explicit off-interest contributions."
+    },
+    {
+      "id": "c28",
+      "family_id": "genetic_risk",
+      "split": "calibration",
+      "title": "Common variants associated with metabolic disease risk",
+      "abstract": "A population association study identifies genetic loci correlated with disease susceptibility. The authors report statistical associations without introducing molecular engineering or a functional prediction method.",
+      "label": "off_interest",
+      "facet": "",
+      "rationale": "Population genetics association is not a biomolecular design contribution."
+    },
+    {
+      "id": "c29",
+      "family_id": "medical_image_ai",
+      "split": "calibration",
+      "title": "Deep classification of radiology images for patient triage",
+      "abstract": "A neural model classifies clinical images and estimates urgency for patient review. Its outputs describe medical imaging categories rather than molecular structures, interactions, or engineered biomolecules.",
+      "label": "off_interest",
+      "facet": "",
+      "rationale": "Machine learning alone is insufficient; the target task is outside core molecular interests."
+    },
+    {
+      "id": "c30",
+      "family_id": "water_rna_detection",
+      "split": "calibration",
+      "title": "Environmental RNA abundance as an indicator of water contamination",
+      "abstract": "The study measures naturally occurring RNA in environmental samples and relates abundance to contamination indicators. It contributes a surveillance association rather than a designed molecular architecture.",
+      "label": "off_interest",
+      "facet": "",
+      "rationale": "Detection of environmental markers is not RNA nanotechnology."
+    },
+    {
+      "id": "c31",
+      "family_id": "crop_association",
+      "split": "calibration",
+      "title": "Genome-wide associations with cereal grain size",
+      "abstract": "Field measurements and genetic markers are analyzed to identify statistical associations with grain size. No designed biological construct, relevant molecular predictor, or programmable material is introduced.",
+      "label": "off_interest",
+      "facet": "",
+      "rationale": "Agricultural trait association is outside the specified engineering interests."
+    },
+    {
+      "id": "c32",
+      "family_id": "industrial_optimization",
+      "split": "calibration",
+      "title": "Optimizing solvent recovery in a refinery separation train",
+      "abstract": "A process model reduces energy use in industrial solvent recovery. The optimization concerns plant operating conditions and has no biomolecular design or programmed assembly component.",
+      "label": "off_interest",
+      "facet": "",
+      "rationale": "The optimization target is an unrelated industrial process."
+    },
+    {
+      "id": "c33",
+      "family_id": "thin_rna_title",
+      "split": "calibration",
+      "title": "A new platform for RNA nanotechnology",
+      "abstract": "A versatile platform with broad potential applications is reported.",
+      "label": "uncertain",
+      "facet": "",
+      "rationale": "The title suggests a core topic, but the abstract supplies no assessable contribution or evidence."
+    },
+    {
+      "id": "c34",
+      "family_id": "ambiguous_protein_design",
+      "split": "calibration",
+      "title": "Design principles of a cellular protein scaffold",
+      "abstract": "We describe architectural principles of a protein scaffold and discuss possible applications. The summary does not establish whether components were engineered or whether the observations concern only the native complex.",
+      "label": "uncertain",
+      "facet": "",
+      "rationale": "The available text cannot distinguish a designed system from descriptive native biology."
+    },
+    {
+      "id": "c35",
+      "family_id": "review_missing_scope",
+      "split": "calibration",
+      "title": "Emerging directions in molecular intelligence",
+      "abstract": "",
+      "label": "uncertain",
+      "facet": "",
+      "rationale": "An absent abstract and ambiguous title do not support a core or contextual assignment."
+    },
+    {
+      "id": "c36",
+      "family_id": "assembly_ambiguous",
+      "split": "calibration",
+      "title": "Controlling condensation in biological systems",
+      "abstract": "This work studies condensation and reports improved control in a biological setting. The supplied summary does not identify the components, the intervention, or the intended function.",
+      "label": "uncertain",
+      "facet": "",
+      "rationale": "There is insufficient evidence to choose native contextual biology or engineered assembly."
+    },
+    {
+      "id": "e01",
+      "family_id": "dna_topology",
+      "split": "evaluation",
+      "title": "Topological routing of interlinked nucleic acid frameworks",
+      "abstract": "A construction scheme uses DNA strands to form mechanically interlocked nanoscale frameworks. The authors verify connectivity and show that route selection specifies allowed collective motions, establishing a design rule for DNA-based machines.",
+      "label": "core",
+      "facet": "DNA nanotechnology",
+      "rationale": "Designed DNA framework topology controls an engineered nanoscale behavior."
+    },
+    {
+      "id": "e02",
+      "family_id": "dna_computation",
+      "split": "evaluation",
+      "title": "Compositional verification of strand-displacement circuits",
+      "abstract": "The paper introduces a framework for composing and checking DNA reaction circuits before assembly. Experiments compare intended logical behavior with measured circuit responses and identify how module interfaces influence reliable operation.",
+      "label": "core",
+      "facet": "DNA nanotechnology",
+      "rationale": "Programmable DNA molecular devices and their design verification are core."
+    },
+    {
+      "id": "e03",
+      "family_id": "rna_cotranscriptional_design",
+      "split": "evaluation",
+      "title": "Encoding folding trajectories into RNA origami sheets",
+      "abstract": "A design procedure arranges RNA structural motifs so a transcribed strand reaches a specified sheet geometry. Imaging tests multiple target shapes and relates folding success to the selected pathway through intermediate structures.",
+      "label": "core",
+      "facet": "RNA nanotechnology",
+      "rationale": "The main result is intentional RNA architecture and control of its assembly pathway."
+    },
+    {
+      "id": "e04",
+      "family_id": "rna_modular_chassis",
+      "split": "evaluation",
+      "title": "Reconfigurable RNA cages built from interchangeable modules",
+      "abstract": "RNA components with compatible interfaces are assembled into cages of different dimensions. The study measures how changing individual modules affects global shape and functional cargo positioning.",
+      "label": "core",
+      "facet": "RNA nanotechnology",
+      "rationale": "Engineered RNA modules create designed structures with specified organization."
+    },
+    {
+      "id": "e05",
+      "family_id": "colloid_shape_entropy",
+      "split": "evaluation",
+      "title": "Choosing crystal symmetry through colloid shape",
+      "abstract": "A library of manufactured particle geometries is used to test how shape directs collective ordering. Theory and microscopy establish a practical mapping from particle design to accessible crystal symmetry.",
+      "label": "core",
+      "facet": "Colloidal self-assembly",
+      "rationale": "Programmable colloidal structure follows from engineered particle geometry."
+    },
+    {
+      "id": "e06",
+      "family_id": "colloid_error_correction",
+      "split": "evaluation",
+      "title": "Error correction in multicomponent particle assembly",
+      "abstract": "The authors design compatible and incompatible particle contacts to suppress incorrect incorporation during growth. Experiments measure defect reduction and establish interaction rules for assembling prescribed colloidal patterns.",
+      "label": "core",
+      "facet": "Colloidal self-assembly",
+      "rationale": "The contribution engineers interaction rules for reliable colloidal assembly."
+    },
+    {
+      "id": "e07",
+      "family_id": "protein_allostery",
+      "split": "evaluation",
+      "title": "Building a protein switch with a designed allosteric response",
+      "abstract": "Protein variants are constructed to connect recognition at one site to altered activity at another. Functional measurements and structural comparisons evaluate whether the intended coupling was achieved.",
+      "label": "core",
+      "facet": "Protein engineering and design",
+      "rationale": "The work intentionally engineers protein function and validates the resulting switch."
+    },
+    {
+      "id": "e08",
+      "family_id": "protein_scaffold_specialist",
+      "split": "evaluation",
+      "title": "A compact scaffold for stabilizing engineered binding loops",
+      "abstract": "A specialist methods study redesigns a protein scaffold to support diverse binding-loop conformations. Experimental folding and binding data identify which scaffold changes improve the performance of the engineered proteins.",
+      "label": "core",
+      "facet": "Protein engineering and design",
+      "rationale": "A focused specialist contribution can be core through direct protein engineering evidence."
+    },
+    {
+      "id": "e09",
+      "family_id": "protein_interface_predictor",
+      "split": "evaluation",
+      "title": "Estimating interaction interfaces in previously unseen protein complexes",
+      "abstract": "A new computational approach predicts contact regions between protein partners. Evaluation excludes related complex families and compares predicted interfaces with independently determined structures.",
+      "label": "core",
+      "facet": "Protein structure and function prediction",
+      "rationale": "The primary contribution is a transferable protein interaction-structure predictor."
+    },
+    {
+      "id": "e10",
+      "family_id": "protein_variant_function",
+      "split": "evaluation",
+      "title": "A physically constrained predictor of protein variant effects",
+      "abstract": "The method estimates how substitutions change molecular activity using structural environments and physical constraints. It is tested across unrelated proteins with quantitative experimental function measurements.",
+      "label": "core",
+      "facet": "Protein structure and function prediction",
+      "rationale": "The prediction target is protein molecular function and evaluation spans multiple families."
+    },
+    {
+      "id": "e11",
+      "family_id": "ml_biomolecular_inverse",
+      "split": "evaluation",
+      "title": "Inverse molecular design from desired interaction landscapes",
+      "abstract": "A learned model proposes biomolecular candidates given a requested pattern of molecular interactions. The study evaluates constraint satisfaction and diversity on unseen design objectives and validates a subset experimentally.",
+      "label": "core",
+      "facet": "Machine learning for biomolecular design",
+      "rationale": "The model directly addresses generation of biomolecular designs."
+    },
+    {
+      "id": "e12",
+      "family_id": "ml_design_transfer",
+      "split": "evaluation",
+      "title": "Transferable learning across experimental molecular design campaigns",
+      "abstract": "A model combines observations from separate design campaigns to recommend new biomolecular candidates. Evaluation holds out entire campaigns and measures the quality of the proposed designs under limited experimental budgets.",
+      "label": "core",
+      "facet": "Machine learning for biomolecular design",
+      "rationale": "Machine learning guides biomolecular optimization with campaign-level generalization tests."
+    },
+    {
+      "id": "e13",
+      "family_id": "therapeutic_release",
+      "split": "evaluation",
+      "title": "Engineering intracellular release of therapeutic oligonucleotides",
+      "abstract": "The authors compare carrier architectures intended to release oligonucleotide cargo after cellular uptake. Measurements separate uptake from productive release and establish design tradeoffs for functional nucleic acid delivery.",
+      "label": "core",
+      "facet": "Gene and RNA therapeutic engineering",
+      "rationale": "A mechanistic delivery engineering contribution is directly within nucleic acid therapeutics scope."
+    },
+    {
+      "id": "e14",
+      "family_id": "therapeutic_local_activation",
+      "split": "evaluation",
+      "title": "Locally activated RNA therapy through molecular architecture design",
+      "abstract": "A therapeutic RNA platform is engineered to regulate activity through its molecular architecture. The study relates alternative designs to intended activation and background activity in a disease-relevant model, emphasizing a transferable engineering principle.",
+      "label": "core",
+      "facet": "Gene and RNA therapeutic engineering",
+      "rationale": "Disease application accompanies a substantive engineering contribution rather than replacing it."
+    },
+    {
+      "id": "e15",
+      "family_id": "protein_material_network",
+      "split": "evaluation",
+      "title": "Protein building blocks assemble into load-bearing networks",
+      "abstract": "Designed protein modules form extended networks with tunable connectivity. Structural and mechanical measurements link interface design to network formation, stiffness, and recovery after deformation.",
+      "label": "core",
+      "facet": "Self-assembled functional materials",
+      "rationale": "Engineered assembly creates a material with deliberately tuned functional properties."
+    },
+    {
+      "id": "e16",
+      "family_id": "supramolecular_membrane",
+      "split": "evaluation",
+      "title": "Self-organizing amphiphiles form adaptive selective membranes",
+      "abstract": "Molecular components are designed to assemble into membranes whose selectivity changes under controlled conditions. The study establishes how component architecture and collective organization determine transport behavior.",
+      "label": "core",
+      "facet": "Self-assembled functional materials",
+      "rationale": "The contribution couples designed self-assembly to a specified material function."
+    },
+    {
+      "id": "e17",
+      "family_id": "native_rna_helicase",
+      "split": "evaluation",
+      "title": "A native RNA helicase forms filaments during immune signaling",
+      "abstract": "Structural experiments reveal how an endogenous helicase organizes into filaments and participates in cellular signaling. No engineered filament, new predictive framework, or designed RNA structure is presented.",
+      "label": "context",
+      "facet": "",
+      "rationale": "Native mechanistic assembly biology is context rather than automatically RNA nanotechnology."
+    },
+    {
+      "id": "e18",
+      "family_id": "native_fibril",
+      "split": "evaluation",
+      "title": "Structural diversity of disease-associated protein fibrils",
+      "abstract": "The authors determine fibril architectures from biological specimens and compare molecular packing between samples. The study provides native structural insight but does not develop a predictive method or engineer a designed assembly.",
+      "label": "context",
+      "facet": "",
+      "rationale": "Native structural characterization may matter to the reader but does not establish a core design-method contribution."
+    },
+    {
+      "id": "e19",
+      "family_id": "molecular_measurement",
+      "split": "evaluation",
+      "title": "Separating molecular mobility states in single-molecule measurements",
+      "abstract": "A statistical analysis method resolves mobility states in fluorescence trajectories from protein samples. The contribution improves experimental measurement without generating designed proteins or predicting molecular function.",
+      "label": "context",
+      "facet": "",
+      "rationale": "A general measurement tool is adjacent context unless a stronger design connection is demonstrated."
+    },
+    {
+      "id": "e20",
+      "family_id": "literature_agent",
+      "split": "evaluation",
+      "title": "Evaluating automated assistants for biological literature synthesis",
+      "abstract": "The study measures how well language-based assistants retrieve and summarize published biological evidence. Tasks concern document synthesis and citation support rather than molecular design or structure prediction.",
+      "label": "context",
+      "facet": "",
+      "rationale": "Scientific workflow AI is contextual rather than a molecular design model."
+    },
+    {
+      "id": "e21",
+      "family_id": "therapy_registry",
+      "split": "evaluation",
+      "title": "Registry outcomes after implementation of an RNA treatment program",
+      "abstract": "A health-system registry describes treatment uptake, adverse events, and patient outcomes after introducing an existing RNA medicine. It contains no new therapeutic construct or delivery-system engineering.",
+      "label": "context",
+      "facet": "",
+      "rationale": "Clinical implementation provides context without a new engineering contribution."
+    },
+    {
+      "id": "e22",
+      "family_id": "development_atlas",
+      "split": "evaluation",
+      "title": "Spatial mapping of cell identities across organ development",
+      "abstract": "A spatial transcriptomic resource charts changing cell identities and tissue organization. The analysis is descriptive and does not design nucleic acid assemblies or introduce a biomolecular engineering method.",
+      "label": "context",
+      "facet": "",
+      "rationale": "An atlas of natural cell states fits contextual research coverage."
+    },
+    {
+      "id": "e23",
+      "family_id": "company_funding",
+      "split": "evaluation",
+      "title": "Financing expands a company developing engineered biologics",
+      "abstract": "The report describes a financing round, planned facilities, and a development portfolio. It does not contain experimental design methods or new research results.",
+      "label": "context",
+      "facet": "",
+      "rationale": "Funding news is context and should not receive a core research facet based on company terminology."
+    },
+    {
+      "id": "e24",
+      "family_id": "research_reproducibility",
+      "split": "evaluation",
+      "title": "An interlaboratory assessment of molecular engineering reproducibility",
+      "abstract": "Laboratories compare reporting practices and measurement agreement for published molecular engineering studies. The article identifies reproducibility concerns without establishing a new molecule or a transferable design algorithm.",
+      "label": "context",
+      "facet": "",
+      "rationale": "Research-practice evidence is useful context, distinct from a new core technical contribution."
+    },
+    {
+      "id": "e25",
+      "family_id": "circulating_mirna",
+      "split": "evaluation",
+      "title": "Circulating microRNA panels discriminate clinical subgroups",
+      "abstract": "A retrospective cohort analysis associates circulating microRNA abundance with clinical subgroup membership. The central result is a biomarker panel, with no RNA device construction or therapeutic engineering.",
+      "label": "off_interest",
+      "facet": "",
+      "rationale": "Clinical biomarker discrimination is not structural RNA nanotechnology."
+    },
+    {
+      "id": "e26",
+      "family_id": "organic_reservoir_hardware",
+      "split": "evaluation",
+      "title": "Organic thin-film reservoirs for neuromorphic signal processing",
+      "abstract": "An electronic material implements reservoir computing for temporal signal tasks. Device memory and energy consumption are assessed; the study neither designs biomolecules nor programs a self-assembled architecture.",
+      "label": "off_interest",
+      "facet": "",
+      "rationale": "Computing hardware remains off-interest despite molecular materials and neural terminology."
+    },
+    {
+      "id": "e27",
+      "family_id": "histology_prognosis",
+      "split": "evaluation",
+      "title": "Histological cell counts predict hospital readmission",
+      "abstract": "Pathology measurements are related to readmission in an observational clinical dataset. The contribution is prognostic association rather than molecular function prediction or biomolecular engineering.",
+      "label": "off_interest",
+      "facet": "",
+      "rationale": "The output concerns clinical prognosis, not the molecular prediction facet."
+    },
+    {
+      "id": "e28",
+      "family_id": "ancestry_association",
+      "split": "evaluation",
+      "title": "Ancestry-associated variation in a population survey",
+      "abstract": "The study catalogs genetic differences across sampled populations and reports associations with demographic variables. No designed molecules, functional molecular model, or engineered assembly is introduced.",
+      "label": "off_interest",
+      "facet": "",
+      "rationale": "Descriptive population variation is outside the defined engineering scope."
+    },
+    {
+      "id": "e29",
+      "family_id": "patient_language_model",
+      "split": "evaluation",
+      "title": "Predicting hospital deterioration from clinical notes",
+      "abstract": "A language model processes patient records to forecast clinical deterioration. Performance is measured against hospital outcomes rather than molecular structure, molecular activity, or design success.",
+      "label": "off_interest",
+      "facet": "",
+      "rationale": "The AI task is clinical risk prediction rather than biomolecular design."
+    },
+    {
+      "id": "e30",
+      "family_id": "ecosystem_observation",
+      "split": "evaluation",
+      "title": "Seasonal variation in aquatic community DNA measurements",
+      "abstract": "Environmental DNA surveys describe seasonal changes in community composition across lakes. The study is ecological observation and does not construct DNA nanostructures or engineer molecular interactions.",
+      "label": "off_interest",
+      "facet": "",
+      "rationale": "DNA is a measurement substrate in an ecological survey, not an engineered nanoscale material."
+    },
+    {
+      "id": "e31",
+      "family_id": "consumer_protein_label",
+      "split": "evaluation",
+      "title": "Consumer preferences for protein-related product labels",
+      "abstract": "A survey estimates how nutritional labels change purchase intentions. Protein terminology is part of the marketing stimulus and no protein molecular research is performed.",
+      "label": "off_interest",
+      "facet": "",
+      "rationale": "Biological vocabulary is incidental to a consumer-behavior contribution."
+    },
+    {
+      "id": "e32",
+      "family_id": "geological_particle_transport",
+      "split": "evaluation",
+      "title": "Particle transport during sediment erosion",
+      "abstract": "Laboratory flows and field observations describe how natural sediment moves during erosion. The particles are not designed to assemble and the study does not establish programmable colloidal structures.",
+      "label": "off_interest",
+      "facet": "",
+      "rationale": "Particle vocabulary alone does not establish colloidal self-assembly relevance."
+    },
+    {
+      "id": "e33",
+      "family_id": "thin_design_title",
+      "split": "evaluation",
+      "title": "Programmable biomolecular systems with exceptional performance",
+      "abstract": "We report a powerful approach and discuss its future potential.",
+      "label": "uncertain",
+      "facet": "",
+      "rationale": "Neither the contribution nor the evidence can be assessed from this promotional summary."
+    },
+    {
+      "id": "e34",
+      "family_id": "mixed_native_engineered",
+      "split": "evaluation",
+      "title": "Sequence control of intracellular droplets",
+      "abstract": "The report links molecular sequence features to droplet behavior in cells. The available text does not say whether the sequences were deliberately redesigned or only compared across naturally occurring proteins.",
+      "label": "uncertain",
+      "facet": "",
+      "rationale": "The supplied evidence cannot resolve engineered material design versus native condensate biology."
+    },
+    {
+      "id": "e35",
+      "family_id": "abstract_unavailable",
+      "split": "evaluation",
+      "title": "Learning molecular organization",
+      "abstract": "",
+      "label": "uncertain",
+      "facet": "",
+      "rationale": "An ambiguous title with no abstract supports abstention rather than a confident facet assignment."
+    },
+    {
+      "id": "e36",
+      "family_id": "prediction_scope_missing",
+      "split": "evaluation",
+      "title": "A predictive framework for protein systems",
+      "abstract": "A framework is evaluated on several protein systems and achieves improved predictions. The summary omits what is predicted, how the method differs from existing work, and what evidence supports its use.",
+      "label": "uncertain",
+      "facet": "",
+      "rationale": "The target could be molecular function or an unrelated outcome, so core scope is unresolved."
+    }
+  ]
+}

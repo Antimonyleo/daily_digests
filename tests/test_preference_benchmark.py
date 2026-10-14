@@ -91,7 +91,7 @@ def _make_synthetic_votes(n_per_class: int = 12, seed: int = 7):
             )
             labels.append(label)
             # Interleave chronologically so the newer-25% test split has both signs.
-            timestamps.append(base + timedelta(hours=item_id))
+            timestamps.append(base + timedelta(days=item_id))
             grades.append(grade)
             vec_by_id[item_id] = vec
             item_id += 1
@@ -303,3 +303,46 @@ def test_ndcg_at_k_helper():
     assert bench._ndcg_at_k(np.array([0.1, 0.2, 0.8, 0.9]), labels, k=10) < 1.0
     # No positive label -> undefined (NaN).
     assert np.isnan(bench._ndcg_at_k(np.array([0.5, 0.6]), np.array([-1, -1])))
+
+
+def test_chronological_split_never_divides_a_day_and_purges_family_overlap():
+    bench = _load_benchmark_module()
+    base = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    stamps = [base + timedelta(hours=h) for h in (1, 2, 25, 26, 49, 50)]
+    train, test = bench._split_chronological(6, stamps, 0.5)
+    assert {stamps[i].date() for i in train}.isdisjoint({stamps[i].date() for i in test})
+    rows = [SimpleNamespace(id=i, title=f"title{i}", url="") for i in range(6)]
+    rows[0].title = rows[-1].title = "same paper"
+    train, test = bench._split_chronological(6, stamps, 0.5, rows=rows)
+    assert 0 in train and 5 not in test
+    with pytest.raises(ValueError, match="two distinct"):
+        bench._split_chronological(2, stamps[:2], 0.75)
+
+
+def test_chronological_split_purges_metadata_doi_and_transitive_aliases():
+    bench = _load_benchmark_module()
+    base = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    stamps = [base + timedelta(days=i) for i in range(6)]
+    rows = [SimpleNamespace(id=i, title=f"Unrelated title {i}",
+                            url=f"https://example.org/item/{i}", external_id=str(i),
+                            metadata_json="{}") for i in range(6)]
+    # DOI exists only in metadata, while the title changes between versions.
+    rows[0].metadata_json = rows[3].metadata_json = '{"doi":"10.1234/shared"}'
+    # A further title-only alias joins the same family through the held-out row.
+    rows[4].title = rows[3].title
+    train, test = bench._split_chronological(6, stamps, 0.5, rows=rows)
+    assert train == [0, 1, 2]
+    assert test == [5]
+
+
+def test_component_reports_train_only_learned_and_knn_diagnostics(monkeypatch):
+    bench = _load_benchmark_module()
+    rows, labels, timestamps, grades, vecs = _make_synthetic_votes()
+    _install_fake_embeddings(monkeypatch, vecs)
+    result = bench.run_production_benchmark(rows, labels, timestamps, grades=grades,
+                                            profile_mat=np.vstack([_PROFILE_AXIS]))
+    assert result["knn_only_p_at_k"] >= result["topic_p_at_k"]
+    assert result["learned_train_ids"] == result["train_exemplar_ids"]
+    assert set(result["learned_train_ids"]).isdisjoint(result["test_ids"])
+    assert "current" in result["limitations"]
+    assert result["decision_time_proxy"]

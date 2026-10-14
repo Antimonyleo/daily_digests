@@ -9,12 +9,13 @@
 from __future__ import annotations
 
 import os
-import sys
+from pathlib import Path
 
 import pytest
 
 _SETUP_ENV_KEYS = (
     "PROFILE_PATH",
+    "OPPORTUNITY_PROFILE_PATH",
     "LLM_BACKEND",
     "LLM_BASE_URL",
     "LLM_API_KEY",
@@ -37,13 +38,18 @@ _SETUP_ENV_KEYS = (
 
 
 @pytest.fixture(autouse=True)
-def _isolate_env(tmp_path, monkeypatch):
+def _isolate_env(tmp_path, tmp_path_factory, monkeypatch):
     """Point DB_PATH at a throwaway sqlite file, blank the LLM key, and reset
     the store engine so each test starts with a fresh database."""
     original_setup_env = {key: os.environ.get(key) for key in _SETUP_ENV_KEYS}
     db_file = tmp_path / "test_digest.db"
     monkeypatch.setenv("DB_PATH", str(db_file))
-    monkeypatch.setenv("PROFILE_PATH", "config/profile.example.yaml")
+    isolated_root = tmp_path_factory.mktemp("isolated-app-state")
+    profile_file = isolated_root / "profile.yaml"
+    profile_file.write_bytes((Path(__file__).resolve().parents[1] / "config/profile.example.yaml").read_bytes())
+    monkeypatch.setenv("PROFILE_PATH", str(profile_file))
+    monkeypatch.setenv("OPPORTUNITY_PROFILE_PATH", str(isolated_root / "opportunities.yaml"))
+    monkeypatch.setenv("LLM_BACKEND", "extractive")
     monkeypatch.setenv("LLM_API_KEY", "")
     monkeypatch.setenv("USER_TZ", "UTC")
     # A developer's private opportunity settings must not change validation of
@@ -59,7 +65,16 @@ def _isolate_env(tmp_path, monkeypatch):
         monkeypatch.setattr(_config, "SETTINGS", isolated_settings)
     except Exception:
         pass
-    web_module = sys.modules.get("dailydigest.web")
+    from dailydigest import web as web_module
+    # Any setup route reached by a failing regression must remain isolated.
+    monkeypatch.setattr(web_module, "_REPO_ROOT", isolated_root)
+    monkeypatch.setattr(web_module, "_ENV_PATH", isolated_root / ".env")
+    from dailydigest.rank import embed as embed_module, profile as profile_module
+    # Fake vectors and backend bindings must not escape a test's compute lifecycle.
+    monkeypatch.setattr(embed_module, "_ENCODER", None)
+    monkeypatch.setattr(embed_module, "_LOADED_KEY", None)
+    monkeypatch.setattr(embed_module, "_PINNED_BACKEND", None)
+    monkeypatch.setattr(profile_module, "_CORE_FACET_CACHE", {})
     if web_module is not None:
         try:
             monkeypatch.setattr(web_module, "SETTINGS", isolated_settings)

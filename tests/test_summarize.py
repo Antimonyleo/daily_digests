@@ -265,7 +265,7 @@ def test_cli_total_budget_limits_the_last_batch_timeout(monkeypatch):
     def fake_monotonic():
         return now[0]
 
-    def fake_call_cli(batch, backend, *, timeout):
+    def fake_call_cli(batch, backend, *, timeout, settings=None):
         timeouts.append(timeout)
         now[0] += timeout
         raise sm.subprocess.TimeoutExpired(backend, timeout)
@@ -352,7 +352,7 @@ def test_provider_failure_reports_extractive_fallback_provenance(monkeypatch):
     monkeypatch.setattr(
         sm,
         "_call_llm",
-        lambda _batch: (_ for _ in ()).throw(RuntimeError("provider down")),
+        lambda _batch, **_kwargs: (_ for _ in ()).throw(RuntimeError("provider down")),
     )
 
     summaries, provenance = sm._summarize_via_provider_with_provenance(
@@ -385,6 +385,21 @@ def test_summary_signature_changes_with_profile_text_and_backend(monkeypatch):
     changed_backend = sm.summary_signature(item, profile, backend="api")
 
     assert len({original, changed_text, changed_profile, changed_backend}) == 4
+
+
+def test_summary_signature_changes_with_canonical_facets(monkeypatch):
+    from dailydigest import config
+
+    monkeypatch.setattr(config, "get_settings", lambda: SimpleNamespace(
+        llm_backend="extractive", llm_api_key="", llm_model="unused",
+    ))
+    item = _row("A transferable method", "We introduce a new engineering method.")
+    profiles = [SimpleNamespace(
+        bio="Biomolecular researcher", keywords=["engineering"],
+        canonical_facets={facet: {"aliases": [facet]}},
+    ) for facet in ("Protein engineering", "Colloidal self-assembly")]
+
+    assert sm.summary_signature(item, profiles[0]) != sm.summary_signature(item, profiles[1])
 
 
 def test_api_summary_signature_changes_with_provider_endpoint(monkeypatch):

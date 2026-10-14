@@ -14,17 +14,17 @@ import email
 import email.utils
 import imaplib
 import logging
-import os
 import re
 from datetime import datetime, timedelta, timezone
 from email.header import decode_header, make_header
 from email.message import Message
-from typing import Any
+from html.parser import HTMLParser
+from typing import Any, Callable
 
 from pydantic import BaseModel
 
 from . import votes as votes_mod
-from .config import SETTINGS
+from .config import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -44,17 +44,14 @@ class InboundConfig(BaseModel):
 
 
 def load_inbound_config() -> InboundConfig:
-    """Build an :class:`InboundConfig` from environment variables."""
-    try:
-        port = int(os.environ.get("IMAP_PORT", "993"))
-    except ValueError:
-        port = 993
+    """Read configured mailbox settings from the environment and local .env."""
+    settings = get_settings()
     return InboundConfig(
-        imap_host=os.environ.get("IMAP_HOST", ""),
-        imap_port=port,
-        imap_user=os.environ.get("IMAP_USER", ""),
-        imap_password=os.environ.get("IMAP_PASSWORD", ""),
-        mailbox=os.environ.get("IMAP_MAILBOX", "INBOX"),
+        imap_host=settings.imap_host,
+        imap_port=settings.imap_port,
+        imap_user=settings.imap_user,
+        imap_password=settings.imap_password,
+        mailbox=settings.imap_mailbox,
     )
 
 
@@ -63,8 +60,6 @@ def load_inbound_config() -> InboundConfig:
 
 # Match a vote token possibly with a leading sign. Word-boundary on both ends.
 _VOTE_TOKEN_RE = re.compile(r"(?<![A-Za-z0-9])[+-]?[RIAGWFEUriagwfeu]\d+\b")
-# Strip HTML tags as a last resort (only when no text/plain part exists).
-_HTML_TAG_RE = re.compile(r"<[^>]+>")
 # "On Mon, Jan 1, 2026 at 8:00 AM Foo <foo@bar> wrote:" style markers.
 _REPLY_MARKER_RE = re.compile(r"^\s*On .+ wrote:\s*$", re.IGNORECASE)
 # Some clients use "From: ..." block; treat that as quoted as well.
@@ -82,18 +77,36 @@ def _decode_header(value: str | None) -> str:
         return value
 
 
+class _ReplyTextParser(HTMLParser):
+    """Keep authored HTML lines separate and omit quoted/non-visible content."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.parts: list[str] = []
+        self.ignored_depth = 0
+
+    def handle_starttag(self, tag, attrs):
+        if tag in {"blockquote", "script", "style"}:
+            self.ignored_depth += 1
+        elif not self.ignored_depth and tag in {"br", "p", "div", "li", "tr"}:
+            self.parts.append("\n")
+
+    def handle_endtag(self, tag):
+        if tag in {"blockquote", "script", "style"}:
+            self.ignored_depth = max(0, self.ignored_depth - 1)
+        elif not self.ignored_depth and tag in {"p", "div", "li", "tr"}:
+            self.parts.append("\n")
+
+    def handle_data(self, data):
+        if not self.ignored_depth:
+            self.parts.append(data)
+
+
 def _strip_html(html: str) -> str:
-    text = _HTML_TAG_RE.sub("", html)
-    # Decode a few common entities without pulling in html.parser machinery.
-    text = (
-        text.replace("&nbsp;", " ")
-        .replace("&amp;", "&")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", '"')
-        .replace("&#39;", "'")
-    )
-    return text
+    parser = _ReplyTextParser()
+    parser.feed(html)
+    parser.close()
+    return "".join(parser.parts)
 
 
 def _get_body(msg: Message) -> str:
@@ -207,8 +220,16 @@ def _imap_search_criteria(cfg: InboundConfig) -> list[str]:
     ]
 
 
-def fetch_replies(cfg: InboundConfig) -> list[dict[str, Any]]:
-    """Connect via IMAP4_SSL, fetch matching unseen messages, mark them seen."""
+def fetch_replies(
+    cfg: InboundConfig,
+    *,
+    on_reply: Callable[[dict[str, Any]], bool] | None = None,
+) -> list[dict[str, Any]]:
+    """Fetch unread replies; acknowledge each only after its handler succeeds.
+
+    Without a handler this is a read-only fetch. A failed handler leaves the
+    message unread so the next poll can retry its idempotent vote updates.
+    """
     if not cfg.imap_host or not cfg.imap_user or not cfg.imap_password:
         return []
 
@@ -226,7 +247,7 @@ def fetch_replies(cfg: InboundConfig) -> list[dict[str, Any]]:
         ids = data[0].split()
         for msg_id in ids:
             try:
-                typ, msg_data = conn.fetch(msg_id, "(RFC822)")
+                typ, msg_data = conn.fetch(msg_id, "(BODY.PEEK[])")
                 if typ != "OK" or not msg_data or not msg_data[0]:
                     continue
                 raw = msg_data[0][1]
@@ -241,22 +262,21 @@ def fetch_replies(cfg: InboundConfig) -> list[dict[str, Any]]:
                 body = _strip_quoted(_get_body(msg))
                 digest_id = _parse_digest_id(subject)
 
-                results.append(
-                    {
-                        "message_id": message_id,
-                        "from": sender,
-                        "subject": subject,
-                        "date": date_hdr,
-                        "body": body,
-                        "digest_id": digest_id,
-                    }
-                )
+                reply = {
+                    "message_id": message_id,
+                    "from": sender,
+                    "subject": subject,
+                    "date": date_hdr,
+                    "body": body,
+                    "digest_id": digest_id,
+                }
+                results.append(reply)
 
-                # Mark as Seen so we don't reprocess.
-                try:
-                    conn.store(msg_id, "+FLAGS", "\\Seen")
-                except Exception as e:  # noqa: BLE001
-                    logger.warning("inbound: failed to mark %r seen: %s", msg_id, e)
+                if on_reply is not None and on_reply(reply):
+                    try:
+                        conn.store(msg_id, "+FLAGS", "\\Seen")
+                    except Exception as e:  # noqa: BLE001
+                        logger.warning("inbound: failed to mark %r seen: %s", msg_id, e)
             except Exception as e:  # noqa: BLE001
                 logger.warning("inbound: failed to fetch message %r: %s", msg_id, e)
                 continue
@@ -280,28 +300,21 @@ def fetch_replies(cfg: InboundConfig) -> list[dict[str, Any]]:
 def process_replies() -> dict[str, Any]:
     """Fetch unread DailyDigest replies and record votes from each.
 
-    Sender authentication: when ``SETTINGS.reply_to_email`` is set, only
-    replies whose ``From:`` address matches it are processed. Mismatched
-    senders are counted under ``skipped_unauthorized`` and logged at
-    WARNING. When the setting is unset, a one-time startup warning is
-    emitted and all senders are accepted (back-compat).
+    Allow the digest recipient's address, falling back to the mailbox user.
+    REPLY_TO_EMAIL is the inbox receiving replies, not the reader sending them.
+    This From-address allowlist relies on the mailbox provider's spam/spoofing
+    checks; it is not independent cryptographic sender authentication.
     """
     cfg = load_inbound_config()
     if not cfg.imap_user or not cfg.imap_password:
         return {"skipped": True}
 
-    expected_sender = (SETTINGS.reply_to_email or "").strip().lower()
+    expected_sender = email.utils.parseaddr(
+        get_settings().digest_to or cfg.imap_user
+    )[1].strip().lower()
     if not expected_sender:
-        logger.warning(
-            "inbound: no REPLY_TO_EMAIL configured; accepting all senders (insecure)"
-        )
-
-    if expected_sender and cfg.imap_user.lower() != expected_sender:
-        # IMAP_USER and REPLY_TO_EMAIL often coincide but don't have to
-        # (e.g., catch-all addresses). Lowered to DEBUG: addresses are PII.
-        logger.debug(
-            "inbound: IMAP_USER differs from REPLY_TO_EMAIL; proceeding.",
-        )
+        logger.warning("inbound: no reader address configured; skipping replies")
+        return {"skipped": True}
 
     summary: dict[str, Any] = {
         "messages": 0,
@@ -312,26 +325,15 @@ def process_replies() -> dict[str, Any]:
         "errors": [],
     }
 
-    try:
-        replies = fetch_replies(cfg)
-    except Exception as e:  # noqa: BLE001
-        logger.warning("inbound: fetch_replies failed: %s", e)
-        summary["errors"].append(f"fetch: {e}")
-        return summary
-
-    for reply in replies:
+    def process_reply(reply: dict[str, Any]) -> bool:
         summary["messages"] += 1
         try:
-            if expected_sender:
-                from_hdr = reply.get("from", "") or ""
-                sender_addr = email.utils.parseaddr(from_hdr)[1].strip().lower()
-                if sender_addr != expected_sender:
-                    summary["skipped_unauthorized"] += 1
-                    logger.warning(
-                        "inbound: skipping reply from non-authorized sender %s",
-                        sender_addr or "<unknown>",
-                    )
-                    continue
+            from_hdr = reply.get("from", "") or ""
+            sender_addr = email.utils.parseaddr(from_hdr)[1].strip().lower()
+            if sender_addr != expected_sender:
+                summary["skipped_unauthorized"] += 1
+                logger.warning("inbound: skipping reply from non-authorized sender")
+                return True
 
             line = extract_vote_line(reply.get("body", "") or "")
             if not line:
@@ -339,11 +341,12 @@ def process_replies() -> dict[str, Any]:
                     "inbound: no vote tokens in reply subject=%r",
                     reply.get("subject"),
                 )
-                continue
+                return True
             counts = votes_mod.record_votes(line, digest_id=reply.get("digest_id"))
             summary["votes_up"] += int(counts.get("up", 0))
             summary["votes_down"] += int(counts.get("down", 0))
             summary["votes_unknown"] += int(counts.get("unknown", 0))
+            return True
         except Exception as e:  # noqa: BLE001
             logger.warning(
                 "inbound: failed to record votes for %r: %s",
@@ -351,6 +354,12 @@ def process_replies() -> dict[str, Any]:
                 e,
             )
             summary["errors"].append(str(e))
-            continue
+            return False
+
+    try:
+        fetch_replies(cfg, on_reply=process_reply)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("inbound: fetch_replies failed: %s", e)
+        summary["errors"].append(f"fetch: {e}")
 
     return summary

@@ -5,6 +5,9 @@ enough feedback, a learned LR model. This module adds stable editorial signals:
 journal/source reputation, novelty/urgency language, and promotional-language
 penalties. It intentionally avoids live impact-factor lookups so daily brewing
 stays local, fast, and reproducible.
+
+Venue prestige is a source prior, not proof of an individual article's quality
+or alignment. Publication exclusions and topic gates remain separate checks.
 """
 
 from __future__ import annotations
@@ -17,7 +20,7 @@ from typing import Any
 
 from ..models import SourceSpec
 
-RANKER_VERSION = "2026-09-02-deadline-venue-v8"
+RANKER_VERSION = "2026-10-10-content-fidelity-v12"
 
 _ARXIV_CS_RE = re.compile(r"\barxiv[\s:_\-]*cs[\s:./\-]", re.IGNORECASE)
 
@@ -66,7 +69,7 @@ TOP_TIER_NAMES = {
     "the lancet",
 }
 
-HIGH_TIER_PATTERNS = (
+HIGH_TIER_NAMES = (
     "nature biotechnology",
     "nature methods",
     "nature medicine",
@@ -101,9 +104,14 @@ HIGH_TIER_PATTERNS = (
     "journal of the american chemical society",
 )
 
-STRONG_TIER_PATTERNS = (
+STRONG_TIER_NAMES = (
     "nature communications",
-    "nature reviews",
+    "nature reviews drug discovery",
+    "nature reviews chemistry",
+    "nature reviews materials",
+    "nature reviews genetics",
+    "nature reviews cancer",
+    "nature reviews microbiology",
     "science advances",
     "science signaling",
     "cell reports",
@@ -112,7 +120,8 @@ STRONG_TIER_PATTERNS = (
     "cell genomics",
     "med (cell press)",
     "chem (cell press)",
-    "jacs",  # bare token keeps JACS Au (2yr ≈ 7.1) at strong; JACS itself is high-tier
+    "jacs",
+    "jacs au",
     "acs catalysis",
     "acs central science",
     "acs chemical biology",
@@ -120,13 +129,43 @@ STRONG_TIER_PATTERNS = (
     "chemical science",
     "chem. soc. rev.",
     "energy and environmental science",
-    "angew. chem.",
+    "angew. chem. int. ed.",
     "angewandte chemie",
+    "angewandte chemie international edition",
     "advanced materials",
     "advanced functional materials",
     "advanced science",
     "small (wiley)",
 )
+
+
+def _normalize_venue_name(value: str) -> str:
+    # Normalize spelling conventions only. Never drop meaningful title words:
+    # Neuronal Signaling is not Neuron, and Small Ruminant Research is not Small.
+    value = value.casefold().replace("&", " and ").replace(".", "")
+    return " ".join(value.split())
+
+
+_VENUE_ALIASES = {
+    "small": "small (wiley)",
+    "chemical society reviews": "chem soc rev",
+    "proceedings of the national academy of sciences": "pnas",
+    "proceedings of the national academy of sciences of the united states of america": "pnas",
+    "new england journal of medicine": "nejm",
+    "the new england journal of medicine": "nejm",
+}
+_VENUE_TIERS = {
+    _normalize_venue_name(name): tier
+    for tier, names in (
+        ("top", TOP_TIER_NAMES), ("high", HIGH_TIER_NAMES), ("strong", STRONG_TIER_NAMES),
+    )
+    for name in names
+}
+
+
+def _known_venue_tier(value: str) -> str | None:
+    normalized = _normalize_venue_name(value)
+    return _VENUE_TIERS.get(_VENUE_ALIASES.get(normalized, normalized))
 
 REPOSITORY_PATTERNS = (
     "biorxiv",
@@ -246,19 +285,6 @@ ACCESS_FRICTION_TERMS = (
     "purchase access",
 )
 
-COMMENTARY_TERMS = (
-    "commentary",
-    "editorial",
-    "viewpoint",
-    "opinion",
-    "perspective",
-    "news and views",
-    "news & views",
-    "correspondence",
-    "letter to the editor",
-    "podcast",
-)
-
 CONTENT_TYPE_TERMS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("editorial", ("editorial", "opinion", "viewpoint", "perspective", "news and views", "news & views")),
     ("commentary", ("commentary", "correspondence", "letter to the editor")),
@@ -304,7 +330,9 @@ SKIP_PATTERNS = (
 # research. Matched on the TITLE (structural markers), so genuine papers whose
 # abstract merely mentions e.g. "correction" are unaffected.
 NON_RESEARCH_TITLE_PATTERNS = (
-    re.compile(r"^\s*(author\s+)?correction(\s+to)?\b[:.]?", re.IGNORECASE),
+    re.compile(r"^\s*author\s+correction\b", re.IGNORECASE),
+    # Bare "Correction of errors ..." can name an original engineering result.
+    re.compile(r"^\s*correction(?:\s+to\b|\s*[:.]|\s*$)", re.IGNORECASE),
     re.compile(r"^\s*publisher\s+correction\b", re.IGNORECASE),
     re.compile(r"^\s*erratum\b", re.IGNORECASE),
     re.compile(r"^\s*retraction(\s+note)?\b", re.IGNORECASE),
@@ -341,15 +369,94 @@ NON_RESEARCH_TITLE_PATTERNS = (
 )
 
 
-def is_non_research_content(row: Any) -> bool:
-    """Return True for research-feed items that are not primary research.
+def research_exclusion_metadata(row: Any) -> dict[str, Any]:
+    """Return explicit publication exclusions that can follow the same work's ID.
 
-    News, News & Views, research highlights, editorials, corrections, retractions,
-    and news round-ups are dropped from the research section (they can still reach
-    the news sections). Only applies to the research section.
+    Title heuristics deliberately stay out: matching titles alone cannot prove
+    that a correction, commentary or retraction describes this specific record.
     """
     if _row_section(row).lower() != "research":
+        return {}
+    metadata = _row_metadata(row)
+    evidence: dict[str, Any] = {}
+    if metadata.get("is_retracted") is True:
+        evidence["is_retracted"] = True
+    publication_types = metadata.get("publication_types", [])
+    if not isinstance(publication_types, (list, tuple)):
+        publication_types = []
+    declared_types = [*publication_types, metadata.get("work_type", "")]
+    non_research_types = {
+        "editorial", "news", "comment", "commentary", "correction", "erratum",
+        "published erratum", "retraction", "retracted publication",
+        "retraction of publication", "retraction notice", "expression of concern",
+        "news and views", "news & views",
+    }
+    rejected_types = sorted({
+        value.strip().casefold()
+        for value in declared_types
+        if isinstance(value, str) and value.strip().casefold() in non_research_types
+    })
+    if rejected_types:
+        evidence["publication_types"] = rejected_types
+        provenance = _publication_type_provenance(metadata, rejected_types)
+        if provenance:
+            evidence["publication_type_evidence"] = provenance
+    return evidence
+
+
+def _publication_type_provenance(metadata: dict, declared_types) -> list[dict]:
+    raw = metadata.get("publication_type_evidence", [])
+    if not isinstance(raw, list):
+        return []
+    provenance = []
+    aliases = {"news and views": "news", "news & views": "news"}
+    for record in raw:
+        if not isinstance(record, dict):
+            continue
+        field, value = record.get("field"), record.get("value")
+        if not isinstance(field, str) or field not in {"dc_type", "prism_genre", "prism_section"} or not isinstance(value, str):
+            continue
+        normalized = " ".join(value.casefold().split())
+        if normalized in declared_types or aliases.get(normalized) in declared_types:
+            entry = {"field": field, "value": value}
+            if entry not in provenance:
+                provenance.append(entry)
+    return provenance
+
+
+def research_publication_metadata(row: Any) -> dict[str, Any]:
+    """Preserve explicit genres and exclusions across the same work's identity.
+
+    A richer generic Journal Article must not erase Review/Perspective/Primer.
+    This is metadata preservation, not a new eligibility policy: unlike
+    research_exclusion_metadata, a nonempty result need not exclude the record.
+    """
+    evidence = research_exclusion_metadata(row)
+    if _row_section(row).lower() != "research":
+        return evidence
+    metadata = _row_metadata(row)
+    declared = metadata.get("publication_types", [])
+    if not isinstance(declared, (list, tuple)):
+        declared = []
+    genres = {term for _label, terms in CONTENT_TYPE_TERMS[:4] for term in terms}
+    genres.update({"systematic review", "meta-analysis"})
+    types = set(evidence.get("publication_types", []))
+    types.update(value.strip().casefold() for value in [*declared, metadata.get("work_type", "")]
+                 if isinstance(value, str) and value.strip().casefold() in genres)
+    if types:
+        evidence["publication_types"] = sorted(types)
+        provenance = _publication_type_provenance(metadata, types)
+        if provenance:
+            evidence["publication_type_evidence"] = provenance
+    return evidence
+
+
+def is_non_research_content(row: Any) -> bool:
+    """Return True for research-feed editorial metadata and non-research titles."""
+    if _row_section(row).lower() != "research":
         return False
+    if research_exclusion_metadata(row):
+        return True
     title = _safe_str(getattr(row, "title", "")).strip()
     if not title:
         return False
@@ -402,8 +509,24 @@ def _quality_source(row: Any) -> str:
     return source
 
 
+def source_diversity_key(row: Any) -> str:
+    """Count exact journal aliases together, without merging publisher families."""
+    source = _quality_source(row)
+    normalized = _normalize_venue_name(source)
+    if _known_venue_tier(source) is not None:
+        if normalized == "angew chem int ed":
+            return "angewandte chemie international edition"
+        return _VENUE_ALIASES.get(normalized, normalized)
+    return _row_source(row).strip().lower()
+
+
 def _row_section(row: Any) -> str:
     return _safe_str(getattr(row, "section", ""))
+
+
+def publication_date_is_known(row: Any) -> bool:
+    """An update/fetch timestamp is not evidence of publication age."""
+    return _row_metadata(row).get("publication_date_source") not in {"updated", "fetched"}
 
 
 def _clip(value: float, low: float = 0.0, high: float = 1.0) -> float:
@@ -477,14 +600,6 @@ def infer_source_quality(source: str, section: str) -> SourceQuality:
     return _infer_source_quality_by_name(source_lc, section_lc)
 
 
-def _is_strong_venue_name(value: str) -> bool:
-    return (
-        any(pattern in value for pattern in STRONG_TIER_PATTERNS)
-        or value == "small"
-        or value.startswith("small ")
-    )
-
-
 def recognized_research_venue(venue_name: str | None) -> str | None:
     """Return ``venue_name`` when it names a known top/high/strong research venue.
 
@@ -495,12 +610,7 @@ def recognized_research_venue(venue_name: str | None) -> str | None:
     """
     if not venue_name:
         return None
-    v = venue_name.lower().strip()
-    if not v:
-        return None
-    if v in TOP_TIER_NAMES:
-        return venue_name
-    if any(p in v for p in HIGH_TIER_PATTERNS) or _is_strong_venue_name(v):
+    if _known_venue_tier(venue_name) is not None:
         return venue_name
     return None
 
@@ -511,11 +621,12 @@ def _infer_source_quality_by_name(source_lc: str, section_lc: str) -> SourceQual
             return SourceQuality(0.34, "aggregator", None)
         if is_arxiv_cs_source(source_lc):
             return SourceQuality(0.48, "repository", None)
-        if source_lc in TOP_TIER_NAMES:
+        venue_tier = _known_venue_tier(source_lc)
+        if venue_tier == "top":
             return SourceQuality(0.99, "top", 7.0)
-        if any(pattern in source_lc for pattern in HIGH_TIER_PATTERNS):
+        if venue_tier == "high":
             return SourceQuality(0.90, "high", 7.0)
-        if _is_strong_venue_name(source_lc):
+        if venue_tier == "strong":
             return SourceQuality(0.76, "strong", 7.0)
         if any(
             pattern in source_lc
@@ -584,13 +695,17 @@ def access_friction_score(row: Any) -> float:
 
 
 def is_arxiv_cs_source(row_or_source) -> bool:
-    """Return True when the source string looks like an arXiv CS feed."""
+    """Use a declared arXiv CS category or the conventional feed name."""
     source = (
         row_or_source
         if isinstance(row_or_source, str)
         else (getattr(row_or_source, "source", None) or "")
     )
-    return bool(_ARXIV_CS_RE.search(source))
+    if _ARXIV_CS_RE.search(source):
+        return True
+    configured = _configured_sources_cached().get(source.lower())
+    return bool(configured and configured.kind.strip().casefold() == "arxiv"
+                and (configured.category or "").strip().casefold().startswith("cs."))
 
 
 def source_bucket(row: Any) -> str:
@@ -622,6 +737,22 @@ def source_bucket(row: Any) -> str:
     if "biorxiv" in quality_source_lc or "medrxiv" in quality_source_lc:
         return "bio_med_preprint"
     if any(pattern in quality_source_lc for pattern in PREPRINT_SERVER_PATTERNS):
+        return "preprint_other"
+
+    # Feed adapter type and explicit publication metadata outrank journal names
+    # and impact flags. Custom feed names must still use the preprint budget.
+    configured = _configured_sources_cached().get(source_lc)
+    kind = (configured.kind if configured else "").strip().casefold()
+    if kind == "arxiv":
+        return "arxiv_other"
+    if kind in {"biorxiv", "medrxiv"}:
+        return "bio_med_preprint"
+    metadata = _row_metadata(row)
+    publication_types = metadata.get("publication_types", [])
+    if not isinstance(publication_types, (list, tuple)):
+        publication_types = []
+    if any(isinstance(value, str) and value.strip().casefold() == "preprint"
+           for value in [*publication_types, metadata.get("work_type", "")]):
         return "preprint_other"
 
     # Live venue-impact enrichment (when enabled) can flag an item whose actual
@@ -659,6 +790,33 @@ def is_low_impact_research(row: Any) -> bool:
     return source_bucket(row) == "low_impact_journal"
 
 
+def venue_evidence(row: Any) -> dict[str, str]:
+    """Describe source evidence without changing conservative selection buckets."""
+    meaning = "Venue-level evidence only; not verified article quality or reader relevance"
+    if _row_section(row).lower() != "research":
+        status = "not_applicable"
+    elif is_preprint_source(row):
+        status = "preprint"
+    elif getattr(row, "venue_low_impact", False) is True:
+        status = "observed_low_impact"
+    elif getattr(row, "venue_high_impact", False) is True:
+        status = "observed_high_impact"
+    elif infer_source_quality(_quality_source(row), "research").quality_tier in {"top", "high", "strong", "low"}:
+        status = "source_prior"
+    else:
+        status = "unknown"
+    evidence = {"status": status, "meaning": meaning}
+    observation = getattr(row, "enrichment_evidence", None)
+    if isinstance(observation, dict):
+        for source, target in (("status", "observation_status"),
+                               ("observed_at", "observed_at"),
+                               ("refresh_status", "refresh_status")):
+            value = observation.get(source)
+            if isinstance(value, str) and value:
+                evidence[target] = value
+    return evidence
+
+
 def is_preprint_source(row: Any) -> bool:
     return source_bucket(row) in {"arxiv_cs", "arxiv_other", "bio_med_preprint", "preprint_other"}
 
@@ -670,15 +828,37 @@ def is_published_journal_source(row: Any) -> bool:
 def is_high_quality_journal_source(row: Any) -> bool:
     if _row_section(row).lower() != "research":
         return False
+    if source_bucket(row) != "published_journal":
+        return False
     quality = infer_source_quality(_quality_source(row), "research")
     return quality.quality_tier in {"top", "high", "strong"}
 
 
 def content_type(row: Any) -> str:
-    """Return a compact content-type label inferred from source text."""
+    """Prefer declared publication genre; scientific task words are not genres."""
+    metadata = _row_metadata(row)
+    declared = metadata.get("publication_types", [])
+    if not isinstance(declared, (list, tuple)):
+        declared = []
+    declared = {value.strip().casefold() for value in [*declared, metadata.get("work_type", "")]
+                if isinstance(value, str)}
+    genre_terms = CONTENT_TYPE_TERMS[:4]
+    for label, terms in genre_terms:
+        if declared.intersection(terms) or (label == "commentary" and "comment" in declared):
+            return label
+    if declared.intersection({"systematic review", "meta-analysis"}):
+        return "review"
+    title = _safe_str(getattr(row, "title", "")).strip()
+    # Publisher genre prefixes are structural; an incidental abstract reference
+    # to "a new perspective" or oligonucleotide primers must not penalize a paper.
+    if not declared.intersection({"article", "journal article", "research article"}):
+        for label, terms in genre_terms:
+            if any(re.match(r"^(?:a\s+)?" + re.escape(term) + r"(?:\s*[:—–-]|\s+(?:of|on)\b|\s*$)",
+                            title, re.IGNORECASE) for term in terms):
+                return label
     text_lc = _row_text(row).lower()
-    for label, terms in CONTENT_TYPE_TERMS:
-        if any(term in text_lc for term in terms):
+    for label, terms in CONTENT_TYPE_TERMS[4:]:
+        if any(re.search(r"\b" + re.escape(term) + r"\b", text_lc) for term in terms):
             return label
     return "research" if _row_section(row).lower() == "research" else "article"
 
@@ -705,7 +885,7 @@ def should_skip_item(row: Any) -> bool:
         if is_non_research_content(row):
             return True
         text_lc = text.lower()
-        is_commentary = any(term in text_lc for term in COMMENTARY_TERMS)
+        is_commentary = content_type(row) in {"editorial", "commentary", "podcast"}
         has_new_information = (
             novelty_score(row) >= 0.24
             or any(term in text_lc for term in METHOD_OR_RESULT_TERMS)
@@ -726,14 +906,16 @@ def _reason_tags(
     tags: list[str] = []
     section = _row_section(row).lower()
     tier = source_quality.quality_tier
-    if tier in {"top", "high", "strong"}:
+    if (is_high_quality_journal_source(row) if section == "research" else tier in {"top", "high", "strong"}):
         tags.append("High-quality source")
-    elif tier in {"repository", "preprint"}:
+    elif is_preprint_source(row) or tier in {"repository", "preprint"}:
         tags.append("Preprint / repository")
     elif tier == "aggregator":
         tags.append("Aggregator source")
     elif tier == "trusted-news":
         tags.append("Trusted news")
+    elif section == "research" and venue_evidence(row)["status"] == "unknown":
+        tags.append("Venue quality unverified")
 
     if novelty >= 0.55:
         tags.append("High novelty")
@@ -760,14 +942,16 @@ def _reason_tags(
 def _quality_tags(source_quality: SourceQuality, promo: float, access: float, row: Any) -> tuple[str, ...]:
     tags: list[str] = []
     tier = source_quality.quality_tier
-    if tier in {"top", "high", "strong"}:
+    if (is_high_quality_journal_source(row) if _row_section(row).lower() == "research" else tier in {"top", "high", "strong"}):
         tags.append("high_quality_source")
-    elif tier in {"repository", "preprint"}:
+    elif is_preprint_source(row) or tier in {"repository", "preprint"}:
         tags.append("preprint_repository")
     elif tier == "aggregator":
         tags.append("aggregator_source")
     elif tier == "trusted-news":
         tags.append("trusted_news")
+    elif _row_section(row).lower() == "research" and venue_evidence(row)["status"] == "unknown":
+        tags.append("unknown_venue")
     if promo >= 0.35:
         tags.append("promo_risk")
     if access >= 0.14:
@@ -787,6 +971,7 @@ def _freshness_tags(novelty: float) -> tuple[str, ...]:
 
 def _why_shown(
     *,
+    row: Any,
     topic: float,
     learned: float,
     source_quality: SourceQuality,
@@ -803,7 +988,11 @@ def _why_shown(
     # LR is trained pairwise; the absolute probability is not a calibrated upvote
     # likelihood, so we intentionally do not emit a "matches your feedback"
     # reason from it. See _reason_tags for the full rationale.
-    if source_quality.quality_tier in {"top", "high", "strong", "trusted-news"}:
+    if (
+        is_high_quality_journal_source(row)
+        if _row_section(row).lower() == "research"
+        else source_quality.quality_tier in {"top", "high", "strong", "trusted-news"}
+    ):
         reasons.append("Reliable source")
     if novelty >= 0.55:
         reasons.append("High-impact new signal")
@@ -861,6 +1050,7 @@ def score_breakdown(
         freshness_tags=freshness_tags,
         quality_tags=quality_tags,
         why_shown=_why_shown(
+            row=row,
             topic=topic,
             learned=learned,
             source_quality=source_quality,
@@ -918,6 +1108,9 @@ def breakdown_payload(
     topic_priority_bonus: float = 0.0,
     topic_coverage_bonus: float = 0.0,
     selection_order_bonus: float = 0.0,
+    contribution_rerank: dict[str, Any] | None = None,
+    contribution_claims: dict[str, Any] | None = None,
+    article_evidence: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Return a JSON-serializable rank explanation for persistence/UI."""
     breakdown = score_breakdown(
@@ -929,7 +1122,7 @@ def breakdown_payload(
     )
     display_score = float(final_score if final_score is not None else breakdown.final)
     confidence = float(confidence_score if confidence_score is not None else display_score)
-    return {
+    payload = {
         "ranker_version": RANKER_VERSION,
         "score": round(display_score, 4),
         "rank_score": round(float(rank_score if rank_score is not None else display_score), 4),
@@ -945,6 +1138,7 @@ def breakdown_payload(
         "negative_interest_penalty": round(float(negative_interest_penalty), 4),
         "content_type": breakdown.content_type,
         "source_bucket": source_bucket(row),
+        "venue_evidence": venue_evidence(row),
         "selection_reason": selection_reason or "",
         "scoring_mode": scoring_mode or "cosine",
         "tags": list(breakdown.tags),
@@ -963,6 +1157,13 @@ def breakdown_payload(
         "topic_coverage_bonus": round(float(topic_coverage_bonus), 4),
         "selection_order_bonus": round(float(selection_order_bonus), 4),
     }
+    if contribution_rerank is not None:
+        payload["contribution_rerank"] = dict(contribution_rerank)
+    if contribution_claims is not None:
+        payload["contribution_claims"] = dict(contribution_claims)
+    if article_evidence is not None:
+        payload["article_evidence"] = dict(article_evidence)
+    return payload
 
 
 def _research_quality_weight() -> float:
@@ -987,9 +1188,9 @@ def _venue_relevance_credit_coeff() -> float:
 def venue_relevance_credit(row: Any) -> float:
     """Topic-relevance credit granted to a high-quality research venue at the gate.
 
-    A prestigious journal in the reader's field is a strong quality prior, so it
-    should clear the ``min_topic_relevance`` floor at a slightly lower raw cosine
-    than an anonymous preprint/aggregator hit. Returns ``coeff * prestige_excess``
+    This configured venue prior allows a slightly lower raw cosine at the
+    ``min_topic_relevance`` floor. It is not evidence of semantic alignment or
+    article validity. Returns ``coeff * prestige_excess``
     for research items (0 for news/preprints/aggregators, whose prestige_excess is
     small or zero), where ``prestige_excess = prestige - LOW_RESEARCH_PRESTIGE``.
 
@@ -998,6 +1199,8 @@ def venue_relevance_credit(row: Any) -> float:
     still fails the gate.
     """
     if _row_section(row).lower() != "research":
+        return 0.0
+    if source_bucket(row) != "published_journal":
         return 0.0
     quality = infer_source_quality(_quality_source(row), "research")
     # Preprints/aggregators do not get venue relevance credit even if their
@@ -1017,7 +1220,7 @@ def quality_adjusted_score(row: Any, base_score: float) -> float:
     quality×relevance interaction term, while low-impact venues take a penalty
     that — unlike the legacy version — does not fully fade at high relevance, so
     a low-impact paper does not rank alongside strong-venue work merely for being
-    on-topic. Truly exceptional results (high relevance + novelty) are exempt.
+    on-topic. Novelty wording alone cannot waive the low-impact penalty.
 
     The returned score is clipped to [0, 1] so the absolute thresholds that gate
     selection downstream (``adaptive_size_bar``, the exceptional-preprint cutoff)
@@ -1032,13 +1235,19 @@ def quality_adjusted_score(row: Any, base_score: float) -> float:
 
     if section == "research":
         Q = _research_quality_weight()
-        prestige_excess = max(source_quality.prestige_score - LOW_RESEARCH_PRESTIGE, 0.0)
+        bucket = source_bucket(row)
+        # Eligibility and scoring must agree: explicit low-impact evidence and
+        # preprint identity veto a journal prior, even if its name/configuration
+        # would otherwise assign a prestigious tier.
+        prestige_excess = (
+            max(source_quality.prestige_score - LOW_RESEARCH_PRESTIGE, 0.0)
+            if bucket == "published_journal" else 0.0
+        )
         # Venue quality is applied ONLY as a RELEVANCE-GATED interaction: a
         # high-impact venue amplifies work that is already on-topic, but grants
-        # little/no lift to an off-topic prestigious paper — so quality reorders
-        # among comparably-relevant items yet can never let an off-niche journal
-        # outrank a more on-topic one. This encodes the reader's rule "high-quality
-        # AND relevant ranks higher; quality never substitutes for relevance."
+        # little/no lift below the relevance band. Within that band the configured
+        # venue prior can invert raw-topic ordering; it does not establish that
+        # either paper is useful or scientifically sound.
         #
         # The prior formula added a relevance-INDEPENDENT source_bonus
         # (0.18·Q·prestige_excess, up to ~+0.13 unconditionally), which lifted
@@ -1049,9 +1258,13 @@ def quality_adjusted_score(row: Any, base_score: float) -> float:
         rel_gate = max(0.0, min(1.0, (float(base) - 0.68) / 0.12))
         quality_relevance = 0.36 * Q * prestige_excess * rel_gate
         score = base + quality_relevance + (0.08 * novelty) - (0.35 * promo)
-        low_prestige = source_quality.prestige_score < LOW_RESEARCH_PRESTIGE
+        low_prestige = (
+            bucket == "low_impact_journal"
+            or (bucket != "published_journal"
+                and source_quality.prestige_score < LOW_RESEARCH_PRESTIGE)
+        )
         exceptional = base >= 0.80 and novelty >= 0.50
-        if low_prestige and not exceptional:
+        if low_prestige:
             # Relevance-scaled component fades as the paper gets more on-topic, but
             # a larger persistent residual (0.10, was 0.05) keeps a low-impact venue
             # meaningfully below comparable strong-venue work even when it is highly
@@ -1066,7 +1279,7 @@ def quality_adjusted_score(row: Any, base_score: float) -> float:
         # preprint can still surface over a weakly matched journal paper.
         # arXiv CS gets a slightly higher penalty but we take the MAX of the two,
         # not both, to avoid double-stacking.
-        if (source_quality.quality_tier in {"repository", "preprint"} or is_arxiv_cs_source(row)) and not exceptional:
+        if is_preprint_source(row) and not exceptional:
             preprint_smooth = max(0.0, min(1.0, (0.76 - base) / 0.26))
             arxiv_smooth = max(0.0, min(1.0, (0.76 - base) / 0.20)) if is_arxiv_cs_source(row) else 0.0
             # Instead of stacking both penalties, use the larger of the two

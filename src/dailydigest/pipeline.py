@@ -5,6 +5,8 @@ from __future__ import annotations
 import logging
 import re
 import time
+import uuid
+from copy import deepcopy
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timezone
@@ -42,6 +44,7 @@ from .rank.ranker import (
     score_items_with_features,
 )
 from .rank.source_quality import (
+    LOW_RESEARCH_PRESTIGE,
     RANKER_VERSION,
     breakdown_payload,
     is_high_quality_journal_source,
@@ -91,6 +94,10 @@ logger = logging.getLogger(__name__)
 _ORIGINAL_SCORE_ITEMS = score_items
 _ORIGINAL_SUMMARIZE_ITEMS = summarize_items
 
+
+class BrewCancelled(RuntimeError):
+    """A cooperative cancellation stopped a brew before digest publication."""
+
 READING_MODE_LIMITS: dict[str, int | None] = {
     "full": None,
     "usual": 15,
@@ -105,7 +112,7 @@ DEADLINE_SECTIONS = {"opportunities", "events"}
 DEADLINE_KEEP = {"full": None, "usual": 6, "minimal": 3}
 
 _TITLE_BLOCKLIST = re.compile(
-    r"^(?:volume\s+\d|issue\s+\d|editorial\b|correspondence\b|correction\b|"
+    r"^(?:volume\s+\d|issue\s+\d|editorial\b|correspondence\b|"
     r"erratum\b|in\s+this\s+issue|table\s+of\s+contents|show\s+hn:|ask\s+hn:|"
     r"sponsored:?|webinar:|save\s+the\s+date)",
     re.IGNORECASE,
@@ -130,10 +137,9 @@ def _quality_gate(rows: list[ItemRow]) -> tuple[list[ItemRow], list[dict[str, An
 
     Drops items that are clearly not useful: very short titles, editorial
     metadata, content-farm patterns, and research items with no abstract.
-    Skipped when the pool is < 10 items to preserve test/backfill behaviour.
+    The same rules apply to sparse and busy days; a small pool is not evidence
+    that editorial metadata or sponsored content is useful research.
     """
-    if len(rows) < 10:
-        return rows, []
     out: list[ItemRow] = []
     drops: list[dict[str, Any]] = []
     for r in rows:
@@ -200,21 +206,23 @@ def normalize_reading_mode(value: str | None, *, default: str = "full") -> str:
     return mode
 
 
-def _deadline_sort_key(pair: tuple[ItemRow, float]) -> tuple[float, float]:
+def _deadline_sort_key(
+    pair: tuple[ItemRow, float], as_of_date: date | None = None
+) -> tuple[float, float]:
     """Order deadline picks by urgency, then score. Undated calls sort last."""
     row, score = pair
     if not hasattr(row, "metadata_json"):
         return (10_000.0, -float(score))
     raw = str((item_metadata(row) or {}).get("deadline") or "").strip()
     try:
-        days = (date.fromisoformat(raw[:10]) - user_local_date()).days
+        days = (date.fromisoformat(raw[:10]) - (as_of_date or user_local_date())).days
     except (ValueError, TypeError):
         days = 10_000
     return (float(days), -float(score))
 
 
 def _limit_deadline_picks(
-    picks: list[tuple[ItemRow, float]], mode: str
+    picks: list[tuple[ItemRow, float]], mode: str, as_of_date: date | None = None
 ) -> list[tuple[ItemRow, float]]:
     """Keep the most urgent deadline picks for the requested reading depth.
 
@@ -225,7 +233,7 @@ def _limit_deadline_picks(
     keep = DEADLINE_KEEP.get(mode)
     if keep is None or len(picks) <= keep:
         return picks
-    by_urgency = sorted(picks, key=_deadline_sort_key)
+    by_urgency = sorted(picks, key=lambda pair: _deadline_sort_key(pair, as_of_date))
     reserved: list[tuple[ItemRow, float]] = []
     seen_sections: set[str] = set()
     for pair in by_urgency:
@@ -254,7 +262,7 @@ def _best_per_other_section(
 
 
 def apply_reading_mode(
-    picked: list[tuple[ItemRow, float]], reading_mode: str
+    picked: list[tuple[ItemRow, float]], reading_mode: str, *, as_of_date: date | None = None
 ) -> list[tuple[ItemRow, float]]:
     """Limit an already-qualified slate to today's requested reading depth.
 
@@ -274,7 +282,7 @@ def apply_reading_mode(
         pair for pair in picked if (pair[0].section or "") not in DEADLINE_SECTIONS
     ]
     ranked = sorted(reading_picks, key=lambda pair: pair[1], reverse=True)
-    kept_deadline = _limit_deadline_picks(deadline_picks, mode)
+    kept_deadline = _limit_deadline_picks(deadline_picks, mode, as_of_date)
     trimmed_deadline = len(kept_deadline) != len(deadline_picks)
     deadline_picks = kept_deadline
     if mode == "minimal":
@@ -312,6 +320,7 @@ def ingest_all(
     progress_callback: ProgressCallback | None = None,
     days: int = 2,
     section_settings: Settings | None = None,
+    stats_out: list[IngestStats] | None = None,
 ) -> int:
     """Fetch all sources, dedupe + langdetect filter, upsert. Returns rows inserted.
 
@@ -355,6 +364,7 @@ def ingest_all(
         # concurrency does not become an accidental API rate-limit burst.
         for index, spec in group:
             t0 = time.monotonic()
+            source = None
             try:
                 source = dispatch_source(spec)
                 fetched = source.fetch(spec, days=days)
@@ -379,6 +389,9 @@ def ingest_all(
                     error=f"{type(exc).__name__}: {exc}"[:200],
                     duration_ms=duration_ms,
                 )
+            diagnostics = getattr(source, "last_fetch_diagnostics", {})
+            if isinstance(diagnostics, dict):
+                stat.diagnostics = deepcopy(diagnostics)
             results.append((index, spec, fetched, stat))
         return results
 
@@ -410,6 +423,8 @@ def ingest_all(
         if family and fetched_research:
             successful_research_families.add(family)
 
+    if stats_out is not None:
+        stats_out.extend(stats)
     try:
         health.record(stats)
     except Exception as e:  # noqa: BLE001
@@ -447,14 +462,17 @@ def ingest_all(
     # A handful of results from one surviving aggregator is not a healthy
     # research scan. Require both adequate supply and two independent provider
     # families when the configured source list offers that redundancy. Optional
-    # news/opportunity failures never trigger this gate.
-    if len(configured_research_families) >= 2:
-        minimum_research_supply = max(
-            10, min(int((section_settings or get_settings()).top_research), 15)
+    # news/opportunity failures never trigger this gate. A setup with only one
+    # research family must still stop if that family's research is unavailable.
+    if configured_research_families:
+        required_families = min(2, len(configured_research_families))
+        minimum_research_supply = (
+            max(10, min(int((section_settings or get_settings()).top_research), 15))
+            if required_families == 2 else 1
         )
         if raw_research_items < minimum_research_supply or len(
             successful_research_families
-        ) < 2:
+        ) < required_families:
             families = ", ".join(sorted(successful_research_families)) or "none"
             raise RuntimeError(
                 "Research source coverage is degraded: "
@@ -484,7 +502,7 @@ def ingest_all(
             "All retrieved items were removed during deduplication/language filtering; "
             "brew stopped to avoid stale recommendations."
         )
-    if len(configured_research_families) >= 2:
+    if configured_research_families:
         english_research_items = sum(
             1
             for item in en_only
@@ -894,6 +912,45 @@ def _apply_topic_selection_preferences(
     ]
 
 
+def _apply_semantic_reranking(scored, features, profile, settings):
+    artifact = getattr(settings, 'contribution_reranker_path', '')
+    model_dir = getattr(settings, 'contribution_encoder_dir', '')
+    weight = float(getattr(settings, 'contribution_reranker_weight', .7))
+    if (not artifact and not model_dir) or weight == 0:
+        return scored
+    if not artifact or not model_dir:
+        raise ValueError('Contribution reranking requires both local paths')
+    from .rank.semantic_rerank import LocalContributionReranker
+
+    # A configured-model failure aborts this brew before replacing its digest.
+    return LocalContributionReranker(artifact, model_dir, profile).rerank(
+        scored, features, weight=weight,
+    )
+
+
+def _apply_contribution_ordering(scored, features, profile, settings):
+    strength = float(getattr(settings, "contribution_order_strength", 0.0))
+    if strength == 0.0:
+        return scored
+    from .rank.contribution import rerank_contributions
+
+    return rerank_contributions(
+        scored, features, getattr(profile, "canonical_facets", {}), strength=strength,
+    )
+
+
+def _annotate_research_evidence(picked, features):
+    from .rank.article_evidence import assess_article_evidence
+    from .rank.contribution_claims import contribution_claims
+
+    for row, _score in picked:
+        if row.section != 'research':
+            continue
+        feature = features.setdefault(_row_feature_key(row), {})
+        feature['contribution_claims'] = contribution_claims(row.abstract or '')
+        feature['article_evidence'] = assess_article_evidence(row.title or '', row.abstract or '')
+
+
 def _assign_labels(
     picked: list[tuple[ItemRow, float]],
 ) -> list[tuple[ItemRow, float, str]]:
@@ -1042,7 +1099,28 @@ def _score_items_for_pipeline(
         downweight,
         reason_penalty_map=reason_penalties,
         attribution=attribution,
+        prepare_quality=_prepare_ranking_enrichment,
     )
+
+
+def _prepare_ranking_enrichment(items, topic_scores) -> None:
+    """Resolve venue evidence for potentially eligible research before scoring."""
+    settings = get_settings()
+    if not getattr(settings, "citation_enrichment", False):
+        return
+    # A venue discovered by lookup can receive the strongest existing credit.
+    # Keep borderline candidates until that evidence is resolved, while avoiding
+    # provider calls for work that could not clear the topic gate even then.
+    max_credit = float(settings.venue_relevance_credit) * (1.0 - LOW_RESEARCH_PRESTIGE)
+    floor = float(settings.min_topic_relevance) - max_credit
+    candidates = [row for row, topic in zip(items, topic_scores, strict=True)
+                  if (row.section or "") == "research"
+                  and (not settings.adaptive_section_sizes or float(topic) >= floor)]
+    try:
+        from .rank.enrich import prepare_enrichment
+        prepare_enrichment(candidates, settings=settings)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("venue evidence preparation failed: %s", exc)
 
 
 def _should_write_digest(digest_id: str) -> bool:
@@ -1064,6 +1142,7 @@ def run_all(
     backfill_days: int | None = None,
     progress_callback: ProgressCallback | None = None,
     reading_mode: str = "full",
+    should_cancel: Callable[[], bool] | None = None,
 ) -> str:
     """Run ingest + rank + summarize + render + send. Returns the digest id.
 
@@ -1079,6 +1158,26 @@ def run_all(
     other non-empty section.
     """
     reading_mode = normalize_reading_mode(reading_mode)
+    timings: dict[str, int] = {}
+    starts: dict[str, float] = {}
+
+    def check_cancel() -> None:
+        # Only called before publication. Running fetch/encoder calls finish
+        # normally; cancellation never interrupts the atomic publication.
+        if should_cancel is not None and should_cancel():
+            raise BrewCancelled("Brew cancelled before publication; the saved digest is unchanged.")
+
+    def stage_start(name: str) -> None:
+        starts[name] = time.monotonic()
+        _emit(progress_callback, "stage_start", {"name": name})
+
+    def stage_done(name: str) -> None:
+        elapsed = max(0, int((time.monotonic() - starts[name]) * 1000))
+        timings[name] = elapsed
+        logger.info("brew stage %s: %dms", name, elapsed)
+        _emit(progress_callback, "stage_done", {"name": name, "duration_ms": elapsed})
+
+    check_cancel()
     init_db()
 
     # Idempotency check: if today's digest has already been sent and this is
@@ -1098,7 +1197,8 @@ def run_all(
 
     # Keep section choices coherent for the entire brew even if the reader
     # saves Settings in another browser tab while this run is in progress.
-    section_settings = get_settings()
+    section_settings = deepcopy(get_settings())
+    profile = deepcopy(load_profile())
     opportunity_profile = None
     if _section_enabled("opportunities", section_settings) or _section_enabled(
         "events", section_settings
@@ -1128,12 +1228,18 @@ def run_all(
             pool_days,
             window_days,
         )
+    ingest_stats: list[IngestStats] = []
+    stage_start("ingestion")
     inserted = ingest_all(
         progress_callback=progress_callback,
         days=pool_days,
         section_settings=section_settings,
+        stats_out=ingest_stats,
     )
     logger.info("upserted %d new items", inserted)
+    stage_done("ingestion")
+    check_cancel()
+    stage_start("calibration")
 
     # NOTE: there is no model to retrain. The ranker reads the vote table
     # directly at scoring time, so feedback applies at the next brew with no
@@ -1165,8 +1271,16 @@ def run_all(
             logger.info("auto-fit score calibrator")
     except Exception as _e:  # noqa: BLE001
         logger.warning("calibrator auto-fit check failed: %s", _e)
+    stage_done("calibration")
+    check_cancel()
 
-    profile = load_profile()
+    from .rank.snapshot import build_ranking_snapshot, capture_selection_facts
+    from .store import feedback_state
+
+    feedback_before = feedback_state()
+    decision_at = datetime.now(timezone.utc)
+    decision_local_date = user_local_date()
+    run_id = uuid.uuid4().hex
 
     # Use Rocchio-blended profile when available; fall back to static profile matrix.
     _vote_count_now = 0
@@ -1175,6 +1289,7 @@ def run_all(
         _vote_count_now = _vc_now()
     except Exception:  # noqa: BLE001
         pass
+    stage_start("profile_encoding")
     if _build_profile_with_rocchio is not None:
         try:
             profile_vec = _build_profile_with_rocchio(profile, vote_count=_vote_count_now)
@@ -1184,7 +1299,10 @@ def run_all(
     else:
         profile_vec = build_profile_matrix(profile)
     logger.info("ranker: profile_rows=%d votes=%d", len(profile_vec), _vote_count_now)
+    stage_done("profile_encoding")
+    check_cancel()
 
+    stage_start("deduplication")
     days = pool_days
     # Do not score disabled sections from older stored rows. The zero selection
     # caps below are a second line of defence against them reaching the digest.
@@ -1242,12 +1360,17 @@ def run_all(
     try:
         from .rank.near_dup import exclude_recent_near_duplicates
 
-        items, near_dup_drops = exclude_recent_near_duplicates(deduped_candidates)
+        items, near_dup_drops = exclude_recent_near_duplicates(
+            deduped_candidates, exclude_digest_id=digest_id,
+        )
     except Exception as _e:  # noqa: BLE001
         logger.warning("cross-day near-dup suppression failed: %s", _e)
         items, near_dup_drops = deduped_candidates, []
+    after_cross_day = list(items)
     quality_rows, quality_drops = _quality_gate(items)      # then gate
     items = quality_rows
+    stage_done("deduplication")
+    check_cancel()
     funnel_audit = {
         "ranker_version": RANKER_VERSION,
         "window_days": days,
@@ -1272,6 +1395,7 @@ def run_all(
         days,
     )
     _emit(progress_callback, "rank_start", {"candidates": len(items)})
+    stage_start("ranking")
     try:
         from .rank.profile import build_attribution_context
 
@@ -1295,7 +1419,7 @@ def run_all(
             _neg_vecs = _embed_rows([row for row, _ in scored])
 
             _neg_scale = 1.0
-            _neg_settings = get_settings()
+            _neg_settings = section_settings
             # DISCRIMINATIVE penalty: penalize by how much an item is CLOSER to a
             # negative topic than to the reader's own profile (neg − topic). An
             # absolute similarity threshold cannot work here — bge-small scores
@@ -1323,22 +1447,18 @@ def run_all(
                 _neg_axes = None
 
             if _neg_axes is not None and len(_neg_axes) > 0:
-                _neg_mat = np.array(_neg_axes, dtype=np.float32)  # (n_neg, embed_dim)
-                # Normalize neg vectors
-                _neg_norms = np.linalg.norm(_neg_mat, axis=1, keepdims=True)
-                _neg_mat_n = _neg_mat / (_neg_norms + 1e-9)
-                _neg_vecs_n = _neg_vecs / (np.linalg.norm(_neg_vecs, axis=1, keepdims=True) + 1e-9)
-                all_neg_sims = _neg_vecs_n @ _neg_mat_n.T  # (n_items, n_neg)
-                try:
-                    from .rank import profile as profile_mod
-                    _neg_weights = np.array(profile_mod.get_negative_interest_weights(profile), dtype=np.float32)
-                    if len(_neg_weights) == all_neg_sims.shape[1]:
-                        all_neg_sims = all_neg_sims * _neg_weights  # broadcast: scale each axis
-                except Exception:  # noqa: BLE001
-                    pass
-                # Penalize by (nearest-negative similarity − topic relevance),
-                # so only items closer to a negative topic than to the profile pay.
-                _neg_sims = np.maximum(0.0, all_neg_sims.max(axis=1) - _neg_topic - _neg_margin)
+                from .rank.profile import (
+                    get_negative_interest_weights,
+                    negative_interest_penalties,
+                )
+
+                # Weights express penalty strength, not a different cosine
+                # threshold: compare interests first, then scale the excess.
+                _neg_sims = negative_interest_penalties(
+                    _neg_vecs, np.asarray(_neg_axes, dtype=np.float32), _neg_topic,
+                    get_negative_interest_weights(profile), margin=_neg_margin,
+                    strength=1.0,  # global strength is applied below once
+                )
             else:
                 _neg_centroid = _build_neg_centroid(profile)
                 if _neg_centroid is not None:
@@ -1403,25 +1523,30 @@ def run_all(
     except Exception as _e:  # noqa: BLE001
         logger.warning("author match boost failed: %s", _e)
 
-    # Cheap deterministic gates run before optional network enrichment and
-    # within-day dedupe. Neither gate depends on citation data, so enriching
-    # rejected candidates only makes a brew slower without changing its slate.
+    # Venue evidence was resolved before quality scoring. Apply strict gates
+    # before the separate citation adjustment and within-day dedupe.
     pickable = _filter_actionable_opportunities(scored, opportunity_profile)
+    after_actionable = list(pickable)
     pickable = _filter_off_topic(pickable, score_features)
+    after_topic = list(pickable)
 
     # Optional live citation-velocity boost via OpenAlex (no-op unless enabled).
     try:
         from .rank.enrich import enrich_scored
 
-        pickable = enrich_scored(pickable)
+        pickable = enrich_scored(pickable, prepared_only=True)
         for row, score in pickable:
             feature = score_features.get(_row_feature_key(row))
             if feature is not None:
                 feature["final_score"] = round(float(score), 4)
-                feature["confidence_score"] = round(float(score), 4)
                 feature["source_bucket"] = source_bucket(row)
     except Exception as _e:  # noqa: BLE001
         logger.warning("citation enrichment failed: %s", _e)
+
+    # Contribution scores choose the representative of a near-duplicate cluster.
+    pickable = _apply_semantic_reranking(
+        pickable, score_features, profile, section_settings,
+    )
 
     # Within-day near-duplicate suppression (research only): among the research
     # candidates, decide which topical near-duplicates to drop so a cluster of
@@ -1488,30 +1613,32 @@ def run_all(
         score_features,
         digest_id=digest_id,
     )
+    pickable = _apply_contribution_ordering(
+        pickable, score_features, profile, section_settings,
+    )
     research_ceiling = _research_ceiling_for_window(
         window_days, settings=section_settings
     )
+    section_caps = _dynamic_section_caps(
+        pickable, score_features, research_ceiling, settings=section_settings,
+    )
+    selection_facts = capture_selection_facts(recent_raw)
     picked = pick_top_per_section(
         pickable,
-        _dynamic_section_caps(
-            pickable,
-            score_features,
-            research_ceiling,
-            settings=section_settings,
-        ),
+        section_caps,
         catch_up=window_days > 2,
         score_features=score_features,
+        settings=section_settings,
+        selection_facts=selection_facts,
     )
 
     # Active-learning exploration: swap a few low-scored picks for high-quality
     # items the learned ranker is most uncertain about. Only when enabled and the
     # LR is actually driving scores (uncertainty is meaningful).
-    _explore = int(getattr(get_settings(), "exploration_slots", 0) or 0)
+    _explore = int(getattr(section_settings, "exploration_slots", 0) or 0)
     if _explore > 0:
         try:
             from .rank.ranker import apply_exploration
-            from .rank.source_quality import is_high_quality_journal_source
-
             uncertainty = {
                 key: 1.0 - 2.0 * abs(float(feat.get("learned_score", 0.0)) - 0.5)
                 for key, feat in score_features.items()
@@ -1527,18 +1654,41 @@ def run_all(
                     pickable,
                     uncertainty,
                     slots=_explore,
-                    eligible=is_high_quality_journal_source,
+                    eligible=lambda row: selection_facts[int(row.id)]["is_high_quality"],
+                    caps=section_caps,
+                    catch_up=window_days > 2,
+                    score_features=score_features,
+                    settings=section_settings,
+                    selection_facts=selection_facts,
                 )
         except Exception as _e:  # noqa: BLE001
             logger.warning("exploration slot failed: %s", _e)
 
     pre_mode_picked = picked
-    picked = apply_reading_mode(picked, reading_mode)
+    picked = apply_reading_mode(picked, reading_mode, as_of_date=decision_local_date)
+    _annotate_research_evidence(picked, score_features)
     reading_mode_overflow = _build_reading_mode_overflow_audit(
         pre_mode_picked, picked, score_features
     )
     top_journal_audit = _build_top_journal_audit(scored, picked, score_features)
     labeled = _assign_labels(picked)
+    ranking_snapshot = build_ranking_snapshot(
+        run_id=run_id, digest_id=digest_id, decision_at=decision_at,
+        decision_local_date=decision_local_date, reading_mode=reading_mode,
+        candidates=recent_raw, scored=scored, eligible=pickable, labeled=labeled,
+        features=score_features, section_budgets=section_caps,
+        settings=section_settings, profile=profile, profile_matrix=profile_vec,
+        catch_up=window_days > 2, ingest_stats=ingest_stats,
+        feedback_before=feedback_before, feedback_after=feedback_state(),
+        selection_facts=selection_facts,
+        stages={
+            "after_reviewed": after_reviewed, "after_shown_and_known": after_shown,
+            "after_identity_dedupe": deduped_candidates,
+            "after_cross_day_dedupe": after_cross_day, "after_quality_gate": items,
+            "after_actionable_gate": [row for row, _ in after_actionable],
+            "after_topic_gate": [row for row, _ in after_topic],
+        },
+    )
     _emit(
         progress_callback,
         "rank_done",
@@ -1549,20 +1699,23 @@ def run_all(
         },
     )
 
+    stage_done("ranking")
+    check_cancel()
     selected_rows = [row for row, _, _ in labeled]
+    stage_start("summary")
     _emit(
         progress_callback,
         "summarize_start",
-        {"items": len(selected_rows), "backend": get_settings().llm_backend},
+        {"items": len(selected_rows), "backend": section_settings.llm_backend},
     )
     # Summary cache: only (re)summarize items that don't already have one, so a
     # re-brew or a catch-up run doesn't re-spend the LLM budget on items already
     # summarized. Existing summaries are reused for rendering.
     selected_ids = {int(row.id) for row in selected_rows}
-    expected_summary_backend = effective_summary_backend()
+    expected_summary_backend = effective_summary_backend(settings=section_settings)
     expected_signatures = {
         int(row.id): summary_signature(
-            row, profile, backend=expected_summary_backend
+            row, profile, backend=expected_summary_backend, settings=section_settings
         )
         for row in selected_rows
     }
@@ -1573,6 +1726,11 @@ def run_all(
         for row in selected_rows
     }
     to_summarize = [row for row in selected_rows if not existing_summaries.get(int(row.id))]
+    summary_diagnostics: dict[str, Any] = {
+        "cache_hits": len(selected_rows) - len(to_summarize),
+        "cache_misses": len(to_summarize),
+        "provider_calls": 0,
+    }
     if summarize_items is not _ORIGINAL_SUMMARIZE_ITEMS:
         generated = summarize_items(to_summarize, profile=profile)
         summary_backends = {
@@ -1580,7 +1738,8 @@ def run_all(
         }
     else:
         generated, summary_backends = summarize_items_with_provenance(
-            to_summarize, profile=profile
+            to_summarize, profile=profile, settings=section_settings,
+            diagnostics=summary_diagnostics,
         )
     new_summaries = {
         item_id: summary
@@ -1597,6 +1756,7 @@ def run_all(
             row_by_id[item_id],
             profile,
             backend=summary_backends.get(item_id, expected_summary_backend),
+            settings=section_settings,
         )
         for item_id in new_summaries
         if item_id in row_by_id
@@ -1607,6 +1767,8 @@ def run_all(
         backends=summary_backends,
     )
     _emit(progress_callback, "summarize_done", {"items": len(new_summaries)})
+    stage_done("summary")
+    check_cancel()
 
     sections: dict[str, list[tuple[ItemRow, float, str]]] = {k: [] for k in SECTION_ORDER}
     for row, score, _label in labeled:
@@ -1615,6 +1777,7 @@ def run_all(
 
     # Dry-runs should refresh the local preview even if today's email was
     # already sent. write_digest preserves sent_at for existing rows.
+    published = False
     if dry_run or _should_write_digest(digest_id):
         def _feature(row: ItemRow) -> dict[str, Any]:
             return score_features.get(_row_feature_key(row), {})
@@ -1664,6 +1827,9 @@ def run_all(
                     selection_order_bonus=float(
                         _feature(row).get("selection_order_bonus", 0.0)
                     ),
+                    contribution_rerank=_feature(row).get("contribution_rerank"),
+                    contribution_claims=_feature(row).get("contribution_claims"),
+                    article_evidence=_feature(row).get("article_evidence"),
                 ),
             )
             for row, score, label in labeled
@@ -1745,17 +1911,31 @@ def run_all(
             # An ordinary same-day rebrew must clear a catch-up briefing that
             # was created by an earlier explicit backfill.
             "catch_up_synthesis": [],
+            "runtime": [{"stage_durations_ms": dict(timings),
+                         "summary": summary_diagnostics}],
         }
         # Catch-up briefing: only on gap runs, grouping the backlog into themes.
+        catch_up_timeout = None
+        if expected_summary_backend in {"api", "anthropic"}:
+            catch_up_timeout = max(0.0, section_settings.llm_summary_budget_seconds
+                                   - (time.monotonic() - starts["summary"]))
+            if summary_diagnostics.get("provider_stopped"):
+                catch_up_timeout = 0.0
         if window_days > 2:
             try:
-                _synth = synthesize_catch_up(selected_rows, window_days, profile=profile)
+                _synth = synthesize_catch_up(
+                    selected_rows, window_days, profile=profile, settings=section_settings,
+                    timeout=catch_up_timeout,
+                )
                 if _synth:
                     _audits["catch_up_synthesis"] = [
                         {"days": window_days, "text": _synth}
                     ]
             except Exception as _e:  # noqa: BLE001
                 logger.warning("catch-up synthesis write failed: %s", _e)
+        check_cancel()
+        stage_start("publication")
+        check_cancel()
         publish_digest(
             digest_id,
             _labeled_rows,
@@ -1763,7 +1943,12 @@ def run_all(
             _impressions,
             model_version=RANKER_VERSION,
             audits=_audits,
+            run_id=run_id,
+            ranking_snapshot=ranking_snapshot,
         )
+        published = True
+        stage_done("publication")
+        _emit(progress_callback, "published", {"digest_id": digest_id})
         # Refresh Pip after every successful publish, including a same-day
         # rebrew whose funnel happens to have the same counts. Comparing card
         # text alone cannot identify that a new run replaced the audit rows.
@@ -1803,18 +1988,29 @@ def run_all(
     except Exception as e:  # noqa: BLE001
         logger.warning("health.weekly_summary failed: %s", e)
 
-    html = render_digest(digest_id, sections, health_summary=health_summary)
-    _emit(
-        progress_callback,
-        "render_done",
-        {"digest_id": digest_id, "html_bytes": len(html)},
-    )
-    subject = f"DailyDigest {digest_id}"
-    sent = send_digest(html, subject, dry_run=dry_run)
-
-    s = get_settings()
-    if sent and not dry_run and s.resend_api_key and s.digest_to:
-        mark_sent(digest_id)
+    warnings: list[str] = []
+    stage_start("render")
+    try:
+        html = render_digest(digest_id, sections, health_summary=health_summary)
+        _emit(
+            progress_callback,
+            "render_done",
+            {"digest_id": digest_id, "html_bytes": len(html)},
+        )
+        subject = f"DailyDigest {digest_id}"
+        sent = send_digest(html, subject, dry_run=dry_run)
+        if sent and not dry_run and section_settings.resend_api_key and section_settings.digest_to:
+            mark_sent(digest_id)
+        elif (not sent and not dry_run and section_settings.resend_api_key
+              and section_settings.digest_to):
+            warnings.append("The digest is saved locally, but email delivery was not confirmed.")
+    except Exception:  # noqa: BLE001 - committed reading remains available
+        if not published:
+            raise
+        logger.exception("Digest %s is published; preview or delivery failed", digest_id)
+        warnings.append("The digest is saved locally, but preview or delivery could not complete.")
+    finally:
+        stage_done("render")
 
     total_items = sum(len(v) for v in sections.values())
     try:
@@ -1825,9 +2021,8 @@ def run_all(
             logger.info("retention maintenance: %s", maintenance)
     except Exception as e:  # noqa: BLE001
         logger.warning("retention maintenance failed: %s", e)
-    _emit(
-        progress_callback,
-        "done",
-        {"digest_id": digest_id, "total_items": total_items, "dry_run": dry_run},
-    )
+    result = {"digest_id": digest_id, "total_items": total_items, "dry_run": dry_run}
+    if warnings:
+        result["warnings"] = warnings
+    _emit(progress_callback, "done", result)
     return digest_id

@@ -131,6 +131,55 @@ def test_biorxiv_external_id_is_canonical_doi(monkeypatch):
     assert not items[0].external_id.startswith("http")
 
 
+@pytest.mark.parametrize("adapter", ["biorxiv", "openalex"])
+@pytest.mark.parametrize("failure", ["transport", "api_error", "missing", "null", "wrong_type"])
+def test_research_pagination_failure_is_not_a_successful_partial_fetch(monkeypatch, adapter, failure):
+    from dailydigest.ingest import biorxiv, openalex
+
+    calls = 0
+
+    def fake_get_json(*_args):
+        nonlocal calls
+        calls += 1
+        if calls > 1:
+            if failure == "transport":
+                raise OSError("second page unavailable")
+            if failure == "api_error":
+                return {"error": "Service unavailable"}
+            if failure == "missing":
+                return {}
+            return {"collection" if adapter == "biorxiv" else "results": None if failure == "null" else {}}
+        if adapter == "biorxiv":
+            return {
+                "messages": [{"total": 2, "status": "ok"}],
+                "collection": [{"doi": "10.1101/123456", "title": "First paper"}],
+            }
+        return {
+            "results": [{"id": "https://openalex.org/W1", "title": "First paper"}],
+            "meta": {"next_cursor": "second-page"},
+        }
+
+    module = biorxiv if adapter == "biorxiv" else openalex
+    source = biorxiv.BiorxivSource() if adapter == "biorxiv" else openalex.OpenAlexSource()
+    monkeypatch.setattr(module, "_get_json", fake_get_json)
+
+    with pytest.raises(RuntimeError, match="second page unavailable" if failure == "transport" else "invalid"):
+        source.fetch(_spec(name=adapter, kind=adapter, query="RNA"))
+    assert calls == 2
+
+
+@pytest.mark.parametrize("adapter", ["biorxiv", "openalex"])
+def test_research_adapters_accept_valid_empty_results(monkeypatch, adapter):
+    from dailydigest.ingest import biorxiv, openalex
+
+    module = biorxiv if adapter == "biorxiv" else openalex
+    source = biorxiv.BiorxivSource() if adapter == "biorxiv" else openalex.OpenAlexSource()
+    key = "collection" if adapter == "biorxiv" else "results"
+    monkeypatch.setattr(module, "_get_json", lambda *_args: {key: []})
+
+    assert source.fetch(_spec(name=adapter, kind=adapter, query="RNA")) == []
+
+
 # ---------------------------------------------------------------------------
 # OpenAlex — URL fallback
 # ---------------------------------------------------------------------------
@@ -586,6 +635,52 @@ def test_openalex_preserves_unrecognized_venue_metadata(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize("stage", ["search", "detail"])
+def test_grants_gov_missing_official_response_is_a_source_failure(monkeypatch, stage):
+    from dailydigest.ingest.grants_gov import GrantsGovSource
+
+    def fake_post(url, _payload):
+        if url.endswith("/search2") and stage != "search":
+            return {"data": {"oppHits": [{"id": 123, "title": "RNA fellowship"}]}}
+        return {"errorcode": 500, "msg": "Service unavailable", "data": None}
+
+    monkeypatch.setattr("dailydigest.ingest.grants_gov._post_json", fake_post)
+
+    with pytest.raises(RuntimeError, match="Grants.gov"):
+        GrantsGovSource().fetch(
+            _spec(name="Grants.gov", kind="grants_gov", section="opportunities", query="RNA")
+        )
+
+
+@pytest.mark.parametrize("search_deadline", ["08/01/2026", "10/01/2026"])
+@pytest.mark.parametrize("description", ["", "See full announcement for details"])
+def test_grants_gov_uses_updated_official_deadline_over_search_index(monkeypatch, search_deadline, description):
+    from dailydigest.ingest.grants_gov import GrantsGovSource
+
+    def fake_post(url, _payload):
+        if url.endswith("/search2"):
+            return {"data": {"oppHits": [{
+                "id": 123,
+                "title": "RNA fellowship",
+                "closeDate": search_deadline,
+            }]}}
+        return {"data": {
+            "opportunityTitle": "RNA fellowship",
+            "synopsis": {"responseDateDesc": description, "responseDate": "10/15/2026"},
+        }}
+
+    monkeypatch.setattr("dailydigest.ingest.grants_gov._post_json", fake_post)
+    monkeypatch.setattr("dailydigest.ingest.grants_gov._today", lambda: date(2026, 8, 10))
+
+    items = GrantsGovSource().fetch(
+        _spec(name="Grants.gov", kind="grants_gov", section="opportunities", query="RNA")
+    )
+
+    assert len(items) == 1
+    assert items[0].metadata["deadline"] == "2026-10-15"
+
+
+@pytest.mark.filterwarnings("error::dateutil.parser.UnknownTimezoneWarning")
 def test_grants_gov_fetches_official_details_and_amounts(monkeypatch):
     from dailydigest.ingest.grants_gov import GrantsGovSource
 

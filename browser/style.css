@@ -1,0 +1,26 @@
+:root { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #15221b; background: #f6f7f4; color-scheme: light; }
+* { box-sizing: border-box; }
+body { margin: 0; }
+#startup { max-width: 680px; margin: 12vh auto; padding: 24px; line-height: 1.6; }
+h1 { font-size: clamp(28px, 5vw, 44px); line-height: 1.15; }
+.eyebrow { color: #256f52; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .09em; }
+#app { display: block; width: 100%; height: calc(100dvh - 48px); border: 0; background: #f6f7f4; }
+[hidden] { display: none !important; }
+.browser-bar { height: 48px; display: flex; gap: 12px; justify-content: space-between; align-items: center; padding: 8px 16px; background: #fff; border-top: 1px solid #dde3dc; font-size: 12px; }
+#status { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+details { position: relative; flex-shrink: 0; }
+summary { cursor: pointer; padding: 8px; }
+.data-tools { position: absolute; bottom: 38px; right: 0; width: 320px; max-width: calc(100vw - 24px); padding: 16px; background: #fff; border: 1px solid #dde3dc; border-radius: 8px; box-shadow: 0 12px 36px #15221b22; z-index: 100; line-height: 1.5; }
+button, .file-button { display: inline-block; font: inherit; border: 1px solid #dde3dc; border-radius: 6px; padding: 10px; background: #e8f3ec; color: #174d39; cursor: pointer; margin: 4px 4px 4px 0; }
+button:disabled, .file-button:has(input:disabled) { opacity: .5; cursor: default; }
+.file-button input { width: 1px; height: 1px; position: absolute; opacity: 0; }
+#companion-menu { margin-left: auto; }
+.browser-bar > button { padding: 6px 9px; margin: 0; flex-shrink: 0; }
+#companion-form label { display: block; margin: 8px 0 4px; }
+#companion-form input { width: 100%; padding: 9px; border: 1px solid #dde3dc; border-radius: 5px; font: inherit; }
+.companion-actions { display: flex; flex-direction: column; align-items: stretch; }
+.data-tools { max-height: calc(100dvh - 92px); overflow-y: auto; }
+:is(button, summary, .file-button):focus-visible, .file-button:focus-within { outline: 2px solid #256f52; outline-offset: 3px; }
+@media (prefers-color-scheme: dark) { :root { color: #edf4ef; background: #0e1511; color-scheme: dark; } .browser-bar, .data-tools { background: #151f19; border-color: #314038; } button, .file-button { background: #1b3426; border-color: #314038; color: #92d2ac; } .eyebrow { color: #92d2ac; } }
+@media (pointer: coarse) { summary, button, .file-button { min-height: 44px; } .browser-bar { height: 60px; } #app { height: calc(100dvh - 60px); } }
+@media (max-width: 680px) { .browser-bar .data-tools { position: fixed; right: 12px; bottom: 72px; } }

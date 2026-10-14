@@ -112,8 +112,12 @@ def _env() -> Environment:
 
 def safe_url(url: str | None) -> str:
     raw = (url or "").strip()
-    parsed = urlsplit(raw)
-    if parsed.scheme.lower() in _ALLOWED_LINK_SCHEMES and parsed.netloc:
+    try:
+        parsed = urlsplit(raw)
+        _ = parsed.port
+    except ValueError:
+        return "#"
+    if parsed.scheme.lower() in _ALLOWED_LINK_SCHEMES and parsed.hostname:
         return raw
     return "#"
 

@@ -1,0 +1,71 @@
+name: DailyDigest browser Pages
+
+on:
+  push:
+    branches: [codex/browser-compute-prototype]
+    paths: [browser/**, src/**, templates/**, config/sources.yaml, prototypes/browser-compute/**, .github/workflows/browser-pages.yml, uv.lock]
+  workflow_dispatch:
+  schedule:
+    - cron: '17 */12 * * *'
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: dailydigest-pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: codex/browser-compute-prototype
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: prototypes/browser-compute/package-lock.json
+      - run: uv sync --frozen --group dev
+      - name: Python regression checks
+        run: uv run pytest tests/test_browser_build.py tests/test_browser_runtime.py tests/test_browser_network.py tests/test_browser_companion.py tests/test_browser_compute_prototype.py tests/test_quality_gate_invariants.py tests/test_pipeline_persistence.py tests/test_feedback_recovery.py tests/test_publication_version_cooldown.py -q
+      - name: Browser bridge checks
+        run: node --test --test-isolation=none browser/frontend.test.mjs
+      - name: Install browser dependencies
+        working-directory: prototypes/browser-compute
+        run: npm ci --ignore-scripts
+      - name: Prepare public model and runtime assets
+        working-directory: prototypes/browser-compute
+        run: npm run prepare-fixture
+      - name: Collect public source metadata
+        run: uv run python browser/collect_sources.py --output browser/.build-cache/public-sources.json --days 21
+      - name: Build static application
+        run: uv run python browser/build.py
+      - name: Prepare isolated browser acceptance fixtures
+        run: uv run python browser/make_test_fixture.py --output .full-review/browser-launch-2026-10-13
+      - name: Full browser acceptance at the project subpath
+        run: |
+          mkdir -p browser/.build-cache/preview
+          ln -s "$GITHUB_WORKSPACE/browser/dist" browser/.build-cache/preview/daily_digests
+          uv run python -m http.server 8767 --bind 127.0.0.1 --directory browser/.build-cache/preview > browser/.build-cache/preview-server.log 2>&1 &
+          node browser/verify-browser.mjs
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: browser/dist
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Publish website
+        id: deployment
+        uses: actions/deploy-pages@v4

@@ -1,51 +1,15 @@
 #!/usr/bin/env python
-"""Leakage-free chronological held-out evaluation of the preference ranker.
+"""Exploratory chronological component diagnostics on current rated-item metadata.
 
-Two DISTINCT numbers are reported, each clearly labeled, because they measure
-DIFFERENT things:
+Split at whole UTC vote-day boundaries; purge paper families crossing the split.
+Training exemplars and learned profile use TRAIN only. Freeze feature time at the
+split boundary. Current metadata/profile and overwritten latest votes cannot
+reconstruct historical decisions. These are rated-pool component probes, not a
+full serving replay, unbiased candidate recall, or evidence for promotion.
 
-  A. PREFERENCE-FEATURE PROBE (``run_benchmark``)
-     A diagnostic. It trains a simple POINTWISE LogisticRegression on the v6
-     engineered features (including the pos/neg affinity "memory" columns) and
-     reads its probability directly. It answers: "do the affinity features let a
-     simple pointwise model separate held-out liked vs. disliked items better
-     than topic-cosine alone?" It is NOT the deployed ranker: the default
-     ``hybrid_knn`` mode fuses the graded kNN preference score with the topic
-     ranking via RRF (see ``dailydigest.rank.ranker``); pairwise LR survives
-     only as the retired/optional ``hybrid_lr`` mode. Treat this as a feature
-     sanity probe, not a benchmark of what ships.
-
-  B. DEPLOYED-SCORER PROBE (``run_production_benchmark``)
-     Mirrors the deployed preference fusion, not the full serving pipeline. It
-     computes the graded kNN preference score for the
-     held-out TEST research items from TRAIN-only vote exemplars
-     (``votes._knn_scores``), then ranks them by RRF-fusing that with the
-     topic-cosine ranking (``ranker._fuse_scores``) — exactly as
-     ``score_items_lr`` uses. The retired pairwise-LR fusion is reported as a
-     comparison line. It reports pairwise accuracy AND nDCG@10 for BOTH the
-     deployed-style fused ranker and the topic-only baseline. THIS is the
-     preference-fusion signal:
-     "does the shipped-style ranker beat topic-only on held-out votes?"
-
-Both modes are leakage-free in the same way:
-  * TRAIN = older 75% of items (ordered chronologically by their signing vote),
-    TEST = newer 25%.
-  * The pos/neg exemplar arrays that feed the affinity features are built from
-    TRAIN votes ONLY, so a held-out test item can never "recognize itself".
-  * The profile is the STATIC config profile matrix
-    (``rank.profile.build_profile_matrix``) — NOT the Rocchio-learned
-    ``learned_profile.npz``, which is rebuilt from ALL current votes (train +
-    test) and would leak the held-out set into the profile vector. This is the
-    key leakage the third audit found; the headline probe number is essentially
-    unchanged by the fix, but the methodology is now correct regardless.
-
-The real-DB numbers depend entirely on the live vote history and are NOT fixed
-claims. Run it to get current, reproducible numbers:
-
-    uv run python scripts/benchmark_ranker.py
-
-Exit code is 0 on success (even if the model does not beat the baseline — this
-is a measurement tool, not a gate).
+A: pointwise affinity-feature probe. B: static topic, current fusion, kNN-only
+(diagnostic only), and fusion with an actual TRAIN-only Rocchio profile. Run on a
+copied DB/profile with cached embeddings for isolated offline experiments.
 """
 from __future__ import annotations
 
@@ -68,12 +32,14 @@ def _build_features_train_only(
     profile_mat: np.ndarray,
     pos_ex,
     neg_ex,
+    *,
+    reference_time: datetime,
 ) -> np.ndarray:
     """Recompute the v6 LR feature matrix, sourcing affinity from GIVEN exemplars.
 
     Mirrors `votes._build_item_features` column-for-column, but takes the pos/neg
     exemplar arrays as arguments instead of loading them from the whole DB. That
-    is what makes the held-out evaluation leakage-free: pass TRAIN-only exemplars
+    prevents exemplar self-recognition: pass TRAIN-only exemplars
     when featurizing the test set.
     """
     from dailydigest.rank.embedding_cache import embed_item_rows
@@ -112,7 +78,7 @@ def _build_features_train_only(
     pos_aff = _affinity(cand_unit, cand_ids, pos_ex)
     neg_aff = _affinity(cand_unit, cand_ids, neg_ex)
 
-    now = datetime.now(timezone.utc)
+    now = _as_utc(reference_time)
     features: list[list[float]] = []
     for i, row in enumerate(rows):
         published = getattr(row, "published_at", None)
@@ -244,14 +210,67 @@ def _recall_at_k(scores: np.ndarray, wanted: np.ndarray, k: int) -> float:
     return float(sum(1 for i in top if wanted[i]) / total)
 
 
+def _paper_family_ids(rows: list) -> list[int]:
+    """Transitive identities shared by split purging and component diagnostics."""
+    from dailydigest.dedupe import candidate_identity_keys, _normalized_title_key
+
+    parent = list(range(len(rows)))
+
+    def root(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    tokens = {}
+    for i, row in enumerate(rows):
+        title = _normalized_title_key(str(getattr(row, "title", "") or ""))
+        # Include metadata-only DOI, PubMed IDs and arXiv versions. Retain
+        # date-agnostic title identity across differently dated paper versions.
+        keys = candidate_identity_keys(row) + (["title:" + title] if title else [])
+        for key in keys:
+            if key in tokens:
+                parent[root(i)] = root(tokens[key])
+            else:
+                tokens[key] = i
+    return [root(i) for i in range(len(rows))]
+
+
 def _split_chronological(
-    n: int, timestamps: list[datetime], train_frac: float
+    n: int, timestamps: list[datetime], train_frac: float, *, rows: list | None = None,
 ) -> tuple[list[int], list[int]]:
-    """Return (train_idx, test_idx): older ``train_frac`` vs. newer remainder."""
-    order = sorted(range(n), key=lambda i: (timestamps[i], i))
-    n_train = max(1, int(round(n * train_frac)))
-    n_train = min(n_train, n - 1) if n > 1 else n
-    return order[:n_train], order[n_train:]
+    """Nearest whole UTC-day boundary; purge TEST families also seen in TRAIN."""
+    if len(timestamps) != n or not 0 < train_frac < 1:
+        raise ValueError("timestamps must align and train_frac must be between 0 and 1")
+    stamps = [_as_utc(stamp).astimezone(timezone.utc) for stamp in timestamps]
+    order = sorted(range(n), key=lambda i: (stamps[i], i))
+    cuts = [i for i in range(1, n) if stamps[order[i-1]].date() != stamps[order[i]].date()]
+    if not cuts:
+        raise ValueError("chronological benchmark needs two distinct UTC vote days")
+    cut = min(cuts, key=lambda i: (abs(i - n * train_frac), i))
+    train, test = order[:cut], order[cut:]
+    if rows is not None:
+        families = _paper_family_ids(rows)
+        train_families = {families[i] for i in train}
+        test = [i for i in test if families[i] not in train_families]
+    if not test:
+        raise ValueError("no independent held-out families after purging")
+    return train, test
+
+
+def _train_learned_profile(rows, grades, timestamps, train_idx):
+    """Pure mirror of production grade-weighted, newest-first Rocchio rebuild."""
+    from dailydigest.rank.embedding_cache import embed_item_rows
+    from dailydigest.votes import _ROCCHIO_ALPHA, _ROCCHIO_BETA, _ROCCHIO_DECAY, grade_to_weight
+
+    indices = sorted(train_idx, key=lambda i: (timestamps[i], i), reverse=True)
+    vecs = embed_item_rows([rows[i] for i in indices]).astype(np.float32)
+    learned = np.zeros(vecs.shape[1], dtype=np.float32)
+    for rank, i in enumerate(indices):
+        weight = grade_to_weight(grades[i])
+        rate = _ROCCHIO_ALPHA if weight >= 0 else _ROCCHIO_BETA
+        learned += rate * weight * _ROCCHIO_DECAY ** rank * vecs[rank]
+    return learned
 
 
 def _build_train_exemplars(
@@ -275,8 +294,7 @@ def _build_train_exemplars(
 def _load_default_static_profile() -> np.ndarray:
     """Load the STATIC config profile matrix (no Rocchio, no learned_profile.npz).
 
-    Using the static profile is what keeps BOTH benchmark modes leakage-free at
-    the profile level: ``build_profile_matrix`` is a pure function of the config
+    Using the static profile avoids a persisted feedback-vector leak: ``build_profile_matrix`` is a pure function of the config
     profile file, so it cannot encode the held-out test votes the way the
     vote-derived Rocchio vector (rebuilt from ALL votes) would.
     """
@@ -321,7 +339,7 @@ def run_benchmark(
 
     The default (``profile_mat is None``) path uses the STATIC config profile
     matrix (``build_profile_matrix``), never the Rocchio ``learned_profile.npz``,
-    so the profile cannot encode held-out votes.
+    so the matrix excludes learned held-out labels (current YAML is not historical).
 
     Returns a dict with keys: n_train, n_test, topic_acc, full_acc, n_test_pairs,
     train_exemplar_ids, test_ids.
@@ -334,7 +352,8 @@ def run_benchmark(
     if grades is None:
         grades = [value_to_grade(v) for v in labels]
 
-    train_idx, test_idx = _split_chronological(n, timestamps, train_frac)
+    train_idx, test_idx = _split_chronological(n, timestamps, train_frac, rows=rows)
+    reference_time = min(timestamps[i] for i in test_idx)
 
     if profile_mat is None:
         profile_mat = _load_default_static_profile()
@@ -355,10 +374,10 @@ def run_benchmark(
     test_labels = np.array([labels[i] for i in test_idx], dtype=np.int32)
 
     X_train = _build_features_train_only(
-        train_rows, train_labels, profile_mat, pos_ex, neg_ex
+        train_rows, train_labels, profile_mat, pos_ex, neg_ex, reference_time=reference_time
     )
     X_test = _build_features_train_only(
-        test_rows, test_labels.tolist(), profile_mat, pos_ex, neg_ex
+        test_rows, test_labels.tolist(), profile_mat, pos_ex, neg_ex, reference_time=reference_time
     )
     y_train = np.array(train_labels, dtype=np.int32)
 
@@ -443,25 +462,12 @@ def run_production_benchmark(
     profile_mat: np.ndarray | None = None,
     train_frac: float = 0.75,
 ) -> dict:
-    """DEPLOYED-SCORER PROBE (mode B) — the preference-fusion signal.
+    """Rated-pool component probe with train-only feedback and learned profile.
 
-    Mirrors the deployed preference scorer on RESEARCH items only, excluding
-    any item with no signed vote. It does not reproduce serving gates, Rocchio,
-    enrichment, or source balancing:
-
-      1. Split TRAIN (older 75%) / TEST (newer 25%) chronologically.
-      2. Compute the graded kNN preference score for the TEST items from
-         TRAIN-only vote exemplars (leakage-free) — the DEPLOYED learned signal.
-      3. Rank the held-out TEST items by RRF-fusing that with the topic-cosine
-         ranking via ``ranker._fuse_scores`` (as ``score_items_lr`` serves).
-      4. Also fit the retired pairwise LR on the same TRAIN split and report its
-         fusion (``lr_fused_acc``) as a comparison line.
-      5. Report pairwise accuracy AND nDCG@10 for the deployed fusion AND the
-         topic-only baseline.
-
-    Returns a dict with keys: n_train, n_test, n_test_pairs,
-    topic_acc, fused_acc, lr_fused_acc, topic_ndcg, fused_ndcg,
-    train_exemplar_ids, test_ids.
+    TRAIN may include all sections (as deployed exemplars do); TEST is research.
+    This omits eligibility, quality adjustments, enrichment, source caps and
+    reading budgets, so results do not estimate the quality of a served digest.
+    The default static matrix uses current YAML, never a persisted learned file.
     """
     from dailydigest.rank.ranker import LRRanker, _fuse_scores
     from dailydigest.votes import value_to_grade
@@ -470,7 +476,12 @@ def run_production_benchmark(
     if grades is None:
         grades = [value_to_grade(v) for v in labels]
 
-    train_idx, test_idx = _split_chronological(n, timestamps, train_frac)
+    train_idx, test_idx = _split_chronological(n, timestamps, train_frac, rows=rows)
+    family_purged = n - len(train_idx) - len(test_idx)
+    reference_time = min(timestamps[i] for i in test_idx)
+    test_idx = [i for i in test_idx if getattr(rows[i], "section", "research") == "research"]
+    if not test_idx:
+        raise ValueError("no research items in held-out whole-day split")
 
     if profile_mat is None:
         profile_mat = _load_default_static_profile()
@@ -489,10 +500,10 @@ def run_production_benchmark(
     test_labels = np.array([labels[i] for i in test_idx], dtype=np.int32)
 
     X_train = _build_features_train_only(
-        train_rows, train_labels, profile_mat, pos_ex, neg_ex
+        train_rows, train_labels, profile_mat, pos_ex, neg_ex, reference_time=reference_time
     )
     X_test = _build_features_train_only(
-        test_rows, test_labels.tolist(), profile_mat, pos_ex, neg_ex
+        test_rows, test_labels.tolist(), profile_mat, pos_ex, neg_ex, reference_time=reference_time
     )
     y_train = np.array(train_labels, dtype=np.int32)
 
@@ -510,10 +521,8 @@ def run_production_benchmark(
     # ranking (feature col 0) with the graded kNN preference score computed from
     # TRAIN-only votes (leakage-free). The retired pairwise-LR fusion is kept as
     # a comparison line — on live votes it had drifted BELOW topic-only.
-    # NOTE: production fuses the QUALITY-ADJUSTED topic score; here TEST rows are
-    # research items so quality adjustment is a monotone-ish per-item shift — we
-    # fuse the raw topic cosine to keep the held-out measurement dependent only on
-    # the learned preference signal vs. topic, not on venue metadata.
+    # Production fuses quality-adjusted scores. This component probe uses raw
+    # semantic scores; omitted source/quality adjustments can change item order.
     from dailydigest.rank.embedding_cache import embed_item_rows
     from dailydigest.votes import KNN_PREFERENCE_K, _knn_scores
 
@@ -565,6 +574,17 @@ def run_production_benchmark(
     topic_head = _head(topic_scores)
     fused_head = _head(fused_scores)
     lr_head = _head(lr_fused_scores)
+    from dailydigest.rank.profile import append_learned_profile
+    from dailydigest.rank.ranker import _multi_cosine
+
+    learned = _train_learned_profile(rows, grades, timestamps, train_idx)
+    learned_mat = append_learned_profile(profile_mat, learned, len(train_idx))
+    learned_scores = _multi_cosine(test_vecs, learned_mat)
+    learned_fused = _fuse_scores(learned_scores, knn_scores)
+    diagnostic = {}
+    for name, scores in (("knn_only", knn_scores), ("learned_fused", learned_fused)):
+        diagnostic[name + "_acc"] = _pairwise_accuracy(scores, test_labels)[0]
+        diagnostic.update({name + "_" + key: value for key, value in _head(scores).items()})
 
     return {
         "n_train": len(train_idx),
@@ -572,6 +592,14 @@ def run_production_benchmark(
         "n_test_pairs": n_pairs,
         "head_k": head_k,
         "n_must_read": int(must_read.sum()),
+        **diagnostic,
+        "learned_train_ids": train_exemplar_ids,
+        "decision_time_proxy": reference_time.isoformat(),
+        "split_basis": "whole UTC latest-vote days; crossing title/DOI/URL families purged",
+        "n_family_purged": family_purged,
+        "limitations": "current metadata/profile and latest votes; not historical serving replay; rated-pool conditional metrics",
+        "head_k_basis": "configured diagnostic K, not historical actual served K",
+        "must_read_basis": "observed held-out must-reads only; not retrieval recall",
         "topic_acc": topic_acc,
         "fused_acc": fused_acc,
         "lr_fused_acc": lr_fused_acc,
@@ -625,7 +653,9 @@ def _load_signed_votes_chronological(research_only: bool = False):
             if research_only and str(getattr(row, "section", "") or "").lower() != "research":
                 continue
             s.expunge(row)
-            ts = _as_utc(created_at) or datetime.now(timezone.utc)
+            ts = _as_utc(created_at)
+            if ts is None:
+                continue  # Missing time cannot support a chronological claim.
             rows.append(row)
             labels.append(v)
             timestamps.append(ts)
@@ -639,8 +669,8 @@ def _fmt(x: float) -> str:
 
 def main() -> int:
     print("=" * 68)
-    print("  DailyDigest ranker — leakage-free chronological benchmark")
-    print("  (STATIC config profile; no Rocchio learned_profile.npz)")
+    print("  DailyDigest ranker — chronological component diagnostics")
+    print("  (whole UTC vote days; train-only feedback; current metadata)")
     print("=" * 68)
 
     # ------------------------------------------------------------------ #
@@ -662,7 +692,7 @@ def main() -> int:
             print(
                 f"      split {a['n_train']}/{a['n_test']} "
                 f"({a['n_test_pairs']} held-out pairs)  "
-                f"leakage: {'FAIL' if leaked_a else 'OK'}"
+                f"item-ID overlap: {'FAIL' if leaked_a else 'none'}"
             )
             print(f"      topic-cosine only   pairwise acc : {_fmt(a['topic_acc'])}")
             print(f"      pointwise+affinity  pairwise acc : {_fmt(a['full_acc'])}")
@@ -683,19 +713,19 @@ def main() -> int:
     rn = len(r_rows)
     rn_pos = sum(1 for v in r_labels if v > 0)
     rn_neg = rn - rn_pos
-    print("  [B] deployed-scorer probe (graded kNN preference + RRF, research items)")
+    print("  [B] component probe (all-section TRAIN, research TEST)")
     print(f"      signed research votes: {rn}  (+{rn_pos} / -{rn_neg})")
 
     if rn < 8 or rn_pos < 2 or rn_neg < 2:
         print("      INSUFFICIENT DATA: need >=8 signed research votes, >=2 each sign.")
     else:
         try:
-            b = run_production_benchmark(r_rows, r_labels, r_ts, grades=r_grades)
+            b = run_production_benchmark(rows, labels, timestamps, grades=grades)
             leaked_b = set(b["test_ids"]) & set(b["train_exemplar_ids"])
             print(
                 f"      split {b['n_train']}/{b['n_test']} "
                 f"({b['n_test_pairs']} held-out pairs)  "
-                f"leakage: {'FAIL' if leaked_b else 'OK'}"
+                f"item-ID overlap: {'FAIL' if leaked_b else 'none'}"
             )
             k = b["head_k"]
             print(f"      {'config':<14s} {'pw acc':>7s} {'nDCG@10':>8s} "
@@ -704,20 +734,23 @@ def main() -> int:
                 ("topic-only", "topic"),
                 ("kNN fuse", "fused"),
                 ("LR fuse", "lr_fused"),
+                ("kNN diagnostic", "knn_only"),
+                ("learned fuse", "learned_fused"),
             ):
                 print(f"      {label:<14s} {_fmt(b[pre + '_acc']):>7s} "
                       f"{_fmt(b[pre + '_ndcg']):>8s} {_fmt(b[pre + '_p_at_k']):>7s} "
                       f"{_fmt(b[pre + '_must_read_recall']):>8s}")
             print(f"      (head metrics at K={k}; {b['n_must_read']} must-read items held out)")
             print("      Pairwise acc scores the WHOLE list; nDCG/P@K/mustR@K score the")
-            print("      ~K items actually served. A config can win one and lose the other —")
-            print("      decide on the head metrics, and quote intervals, not third digits.")
+            print("      configured diagnostic K, not historical actual served K. Unknown")
+            print("      candidate labels/old vote revisions prevent exact historical replay.")
+            print(f"      Family overlap purged: {b['n_family_purged']}; freeze: {b['decision_time_proxy']}")
         except ValueError as e:
             print(f"      could not run production benchmark: {e}")
 
     print("=" * 68)
-    print("  Both numbers reflect the CURRENT live vote history and are not fixed")
-    print("  guarantees. Re-run after voting to re-measure.")
+    print("  These diagnostics reflect CURRENT latest votes and are not fixed")
+    print("  guarantees. Current metadata/profile; latest labels cannot recover old votes.")
     return 0
 
 

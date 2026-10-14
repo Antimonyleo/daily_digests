@@ -4,7 +4,8 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 
 import numpy as np
-from sqlalchemy import select
+import pytest
+from sqlalchemy import event, select
 
 from dailydigest import config as config_mod
 from dailydigest import store as store_mod
@@ -251,3 +252,99 @@ def test_deserialize_rejects_corrupt_or_truncated_blob():
     assert _deserialize(raw, 4) is None
     assert _deserialize(raw, 0) is None
     assert _deserialize(raw, 99999) is None
+
+
+@pytest.fixture
+def actual_backend_rows(monkeypatch, tmp_path):
+    from dailydigest.rank import embed
+    _reset_store(monkeypatch, tmp_path)
+    monkeypatch.setattr(embed, "_embed_config", lambda: ("fake", "cpu", "Q:", "", "auto"))
+    monkeypatch.setattr(embed, "_runtime_limits", lambda: (8, 1))
+    monkeypatch.setattr(embed.importlib.util, "find_spec", lambda name: object())
+    embed.release_encoder()
+    state = {"fast_available": True, "loads": []}
+
+    def fast(*args, **kwargs):
+        state["loads"].append("fastembed")
+        if not state["fast_available"]:
+            raise RuntimeError("fixture unavailable")
+        return lambda texts: np.tile([1., 0.], (len(texts), 1))
+
+    def fallback(*args, **kwargs):
+        state["loads"].append("st")
+        return lambda texts: np.tile([0., 1.], (len(texts), 1))
+
+    monkeypatch.setattr(embed, "_load_fastembed", fast)
+    monkeypatch.setattr(embed, "_load_sentence_transformers", fallback)
+    store_mod.init_db()
+    with store_mod.session_scope() as session:
+        rows = [_row("Fixture", str(i), f"Paper {i}") for i in range(2)]
+        session.add_all(rows)
+        session.flush()
+        for row in rows:
+            session.expunge(row)
+    yield embed, rows, state
+    embed.release_encoder()
+
+
+def test_fallback_vectors_use_actual_signature_and_recovery_reembeds(actual_backend_rows):
+    from dailydigest.rank import embedding_cache as cache
+    embed, rows, state = actual_backend_rows
+    expected_fast = embed.active_embedding_signature()
+    state["fast_available"] = False
+    np.testing.assert_array_equal(cache.embed_item_rows(rows), [[0., 1.], [0., 1.]])
+    actual = embed.active_embedding_signature()
+    assert actual != expected_fast
+    with store_mod.session_scope() as session:
+        assert {r.model for r in session.execute(select(store_mod.ItemEmbeddingRow)).scalars()} == {actual}
+    assert embed.active_embedding_provenance()["actual_backend"] == "st"
+    embed.release_encoder()
+    state["fast_available"] = True
+    np.testing.assert_array_equal(cache.embed_item_rows(rows), [[1., 0.], [1., 0.]])
+    assert embed.active_embedding_signature() == expected_fast
+
+
+def test_partial_hit_cannot_mix_cached_preferred_and_new_fallback(actual_backend_rows):
+    from dailydigest.rank import embedding_cache as cache
+    embed, rows, state = actual_backend_rows
+    cache.embed_item_rows(rows[:1])
+    embed.release_encoder()
+    state["fast_available"] = False
+    np.testing.assert_array_equal(cache.embed_item_rows(rows), [[0., 1.], [0., 1.]])
+
+
+def test_query_first_fallback_keeps_profile_and_cached_documents_in_one_space(actual_backend_rows):
+    from dailydigest.rank import embedding_cache as cache
+    embed, rows, state = actual_backend_rows
+    cache.embed_item_rows(rows)
+    embed.release_encoder()
+    state["fast_available"] = False
+    query = embed.embed_texts(["profile"], is_query=True)
+    documents = cache.embed_item_rows(rows)
+    np.testing.assert_array_equal(query @ documents.T, [[1., 1.]])
+    assert embed.active_embedding_provenance()["actual_backend"] == "st"
+
+
+def test_warm_hit_never_loads_model_or_deletes_and_pins_later_queries(actual_backend_rows):
+    from dailydigest.rank import embedding_cache as cache
+    embed, rows, state = actual_backend_rows
+    cache.embed_item_rows(rows)
+    embed.release_encoder()
+    state["loads"].clear()
+    statements = []
+    engine = store_mod._ENGINE
+
+    def record_sql(conn, cursor, statement, parameters, context, executemany):
+        statements.append(statement)
+
+    event.listen(engine, "before_cursor_execute", record_sql)
+    try:
+        np.testing.assert_array_equal(cache.embed_item_rows(rows), [[1., 0.], [1., 0.]])
+    finally:
+        event.remove(engine, "before_cursor_execute", record_sql)
+    assert state["loads"] == []
+    assert not any(sql.lstrip().upper().startswith("DELETE") for sql in statements)
+    state["fast_available"] = False
+    with pytest.raises(RuntimeError, match="no embedding backend"):
+        embed.embed_texts(["reader profile"], is_query=True)
+    assert "st" not in state["loads"]

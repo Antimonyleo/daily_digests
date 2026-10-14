@@ -364,6 +364,92 @@ def test_flagship_acs_journals_are_high_tier():
     assert infer_source_quality("JACS Au", "research").quality_tier == "strong"
 
 
+@pytest.mark.parametrize("venue", [
+    "Small Ruminant Research", "Small Business Economics", "Neuronal Signaling",
+    "Immunity, Inflammation and Disease", "International Journal of Nucleic Acids Research",
+    "Nature Materials Letters", "ACS Nanoscience", "Advanced Materials Research",
+])
+def test_unlisted_venue_cannot_inherit_prestige_from_name_substring(venue):
+    from types import SimpleNamespace
+    from dailydigest.rank.source_quality import (
+        recognized_research_venue, is_high_quality_journal_source, venue_relevance_credit,
+    )
+
+    row = SimpleNamespace(source="OpenAlex (your topics)", section="research",
+                          metadata={"venue": venue}, title="DNA nanostructure methods", abstract="")
+    assert recognized_research_venue(venue) is None
+    assert infer_source_quality(venue, "research").quality_tier == "unknown"
+    assert source_bucket(row) == "low_impact_journal"
+    assert not is_high_quality_journal_source(row)
+    assert venue_relevance_credit(row) == 0.0
+
+
+@pytest.mark.parametrize("venue,tier", [
+    ("  NATURE   MATERIALS  ", "high"),
+    ("Cell Host & Microbe", "high"),
+    ("Angew. Chem. Int. Ed.", "strong"),
+    ("Angewandte Chemie International Edition", "strong"),
+    ("Nature Reviews Drug Discovery", "strong"),
+    ("Small", "strong"), ("Small (Wiley)", "strong"),
+    ("JACS Au", "strong"), ("Chemical Society Reviews", "strong"),
+    ("Proceedings of the National Academy of Sciences", "high"),
+    ("The New England Journal of Medicine", "top"),
+])
+def test_known_journal_aliases_keep_their_exact_identity(venue, tier):
+    from dailydigest.rank.source_quality import recognized_research_venue
+
+    assert recognized_research_venue(venue) == venue
+    assert infer_source_quality(venue, "research").quality_tier == tier
+
+
+def test_verified_low_impact_cannot_keep_high_quality_protection_or_gate_credit():
+    from types import SimpleNamespace
+    from dailydigest.rank.source_quality import is_high_quality_journal_source, venue_relevance_credit
+
+    row = SimpleNamespace(source="Nature", section="research", venue_low_impact=True)
+    assert source_bucket(row) == "low_impact_journal"
+    assert not is_high_quality_journal_source(row)
+    assert venue_relevance_credit(row) == 0
+
+
+def test_configured_preprint_cannot_receive_journal_quality_protection(monkeypatch):
+    from types import SimpleNamespace
+    from dailydigest.models import SourceSpec
+    from dailydigest.rank import source_quality as quality
+
+    monkeypatch.setattr(quality, "_configured_sources_cached", lambda: {
+        "biorxiv": SourceSpec(name="bioRxiv", kind="biorxiv", section="research",
+                             quality_tier="high", prestige_score=0.95),
+    })
+    row = SimpleNamespace(source="bioRxiv", section="research")
+    assert source_bucket(row) == "bio_med_preprint"
+    assert not quality.is_high_quality_journal_source(row)
+    assert quality.venue_relevance_credit(row) == 0
+
+
+@pytest.mark.parametrize("source,attributes", [
+    ("Nature", {"venue_low_impact": True}),
+    ("bioRxiv", {}),
+])
+def test_breakdown_does_not_highlight_disqualified_research_sources(monkeypatch, source, attributes):
+    from types import SimpleNamespace
+    from dailydigest.models import SourceSpec
+    from dailydigest.rank import source_quality as quality
+
+    monkeypatch.setattr(quality, "_configured_sources_cached", lambda: {
+        source.lower(): SourceSpec(name=source, kind="rss", section="research", quality_tier="high"),
+    })
+    row = SimpleNamespace(source=source, section="research", title="DNA assembly mechanism",
+                          abstract="Primary research methods.", **attributes)
+    breakdown = quality.score_breakdown(row, 0.8)
+    assert "High-quality source" not in breakdown.tags
+    assert "high_quality_source" not in breakdown.quality_tags
+    assert "Reliable source" not in breakdown.why_shown
+    payload = quality.breakdown_payload(row, base_score=0.8)
+    assert "High-quality source" not in payload["tags"]
+    assert "high_quality_source" not in payload["quality_tags"]
+
+
 def test_non_research_frontmatter_is_skipped_from_research():
     from dailydigest.rank.source_quality import is_non_research_content
 

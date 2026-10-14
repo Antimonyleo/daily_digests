@@ -276,6 +276,76 @@ def test_unofficial_opportunity_never_gets_affirmative_eligibility():
     assert "official" in result.reason
 
 
+@pytest.mark.parametrize(
+    "tags",
+    [["Unrestricted (open to any type of entity)"], ["Private institutions of higher education"]],
+)
+@pytest.mark.parametrize(
+    "eligibility_text",
+    ["", "Applicants must have research experience.", "Foreign institutions are not eligible."],
+)
+def test_foreign_country_eligibility_is_not_inferred_from_applicant_type(tags, eligibility_text):
+    from dailydigest.opportunities import OpportunityProfile, assess_opportunity
+
+    profile = OpportunityProfile(**{**_profile_payload(), "country": "Germany"})
+    result = assess_opportunity(
+        {
+            "official": True,
+            "eligibility_tags": tags,
+            "eligibility_description": eligibility_text,
+        },
+        profile,
+    )
+
+    assert result.eligibility != "likely"
+
+
+@pytest.mark.parametrize(
+    "eligibility_text",
+    ["Applicants must be domestic only.", "Domestic only; foreign institutions are not eligible."],
+)
+def test_unrestricted_applicant_types_do_not_override_domestic_only_restriction(eligibility_text):
+    from dailydigest.opportunities import OpportunityProfile, assess_opportunity
+
+    profile = OpportunityProfile(**{**_profile_payload(), "country": "Germany"})
+    result = assess_opportunity(
+        {
+            "official": True,
+            "eligibility_tags": ["Unrestricted (open to any type of entity)"],
+            "eligibility_description": eligibility_text,
+        },
+        profile,
+    )
+
+    assert result.actionable is False
+    assert result.eligibility == "unlikely"
+
+
+@pytest.mark.parametrize(
+    "eligibility_text",
+    [
+        "Eligibility is not domestic only; foreign institutions may apply.",
+        "Applicants are not limited to U.S. only.",
+        "There is no domestic only requirement; foreign institutions may apply.",
+    ],
+)
+def test_negated_country_restrictions_remain_unknown(eligibility_text):
+    from dailydigest.opportunities import OpportunityProfile, assess_opportunity
+
+    profile = OpportunityProfile(**{**_profile_payload(), "country": "Germany"})
+    result = assess_opportunity(
+        {
+            "official": True,
+            "eligibility_tags": ["Unrestricted (open to any type of entity)"],
+            "eligibility_description": eligibility_text,
+        },
+        profile,
+    )
+
+    assert result.actionable is True
+    assert result.eligibility == "unknown"
+
+
 def test_event_date_must_leave_enough_lead_time():
     from dailydigest.opportunities import OpportunityProfile, assess_opportunity
 

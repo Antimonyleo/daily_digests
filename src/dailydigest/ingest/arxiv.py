@@ -18,6 +18,7 @@ from tenacity import (
 )
 
 from ..models import Item, SourceSpec
+from ..dedupe import _canonical_doi
 
 logger = logging.getLogger(__name__)
 
@@ -126,6 +127,17 @@ class ArxivSource:
                         pass
 
             ext = arxiv_id or hashlib.sha1(link.encode("utf-8")).hexdigest()[:16]
+            # These optional Atom fields describe this paper's publication,
+            # not works cited in the summary. Keep the arXiv identity/source:
+            # a supplied journal reference is not a venue-quality upgrade.
+            metadata = {}
+            doi = entry.get("arxiv_doi")
+            published_doi = _canonical_doi(doi) if isinstance(doi, str) else ""
+            if re.fullmatch(r"10\.\d{4,9}/\S+", published_doi):
+                metadata["published_doi"] = published_doi
+            journal_ref = entry.get("arxiv_journal_ref")
+            if isinstance(journal_ref, str) and journal_ref.strip():
+                metadata["journal_reference"] = " ".join(journal_ref.split())
             out.append(
                 Item(
                     source=spec.name,
@@ -136,6 +148,7 @@ class ArxivSource:
                     abstract=abstract,
                     authors=authors,
                     published_at=pub_dt,
+                    metadata=metadata,
                 )
             )
         return out

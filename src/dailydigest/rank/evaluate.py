@@ -1,28 +1,19 @@
-"""Offline ranking evaluation against accumulated thumbs feedback.
+"""Section-specific displayed-order diagnostics using current latest judgments.
 
-This is the measurement loop that turns ranker tuning from guesswork into A/B:
-it replays the *persisted* per-digest ordering (the scores the ranker actually
-assigned at send time) and scores it against the votes the user later cast.
-
-Relevance labels come from votes: an up-vote (+1) is relevant, a down-vote (-1)
-is non-relevant, and un-voted items are treated as non-relevant (standard for
-implicit feedback). Because sparse feedback makes absolute nDCG hard to read, we
-also report **pairwise accuracy** — over every (up-voted, down-voted) pair in a
-digest, the fraction the ranker ordered correctly — which is robust to how many
-items went un-judged.
-
-Metrics are macro-averaged across digests (each digest counts once) so a single
-heavily-voted day cannot dominate. To compare two ranker configurations, run
-each over a span of digests (e.g. via ``backfill``) and diff the report.
+Unjudged items are unknown: observed precision is a lower bound, accompanied by
+an upper bound and judged coverage. nDCG/AP are conditional on observed positives
+in the displayed pool, never estimates of retrieval recall. Same-day rebrews
+replace this legacy view; immutable captured runs use ``rank.replay`` instead.
 """
 
 from __future__ import annotations
 
 import logging
 import math
-from dataclasses import dataclass, field
+import re
+from dataclasses import asdict, dataclass, field
 
-from ..store import DigestItemFeatureRow, DigestItemRow, init_db, session_scope
+from ..store import DigestItemRow, VoteRow, init_db, session_scope
 from ..votes import _latest_vote_values
 
 logger = logging.getLogger(__name__)
@@ -38,6 +29,10 @@ class DigestEval:
     precision_at_k: float | None
     average_precision: float | None
     pairwise_accuracy: float | None
+    n_unknown: int = 0
+    judged_coverage_at_k: float | None = None
+    precision_upper_at_k: float | None = None
+    graded_utility_at_k: float = 0.0
 
 
 @dataclass
@@ -52,9 +47,28 @@ class EvalReport:
     pairwise_accuracy: float | None
     per_digest: list[DigestEval] = field(default_factory=list)
 
+    section: str = "research"
+    unknown_items: int = 0
+    judged_coverage_at_k: float | None = None
+    precision_upper_at_k: float | None = None
+    graded_utility_at_k: float | None = None
+    zero_positive_digests: int = 0
+    ndcg_defined_digests: int = 0
+
     def as_dict(self) -> dict:
         return {
             "k": self.k,
+            "section": self.section,
+            "label_basis": "current latest signed votes; not historical as-of judgments",
+            "precision_basis": "macro across all displayed section-days; observed positive lower bound, unknowns may be positive",
+            "ndcg_basis": "observed positives in displayed section; excludes zero-positive digests",
+            "graded_utility_basis": "observed gain sum at K: must-read=3, relevant=1, others=0",
+            "unknown_items": self.unknown_items,
+            "judged_coverage_at_k": _round(self.judged_coverage_at_k),
+            "precision_upper_at_k": _round(self.precision_upper_at_k),
+            "graded_utility_at_k": _round(self.graded_utility_at_k),
+            "zero_positive_digests": self.zero_positive_digests,
+            "ndcg_defined_digests": self.ndcg_defined_digests,
             "digests_total": self.n_digests_total,
             "digests_scored": self.n_digests_scored,
             "votes_used": self.n_votes,
@@ -62,19 +76,7 @@ class EvalReport:
             "precision_at_k": _round(self.precision_at_k),
             "map": _round(self.map_score),
             "pairwise_accuracy": _round(self.pairwise_accuracy),
-            "per_digest": [
-                {
-                    "digest_id": d.digest_id,
-                    "n_items": d.n_items,
-                    "n_up": d.n_up,
-                    "n_down": d.n_down,
-                    "ndcg_at_k": _round(d.ndcg_at_k),
-                    "precision_at_k": _round(d.precision_at_k),
-                    "average_precision": _round(d.average_precision),
-                    "pairwise_accuracy": _round(d.pairwise_accuracy),
-                }
-                for d in self.per_digest
-            ],
+            "per_digest": [asdict(d) for d in self.per_digest],
         }
 
 
@@ -142,46 +144,40 @@ def _pairwise_accuracy(ranked: list[tuple[int, int]]) -> float | None:
     return correct / total if total else None
 
 
-def _load_digest_orderings() -> dict[str, list[tuple[int, float]]]:
-    """Return ``{digest_id: [(item_id, score), ...]}`` ordered by score desc.
-
-    Membership is the DISPLAYED slate (``digest_items``), which a same-day rebrew
-    replaces atomically. The feature table (``digest_item_features``) is only used
-    to enrich the score for those displayed items — it must NOT drive membership,
-    because its rows are upserted per ``(digest_id, item_id)`` and never deleted on
-    rebrew, so it accumulates the UNION of every candidate ever featured under a
-    digest_id (observed: 73 feature rows for a 31-item digest). Scoring that union
-    silently evaluates papers the user never saw and inflates the metrics.
-    """
-    orderings: dict[str, list[tuple[int, float]]] = {}
+def _load_digest_orderings(section: str = "research") -> dict[str, list[tuple[int, int]]]:
+    """Load displayed section membership in numeric label order (R2 before R10)."""
+    # Labels persist the section that was displayed, even if current item
+    # metadata is subsequently reclassified. These are the persisted label ABI.
+    prefixes = {"research": "R", "industry": "I", "ai": "A", "regulatory": "G",
+                "world": "W", "opportunities": "F", "events": "E"}
+    if section not in prefixes:
+        raise ValueError(f"unknown section: {section}")
+    pattern = re.compile(re.escape(prefixes[section]) + r"(\d+)$")
+    orderings: dict[str, list[tuple[int, int]]] = {}
     init_db()
     with session_scope() as s:
-        # Enrichment scores from the feature table, keyed by (digest_id, item_id).
-        feat_score: dict[tuple[str, int], float] = {}
-        for r in s.query(DigestItemFeatureRow).all():
-            if r.item_id is not None and r.final_score is not None:
-                feat_score[(r.digest_id, int(r.item_id))] = float(r.final_score)
-        # Membership + fallback score from the displayed slate.
-        for r in s.query(DigestItemRow).all():
-            if r.item_id is None:
+        rows = s.query(DigestItemRow).all()
+        for row in rows:
+            match = pattern.fullmatch(row.item_label or "")
+            if match is None:
                 continue
-            item_id = int(r.item_id)
-            score = feat_score.get(
-                (r.digest_id, item_id),
-                float(r.score) if r.score is not None else 0.0,
-            )
-            orderings.setdefault(r.digest_id, []).append((item_id, score))
-    for digest_id in orderings:
-        orderings[digest_id].sort(key=lambda t: t[1], reverse=True)
+            position = int(match.group(1))
+            orderings.setdefault(row.digest_id, []).append((int(row.item_id), position))
+    for items in orderings.values():
+        items.sort(key=lambda item: (item[1], item[0]))
     return orderings
 
 
-def evaluate_history(k: int = 10) -> EvalReport:
-    """Replay persisted digests and score their order against later votes."""
-    orderings = _load_digest_orderings()
+def evaluate_history(k: int = 10, section: str = "research") -> EvalReport:
+    """Evaluate one section's displayed order against current latest signed votes."""
+    if k <= 0:
+        raise ValueError("k must be positive")
+    orderings = _load_digest_orderings(section)
     all_item_ids = [item_id for items in orderings.values() for item_id, _ in items]
     votes = _latest_vote_values(all_item_ids) if all_item_ids else {}
 
+    with session_scope() as s:
+        grades = {int(row.item_id): row.grade for row in s.query(VoteRow).all()}
     per_digest: list[DigestEval] = []
     ndcgs: list[float] = []
     precisions: list[float] = []
@@ -194,9 +190,12 @@ def evaluate_history(k: int = 10) -> EvalReport:
         n_up = sum(1 for lbl in labels if lbl > 0)
         n_down = sum(1 for lbl in labels if lbl < 0)
         votes_used += n_up + n_down
-        if n_up == 0 and n_down == 0:
-            continue  # no feedback on this digest — nothing to score against
-
+        top = labels[:k]
+        unknown = sum(label == 0 for label in top)
+        coverage = sum(label != 0 for label in top) / len(top)
+        upper = (sum(label > 0 for label in top) + unknown) / len(top)
+        utility = sum(3.0 if (grades.get(item_id) or 0) >= 100 else 1.0
+                      for item_id, _ in items[:k] if votes.get(item_id, 0) > 0)
         ndcg = _ndcg_at_k(labels, k)
         prec = _precision_at_k(labels, k)
         ap = _average_precision(labels)
@@ -212,6 +211,10 @@ def evaluate_history(k: int = 10) -> EvalReport:
                 precision_at_k=prec,
                 average_precision=ap,
                 pairwise_accuracy=pw,
+                n_unknown=len(labels) - n_up - n_down,
+                judged_coverage_at_k=coverage,
+                precision_upper_at_k=upper,
+                graded_utility_at_k=utility,
             )
         )
         if ndcg is not None:
@@ -229,11 +232,18 @@ def evaluate_history(k: int = 10) -> EvalReport:
     return EvalReport(
         k=k,
         n_digests_total=len(orderings),
-        n_digests_scored=len(per_digest),
+        n_digests_scored=sum(d.n_up + d.n_down > 0 for d in per_digest),
         n_votes=votes_used,
         ndcg_at_k=_mean(ndcgs),
         precision_at_k=_mean(precisions),
         map_score=_mean(aps),
         pairwise_accuracy=_mean(pairwise),
         per_digest=per_digest,
+        section=section,
+        unknown_items=sum(votes.get(item_id, 0) == 0 for item_id in all_item_ids),
+        judged_coverage_at_k=_mean([d.judged_coverage_at_k for d in per_digest]),
+        precision_upper_at_k=_mean([d.precision_upper_at_k for d in per_digest]),
+        graded_utility_at_k=_mean([d.graded_utility_at_k for d in per_digest]),
+        zero_positive_digests=sum(d.n_up == 0 and d.n_down > 0 for d in per_digest),
+        ndcg_defined_digests=len(ndcgs),
     )

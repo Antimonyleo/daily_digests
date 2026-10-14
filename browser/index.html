@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>DailyDigest · Browser</title>
+  <link rel="stylesheet" href="./style.css">
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="icon" href="./app-icon.svg" type="image/svg+xml">
+</head>
+<body>
+  <main id="startup" aria-labelledby="startup-title">
+    <p class="eyebrow">DailyDigest in your browser</p>
+    <h1 id="startup-title">Your reading desk, locally.</h1>
+    <p>The full DailyDigest interface runs with Python in this browser. Your profile, feedback and saved reading stay in this browser’s storage.</p>
+    <p>First launch downloads the Python runtime and application. Brewing contacts the sources you select. Research services may require a configured companion when they block browser requests.</p>
+    <p id="startup-status" role="status">Starting Python…</p>
+    <button id="retry" hidden type="button">Retry startup</button>
+  </main>
+  <iframe id="app" title="DailyDigest reading desk" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-downloads" hidden></iframe>
+  <footer class="browser-bar">
+    <span id="status" role="status">Starting Python…</span>
+    <button id="install" type="button" hidden title="Install a DailyDigest browser app shortcut">Install</button>
+    <details id="companion-menu">
+      <summary>Companion</summary>
+      <div class="data-tools">
+        <p>A companion can provide local CLI summaries, email, inbound reading and optional state transfer. Connect only to a server you trust. Each action below is explicit.</p>
+        <form id="companion-form">
+          <label for="companion-endpoint">Local server URL</label>
+          <input id="companion-endpoint" type="url" required placeholder="http://127.0.0.1:8766" autocomplete="url">
+          <label for="companion-token">Access token</label>
+          <input id="companion-token" type="password" required autocomplete="off">
+          <button id="companion-connect" disabled type="submit">Connect</button>
+          <button id="companion-disconnect" disabled type="button">Disconnect</button>
+        </form>
+        <p id="companion-status" role="status">No companion configured.</p>
+        <p id="companion-summary-help" hidden>Select a supported CLI summary provider in Settings to use companion summaries during a brew.</p>
+        <p id="companion-schedule-help" hidden>For scheduled brews, send browser state once and keep the companion running. Restore companion state to retrieve its latest digest.</p>
+        <div class="companion-actions">
+          <button id="companion-email" disabled type="button">Send latest digest email</button>
+          <button id="companion-inbound" disabled type="button">Import email feedback</button>
+          <button id="companion-push" disabled type="button">Send browser state</button>
+          <button id="companion-pull" disabled type="button">Restore companion state</button>
+        </div>
+      </div>
+    </details>
+    <details>
+      <summary>Browser data</summary>
+      <div class="data-tools">
+        <p>Data is private to this browser and site. Export a backup before clearing browser storage. Imported backups replace this browser’s DailyDigest data.</p>
+        <button id="export" disabled type="button">Export backup</button>
+        <label class="file-button">Import backup<input id="import" type="file" accept="application/json,.json" disabled></label>
+      </div>
+    </details>
+  </footer>
+  <script type="module" src="./app.mjs"></script>
+</body>
+</html>

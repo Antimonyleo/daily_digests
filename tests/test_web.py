@@ -339,7 +339,7 @@ def test_setup_page_renders_accessible_optional_section_switches(monkeypatch):
     assert 'id="user-timezone"' in html
     assert "Intl.DateTimeFormat().resolvedOptions().timeZone" in html
     assert "Optional matching preferences" in html
-    assert "weighted research interests above are reused" in html
+    assert "research interests above are reused" in html
     assert "About you for opportunity matching" in html
     assert 'id="top_ai"' in html
     assert "AI tools &amp; methods" in html
@@ -692,7 +692,7 @@ def test_setup_validation_error_preserves_optional_section_switches(
                 form={
                     "_csrf_token": web._CSRF_TOKEN,
                     "bio": "Researcher.",
-                    "topics": "missing a weight",
+                    "topics": "RNA | invalid",
                     "llm_backend": "extractive",
                     "include_industry": "true",
                     "include_ai": "false",
@@ -732,7 +732,7 @@ def test_setup_validation_error_does_not_echo_submitted_api_key(
                 form={
                     "_csrf_token": web._CSRF_TOKEN,
                     "bio": "Researcher.",
-                    "topics": "missing a weight",
+                    "topics": "RNA | invalid",
                     "llm_backend": "api",
                     "llm_base_url": "https://api.example.test/v1",
                     "llm_api_key": "super-secret-test-key",
@@ -780,7 +780,7 @@ def test_setup_post_requires_at_least_one_research_item(tmp_path, monkeypatch):
     ("raw", "message"),
     [
         ("", "at least one"),
-        ("topic without weight", "must use"),
+        ("topic |", "must use"),
         ("topic | 0", "greater than 0"),
         ("\n".join(f"topic {i} | 1" for i in range(11)), "at most 10"),
     ],
@@ -1015,6 +1015,33 @@ def test_recent_digest_ids_are_ordered_by_actual_brew_time():
         "2026-05-05",
         "2026-05-01",
     ]
+
+
+@pytest.mark.parametrize('viewed,available,previous', [
+    ('2026-05-05', ['2026-05-05', '2026-05-03', '2026-05-01'], '2026-05-03'),
+    ('2026-05-03', ['2026-05-05', '2026-05-03', '2026-05-01'], '2026-05-01'),
+    ('2026-05-03', ['2026-05-03'], None),
+    ('2026-05-05', ['2026-05-03'], '2026-05-03'),
+])
+def test_explicit_current_and_previous_brew_navigation(tmp_path, monkeypatch, viewed, available, previous):
+    from dailydigest import web
+    profile_path = tmp_path / 'profile.yaml'
+    profile_path.write_text('name: Ada\nbio: Researcher.\nkeywords: []\ndownweight: []\n')
+    monkeypatch.setattr(web, '_get_profile_path', lambda: profile_path)
+    monkeypatch.setattr(web, '_digest_id', lambda: '2026-05-05')
+    monkeypatch.setattr(web, '_recent_digest_ids', lambda _today, limit=3: available)
+    monkeypatch.setattr(web, '_digest_exists', lambda value: value in available)
+    _stub_index_dependencies(web, monkeypatch)
+    monkeypatch.setattr(web, '_load_today', lambda *_args, **_kwargs: ([], {}))
+    response = web.index(_request('GET', '/'), digest_id=viewed)
+    page = _text_payload(response)
+    assert 'href="/" aria-label="Open current brew"' in page
+    assert '>Current brew</a>' in page
+    if previous is None:
+        assert '>Previous brew</a>' not in page
+    else:
+        assert f'href="/?digest_id={previous}" rel="prev"' in page
+        assert '>Previous brew</a>' in page
 
 
 def test_index_falls_back_to_today_outside_the_time_machine_window(
@@ -1481,7 +1508,8 @@ def test_overflow_shelf_renders_and_saves_for_tomorrow(tmp_path, monkeypatch):
     assert before.count('class="overflow-vote"') == 4
 
     headers = {"X-CSRF-Token": web._CSRF_TOKEN}
-    response = web.overflow_save(_request("POST", "/overflow/save", headers=headers))
+    signature = web._overflow_signature("2026-05-07", web.load_digest_audit("2026-05-07", "reading_mode_overflow"))
+    response = web.overflow_save(_request("POST", "/overflow/save", headers=headers), digest_id="2026-05-07", audit_signature=signature)
     payload = _json_payload(response)
     assert payload == {
         "ok": True,
@@ -1498,13 +1526,15 @@ def test_overflow_shelf_renders_and_saves_for_tomorrow(tmp_path, monkeypatch):
     # Rating a near-miss positively must also PIN it: eligibility alone cannot
     # bring it back once its publication date leaves the candidate window.
     pinned = web.overflow_save_one(
-        _request("POST", f"/overflow/save/{trimmed_id}", headers=headers), trimmed_id
+        _request("POST", f"/overflow/save/{trimmed_id}", headers=headers), trimmed_id,
+        digest_id="2026-05-07", audit_signature=signature,
     )
     assert _json_payload(pinned)["ok"] is True
     assert trimmed_id in store_mod.carryover_item_ids()
     with pytest.raises(HTTPException) as not_overflow:
         web.overflow_save_one(
-            _request("POST", "/overflow/save/424242", headers=headers), 424242
+            _request("POST", "/overflow/save/424242", headers=headers), 424242,
+            digest_id="2026-05-07", audit_signature=signature,
         )
     assert not_overflow.value.status_code == 404
 
@@ -1528,7 +1558,8 @@ def test_overflow_shelf_renders_and_saves_for_tomorrow(tmp_path, monkeypatch):
     # A day with no overflow audit -> 404 rather than a silent no-op.
     monkeypatch.setattr(web, "_digest_id", lambda: "2026-05-08")
     with pytest.raises(HTTPException) as excinfo:
-        web.overflow_save(_request("POST", "/overflow/save", headers=headers))
+        web.overflow_save(_request("POST", "/overflow/save", headers=headers),
+                          digest_id="2026-05-08", audit_signature=signature)
     assert excinfo.value.status_code == 404
 
 
@@ -2618,7 +2649,7 @@ def test_run_page_reuses_valid_run_id_so_refresh_reconnects(monkeypatch, tmp_pat
     body = _text_payload(response)
 
     assert 'const RUN_ID = "abcdef123456";' in body
-    assert "autostart=1\\u0026run_id=abcdef123456" in body
+    assert "resume=1\\u0026run_id=abcdef123456" in body
 
 
 def test_setup_and_completion_pages_use_time_neutral_copy(monkeypatch, tmp_path):
@@ -2677,24 +2708,27 @@ def test_main_page_exposes_one_click_reading_modes_and_settings_can_return(
     assert 'teaButton.setAttribute("title", "Tea break complete")' in main
     assert "teaButton.disabled = true" in main
     assert "localStorage.setItem(teaLeafStorageKey, String(teaLeaves))" in main
-    assert "teaIndex = (teaIndex + 1) % TEA_NOTES.length" in main
+    assert "TEA_NOTES[teaLeaves % TEA_NOTES.length]" in main
     assert 'class="tea-pet" id="tea-pet" role="button" tabindex="0"' in main
     assert 'data-note-kind=' in main
     assert ".tea-break-copy { display: block; min-width: 0; }" in main
     assert ".tea-break-copy { max-width: 80ch; }" not in main
     assert "teaBreak.dataset.noteKind" in main
-    assert "pet-steam-rise 1.9s ease-out 2 both" in main
-    # The fall holds the leaf gone (forwards) and a separate regrow brings the
-    # next one back, so the two never run back to back.
+    assert 'class="pet-rim"' in main
+    assert "pet-steam-rise 1.5s ease-out 1 both" in main
+    assert "thankReader" not in main
+    assert "pet-hop" not in main
+    assert "note-pop" not in main
+    # Hold the leaf gone until the contented reaction ends, then regrow.
     assert (
-        ".tea-break.is-changing .tea-leaf-shape { animation: leaf-drop 0.62s ease-in 1 forwards; }"
+        ".tea-break.is-feeding .tea-leaf-shape { animation: leaf-drop 0.48s ease-in 1 forwards; }"
         in main
     )
     assert ".tea-break.is-regrowing .tea-leaf-shape { animation: leaf-regrow" in main
-    assert "const LEAF_PAUSE_MS = 220;" in main
+    assert "const LEAF_REST_MS = 420;" in main
     assert '@media (hover: hover) and (pointer: fine) and (prefers-reduced-motion: no-preference)' in main
     assert 'teaPet.addEventListener("pointermove"' in main
-    assert 'teaPet.addEventListener("pointerleave"' in main
+    assert 'stage.addEventListener("pointerleave"' in main
     assert 'teaPet.addEventListener("pointerdown"' in main
     assert "teaPet.setPointerCapture(event.pointerId)" in main
     assert 'teaPet.addEventListener("keydown"' in main
@@ -2816,14 +2850,18 @@ def test_theme_controls_and_safe_pwa_assets_are_exposed(monkeypatch, tmp_path):
     assert '>Add to desktop</button>' in page
     assert "It does not install or start the DailyDigest server" in page
     assert 'aria-describedby="install-app-help"' in page
-    assert 'compact ? "Comfortable view" : "Compact view"' in page
+    assert '<details class="app-utilities" id="display-menu">' in page
+    assert 'id="display-menu-toggle" aria-controls="display-options">Display</summary>' in page
+    assert 'id="pip-toggle"' in page
+    assert 'role="group" aria-label="Display preferences"' in page
+    assert 'displayButton.textContent = "Compact view"' in page
     assert "localStorage.getItem(\"dailydigest-theme\")" in page
     assert "localStorage.getItem(\"dailydigest-display\")" in page
     assert page.index("dailydigest-theme") < page.index("<style>")
     assert "@media (max-width: 680px)" in page
     assert ".app-utilities {" in page
     assert "display: flex; flex-direction: column" in page
-    assert "position: static; flex-direction: row; justify-content: center" in page
+    assert "position: relative; right: auto; bottom: auto; width: max-content" in page
     assert "navigator.serviceWorker.register" in page
     assert 'data-theme="light"' in page
     assert "@media (prefers-reduced-motion: no-preference)" in page

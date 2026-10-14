@@ -120,6 +120,7 @@ def test_ingest_all_records_adapter_exceptions_as_failed_health(monkeypatch):
 
     class BrokenSource:
         def fetch(self, _spec, days=2):
+            self.last_fetch_diagnostics = {"queries": [{"failure": "network unavailable"}]}
             raise RuntimeError("network unavailable")
 
     recorded = []
@@ -132,12 +133,14 @@ def test_ingest_all_records_adapter_exceptions_as_failed_health(monkeypatch):
     monkeypatch.setattr(pipeline_mod, "dispatch_source", lambda _spec: BrokenSource())
     monkeypatch.setattr(pipeline_mod.health, "record", lambda stats: recorded.extend(stats))
 
+    stats_out = []
     with pytest.raises(RuntimeError, match="No items were retrieved"):
-        pipeline_mod.ingest_all(days=2)
+        pipeline_mod.ingest_all(days=2, stats_out=stats_out)
 
     assert len(recorded) == 1
     assert recorded[0].ok is False
     assert "network unavailable" in (recorded[0].error or "")
+    assert stats_out[0].diagnostics == {"queries": [{"failure": "network unavailable"}]}
 
 
 def test_ingest_all_aborts_when_every_enabled_opportunity_provider_fails(monkeypatch):
@@ -242,6 +245,50 @@ def test_ingest_all_aborts_a_single_provider_partial_research_scan(monkeypatch):
 
     assert len(recorded) == 3
     assert any(not row.ok for row in recorded)
+
+
+@pytest.mark.parametrize("failure_stage", ["fetch", "filter", None])
+def test_ingest_all_checks_sole_research_family_before_publishing(
+    monkeypatch, failure_stage
+):
+    from dailydigest import pipeline as pipeline_mod
+
+    specs = [
+        SimpleNamespace(name="OpenAlex", kind="openalex", section="research"),
+        SimpleNamespace(name="World", kind="rss", section="world"),
+    ]
+
+    class Source:
+        def fetch(self, spec, days=2):
+            if spec.section == "research" and failure_stage == "fetch":
+                raise RuntimeError("research provider unavailable")
+            return [SimpleNamespace(section=spec.section, url=f"https://example.com/{spec.name}")]
+
+    monkeypatch.setattr(pipeline_mod, "init_db", lambda: None)
+    monkeypatch.setattr(pipeline_mod, "load_sources", lambda: specs)
+    monkeypatch.setattr(pipeline_mod, "dispatch_source", lambda _spec: Source())
+    monkeypatch.setattr(pipeline_mod.health, "record", lambda _stats: None)
+    monkeypatch.setattr(pipeline_mod, "dedupe_by_url", lambda items: items)
+    monkeypatch.setattr(
+        pipeline_mod, "filter_english",
+        lambda items: [
+            item for item in items
+            if failure_stage != "filter" or item.section != "research"
+        ],
+    )
+    persisted = []
+    monkeypatch.setattr(pipeline_mod, "upsert_items", lambda items: persisted.extend(items))
+
+    settings = SimpleNamespace(top_research=10, include_world=True)
+    if failure_stage is None:
+        pipeline_mod.ingest_all(days=2, section_settings=settings)
+        assert len(persisted) == 2
+        return
+    with pytest.raises(RuntimeError, match="Research source coverage is degraded"):
+        pipeline_mod.ingest_all(
+            days=2, section_settings=settings
+        )
+    assert persisted == []
 
 
 def test_ingest_all_accepts_two_research_provider_families(monkeypatch):
@@ -627,7 +674,7 @@ def test_run_all_persists_summaries_for_web_view(monkeypatch, tmp_path):
             external_id="summary-1",
             url="https://example.com/summary-1",
             title="Summary persistence",
-            abstract="Original abstract.",
+            abstract="Original abstract describing primary research methods and results.",
             published_at=datetime.now(timezone.utc),
         )
         s.add(row)
@@ -637,7 +684,7 @@ def test_run_all_persists_summaries_for_web_view(monkeypatch, tmp_path):
     monkeypatch.setattr(
         pipeline_mod,
         "ingest_all",
-        lambda progress_callback=None, days=2, section_settings=None: 0,
+        lambda progress_callback=None, days=2, section_settings=None, stats_out=None: 0,
     )
     monkeypatch.setattr(pipeline_mod, "load_profile", lambda: SimpleNamespace(bio="", keywords=[], downweight=[]))
     monkeypatch.setattr(pipeline_mod, "build_profile_matrix", lambda _profile: __import__("numpy").zeros((1, 3)))
@@ -657,8 +704,9 @@ def test_run_all_persists_summaries_for_web_view(monkeypatch, tmp_path):
     assert audit[0]["after_cross_source_dedupe"] == 1
 
 
+@pytest.mark.parametrize("negative_enabled", [False, True])
 def test_run_all_enriches_only_candidates_that_clear_free_gates(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, negative_enabled
 ):
     """Optional network enrichment must not run for already-rejected papers."""
     from dailydigest import pipeline as pipeline_mod
@@ -697,7 +745,7 @@ def test_run_all_enriches_only_candidates_that_clear_free_gates(
         features = {
             int(row.id): {
                 "topic_score": 0.8 if row.external_id == "on-topic" else 0.2,
-                "confidence_score": value,
+                "confidence_score": 0.69,
                 "final_score": value,
             }
             for row, value in scored
@@ -715,7 +763,8 @@ def test_run_all_enriches_only_candidates_that_clear_free_gates(
     monkeypatch.setattr(
         pipeline_mod,
         "load_profile",
-        lambda: SimpleNamespace(bio="", keywords=[], downweight=[]),
+        lambda: SimpleNamespace(bio="", keywords=[], downweight=[],
+                                negative_interests={"diagnostic work": 0.8}),
     )
     monkeypatch.setattr(
         pipeline_mod,
@@ -724,7 +773,18 @@ def test_run_all_enriches_only_candidates_that_clear_free_gates(
     )
     monkeypatch.setattr(pipeline_mod, "recent_items", recent_items)
     monkeypatch.setattr(pipeline_mod, "_score_items_for_pipeline", score)
-    monkeypatch.setattr(pipeline_mod, "_build_neg_centroid", None)
+    if negative_enabled:
+        from dailydigest.rank import profile as profile_mod
+        from dailydigest.rank import embedding_cache
+        import numpy as np
+
+        monkeypatch.setattr(profile_mod, "build_negative_vectors", lambda _profile: [[1., 0., 0.]])
+        monkeypatch.setattr(embedding_cache, "embed_item_rows", lambda rows: np.array([[1., 0., 0.]] * len(rows)))
+        monkeypatch.setenv("NEGATIVE_INTEREST_WEIGHT", "0.8")
+        from dailydigest.config import get_settings
+        get_settings.cache_clear()
+    else:
+        monkeypatch.setattr(pipeline_mod, "_build_neg_centroid", None)
     monkeypatch.setattr(enrich_mod, "enrich_scored", enrich)
     monkeypatch.setattr(
         pipeline_mod,
@@ -742,6 +802,19 @@ def test_run_all_enriches_only_candidates_that_clear_free_gates(
             for row in session.query(store_mod.ImpressionRow).all()
         }
     assert impressions[ids[0]].final_score == 0.73
+    expected_confidence = 0.562 if negative_enabled else 0.69
+    persisted = store_mod.load_digest_features("2026-09-02")[ids[0]]
+    assert persisted["confidence_score"] == expected_confidence
+    if negative_enabled:
+        assert persisted["negative_interest_penalty"] == pytest.approx(.128)
+    from dailydigest.rank.replay import frozen_selection, validate_replay
+
+    runs = store_mod.list_ranking_snapshots(digest_id="2026-09-02")
+    snapshot = store_mod.load_ranking_snapshot(runs[0]["run_id"])
+    assert len(snapshot["candidates"]) == 2
+    assert snapshot["candidates"][1]["first_rejected_stage"] == "after_topic_gate"
+    assert snapshot["candidates"][0]["quality_score"] == expected_confidence
+    assert validate_replay(snapshot, frozen_selection)["status"] == "matched"
 
 
 def test_run_all_author_boost_keeps_served_score_within_unit_range(
@@ -890,7 +963,7 @@ def test_run_all_gives_carryover_items_one_more_pass_then_consumes(monkeypatch, 
     monkeypatch.setattr(
         pipeline_mod,
         "ingest_all",
-        lambda progress_callback=None, days=2, section_settings=None: 0,
+        lambda progress_callback=None, days=2, section_settings=None, stats_out=None: 0,
     )
     monkeypatch.setattr(
         pipeline_mod,
@@ -992,7 +1065,7 @@ def test_run_all_logs_research_candidate_pool_with_selected_flags(monkeypatch, t
     monkeypatch.setattr(
         pipeline_mod,
         "ingest_all",
-        lambda progress_callback=None, days=2, section_settings=None: 0,
+        lambda progress_callback=None, days=2, section_settings=None, stats_out=None: 0,
     )
     monkeypatch.setattr(pipeline_mod, "load_profile", lambda: SimpleNamespace(bio="", keywords=[], downweight=[]))
     monkeypatch.setattr(pipeline_mod, "build_profile_matrix", lambda _profile: __import__("numpy").zeros((1, 3)))
@@ -1089,7 +1162,7 @@ def test_run_all_impressions_carry_primary_facet_and_topic_score(monkeypatch, tm
     monkeypatch.setattr(
         pipeline_mod,
         "ingest_all",
-        lambda progress_callback=None, days=2, section_settings=None: 0,
+        lambda progress_callback=None, days=2, section_settings=None, stats_out=None: 0,
     )
     monkeypatch.setattr(pipeline_mod, "load_profile", lambda: SimpleNamespace(bio="", keywords=[], downweight=[]))
     monkeypatch.setattr(pipeline_mod, "build_profile_matrix", lambda _profile: __import__("numpy").zeros((1, 3)))
@@ -1182,7 +1255,7 @@ def test_run_all_logs_selected_research_item_below_pool_cap(monkeypatch, tmp_pat
     monkeypatch.setattr(
         pipeline_mod,
         "ingest_all",
-        lambda progress_callback=None, days=2, section_settings=None: 0,
+        lambda progress_callback=None, days=2, section_settings=None, stats_out=None: 0,
     )
     monkeypatch.setattr(pipeline_mod, "load_profile", lambda: SimpleNamespace(bio="", keywords=[], downweight=[]))
     monkeypatch.setattr(pipeline_mod, "build_profile_matrix", lambda _profile: __import__("numpy").zeros((1, 3)))
@@ -1259,7 +1332,8 @@ def test_dry_run_after_sent_digest_refreshes_preview_and_preserves_sent_at(monke
             section="research",
             external_id="new",
             url="https://example.com/new",
-            title="New item",
+            title="New substantive research item",
+            abstract="Primary research with sufficient methods and results for ranking.",
         )
         s.add_all([old, new])
         s.flush()
@@ -1276,7 +1350,7 @@ def test_dry_run_after_sent_digest_refreshes_preview_and_preserves_sent_at(monke
     monkeypatch.setattr(
         pipeline_mod,
         "ingest_all",
-        lambda progress_callback=None, days=2, section_settings=None: 0,
+        lambda progress_callback=None, days=2, section_settings=None, stats_out=None: 0,
     )
     monkeypatch.setattr(pipeline_mod, "load_profile", lambda: SimpleNamespace(bio="", keywords=[], downweight=[]))
     monkeypatch.setattr(pipeline_mod, "build_profile_matrix", lambda _profile: __import__("numpy").zeros((1, 3)))
@@ -1312,7 +1386,8 @@ def test_run_all_does_not_mark_sent_when_send_digest_returns_false(monkeypatch, 
             section="research",
             external_id="unsent",
             url="https://example.com/unsent",
-            title="Unsent item",
+            title="Unsent substantive research item",
+            abstract="Primary research with sufficient methods and results for ranking.",
         )
         s.add(item)
         s.flush()
@@ -1328,7 +1403,7 @@ def test_run_all_does_not_mark_sent_when_send_digest_returns_false(monkeypatch, 
     monkeypatch.setattr(
         pipeline_mod,
         "ingest_all",
-        lambda progress_callback=None, days=2, section_settings=None: 0,
+        lambda progress_callback=None, days=2, section_settings=None, stats_out=None: 0,
     )
     monkeypatch.setattr(pipeline_mod, "load_profile", lambda: SimpleNamespace(bio="", keywords=[], downweight=[]))
     monkeypatch.setattr(pipeline_mod, "build_profile_matrix", lambda _profile: __import__("numpy").zeros((1, 3)))
@@ -1368,7 +1443,7 @@ def test_run_all_auto_backfill_when_days_missed(monkeypatch, tmp_path):
     monkeypatch.setattr(
         pipeline_mod,
         "ingest_all",
-        lambda progress_callback=None, days=2, section_settings=None: 0,
+        lambda progress_callback=None, days=2, section_settings=None, stats_out=None: 0,
     )
     monkeypatch.setattr(pipeline_mod, "load_profile", lambda: SimpleNamespace(bio="", keywords=[], downweight=[]))
     monkeypatch.setattr(pipeline_mod, "build_profile_matrix", lambda _profile: __import__("numpy").zeros((1, 3)))
@@ -1399,7 +1474,7 @@ def test_run_all_explicit_backfill_days_overrides_auto(monkeypatch, tmp_path):
     monkeypatch.setattr(
         pipeline_mod,
         "ingest_all",
-        lambda progress_callback=None, days=2, section_settings=None: 0,
+        lambda progress_callback=None, days=2, section_settings=None, stats_out=None: 0,
     )
     monkeypatch.setattr(pipeline_mod, "load_profile", lambda: SimpleNamespace(bio="", keywords=[], downweight=[]))
     monkeypatch.setattr(pipeline_mod, "build_profile_matrix", lambda _profile: __import__("numpy").zeros((1, 3)))
@@ -1427,7 +1502,7 @@ def test_run_all_empty_digest_emits_done_with_zero_items(monkeypatch, tmp_path):
     monkeypatch.setattr(
         pipeline_mod,
         "ingest_all",
-        lambda progress_callback=None, days=2, section_settings=None: 0,
+        lambda progress_callback=None, days=2, section_settings=None, stats_out=None: 0,
     )
     monkeypatch.setattr(pipeline_mod, "load_profile", lambda: SimpleNamespace(bio="", keywords=[], downweight=[]))
     monkeypatch.setattr(pipeline_mod, "build_profile_matrix", lambda _profile: __import__("numpy").zeros((1, 3)))
@@ -1439,7 +1514,7 @@ def test_run_all_empty_digest_emits_done_with_zero_items(monkeypatch, tmp_path):
     monkeypatch.setattr(
         pipeline_mod,
         "apply_reading_mode",
-        lambda picked, mode: (
+        lambda picked, mode, **_kwargs: (
             applied_modes.append(mode) or real_apply_reading_mode(picked, mode)
         ),
     )

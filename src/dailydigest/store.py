@@ -5,6 +5,7 @@ import json
 import logging
 import sqlite3
 import uuid
+import zlib
 from collections.abc import Iterable
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -32,6 +33,7 @@ from sqlalchemy import (
     or_,
     select,
     text,
+    true,
     update,
 )
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
@@ -127,6 +129,24 @@ class VoteRow(Base):
     __table_args__ = (
         UniqueConstraint("item_id", name="uq_votes_item_id"),
         CheckConstraint("value IN (-1, 0, 1)", name="ck_vote_value"),
+    )
+
+
+class FeedbackEventRow(Base):
+    """Append-only preference events; historical votes are never fabricated."""
+
+    __tablename__ = "feedback_events"
+
+    id = Column(Integer, primary_key=True)
+    item_id = Column(Integer, ForeignKey("items.id", ondelete="CASCADE"), nullable=False, index=True)
+    value = Column(Integer, nullable=False)
+    grade = Column(Integer, nullable=True)
+    recorded_at = Column(
+        DateTime(timezone=True), nullable=False,
+        default=lambda: datetime.now(timezone.utc), index=True,
+    )
+    __table_args__ = (
+        CheckConstraint("value IN (-1, 0, 1)", name="ck_feedback_event_value"),
     )
 
 
@@ -267,6 +287,21 @@ class DigestRow(Base):
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     item_count = Column(Integer, default=0)
     sent_at = Column(DateTime(timezone=True))
+
+
+class RankingSnapshotRow(Base):
+    """One immutable, compressed decision snapshot per successfully published run."""
+
+    __tablename__ = "ranking_snapshots"
+
+    run_id = Column(String, primary_key=True)
+    digest_id = Column(String, ForeignKey("digests.id", ondelete="CASCADE"), nullable=False, index=True)
+    schema_version = Column(Integer, nullable=False)
+    payload_zlib = Column(LargeBinary, nullable=False)
+    created_at = Column(
+        DateTime(timezone=True), nullable=False,
+        default=lambda: datetime.now(timezone.utc), index=True,
+    )
 
 
 class DigestItemFeatureRow(Base):
@@ -653,7 +688,9 @@ def exclude_known_items(rows: list[ItemRow]) -> list[ItemRow]:
     ids = [int(r.id) for r in rows if r.id is not None]
     if not ids:
         return rows
-    known = known_item_ids(ids)
+    init_db()
+    with session_scope() as s:
+        known = {int(item_id) for item_id in s.execute(select(KnownItemRow.item_id)).scalars()}
     if not known:
         return rows
     return _exclude_identity_siblings(rows, known)
@@ -667,10 +704,15 @@ def _exclude_identity_siblings(
         return rows
     from .dedupe import candidate_identity_keys
 
+    # Feedback remains binding after its original provider row leaves the
+    # candidate window or an earlier pipeline gate removes that row.
+    with session_scope() as s:
+        excluded_rows = s.execute(
+            select(ItemRow).where(ItemRow.id.in_(excluded_ids))
+        ).scalars().all()
     excluded_keys = {
         key
-        for row in rows
-        if row.id is not None and int(row.id) in excluded_ids
+        for row in excluded_rows
         for key in candidate_identity_keys(row)
     }
     return [
@@ -760,7 +802,20 @@ def clear_carryover_items(item_ids: Iterable[int]) -> None:
         s.execute(delete(CarryoverItemRow).where(CarryoverItemRow.item_id.in_(ids)))
 
 
-def search_bookmarks(query: str = "", limit: int = 200) -> list[SavedItem]:
+def count_bookmarks(query: str = "") -> int:
+    """Count the complete saved library, using the same search as its pages."""
+    init_db()
+    with session_scope() as s:
+        stmt = select(func.count(BookmarkRow.id)).join(ItemRow, ItemRow.id == BookmarkRow.item_id)
+        term = str(query or "").strip()
+        if term:
+            pattern = f"%{term}%"
+            stmt = stmt.where(or_(ItemRow.title.ilike(pattern), ItemRow.source.ilike(pattern),
+                                  ItemRow.abstract.ilike(pattern), ItemRow.summary.ilike(pattern)))
+        return int(s.scalar(stmt) or 0)
+
+
+def search_bookmarks(query: str = "", limit: int = 200, *, offset: int = 0) -> list[SavedItem]:
     """Return saved items newest-first, optionally matching their readable text."""
     init_db()
     term = str(query or "").strip()
@@ -781,7 +836,7 @@ def search_bookmarks(query: str = "", limit: int = 200) -> list[SavedItem]:
         rows = s.execute(
             stmt.order_by(BookmarkRow.created_at.desc(), BookmarkRow.id.desc()).limit(
                 max(1, min(int(limit), 500))
-            )
+            ).offset(max(0, int(offset)))
         ).all()
         return [
             SavedItem(
@@ -900,16 +955,48 @@ def upsert_items(items: Iterable[Item]) -> int:
                     row.abstract = new_abstract
                 if not (row.authors or "").strip() and (it.authors or "").strip():
                     row.authors = it.authors
-                if row.published_at is None and it.published_at is not None:
+                old_metadata = item_metadata(row)
+                incoming_metadata = it.metadata or {}
+                old_date_source = old_metadata.get("publication_date_source")
+                new_date_source = incoming_metadata.get("publication_date_source")
+                replace_publication_date = (
+                    it.section == "research" and new_date_source == "published"
+                    and old_date_source != "published" and it.published_at is not None
+                )
+                if (row.published_at is None or replace_publication_date) and it.published_at is not None:
                     row.published_at = it.published_at
                 if (
                     (not row.url or not str(row.url).startswith(("http://", "https://")))
                     and str(it.url or "").startswith(("http://", "https://"))
                 ):
                     row.url = it.url
-                old_metadata = item_metadata(row)
-                incoming_metadata = it.metadata or {}
                 merged_metadata = {**old_metadata, **incoming_metadata}
+                if it.section == "research" and old_date_source == "published" and row.published_at is not None:
+                    # A later RSS update must not relabel the retained publication
+                    # timestamp, even when the rest of the metadata refreshes.
+                    merged_metadata["publication_date_source"] = "published"
+                # Missing/generic annotations do not establish a changed record
+                # identity. Keep explicit publication genres and exclusion evidence
+                # while allowing unrelated metadata to refresh normally.
+                from .rank.source_quality import research_publication_metadata
+
+                publication_facts = research_publication_metadata(row)
+                if publication_facts.get("is_retracted") is True:
+                    merged_metadata["is_retracted"] = True
+                if publication_facts.get("publication_types"):
+                    types = merged_metadata.get("publication_types", [])
+                    types = [value for value in types if isinstance(value, str)] if isinstance(types, list) else []
+                    existing_types = {value.strip().casefold() for value in types}
+                    merged_metadata["publication_types"] = types + sorted(
+                        set(publication_facts["publication_types"]) - existing_types
+                    )
+                if publication_facts.get("publication_type_evidence"):
+                    evidence = merged_metadata.get("publication_type_evidence", [])
+                    evidence = list(evidence) if isinstance(evidence, list) else []
+                    for claim in publication_facts["publication_type_evidence"]:
+                        if claim not in evidence:
+                            evidence.append(claim)
+                    merged_metadata["publication_type_evidence"] = evidence
                 if merged_metadata != old_metadata:
                     row.metadata_json = json.dumps(
                         merged_metadata,
@@ -1006,7 +1093,7 @@ def exclude_reviewed_items(rows: list[ItemRow]) -> list[ItemRow]:
         return rows
     reviewed = {
         item_id
-        for item_id, value in _latest_vote_values(ids).items()
+        for item_id, value in _latest_vote_values().items()
         if value != 1
     }
     if not reviewed:
@@ -1014,14 +1101,11 @@ def exclude_reviewed_items(rows: list[ItemRow]) -> list[ItemRow]:
     return _exclude_identity_siblings(rows, reviewed)
 
 
-def _latest_vote_values(item_ids: list[int]) -> dict[int, int]:
-    """Return latest vote values for ids, tolerating legacy duplicate rows."""
-    if not item_ids:
-        return {}
+def _latest_vote_values() -> dict[int, int]:
+    """Return latest stored vote values, tolerating legacy duplicate rows."""
     with session_scope() as s:
         rows = s.execute(
             select(VoteRow.item_id, VoteRow.value)
-            .where(VoteRow.item_id.in_(item_ids))
             .order_by(VoteRow.item_id, VoteRow.created_at.desc(), VoteRow.id.desc())
         ).all()
     latest: dict[int, int] = {}
@@ -1102,26 +1186,31 @@ def prune(days: int) -> int:
     items are kept so the reading archive remains durable after normal
     rotation; items flagged known are kept so a re-ingested funding call still
     matches an existing row and stays suppressed; pinned carryover items are kept
-    so a promised extra ranking pass is not deleted before it happens. Without these guards, cascade
-    deletion would erase all three.
+    so a promised extra ranking pass is not deleted before it happens. Retained
+    impression history also protects candidates displaced by a later rebrew.
+    Append-only feedback protects rated items even if a current vote is removed.
     """
     init_db()
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     with session_scope() as s:
         voted_subq = select(VoteRow.item_id).distinct().scalar_subquery()
+        feedback_subq = select(FeedbackEventRow.item_id).distinct().scalar_subquery()
         bookmarked_subq = select(BookmarkRow.item_id).distinct().scalar_subquery()
         known_subq = select(KnownItemRow.item_id).distinct().scalar_subquery()
         carryover_subq = (
             select(CarryoverItemRow.item_id).distinct().scalar_subquery()
         )
         digest_item_subq = select(DigestItemRow.item_id).distinct().scalar_subquery()
+        impression_item_subq = select(ImpressionRow.item_id).distinct().scalar_subquery()
         stmt = delete(ItemRow).where(
             ItemRow.fetched_at < cutoff,
             ItemRow.id.not_in(voted_subq),
+            ItemRow.id.not_in(feedback_subq),
             ItemRow.id.not_in(bookmarked_subq),
             ItemRow.id.not_in(known_subq),
             ItemRow.id.not_in(carryover_subq),
             ItemRow.id.not_in(digest_item_subq),
+            ItemRow.id.not_in(impression_item_subq),
         )
         result = s.execute(stmt)
         return result.rowcount or 0
@@ -1505,8 +1594,13 @@ def publish_digest(
     model_version: str | None = None,
     audits: dict[str, list[dict]] | None = None,
     run_id: str | None = None,
+    ranking_snapshot: dict | None = None,
 ) -> str:
-    """Publish one complete slate and its measurement rows in one transaction."""
+    """Publish one complete slate and its measurement rows in one transaction.
+
+    A supplied ranking snapshot must match the explicit ``run_id`` and digest.
+    Reusing a snapshot run id rejects and rolls back the entire publication.
+    """
     init_db()
     labeled_items = _dedupe_labeled_items(digest_id, labeled_items)
     selected_pairs = {(str(item[0]), int(item[1])) for item in labeled_items}
@@ -1518,6 +1612,16 @@ def publish_digest(
         row for row in feature_rows if (str(row[0]), int(row[1])) in selected_pairs
     ]
     run_id = run_id or uuid.uuid4().hex
+    snapshot_blob = None
+    if ranking_snapshot is not None:
+        if ranking_snapshot.get("run_id") != run_id or ranking_snapshot.get("digest_id") != digest_id:
+            raise ValueError("Ranking snapshot run_id and digest_id must match publication")
+        version = ranking_snapshot.get("schema_version")
+        if type(version) is not int or version < 1:
+            raise ValueError("Ranking snapshot requires a positive integer schema_version")
+        snapshot_blob = zlib.compress(json.dumps(
+            ranking_snapshot, sort_keys=True, separators=(",", ":"), allow_nan=False,
+        ).encode("utf-8"))
     now = datetime.now(timezone.utc)
     with session_scope() as s:
         digest = s.get(DigestRow, digest_id)
@@ -1526,6 +1630,16 @@ def publish_digest(
             s.add(digest)
         else:
             digest.item_count = len(labeled_items)
+
+        if snapshot_blob is not None:
+            # Flush the digest before its FK child. An existing run id raises
+            # IntegrityError, rolling back the slate and every measurement row.
+            s.flush()
+            s.add(RankingSnapshotRow(
+                run_id=run_id, digest_id=digest_id,
+                schema_version=ranking_snapshot["schema_version"],
+                payload_zlib=snapshot_blob, created_at=now,
+            ))
 
         previous = s.execute(
             select(ItemRow).where(ItemRow.digest_id == digest_id)
@@ -1637,6 +1751,83 @@ def publish_digest(
                     )
                 )
     return run_id
+
+
+def _utc_iso(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc).isoformat()
+
+
+def load_ranking_snapshot(run_id: str) -> dict | None:
+    """Read the frozen run, never reconstruct it from mutable item metadata."""
+    init_db()
+    with session_scope() as s:
+        row = s.get(RankingSnapshotRow, run_id)
+        if row is None:
+            return None
+        payload = json.loads(zlib.decompress(row.payload_zlib))
+    if not isinstance(payload, dict):
+        raise ValueError("Ranking snapshot payload is not an object")
+    return payload
+
+
+def list_ranking_snapshots(*, digest_id: str | None = None, limit: int | None = None) -> list[dict]:
+    """List retained run metadata without decompressing all candidate pools."""
+    init_db()
+    stmt = select(
+        RankingSnapshotRow.run_id, RankingSnapshotRow.digest_id,
+        RankingSnapshotRow.schema_version, RankingSnapshotRow.created_at,
+    )
+    if limit is not None:
+        if limit < 1:
+            raise ValueError("limit must be positive")
+        stmt = stmt.order_by(RankingSnapshotRow.created_at.desc(), RankingSnapshotRow.run_id.desc()).limit(limit)
+    else:
+        stmt = stmt.order_by(RankingSnapshotRow.created_at, RankingSnapshotRow.run_id)
+    if digest_id is not None:
+        stmt = stmt.where(RankingSnapshotRow.digest_id == digest_id)
+    with session_scope() as s:
+        return [dict(run_id=row.run_id, digest_id=row.digest_id,
+                     schema_version=row.schema_version, created_at=_utc_iso(row.created_at))
+                for row in s.execute(stmt)]
+
+
+def load_feedback_events(*, before: datetime | None = None) -> list[dict]:
+    """Read only genuinely recorded events, optionally strictly before UTC cutoff."""
+    init_db()
+    stmt = select(FeedbackEventRow).order_by(FeedbackEventRow.recorded_at, FeedbackEventRow.id)
+    if before is not None:
+        if before.tzinfo is None:
+            before = before.replace(tzinfo=timezone.utc)
+        stmt = stmt.where(FeedbackEventRow.recorded_at < before.astimezone(timezone.utc))
+    with session_scope() as s:
+        return [dict(id=row.id, item_id=row.item_id, value=row.value, grade=row.grade,
+                     recorded_at=_utc_iso(row.recorded_at))
+                for row in s.execute(stmt).scalars()]
+
+
+def feedback_state() -> dict:
+    """Atomically read current votes and event watermark for capture consistency.
+
+    A single SQL statement also covers the empty-votes case, so concurrent
+    writers cannot put the watermark and latest-vote rows at different instants.
+    Legacy votes are a current-state baseline, not synthetic historical events.
+    """
+    init_db()
+    latest_event = select(func.max(FeedbackEventRow.id).label("event_id")).subquery()
+    stmt = (select(VoteRow, latest_event.c.event_id).select_from(latest_event)
+            .outerjoin(VoteRow, true()).order_by(VoteRow.item_id))
+    with session_scope() as s:
+        rows = s.execute(stmt).all()
+        return {
+            "max_event_id": int(rows[0][1] or 0),
+            "votes": [dict(item_id=row.item_id, value=row.value, grade=row.grade,
+                           created_at=_utc_iso(row.created_at))
+                      for row, _event_id in rows if row is not None],
+        }
 
 
 def load_digest_audit(digest_id: str, audit_type: str) -> list[dict]:

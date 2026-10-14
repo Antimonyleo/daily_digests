@@ -4,7 +4,7 @@ Persisted as JSON at ``data/health.json`` next to the SQLite db. Schema::
 
     {
         "updated_at": "<ISO8601>",
-        "latest": [ {source, items, ok, error, duration_ms, recorded_at}, ... ],
+        "latest": [ {source, items, ok, error, duration_ms, diagnostics}, ... ],
         "history": [
             {"recorded_at": "<ISO8601>", "stats": [ ... same shape as latest ... ]},
             ...  # capped at 7 entries (one per run-day)
@@ -19,7 +19,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .config import get_settings, ensure_data_dir
 
@@ -32,6 +32,9 @@ class IngestStats(BaseModel):
     ok: bool = True
     error: str | None = None
     duration_ms: int = 0
+    # Adapter-specific query coverage, including valid emptiness and saturation.
+    # Old records omit this field; no historical coverage is inferred for them.
+    diagnostics: dict = Field(default_factory=dict)
 
 
 def _health_path() -> Path:
