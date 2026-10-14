@@ -116,15 +116,15 @@ async function initialize() {
     computeMode = ['cpu', 'gpu', 'multicore'].includes(savedCompute) ? savedCompute : 'cpu';
     const engine = createEmbeddingEngine({ mode: computeMode, capabilities: computeCapabilities(), env: env.backends.onnx,
       loadTokenizer: options => AutoTokenizer.from_pretrained('bge-small', { local_files_only: true, ...options }),
-      loadModel: async options => {
+      loadModel: async ({ exportKind, ...options }) => {
         if (options.device === 'webgpu') {
           const adapter = await navigator.gpu?.requestAdapter({ powerPreference: 'high-performance' });
           if (!adapter || adapter.info?.isFallbackAdapter) throw new Error('Hardware GPU acceleration is unavailable');
           env.backends.onnx.webgpu.adapter = adapter;
         }
-        return AutoModel.from_pretrained(options.device === 'webgpu' ? 'bge-small-webgpu' : 'bge-small', {
+        return AutoModel.from_pretrained(exportKind === 'gpu' ? 'bge-small-webgpu' : 'bge-small', {
           local_files_only: true, ...options,
-          ...(options.device === 'webgpu' ? { session_options: { graphOptimizationLevel: 'disabled' } } : {}),
+          ...(exportKind === 'gpu' ? { session_options: { graphOptimizationLevel: 'disabled' } } : {}),
         });
       },
       prepareBatch: prepareBertBatch, makeTensor: (data, dims) => new Tensor('int64', data, dims),
@@ -135,7 +135,7 @@ async function initialize() {
     state = { py, engine };
     globalThis.browserYield = () => new Promise(resolve => setTimeout(resolve, 0));
     globalThis.browserEmbed = texts => engine.embed(texts);
-    globalThis.browserEmbeddingBackend = () => engine.device === 'webgpu' ? 'browser-onnx-webgpu-v1' : 'browser-onnx';
+    globalThis.browserEmbeddingBackend = () => engine.cacheBackend;
     companion = savedCompanion || null;
     globalThis.browserCompanionSupports = backend => Boolean(companion?.endpoint && ['api', 'anthropic', 'claude_cli', 'codex_cli'].includes(backend) && companion.capabilities?.summarize?.includes(backend));
     globalThis.browserCompanionIdentity = backend => globalThis.browserCompanionSupports(backend)

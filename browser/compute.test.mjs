@@ -84,6 +84,26 @@ test('a broken GPU session can fail during disposal without preventing CPU fallb
   assert.equal(h.engine.device, 'wasm');
 });
 
+test('fallback preserves the export after returning profile vectors on GPU', async () => {
+  const baseline = harness(), configs = [];
+  let calls = 0;
+  const h = harness('gpu', { loadModel: async config => {
+    configs.push(config);
+    const run = await baseline.options.loadModel(config);
+    return async inputs => {
+      if (config.device === 'webgpu' && ++calls > 1) throw new Error('GPU lost after profile encoding');
+      return run(inputs);
+    };
+  } });
+  await h.engine.embed(['profile']);
+  const signature = h.engine.cacheBackend;
+  assert.notEqual(signature, baseline.engine.cacheBackend);
+  await h.engine.embed(['document']);
+  assert.equal(h.engine.device, 'wasm');
+  assert.equal(h.engine.cacheBackend, signature);
+  assert.equal(configs.at(-1).exportKind, 'gpu');
+});
+
 test('CPU failures are reported rather than inventing successful vectors', async () => {
   const h = harness('cpu', { loadModel: async () => async () => { throw new Error('Inference failed'); } });
   await assert.rejects(h.engine.embed(['x']), /Inference failed/);
