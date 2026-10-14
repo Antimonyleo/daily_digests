@@ -466,6 +466,41 @@ try {
     await page.locator('#companion-disconnect').click();
     return { nativeApiWithNoBrowserKey: true, providerSummaryBackend: 'api', selectedItemsOnly: first.length, serverIdentityInvalidatesCache: true, extractiveRestored: true };
   });
+  await check('public-snapshot-through-real-browser-httpx', async () => {
+    // A separate ephemeral worker reads public metadata only. The other cases
+    // use fixture feeds, which cannot expose Pages' real compression headers.
+    const evidence = await page.evaluate(async base => {
+      const source = `
+        import { loadPyodide } from ${JSON.stringify(base + 'node_modules/pyodide/pyodide.mjs')};
+        try {
+          const py = await loadPyodide({ indexURL: ${JSON.stringify(base + 'node_modules/pyodide/')} });
+          await py.loadPackage(['httpx']);
+          const bundle = await fetch(${JSON.stringify(base + 'assets/app.zip')});
+          if (!bundle.ok) throw new Error('Application archive unavailable');
+          py.unpackArchive(await bundle.arrayBuffer(), 'zip', { extractDir: '/app' });
+          py.runPython("import sys\\nsys.path.insert(0, '/app/browser')\\nimport network\\nnetwork.install_httpx_transport()");
+          py.globals.set('snapshot_url', ${JSON.stringify(base + 'assets/public-sources.json')});
+          const result = py.runPython("import httpx, json\\nwith httpx.Client(timeout=20, follow_redirects=False) as client:\\n    response = client.get(snapshot_url)\\n    response.raise_for_status()\\n    snapshot = response.json()\\njson.dumps({'public_only': snapshot['public_only'], 'sources': len(snapshot['sources']), 'decoded_bytes': len(response.content), 'content_encoding': response.headers.get('content-encoding'), 'content_length': int(response.headers['content-length'])})");
+          postMessage({ result: JSON.parse(result) });
+        } catch (error) { postMessage({ error: String(error) }); }
+      `;
+      const url = URL.createObjectURL(new Blob([source], { type: 'text/javascript' }));
+      try {
+        return await new Promise((resolve, reject) => {
+          const worker = new Worker(url, { type: 'module' });
+          const finish = callback => value => { clearTimeout(timer); worker.terminate(); callback(value); };
+          const timer = setTimeout(finish(reject), 90000, new Error('Public snapshot transport check timed out'));
+          worker.onmessage = finish(event => event.data.error ? reject(new Error(event.data.error)) : resolve(event.data.result));
+          worker.onerror = finish(event => reject(new Error(event.message)));
+        });
+      } finally { URL.revokeObjectURL(url); }
+    }, base);
+    assert.equal(evidence.public_only, true);
+    assert.ok(evidence.sources > 0);
+    assert.equal(evidence.content_encoding, null);
+    assert.equal(evidence.content_length, evidence.decoded_bytes);
+    return evidence;
+  });
 } catch (error) { report.fatal = error.stack; console.error(error.message); }
 finally {
   report.workerEvents = await page.evaluate(() => window.__workerEvents).catch(() => []);

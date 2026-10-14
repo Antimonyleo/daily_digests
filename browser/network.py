@@ -90,6 +90,11 @@ class BrowserTransport(httpx.BaseTransport):
         for line in str(xhr.getAllResponseHeaders()).splitlines():
             if ":" in line:
                 name, value = line.split(":", 1)
+                # XHR has already decoded compression and transfer framing.
+                # Forwarding wire encoding headers makes HTTPX decode twice;
+                # its response constructor should compute the decoded length.
+                if name.strip().lower() in {"content-encoding", "content-length", "transfer-encoding"}:
+                    continue
                 headers.append((name.strip(), value.strip()))
         return httpx.Response(
             int(xhr.status), headers=headers, content=self._bytes(xhr),

@@ -109,3 +109,7 @@ Run the full native suite before release. Browser bridge tests run with
 acceptance is `node browser/verify-browser.mjs`; it expects isolated fictional
 backup and feed artifacts and blocks arbitrary external services. It is not a
 live brew against the reader's database or configured providers.
+It also reads the published public snapshot through the actual browser HTTPX
+transport, checking that browser-decoded responses are not decompressed twice.
+Mobile viewport checks establish layout only; production-scale latency and
+actual Android/iOS or other browser engines still need separate verification.

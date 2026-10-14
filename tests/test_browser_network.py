@@ -69,6 +69,29 @@ def test_method_binary_headers_status_and_timeout():
         response.raise_for_status()
 
 
+@pytest.mark.parametrize('encoding', ['gzip', 'deflate', 'br', 'identity'])
+def test_browser_decoded_response_is_not_decompressed_again(encoding):
+    # XHR exposes decoded bytes but retains the server's wire headers.
+    # Exercise HTTPX's real decoder, not just the transport's returned object.
+    xhr = XHR()
+    body = b'{"version":1,"public_only":true,"sources":{}}'
+    xhr.getAllResponseHeaders = lambda: (
+        f'Content-Type: application/json\r\ncOnTeNt-EnCoDiNg: {encoding}\r\n'
+        'Content-Length: 17\r\nTransfer-Encoding: chunked\r\nETag: "public-v1"\r\n'
+    )
+    transport = network.BrowserTransport(
+        xhr_factory=lambda: xhr, response_bytes=lambda _: body, request_body=bytes,
+    )
+    with httpx.Client(transport=transport) as http:
+        response = http.request('GET', 'https://example.test/api')
+    assert response.json() == {'version': 1, 'public_only': True, 'sources': {}}
+    assert response.content == body
+    assert 'content-encoding' not in response.headers
+    assert 'transfer-encoding' not in response.headers
+    assert int(response.headers['content-length']) == len(body)
+    assert response.headers['etag'] == '"public-v1"'
+
+
 @pytest.mark.parametrize("message,error", [("NetworkError: CORS", httpx.ConnectError),
                                          ("TimeoutError", httpx.ReadTimeout)])
 def test_failed_requests_are_httpx_errors(message, error):
