@@ -4,12 +4,20 @@ import assert from 'node:assert/strict';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { chromium } from '../prototypes/browser-compute/node_modules/playwright-core/index.mjs';
 
 const base = process.env.DAILYDIGEST_BROWSER_URL || 'http://127.0.0.1:8767/daily_digests/';
 const output = resolve(process.env.DAILYDIGEST_BROWSER_REPORT || '.full-review/browser-launch-2026-10-13');
 const fixture = process.env.DAILYDIGEST_BROWSER_FIXTURE || `${output}/fixture-backup.json`;
 const feedPath = process.env.DAILYDIGEST_BROWSER_FEED || `${output}/research-feed.xml`;
+function publicCacheProbeTexts(snapshot, hashes) {
+  const covered = new Set(hashes);
+  return [...new Set(Object.values(snapshot.sources || {}).filter(row => row.status === 'ok')
+    .flatMap(row => row.items || []).filter(item => item.section === 'research' && item.title?.trim())
+    .map(item => item.abstract?.trim() ? `${item.title.trim()}. ${item.abstract.trim()}` : item.title.trim()))]
+    .filter(text => covered.has(createHash('sha256').update(text).digest('hex'))).slice(0, 12);
+}
 await mkdir(output, { recursive: true });
 const report = { url: base, started: new Date().toISOString(), checks: [], console: [], errors: [], requests: [], fixtureRequests: [], workerEvents: [] };
 const scopeCorpus = JSON.parse(await readFile(new URL('../tests/fixtures/research_scope_benchmark.json', import.meta.url), 'utf8')).examples;
@@ -298,20 +306,32 @@ try {
     return evidence;
   }));
   if (!initialReady) throw new Error('Startup failed; dependent acceptance checks cannot run.');
-  await check('fresh-profile-reuses-public-vectors-without-loading-model', async () => {
+  await check('fresh-profile-reuses-covered-public-vectors-or-encodes-locally', async () => {
     const response = await page.request.get(base+'assets/public-sources.json');
     assert.equal(response.ok(),true);
     const snapshot=await response.json();
-    const texts=[...new Set(Object.values(snapshot.sources).filter(row=>row.status==='ok').flatMap(row=>row.items || [])
-      .filter(item=>item.section==='research' && item.title?.trim())
-      .map(item=>item.abstract?.trim()?`${item.title.trim()}. ${item.abstract.trim()}`:item.title.trim()))].slice(0,12);
-    assert.equal(texts.length,12);
+    const build = await (await page.request.get(base+'assets/build-manifest.json')).json();
+    const asset = await page.request.get(base+'assets/public-embeddings.json');
+    if (build.public_embeddings.published > 0) assert.equal(asset.ok(), true, 'Declared public cache must be present');
+    const cache = asset.ok() ? await asset.json() : {hashes:[]};
+    const covered = publicCacheProbeTexts(snapshot, cache.hashes);
+    if (build.public_embeddings.complete) assert.equal(covered.length, 12, 'Complete cache must cover the public research probe');
+    const texts = covered.length ? covered : [...new Set(Object.values(snapshot.sources)
+      .filter(row => row.status === 'ok').flatMap(row => row.items || [])
+      .filter(item => item.section === 'research' && item.title?.trim())
+      .map(item => item.abstract?.trim() ? `${item.title.trim()}. ${item.abstract.trim()}` : item.title.trim()))].slice(0,3);
+    assert.ok(texts.length > 0, 'Research probe requires real public source text');
     const result=await page.evaluate(texts=>window.__rpc({type:'acceptance-public-cache',texts}),texts);
     assert.equal(result.status,200,result.body);
     const evidence=JSON.parse(result.body);
-    assert.equal(evidence.before,0); assert.equal(evidence.after,0);
-    assert.equal(evidence.hits,12); assert.equal(evidence.valid,true);
-    return evidence;
+    assert.equal(evidence.before,0); assert.equal(evidence.valid,true);
+    if (covered.length) {
+      assert.equal(evidence.after,0); assert.equal(evidence.hits,texts.length);
+    } else {
+      assert.equal(evidence.after,texts.length); assert.equal(evidence.hits,0);
+    }
+    return {...evidence, published:build.public_embeddings.published,
+      missing:build.public_embeddings.missing, localFallbackVerified:!covered.length};
   });
   await check('dynamic-internal-links-support-modified-clicks', async () => {
     await page.evaluate(() => {

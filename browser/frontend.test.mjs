@@ -2,7 +2,23 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { runInNewContext } from 'node:vm';
 import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { localPath, routeFromHash, renderedDocument, WorkerClient, browserSupportError, friendlyLoadingStatus, publicRoute, announcementKey, computeStatusText, requestStorageProtection, publicSourceFreshness } from './app.mjs';
+
+test('acceptance probes covered public texts when an optional cache is partial', () => {
+  const source = readFileSync(new URL('./verify-browser.mjs', import.meta.url), 'utf8');
+  const match = source.match(/function publicCacheProbeTexts\([\s\S]*?\n\}/);
+  assert.ok(match, 'Acceptance needs coverage-aware probe selection');
+  const choose = runInNewContext(`(${match[0]})`, {createHash});
+  const snapshot = {sources: {feed: {status:'ok', items:[
+    {section:'research', title:'Uncached first article', abstract:'New text'},
+    {section:'research', title:'Covered article', abstract:'Existing text'},
+  ]}}};
+  const hash = createHash('sha256').update('Covered article. Existing text').digest('hex');
+  assert.equal(choose(snapshot, [hash]).join('|'), 'Covered article. Existing text');
+  assert.equal(choose(snapshot, []).length, 0);
+  assert.equal(choose({sources:{}}, [hash]).length, 0);
+});
 
 test('compute feedback distinguishes selected, exercised, fallback and busy states', () => {
   const selected = { mode: 'gpu', device: 'webgpu', stats: { completedInputs: 0 } };
