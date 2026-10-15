@@ -287,3 +287,70 @@ def test_api_connection_check_keeps_masked_saved_key_at_its_provider(monkeypatch
     assert response.status_code == 200
     assert calls[0]["api_key"] == expected
     assert "saved-secret" not in response.text
+
+
+def test_local_interest_wording_variants_are_bounded_and_never_guess_synonyms():
+    source = (Path(__file__).resolve().parents[1] / "templates/setup.html.j2").read_text()
+    assert "  function wordingVariants(" in source
+    script = source.split("  function wordingVariants(")[1].split("  function percentages(")[0]
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node is needed for local wording variants")
+    result = subprocess.run([node, "-e", "const assert = require('node:assert/strict');\n"
+        + "function wordingVariants(" + script + """
+        assert.deepEqual(wordingVariants('quantum error correction (QEC)'), ['quantum error correction', 'QEC']);
+        assert.deepEqual(wordingVariants('QEC (quantum error correction)'), ['QEC', 'quantum error correction']);
+        assert.deepEqual(wordingVariants('metal-organic frameworks'), ['metal organic frameworks']);
+        assert.deepEqual(wordingVariants('single-cell analysis'), ['single cell analysis']);
+        assert.deepEqual(wordingVariants('C-H activation'), []);
+        assert.deepEqual(wordingVariants('KRAS-G12D inhibitor'), []);
+        assert.deepEqual(wordingVariants('Drug development'), []);
+        assert.deepEqual(wordingVariants('Induce proximity'), []);
+        assert.deepEqual(wordingVariants('protein engineering (computational)'), []);
+        assert.deepEqual(wordingVariants('word '.repeat(50)), []);
+        """], capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stderr
+
+
+def test_loaded_interest_exposes_variants_without_editing_and_requires_explicit_add():
+    source = (Path(__file__).resolve().parents[1] / "templates/setup.html.j2").read_text()
+    helper = "function wordingVariants(" + source.split("  function wordingVariants(", 1)[1].split("  function percentages(", 1)[0]
+    controls = "const aliasInput =" + source.split("    const aliasInput =", 1)[1].split("    const nameInput =", 1)[0]
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node is needed for local wording controls")
+    script = """
+        const assert = require('node:assert/strict');
+        class Element {
+            constructor() { this.children = []; this.events = {}; this.textContent = ''; }
+            setAttribute() {}
+            addEventListener(type, callback) { this.events[type] = callback; }
+            append(...nodes) { this.children.push(...nodes); }
+            replaceChildren(...nodes) { this.children = nodes; }
+        }
+        const aliases = {value: ''}, topic = {value: 'quantum error correction (QEC)'};
+        const detailsPanel = new Element();
+        const row = {querySelector(selector) {
+            return selector === '[data-interest-aliases]' ? aliases
+                : selector === '[data-interest-name]' ? topic : detailsPanel;
+        }};
+        const document = {createElement: () => new Element()};
+        const fetch = () => assert.fail('Local suggestions must not contact a service');
+        let saves = 0; const serialize = () => {saves++;};
+    """ + helper + controls + """
+        const actions = detailsPanel.children[0];
+        assert.equal(actions.children.length, 1, 'Loaded interests must expose the suggestion button immediately');
+        assert.equal(actions.children[0].textContent, 'Suggest wording variants');
+        actions.children[0].events.click();
+        assert.equal(aliases.value, ''); assert.equal(saves, 0);
+        actions.children.find(button => button.textContent === 'Add “QEC”').events.click();
+        assert.equal(aliases.value, 'QEC'); assert.equal(saves, 1);
+        assert.equal(topic.value, 'quantum error correction (QEC)');
+        aliases.value = 'one; two; three';
+        actions.children[0].events.click();
+        actions.children.find(button => button.textContent === 'Add “QEC”').events.click();
+        assert.equal(aliases.value, 'one; two; three'); assert.equal(saves, 1);
+        assert.match(detailsPanel.children[1].textContent, /up to 3/);
+    """
+    result = subprocess.run([node, "-e", script], capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stderr

@@ -339,10 +339,21 @@ def _interest_coverage_audit(snapshot: dict) -> list[dict]:
                               "limited" if diagnostic.get("truncated") else "completed")
                     queries.append(status)
                     count = diagnostic.get("returned_count")
-                    searches.append({"source": source.get("source") or "Source",
-                                     "query": str(diagnostic.get("query") or ""), "status": status,
-                                     "returned_count": count if status in {"completed", "limited"}
-                                     and type(count) is int and count >= 0 else None})
+                    search = {"source": source.get("source") or "Source",
+                              "query": str(diagnostic.get("query") or ""), "status": status,
+                              "returned_count": count if status in {"completed", "limited"}
+                              and type(count) is int and count >= 0 else None}
+                    provider_warnings = diagnostic.get("warnings")
+                    if isinstance(provider_warnings, dict):
+                        labels = {"quotedphrasesnotfound": "Quoted phrase not found",
+                                  "phrasesignored": "Ignored phrase"}
+                        messages = [f"{labels[key]}: {message}" if key in labels else message
+                                    for key, group in provider_warnings.items()
+                                    if isinstance(group, list) for message in group
+                                    if isinstance(message, str) and message.strip()]
+                        if messages:
+                            search["warnings"] = list(dict.fromkeys(messages))
+                    searches.append(search)
         rows.append({"title": name, "candidates": len(attributed),
                      "eligible": sum(bool(candidate.get("eligible")) for candidate in attributed),
                      "queries": queries, "searches": searches, "rejections": dict(rejected),

@@ -862,7 +862,7 @@
         <li><strong>{{ interest.title }} · {{ interest.selected }} selected</strong>
           {% if interest.candidates is not none %}<span>{{ interest.candidates }} scored matches · {{ interest.eligible }} passed eligibility{% if interest.queries %} · Searches: {{ interest.queries|join(', ') }}{% endif %}</span>{% endif %}
           <span>{{ interest.explanation }}</span>
-          {% for search in interest.searches|default([]) %}<span>{{ search.source }}: {% if search.returned_count == 0 %}This search returned no papers{% else %}{{ search.status }}{% endif %}{% if search.query %} · Searched: <code>{{ search.query }}</code>{% endif %}.</span>{% endfor %}
+          {% for search in interest.searches|default([]) %}<span>{{ search.source }}: {{ search.status }}{% if search.status in ['completed', 'limited'] and search.returned_count == 0 %} · 0 papers returned by this search{% endif %}{% if search.query %} · Searched: <code>{{ search.query }}</code>{% endif %}.{% for warning in search.warnings|default([]) %} Provider notice: {{ warning }}.{% endfor %}</span>{% endfor %}
           {% if interest.rejections %}<span>Not selected: {% for stage, count in interest.rejections.items() %}{{ stage|replace('_', ' ') }} {{ count }}{% if not loop.last %}; {% endif %}{% endfor %}.</span>{% endif %}
         </li>{% endfor %}</ul>
     </details>
@@ -1005,6 +1005,7 @@
                 {% endfor %}
               {% endif %}
               <div class="why-copy"><strong>Why this recommendation?</strong>
+                {% if item.ranking.primary_facet %}Best-matching interest: {{ item.ranking.primary_facet }}.{% endif %}
                 {% if item.ranking.why_shown %}
                 {{ item.ranking.why_shown | join('; ') }}.
                 {% else %}

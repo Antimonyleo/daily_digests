@@ -161,7 +161,7 @@
         <div id="interest-rows"></div>
         <div class="interest-actions"><button type="button" class="btn" id="add-interest">Add interest</button><button type="button" class="btn" id="even-interests">Distribute evenly</button><button type="button" class="btn" id="normalize-interests">Normalize to 100%</button><output id="interest-total" aria-live="polite"></output></div>
         <p class="hint">Give each interest a share of 100%. Adding or removing a row adjusts the shares; after editing a percentage, use Normalize to 100% if needed. These guide relative priority, not guaranteed digest slots. Existing relative weights are converted to whole percentages when you save. Open search details to add alternative terms or describe useful papers.</p>
-        <p class="hint">Check wording sends only the chosen interest to PubMed for spelling suggestions. Nothing is checked automatically. Accept a suggestion to use it for searches and ranking after saving. Suggestions may miss specialist terms.</p>
+        <p class="hint">Suggest wording variants works locally from your supplied acronym or hyphenated wording; additions are optional. Check wording sends only the chosen interest to PubMed for spelling suggestions. Nothing is checked automatically. Accept a suggestion to use it for searches and ranking after saving. Suggestions may miss specialist terms.</p>
       </div>
       <textarea id="topic-details" name="topic_details" hidden disabled>{{ form.topic_details | default('') }}</textarea>
       <input id="topic-weight-mode" name="topic_weight_mode" type="hidden" value="percentage" disabled>
@@ -502,6 +502,28 @@
   let checkingWording = false;
   let metadata = {};
   try { metadata = JSON.parse(details.value || "{}"); } catch (_) {}
+  // Suggestions use only wording the reader supplied, without a network call.
+  function wordingVariants(topic) {
+    topic = topic.trim().replace(/\s+/g, ' ');
+    if (!topic || topic.length > 160) return [];
+    const variants = [];
+    const explicit = topic.match(/^(.+?)\s*\(([^()]+)\)$/);
+    if (explicit) {
+      const left = explicit[1].trim(), right = explicit[2].trim();
+      const acronym = /^[A-Z][A-Z0-9]{1,15}$/;
+      if ((acronym.test(left) && right.split(' ').length >= 2)
+          || (acronym.test(right) && left.split(' ').length >= 2)) variants.push(left, right);
+    }
+    // Preserve chemical bonds/identifiers such as C-H and KRAS-G12D.
+    const spaced = topic.replace(/\b([a-z]{3,})[-‐‑]([a-z]{3,})\b/g, '$1 $2');
+    if (spaced !== topic) variants.push(spaced);
+    const seen = new Set([topic.toLowerCase()]);
+    return variants.filter(term => {
+      const key = term.toLowerCase();
+      if (term.length > 160 || seen.has(key)) return false;
+      seen.add(key); return true;
+    }).slice(0, 3);
+  }
   function percentages(weights) {
     const count = weights.length;
     if (!count) return [];
@@ -551,6 +573,32 @@
     row.querySelector('[data-interest-aliases]').value = (detail.aliases || []).join('; ');
     row.querySelector('[data-interest-description]').value = detail.description || '';
     row.querySelector('button').addEventListener('click', () => { row.remove(); if (!rows.children.length) addRow(); distribute(false); });
+    const aliasInput = row.querySelector('[data-interest-aliases]');
+    const variantActions = document.createElement('div'); variantActions.className = 'interest-actions';
+    const variantStatus = document.createElement('p'); variantStatus.className = 'hint'; variantStatus.setAttribute('aria-live', 'polite');
+    const suggest = document.createElement('button'); suggest.type = 'button'; suggest.className = 'btn'; suggest.textContent = 'Suggest wording variants';
+    const clearVariants = () => { variantActions.replaceChildren(suggest); variantStatus.textContent = ''; };
+    suggest.addEventListener('click', () => {
+      clearVariants();
+      const aliases = aliasInput.value.split(';').map(term => term.trim().toLowerCase()).filter(Boolean);
+      const variants = wordingVariants(row.querySelector('[data-interest-name]').value).filter(term => !aliases.includes(term.toLowerCase()));
+      variantStatus.textContent = variants.length
+        ? 'Local wording variants only. Add one if it means the same thing in your field; save settings to use it. No synonym search was performed.'
+        : 'No additional wording variants found locally. Add field-specific synonyms or established acronyms yourself; this does not mean no papers exist.';
+      for (const term of variants) {
+        const add = document.createElement('button'); add.type = 'button'; add.className = 'btn'; add.textContent = `Add “${term}”`;
+        add.addEventListener('click', () => {
+          const current = aliasInput.value.split(';').map(value => value.trim()).filter(Boolean);
+          if (current.some(value => value.toLowerCase() === term.toLowerCase())) { add.disabled = true; return; }
+          if (current.length >= 3) { variantStatus.textContent = 'Keep up to 3 alternative terms. Remove one before adding another.'; return; }
+          aliasInput.value = [...current, term].join('; '); add.disabled = true; serialize();
+          variantStatus.textContent = 'Variant added to the form. Save settings to use it for searches and ranking.';
+        });
+        variantActions.append(add);
+      }
+    });
+    clearVariants();
+    row.querySelector('details').append(variantActions, variantStatus);
     const nameInput = row.querySelector('[data-interest-name]');
     const spelling = document.createElement('div'); spelling.className = 'interest-spelling';
     const spellingActions = document.createElement('div'); spellingActions.className = 'interest-actions';
@@ -561,7 +609,7 @@
     spellingActions.append(check, accept, dismiss); spelling.append(spellingActions, spellingStatus); row.querySelector('details').append(spelling);
     let wordingVersion = 0, suggestion = null;
     const clearSuggestion = () => { suggestion = null; accept.hidden = dismiss.hidden = true; spellingStatus.textContent = ''; };
-    nameInput.addEventListener('input', () => { wordingVersion++; delete row.dataset.correctedFrom; clearSuggestion(); });
+    nameInput.addEventListener('input', () => { wordingVersion++; delete row.dataset.correctedFrom; clearSuggestion(); clearVariants(); });
     check.addEventListener('click', async () => {
       if (checkingWording) return;
       const original = nameInput.value.trim(), version = wordingVersion;
