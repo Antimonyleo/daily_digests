@@ -419,3 +419,15 @@ def test_api_summary_signature_changes_with_provider_endpoint(monkeypatch):
     endpoint_b = sm.summary_signature(item, backend="api")
 
     assert endpoint_a != endpoint_b
+
+
+def test_windows_cli_timeout_terminates_child_tree_without_shell(monkeypatch):
+    proc = _FakePopen(['fixture'])
+    calls = []
+    monkeypatch.setattr(sm.sys, 'platform', 'win32')
+    monkeypatch.setattr(sm.subprocess, 'run', lambda command, **kwargs: calls.append((command, kwargs)))
+    sm._kill_process_group(proc)
+    assert calls[0][0] == ['taskkill', '/PID', '999', '/T', '/F']
+    assert calls[0][1]['timeout'] == 5
+    assert calls[0][1].get('shell', False) is False
+    assert proc.killed

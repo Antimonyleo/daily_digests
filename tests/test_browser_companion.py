@@ -1,6 +1,5 @@
 """Companion capability tests use fixtures and mocks, never providers/mailboxes."""
 import base64
-import importlib.util
 import json
 from pathlib import Path
 import sqlite3
@@ -12,12 +11,7 @@ import pytest
 from dailydigest.config import Settings
 
 
-module_spec = importlib.util.spec_from_file_location(
-    "browser_companion", Path(__file__).resolve().parents[1] / "browser" / "companion.py"
-)
-companion = importlib.util.module_from_spec(module_spec)
-sys.modules[module_spec.name] = companion
-module_spec.loader.exec_module(companion)
+from dailydigest import companion
 TOKEN = "fixture-private-token-" + "x" * 32
 ORIGIN = "https://antimonyleo.github.io"
 HEADERS = {"Origin": ORIGIN, "X-DailyDigest-Token": TOKEN}
@@ -517,16 +511,19 @@ def test_cli_token_is_private_and_never_printed(settings, tmp_path, monkeypatch,
     import uvicorn
     from dailydigest import config
 
-    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
     monkeypatch.setattr(config, "get_settings", lambda: settings)
     monkeypatch.setattr(sys, "argv", ["companion.py"])
     starts = []
     monkeypatch.setattr(uvicorn, "run", lambda app, **kwargs: starts.append(kwargs))
     companion.main()
-    token_file = next(tmp_path.glob("dailydigest-companion-*/token"))
+    token_file = tmp_path / "dailydigest" / "companion-token"
     token = token_file.read_text().strip()
     assert len(token) >= 32
     assert token not in capsys.readouterr().out
     assert token_file.stat().st_mode & 0o077 == 0
     assert starts[0]["host"] == "127.0.0.1"
     assert starts[0]["port"] == 8768
+    companion.main()
+    assert token_file.read_text().strip() == token

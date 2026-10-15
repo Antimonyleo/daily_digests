@@ -15,6 +15,7 @@ const report = { url: base, started: new Date().toISOString(), checks: [], conso
 const scopeCorpus = JSON.parse(await readFile(new URL('../tests/fixtures/research_scope_benchmark.json', import.meta.url), 'utf8')).examples;
 const fixtureLabels = new Map(scopeCorpus.map(row => [row.title, row.label]));
 const companionRequests = [];
+const checkpointEvidence = [];
 let companionSnapshot = '';
 let companionBackends = ['claude_cli'];
 let companionProviderIdentity = 'a'.repeat(64);
@@ -23,10 +24,50 @@ let providerSnapshotSequence = 0;
 const browser = await chromium.launch({ executablePath: process.env.CHROME_PATH || '/usr/bin/google-chrome', headless: true, args: ['--no-sandbox', '--enable-experimental-webassembly-jspi'] });
 const context = await browser.newContext({ viewport: { width: 1360, height: 900 }, acceptDownloads: true });
 let sourceMode = 'success';
+let pendingSlowSource;
 let feed = '';
 try { feed = await readFile(feedPath, 'utf8'); } catch { /* Startup checks can run before fixtures are ready. */ }
 await context.route('**/*', async route => {
   const url = route.request().url();
+  if (url.startsWith(base) && new URL(url).pathname.endsWith('/worker.mjs')) {
+    const response = await route.fetch();
+    let source = await response.text();
+    // Test-only instrumentation; never included in the published worker.
+    source = source.replace("self.onmessage = async ({ data }) => {", `self.onmessage = async ({ data }) => {
+      if (data.type === 'acceptance-state') {
+        try {
+          if (data.action === 'begin') state.py.runPython(\`from dailydigest.store import _engine
+from sqlalchemy import text
+_acceptance_connection = _engine().connect()
+_acceptance_transaction = _acceptance_connection.begin()
+_acceptance_connection.execute(text("CREATE TABLE IF NOT EXISTS acceptance_checkpoint (id INTEGER)"))
+_acceptance_connection.execute(text("INSERT INTO acceptance_checkpoint VALUES (1)"))\`);
+          if (data.action === 'reset-view') state.py.runPython(\`from dailydigest import store
+from sqlalchemy import text
+with store.session_scope() as session:
+    digest_id = session.execute(text("SELECT id FROM digests ORDER BY id DESC LIMIT 1")).scalar_one()
+    item_id = session.execute(text("SELECT item_id FROM digest_items WHERE digest_id=:digest ORDER BY item_label LIMIT 1"), {"digest":digest_id}).scalar_one()
+store.write_impressions(digest_id, [('research', item_id, 0, 0.9)], model_version='acceptance-checkpoint')\`);
+          if (data.action === 'commit') state.py.runPython('_acceptance_transaction.commit(); _acceptance_connection.close()');
+          const ready = Boolean(state.py.globals.get('snapshot_ready')());
+          const saved = await persist({force: true});
+          const full = ready ? state.py.globals.get('export_snapshot')() : null;
+          if (full) { state.py.globals.set('_acceptance_snapshot', full); state.py.runPython('validate_snapshot_sqlite(decode_snapshot(_acceptance_snapshot))'); }
+          self.postMessage(response(data.id, JSON.stringify({ready, saved, generation: Number(state.py.globals.get('state_generation')()), equal: full === await readSnapshot()})));
+        } catch (error) { self.postMessage(response(data.id, String(error), 500)); }
+        return;
+      }`);
+    source = source.replace("    const result = await state.py.globals.get('handle_request')", "    const acceptanceBefore = Number(state.py.globals.get('state_generation')());\n    const result = await state.py.globals.get('handle_request')");
+    source = source.replace('    if (!saved) {', `    if (saved && !jobRunning) {
+      const persisted = await readSnapshot();
+      const generation = Number(state.py.globals.get('state_generation')());
+      const equal = persisted === state.py.globals.get('export_snapshot')();
+      self.postMessage({type: 'acceptance-checkpoint', method: data.method || 'GET', path: data.path,
+        before: acceptanceBefore, after: generation, equal});
+    }
+    if (!saved) {`);
+    return route.fulfill({response, body: source});
+  }
   if (url.startsWith(base)) return route.continue();
   if (url.startsWith('http://127.0.0.1:8768/')) {
     const request = route.request();
@@ -53,6 +94,11 @@ await context.route('**/*', async route => {
   }
   if (url.startsWith('https://acceptance.invalid/')) {
     report.fixtureRequests.push({ url, mode: sourceMode });
+    if (sourceMode === 'slow') {
+      pendingSlowSource?.();
+      await new Promise(resolve => setTimeout(resolve, 8000));
+      return route.fulfill({ status: 200, contentType: 'application/rss+xml', body: feed, headers: { 'access-control-allow-origin': '*' } }).catch(() => {});
+    }
     if (sourceMode === 'failure') return route.fulfill({ status: 503, body: 'Acceptance fixture unavailable', headers: { 'access-control-allow-origin': '*' } });
     return route.fulfill({ status: 200, contentType: 'application/rss+xml', body: feed, headers: { 'access-control-allow-origin': '*' } });
   }
@@ -73,6 +119,7 @@ await page.addInitScript(() => {
       this.addEventListener('message', event => {
         const data = event.data;
         window.__workerEvents.push({ type: data.type, stage: data.stage, detail: data.detail, message: data.message, id: data.id, status: data.status, body: data.type === 'stream' || data.status >= 400 ? data.body : undefined });
+        if (data.type === 'acceptance-checkpoint') { window.__checkpoints ||= []; window.__checkpoints.push(data); window.__recordCheckpoint?.(data); }
         if (data.type === 'ready') window.__workerReady = true;
       });
     }
@@ -89,6 +136,7 @@ await page.addInitScript(() => {
     window.__appWorker.postMessage({ ...payload, id: requestId });
   });
 });
+await page.exposeFunction('__recordCheckpoint', data => checkpointEvidence.push(data));
 const frame = () => page.frameLocator('#app');
 async function check(name, work) {
   const started = performance.now();
@@ -127,6 +175,9 @@ async function route(path, selector) {
   }, path, { timeout: 60000 });
   if (selector) await frame().locator(selector).first().waitFor({ state: 'visible' });
 }
+async function setTopics(value) {
+  await frame().locator('#topics').evaluate((node, text) => { node.value = text; node.dispatchEvent(new Event('input', { bubbles: true })); }, value);
+}
 async function snapshot() {
   const response = await page.evaluate(() => window.__rpc({ type: 'export' }));
   assert.equal(response.status, 200, response.body);
@@ -139,8 +190,8 @@ async function openSection(section) {
 async function openCompanionMenu() {
   if (await page.locator('#companion-menu').getAttribute('open') === null) await page.locator('#companion-menu > summary').click();
 }
-async function digestIdentity() {
-  await route('/', '.digest-date');
+async function digestIdentity(digestId = '') {
+  await route(digestId ? '/?digest_id=' + encodeURIComponent(digestId) : '/', '.digest-date');
   return (await frame().locator('.digest-date').textContent()).trim();
 }
 async function selectedStoredSummaries() {
@@ -166,6 +217,10 @@ async function successfulBrew(mode = 'full') {
   assert.ok((await page.evaluate(() => location.hash)).startsWith('#/done'), await frame().locator('#err').textContent().catch(() => 'Brew did not finish'));
   await frame().locator('a.cta').click();
   await frame().locator('.item[data-section="research"]').first().waitFor();
+  const checkpoint = await page.evaluate(() => window.__rpc({type:'acceptance-state'}));
+  assert.equal(checkpoint.status, 200, checkpoint.body);
+  assert.equal(JSON.parse(checkpoint.body).equal, true, 'Mocked brew completion must persist the full committed snapshot');
+  report.brewCheckpoints ||= []; report.brewCheckpoints.push(JSON.parse(checkpoint.body));
 }
 let initialReady = false;
 let itemId;
@@ -178,15 +233,32 @@ try {
     assert.equal(await page.locator('#startup .steam').first().evaluate(node => getComputedStyle(node).animationName), 'none');
     await page.emulateMedia({ reducedMotion: 'no-preference' });
     const evidence = await startup();
-    await frame().locator('#topics').waitFor();
+    await frame().locator('#interest-editor').waitFor();
     return evidence;
   }));
   if (!initialReady) throw new Error('Startup failed; dependent acceptance checks cannot run.');
+  await check('dynamic-internal-links-support-modified-clicks', async () => {
+    await page.evaluate(() => {
+      const doc = document.querySelector('#app').contentDocument;
+      const link = doc.createElement('a'); link.id = 'dynamic-navigation-check';
+      link.textContent = 'Open saved reading in another tab'; link.target = '_blank';
+      doc.body.prepend(link); link.href = '/saved';
+    });
+    await page.waitForFunction(() => document.querySelector('#app').contentDocument.querySelector('#dynamic-navigation-check').href.includes('#/saved'));
+    const target = frame().locator('#dynamic-navigation-check');
+    assert.equal(await target.getAttribute('href'), base + '#/saved');
+    const opened = await context.newPage();
+    const response = await opened.goto(await target.getAttribute('href'), { waitUntil: 'domcontentloaded' });
+    assert.equal(response.status(), 200);
+    assert.equal(opened.url(), base + '#/saved');
+    await opened.close(); await target.evaluate(node => node.remove());
+    return { dynamicRoutePreserved: true, newTabTargetPublicSubpath: true };
+  });
   await check('explicit-compute-controls-and-device-warning', async () => {
     const current = await page.evaluate(async () => JSON.parse((await window.__rpc({ type: 'compute-status' })).body));
     await page.locator('#compute-menu > summary').click();
     assert.equal(await page.locator('#compute-mode').inputValue(), 'cpu');
-    assert.equal(await page.locator('#compute-mode option[value="multicore"]').isDisabled(), !current.capabilities.multicore);
+    assert.equal(await page.locator('#compute-mode option[value="multicore"]').isDisabled(), false);
     assert.equal(await page.locator('#compute-mode option[value="gpu"]').isDisabled(), !current.capabilities.gpu);
     assert.match(await page.locator('#compute-menu').textContent(), /heat, fan noise and battery use/);
     if (current.capabilities.gpu) {
@@ -199,7 +271,7 @@ try {
       await Promise.all([page.waitForEvent('load'), page.locator('#compute-apply').click()]);
       await startup();
     } else await page.locator('#compute-menu > summary').click();
-    await frame().locator('#topics').waitFor();
+    await frame().locator('#interest-editor').waitFor();
     return { optInPersistsAcrossReload: current.capabilities.gpu, unsupportedChoicesDisabled: true, deviceWarning: true, cpuDefault: true };
   });
   await check('muted-research-examples-require-explicit-use-and-save', async () => {
@@ -214,14 +286,22 @@ try {
     const beforeSave = await snapshot();
     assert.equal(Object.hasOwn(beforeSave.files, 'data/profile.yaml'), false);
     await page.screenshot({ path: `${output}/research-example.png`, fullPage: true });
-    await topics.fill('');
+    await setTopics('');
     await frame().locator('#profile-options > summary').click();
     await frame().locator('#bio').fill('');
     await frame().locator('#profile-options > summary').click();
     return { examplesOnlyUntilChosen: true, tenResearchTopics: true, noProfileWrittenUntilSave: true };
   });
   await check('setup-native-form', async () => {
-    await frame().locator('#topics').fill('RNA delivery\nProtein design\nHydrogels');
+    await setTopics('DNA nanotechnology | 5\nRNA nanotechnology | 5\nnucleic acid delivery | 15\nmRNA therapeutics | 10\ngene therapy | 10\nnucleic acid therapeutics | 15\nTarget protein degradation | 15\nInduce proximity | 15\nDrug development | 10');
+    assert.match(await frame().locator('#interest-total').textContent(), /100%/);
+    const degradation = frame().locator('.interest-row').nth(6);
+    await degradation.locator('summary').click();
+    await degradation.locator('[data-interest-aliases]').fill('targeted protein degradation; PROTAC');
+    await degradation.locator('[data-interest-description]').fill('New degrader designs and transferable methods.');
+    const proximity = frame().locator('.interest-row').nth(7);
+    await proximity.locator('summary').click();
+    await proximity.locator('[data-interest-aliases]').fill('induced proximity; molecular glue');
     await frame().locator('details:has(#name) > summary').click();
     await frame().locator('#name').fill('Browser Acceptance');
     await frame().locator('#bio').fill('Fictional browser acceptance reader researching RNA delivery, protein design and biomaterials.');
@@ -232,7 +312,34 @@ try {
     }, undefined, { timeout: 60000 });
     const exported = await snapshot();
     assert.ok(Object.hasOwn(exported.files, '.env'));
-    return { privateConfigPersisted: true, route: await page.evaluate(() => location.hash) };
+    const parsed = spawnSync(new URL('../.venv/bin/python', import.meta.url).pathname,
+      ['-c', 'import yaml,json,sys; print(json.dumps(yaml.safe_load(sys.stdin.read())))'],
+      { input: Buffer.from(exported.files['data/profile.yaml'], 'base64').toString(), encoding: 'utf8' });
+    assert.equal(parsed.status, 0, parsed.stderr);
+    const profile = JSON.parse(parsed.stdout);
+    assert.equal(profile.keywords.length, 9);
+    assert.equal(Object.keys(profile.canonical_facets).length, 9);
+    assert.equal(profile.canonical_facets['Target protein degradation'].priority, 15);
+    assert.deepEqual(profile.canonical_facets['Induce proximity'].aliases, ['induced proximity', 'molecular glue']);
+    assert.equal(exported.credentialsIncluded, false);
+    return { privateConfigPersisted: true, allNineInterests: true, relativeWeightsPreserved: true, aliasesPersisted: true, credentialsExcluded: true, route: await page.evaluate(() => location.hash) };
+  });
+  await check('unrelated-settings-edits-preserve-legacy-priorities', async () => {
+    const backup = await snapshot();
+    backup.files['data/profile.yaml'] = Buffer.from('bio: General reader.\nkeywords: [Astrophysics, History]\ncanonical_facets:\n  Astrophysics: {priority: 0.1}\n  History: {priority: 100}\n').toString('base64');
+    const imported = await page.evaluate(body => window.__rpc({ type: 'import', body, overwrite: true }), JSON.stringify(backup));
+    assert.equal(imported.status, 200, imported.body);
+    await page.reload(); await startup();
+    await route('/setup', '#interest-editor');
+    await frame().locator('details:has(#name) > summary').click();
+    await frame().locator('#name').fill('Renamed reader');
+    await frame().locator('form[action="/setup"] button[type="submit"]').click();
+    await page.waitForFunction(() => location.hash.startsWith('#/run'));
+    const stored = await snapshot();
+    const yaml = Buffer.from(stored.files['data/profile.yaml'], 'base64').toString();
+    assert.match(yaml, /priority: 0\.1\b/);
+    assert.match(yaml, /priority: 100(?:\.0)?\b/);
+    return { fractionalLegacyPriorityPreserved: true, unrelatedNameEdit: true };
   });
   const backupText = await readFile(fixture, 'utf8');
   await check('import-fixture-backup', async () => {
@@ -258,7 +365,7 @@ try {
     if (await pip.isVisible()) { await pip.click(); assert.equal(await root.getAttribute('data-pip'), 'hidden'); }
     await route('/', '.item[data-item-id]');
     await openSection('events');
-    const calendar = frame().locator('a[href^="/calendar/"]').first();
+    const calendar = frame().locator('a[href*="#/calendar/"]').first();
     await calendar.waitFor();
     const readingHash = await page.evaluate(() => location.hash);
     const downloadEvent = page.waitForEvent('download');
@@ -269,6 +376,47 @@ try {
     assert.match(contents, /BEGIN:VCALENDAR/);
     assert.equal(await page.evaluate(() => location.hash), readingHash, 'Calendar export must preserve the reading route for reload.');
     return { historyEntries: await history.count(), calendar: true, display: 'compact', theme: 'dark' };
+  });
+  await check('real-browser-mutation-and-impression-checkpoints', async () => {
+    await route('/', '.item[data-section="research"]');
+    const id = await frame().locator('.item[data-section="research"]').first().getAttribute('data-item-id');
+    const token = await frame().locator('body').evaluate(() => {
+      const text = [...document.scripts].map(node => node.textContent).join('\n');
+      return JSON.parse(text.match(/const CSRF_TOKEN\s*=\s*("[^"\n]+")/)[1]);
+    });
+    const evidence = [];
+    for (const [method, path] of [['POST', `/vote/${id}/70`], ['POST', `/bookmark/${id}`],
+      ['DELETE', `/bookmark/${id}`], ['POST', `/known/${id}`], ['DELETE', `/known/${id}`],
+      ['POST', `/vote/${id}/10`], ['POST', `/vote/${id}/reason/off_topic`],
+      ['DELETE', `/vote/${id}/reason/off_topic`], ['DELETE', `/vote/${id}`]]) {
+      const before = JSON.parse((await page.evaluate(() => window.__rpc({type:'acceptance-state'}))).body).generation;
+      const result = await page.evaluate(({method,path,token}) => window.__rpc({type:'request', method, path, headers:{'X-CSRF-Token':token}}), {method,path,token});
+      assert.equal(result.status, 200, result.body);
+      const after = JSON.parse((await page.evaluate(() => window.__rpc({type:'acceptance-state'}))).body);
+      assert.ok(after.generation > before, `Untracked ${method} ${path}`);
+      assert.equal(after.saved && after.equal, true);
+      evidence.push({method,path,generation:after.generation});
+    }
+    const reset = await page.evaluate(() => window.__rpc({type:'acceptance-state', action:'reset-view'}));
+    assert.equal(reset.status, 200, reset.body);
+    const before = JSON.parse(reset.body).generation;
+    const digest = await page.evaluate(() => window.__rpc({type:'request',method:'GET',path:'/'}));
+    assert.equal(digest.status, 200, digest.body.slice(0,200));
+    const after = JSON.parse((await page.evaluate(() => window.__rpc({type:'acceptance-state'}))).body);
+    assert.ok(after.generation > before, 'Digest GET must track its impression writes');
+    assert.equal(after.saved && after.equal, true);
+    return {mutations:evidence, impressionGet:true};
+  });
+  await check('sql-checkpoint-defers-mid-transaction-and-validates-after-commit', async () => {
+    const probe = action => page.evaluate(action => window.__rpc({type:'acceptance-state', action}), action);
+    const during = await probe('begin');
+    assert.equal(during.status, 200, during.body);
+    assert.deepEqual([JSON.parse(during.body).ready, JSON.parse(during.body).saved], [false, false]);
+    const after = await probe('commit');
+    assert.equal(after.status, 200, after.body);
+    const evidence = JSON.parse(after.body);
+    assert.equal(evidence.ready && evidence.saved && evidence.equal, true);
+    return evidence;
   });
   await check('feedback-vote-reason-bookmark-known', async () => {
     await route('/', '.item[data-item-id]');
@@ -291,7 +439,7 @@ try {
     await page.reload(); await startup();
     await route('/', '.time-machine-link');
     const archived = frame().locator('.time-machine-link').last();
-    const archivedPath = await archived.getAttribute('href');
+    const archivedPath = new URL(await archived.getAttribute('href'), base).hash.slice(1);
     await archived.click();
     await page.waitForFunction(path => document.querySelector('#app')?.contentWindow?.ddLocation?.endsWith(path), archivedPath);
     await openSection('events');
@@ -316,7 +464,7 @@ try {
   });
   await check('mobile-layout-and-keyboard', async () => {
     await page.setViewportSize({ width: 390, height: 844 });
-    await route('/setup', '#topics');
+    await route('/setup', '#interest-editor');
     await frame().locator('details:has(#name) > summary').click();
     const overflow = await page.evaluate(() => {
       const doc = document.querySelector('#app').contentDocument;
@@ -324,13 +472,21 @@ try {
     });
     assert.ok(overflow.scrollWidth <= overflow.width + 1, JSON.stringify(overflow));
     assert.ok(overflow.outerScrollWidth <= overflow.outerWidth + 1, JSON.stringify(overflow));
+    const statusBox = await page.locator('#status').boundingBox();
+    assert.ok(statusBox.width > 300, JSON.stringify(statusBox));
     await openCompanionMenu();
     const companionBox = await page.locator('#companion-menu .data-tools').boundingBox();
     assert.ok(companionBox.x >= 0 && companionBox.x + companionBox.width <= 390, JSON.stringify(companionBox));
     await page.locator('#companion-menu > summary').press('Escape');
-    await frame().locator('#topics').focus(); await page.keyboard.press('Tab');
-    assert.equal(await page.evaluate(() => document.querySelector('#app').contentDocument.activeElement.tagName), 'SUMMARY');
+    await frame().locator('[data-interest-name]').first().focus(); await page.keyboard.press('Tab');
+    assert.equal(await frame().locator('[data-interest-weight]').first().evaluate(node => node === document.activeElement), true);
     await page.screenshot({ path: `${output}/mobile-setup.png`, fullPage: true });
+    await page.setViewportSize({ width: 800, height: 900 });
+    await page.locator('#compute-menu > summary').click();
+    const computeBox = await page.locator('#compute-menu .data-tools').boundingBox();
+    assert.ok(computeBox.x >= 0 && computeBox.x + computeBox.width <= 800, JSON.stringify(computeBox));
+    await page.locator('#status').click();
+    assert.equal(await page.locator('#compute-menu').getAttribute('open'), null);
     await page.setViewportSize({ width: 1360, height: 900 });
     return overflow;
   });
@@ -346,8 +502,45 @@ try {
     assert.equal(await frame().locator('#progress-panel').getAttribute('data-state'), 'paused');
     assert.equal(await frame().locator('.cup .steam').first().evaluate(node => getComputedStyle(node).animationName), 'none');
     assert.match(await frame().locator('#brew-title').textContent(), /needs attention/);
-    const after = await digestIdentity(); assert.equal(after, before);
+    const after = await digestIdentity(before); assert.equal(after, before);
     return { before, after, waitingAnimationStopped: true };
+  });
+  await check('stop-aborts-a-pending-source-fetch', async () => {
+    const before = await digestIdentity();
+    const csrf = await page.evaluate(() => {
+      const scripts = [...document.querySelector('#app').contentDocument.scripts].map(node => node.textContent).join('\n');
+      const value = scripts.match(/const CSRF_TOKEN\s*=\s*("[^"\n]+")/);
+      if (!value) throw new Error('Fictional reading page did not expose its CSRF token');
+      return JSON.parse(value[1]);
+    });
+    let timeout;
+    const started = new Promise((resolve, reject) => {
+      pendingSlowSource = resolve;
+      timeout = setTimeout(() => reject(new Error('Slow fixture was not requested')), 30000);
+    });
+    sourceMode = 'slow';
+    try {
+      await route('/run?reading_mode=usual', '#brew-button');
+      await frame().locator('#brew-button').click();
+      await started; clearTimeout(timeout);
+      const vote = await page.evaluate(({ id, csrf }) => window.__rpc({ type: 'request',
+        method: 'POST', path: `/vote/${id}/70`, headers: { 'x-csrf-token': csrf } }), { id: itemId, csrf });
+      assert.equal(vote.status, 200, vote.body);
+      assert.equal(JSON.parse(vote.body).new_grade, 70);
+      const beginning = performance.now();
+      await frame().locator('#cancel-button').click();
+      await frame().locator('#err').waitFor({ state: 'visible', timeout: 5000 });
+      const elapsedMs = performance.now() - beginning;
+      assert.match(await frame().locator('#err').textContent(), /stop|cancel/i);
+      assert.equal(await digestIdentity(), before);
+      await page.reload(); await startup();
+      await route('/saved', '.saved-card');
+      const card = frame().locator(`.saved-card[data-item-id="${itemId}"]`);
+      await card.locator('.vote-btn[data-grade="70"][aria-pressed="true"]').waitFor();
+      await card.locator('.clear-rating').click();
+      await card.locator('.clear-rating').waitFor({ state: 'hidden' });
+      return { cancelledDuringFetch: true, elapsedMs: Math.round(elapsedMs), savedDigestPreserved: true, midBrewVoteDurableAfterReload: true };
+    } finally { sourceMode = 'success'; pendingSlowSource = null; clearTimeout(timeout); }
   });
   await check('brew-status-reconnect-without-starting-a-new-brew', async () => {
     const sourcesBefore = report.fixtureRequests.length;
@@ -378,7 +571,7 @@ try {
     return { digest: await digestIdentity(), selected: await frame().locator('.item[data-item-id]').count(), slate, fixtureRequests: report.fixtureRequests.length };
   });
   await check('source-coverage-reports-the-readers-latest-check', async () => {
-    const coverage = frame().locator('.source-coverage');
+    const coverage = frame().locator('.source-coverage[aria-label="Source coverage and freshness"]');
     assert.match(await coverage.textContent(), /1 of 1 sources responded/);
     assert.match(await coverage.textContent(), /Checked.*UTC/s);
     await coverage.locator('summary').click();
@@ -409,8 +602,8 @@ try {
     await frame().locator('#err').waitFor({ state: 'visible', timeout: 300000 });
     const message = await frame().locator('#err').textContent();
     assert.match(message, /research|source|coverage|fetch|ingest/i);
-    const after = await digestIdentity(); assert.equal(after, before);
-    assert.match(await frame().locator('.source-coverage').textContent(), /0 of 1 sources responded.*1 unavailable/s);
+    const after = await digestIdentity(before); assert.equal(after, before);
+    assert.match(await frame().locator('.source-coverage[aria-label="Source coverage and freshness"]').textContent(), /0 of 1 sources responded.*1 unavailable/s);
     sourceMode = 'success'; return { before, after, message, unavailableCoverageVisible: true };
   });
   await check('backup-download-and-import-confirmation', async () => {
@@ -431,7 +624,10 @@ try {
     await page.locator('#import').setInputFiles(`${output}/downloaded-backup.json`);
     await (await confirmation).accept();
     await reload; await startup();
-    return { files: Object.keys(exported.files), confirmationDismissed: true, confirmedImportReloaded: true };
+    await page.locator('#transfer-notice').waitFor({ state: 'visible' });
+    assert.match(await page.locator('#transfer-message').textContent(), /excluded credentials/);
+    await page.locator('#dismiss-transfer').click();
+    return { files: Object.keys(exported.files), confirmationDismissed: true, confirmedImportReloaded: true, credentialOmissionExplained: true };
   });
   await check('optional-companion-explicit-actions', async () => {
     assert.equal(companionRequests.length, 0, 'No companion contact should occur before explicit setup.');
@@ -479,7 +675,8 @@ try {
       window.dispatchEvent(offered);
       return { manifest, scope: registration.scope, promptPrevented: offered.defaultPrevented, offeredButtonVisible: !document.getElementById('install').hidden };
     });
-    assert.equal(evidence.manifest, base + 'manifest.webmanifest');
+    assert.equal(new URL(evidence.manifest).pathname, new URL(base + 'manifest.webmanifest').pathname);
+    assert.ok(new URL(evidence.manifest).searchParams.has('build'));
     assert.equal(evidence.scope, base);
     assert.equal(evidence.promptPrevented, true);
     assert.equal(evidence.offeredButtonVisible, true);
@@ -496,7 +693,7 @@ try {
     await page.locator('#companion-connect').click();
     await page.waitForFunction(() => document.getElementById('companion-status').textContent.includes('Connected'));
     await page.locator('#companion-menu > summary').press('Escape');
-    await route('/setup', '#topics');
+    await route('/setup', '#interest-editor');
     await frame().locator('details:has(input[name="llm_backend"]) > summary').click();
     await frame().locator('input[name="llm_backend"][value="api"]').check();
     await frame().locator('#llm_api_key').fill('');
@@ -504,7 +701,7 @@ try {
     await frame().locator('form[action="/setup"] button[type="submit"]').click();
     await page.waitForFunction(() => document.querySelector('#app')?.contentWindow?.ddLocation?.startsWith('http://127.0.0.1:8765/run'));
     const configured = await snapshot();
-    assert.match(Buffer.from(configured.files['.env'], 'base64').toString(), /LLM_BACKEND=api/);
+    assert.match(Buffer.from(configured.files['.env'], 'base64').toString(), /LLM_BACKEND="?api"?/);
     const initialRequests = companionRequests.filter(row => row.path === '/summarize').length;
     await successfulBrew();
     const first = await selectedStoredSummaries();
@@ -529,32 +726,78 @@ try {
     assert.ok(companionRequests.filter(row => row.path === '/summarize').length > firstCalls, 'Changed server provider identity must invalidate cached browser summaries.');
     assert.deepEqual(second.map(row => row.id), first.map(row => row.id));
     for (const row of second) { assert.equal(row.backend, 'api'); assert.match(row.summary, /Mock API B summary/); assert.notEqual(row.signature, first.find(prior => prior.id === row.id).signature); }
-    await route('/setup', '#topics');
+    await route('/setup', '#interest-editor');
     await frame().locator('details:has(input[name="llm_backend"]) > summary').click();
     await frame().locator('input[name="llm_backend"][value="extractive"]').check();
     await frame().locator('form[action="/setup"] button[type="submit"]').click();
     await page.waitForFunction(() => document.querySelector('#app')?.contentWindow?.ddLocation?.startsWith('http://127.0.0.1:8765/run'));
     const restored = await snapshot();
-    assert.match(Buffer.from(restored.files['.env'], 'base64').toString(), /LLM_BACKEND=extractive/);
+    assert.match(Buffer.from(restored.files['.env'], 'base64').toString(), /LLM_BACKEND="?extractive"?/);
     await openCompanionMenu();
     await page.locator('#companion-disconnect').click();
     return { nativeApiWithNoBrowserKey: true, providerSummaryBackend: 'api', selectedItemsOnly: first.length, serverIdentityInvalidatesCache: true, extractiveRestored: true };
+  });
+  await check('multicore-opt-in-on-a-host-without-isolation-headers', async () => {
+    const initial = await page.evaluate(() => ({ isolated: crossOriginIsolated, cores: navigator.hardwareConcurrency }));
+    if (initial.cores <= 1) return { singleCoreDevice: true };
+    await page.locator('#compute-menu > summary').click();
+    await page.locator('#compute-mode').selectOption('multicore');
+    await Promise.all([page.waitForEvent('load'), page.locator('#compute-apply').click()]);
+    await startup();
+    const status = await page.evaluate(async () => ({ isolated: crossOriginIsolated,
+      ...JSON.parse((await window.__rpc({ type: 'compute-status' })).body) }));
+    assert.equal(status.isolated, true);
+    assert.ok(status.threads > 1 && status.threads <= 4, JSON.stringify(status));
+    await successfulBrew('usual');
+    const configured = await page.evaluate(() => window.__rpc({ type: 'configure-compute', mode: 'cpu' }));
+    assert.equal(configured.status, 200, configured.body);
+    await page.locator('#compute-menu > summary').click();
+    await page.locator('#compute-mode').selectOption('cpu');
+    await Promise.all([page.waitForEvent('load'), page.locator('#compute-apply').click()]);
+    await startup();
+    assert.equal(await page.evaluate(() => crossOriginIsolated), false);
+    return { initiallyIsolated: initial.isolated, isolatedAfterOptIn: status.isolated, threads: status.threads, realBrewPassed: true, optOutRestored: true };
   });
   await check('public-snapshot-through-real-browser-httpx', async () => {
     // A separate ephemeral worker reads public metadata only. The other cases
     // use fixture feeds, which cannot expose Pages' real compression headers.
     const evidence = await page.evaluate(async base => {
+      const manifest = await (await fetch(base + 'assets/build-manifest.json')).json();
+      const probe = [
+        'def probe():',
+        '    import httpx, json',
+        '    from datetime import datetime, timezone, timedelta',
+        '    with httpx.Client(timeout=20, follow_redirects=False) as client:',
+        '        response = client.get(snapshot_url)',
+        '        response.raise_for_status()',
+        '        snapshot = response.json()',
+        '    records = list(snapshot["sources"].values())',
+        '    instant = datetime.now(timezone.utc)',
+        '    healthy = [r for r in records if r.get("status") == "ok" and timedelta(minutes=-5) <= instant - datetime.fromisoformat(r["fetched_at"]) <= timedelta(hours=48)]',
+        '    fresh = [r for r in healthy if not r.get("carried_forward")]',
+        '    fallback = snapshot.get("publication", {}).get("mode") == "push-carry-forward"',
+        '    eligible = healthy if fallback else fresh',
+        '    attempts = [r.get("latest_attempt", {}) for r in records]',
+        '    if fallback and not any(a.get("status") == "ok" and not a.get("carried_forward") for a in attempts): raise ValueError("All current collection attempts failed")',
+
+        '    return json.dumps({"public_only": snapshot["public_only"], "sources": len(records), "healthy": len(healthy), "fresh": len(fresh), "eligible": len(eligible), "fallback": fallback, "kinds": sorted({r["kind"] for r in records}), "healthy_kinds": sorted({r["kind"] for r in eligible}), "sections": sorted({r["section"] for r in records}), "healthy_sections": sorted({r["section"] for r in eligible}), "decoded_bytes": len(response.content), "content_encoding": response.headers.get("content-encoding"), "content_length": int(response.headers["content-length"])})',
+        'probe',
+      ].join('\n');
       const source = `
-        import { loadPyodide } from ${JSON.stringify(base + 'node_modules/pyodide/pyodide.mjs')};
+        import { loadPyodide } from ${JSON.stringify(base + manifest.runtime_path + 'pyodide/pyodide.mjs')};
+        import { createBrowserHttpBridge } from ${JSON.stringify(base + 'http.mjs')};
         try {
-          const py = await loadPyodide({ indexURL: ${JSON.stringify(base + 'node_modules/pyodide/')} });
+          const bridge = createBrowserHttpBridge();
+          globalThis.browserHttpRequest = bridge.request;
+          globalThis.browserHttpWait = bridge.wait;
+          const py = await loadPyodide({ indexURL: ${JSON.stringify(base + manifest.runtime_path + 'pyodide/')} });
           await py.loadPackage(['httpx']);
           const bundle = await fetch(${JSON.stringify(base + 'assets/app.zip')});
           if (!bundle.ok) throw new Error('Application archive unavailable');
           py.unpackArchive(await bundle.arrayBuffer(), 'zip', { extractDir: '/app' });
           py.runPython("import sys\\nsys.path.insert(0, '/app/browser')\\nimport network\\nnetwork.install_httpx_transport()");
           py.globals.set('snapshot_url', ${JSON.stringify(base + 'assets/public-sources.json')});
-          const result = py.runPython("import httpx, json\\nwith httpx.Client(timeout=20, follow_redirects=False) as client:\\n    response = client.get(snapshot_url)\\n    response.raise_for_status()\\n    snapshot = response.json()\\njson.dumps({'public_only': snapshot['public_only'], 'sources': len(snapshot['sources']), 'decoded_bytes': len(response.content), 'content_encoding': response.headers.get('content-encoding'), 'content_length': int(response.headers['content-length'])})");
+          const result = await py.runPython(${JSON.stringify(probe)}).callPromising();
           postMessage({ result: JSON.parse(result) });
         } catch (error) { postMessage({ error: String(error) }); }
       `;
@@ -570,7 +813,10 @@ try {
       } finally { URL.revokeObjectURL(url); }
     }, base);
     assert.equal(evidence.public_only, true);
-    assert.ok(evidence.sources > 0);
+    assert.ok(evidence.healthy > 0);
+    assert.ok(evidence.eligible / evidence.sources >= 0.5);
+    assert.deepEqual(evidence.healthy_kinds, evidence.kinds);
+    assert.deepEqual(evidence.healthy_sections, evidence.sections);
     assert.equal(evidence.content_encoding, null);
     assert.equal(evidence.content_length, evidence.decoded_bytes);
     return evidence;
@@ -597,11 +843,86 @@ try {
     await testPage.addInitScript(() => Object.defineProperty(WebAssembly, 'Suspending', { value: undefined, configurable: true }));
     try {
       await testPage.goto(base, { waitUntil: 'domcontentloaded' });
-      await testPage.locator('#retry').waitFor({ state: 'visible' });
+      await testPage.locator('#startup[data-state="error"]').waitFor();
+      assert.equal(await testPage.locator('#retry').isVisible(), false);
       assert.match(await testPage.locator('#startup-status').textContent(), /current desktop Chrome/);
       assert.equal(workerRequests.length, 0);
       return { simulatedMissingCapability: true, clearMessage: true, runtimeNotDownloaded: true };
     } finally { await unsupported.close(); }
+  });
+  await check('mixed-html-release-reloads-once-and-preserves-route', async () => {
+    const mixed = await browser.newContext();
+    let documents = 0;
+    await mixed.route('**/*', async request => {
+      if (!request.request().url().startsWith(base)) return request.abort('blockedbyclient');
+      if (new URL(request.request().url()).pathname === new URL(base).pathname) {
+        const response = await request.fetch();
+        let html = await response.text();
+        if (++documents === 1) html = html.replace(/(<meta name="dailydigest-build" content=")[^"]+/, '$1old-cached-release');
+        return request.fulfill({response, body:html});
+      }
+      return request.continue();
+    });
+    try {
+      const testPage = await mixed.newPage();
+      await testPage.goto(base + '#/setup');
+      await testPage.locator('#app').waitFor({state:'visible', timeout:300000});
+      assert.equal(documents, 2, 'Mixed release must reload exactly once');
+      assert.equal(new URL(testPage.url()).hash, '#/setup');
+      assert.match(new URL(testPage.url()).searchParams.get('__dd_build'), /^[a-f0-9]{16}$/);
+      await testPage.frameLocator('#app').locator('#interest-editor').waitFor();
+      return {documents, routePreserved:true, startupRecovered:true};
+    } finally { await mixed.close(); }
+  });
+  await check('corrupt-startup-retains-raw-data-and-can-recover', async () => {
+    const recovery = await browser.newContext({ acceptDownloads: true });
+    const testPage = await recovery.newPage();
+    const corrupt = '{"format":"dailydigest-browser-v1","files":{"data/digest.db":"broken-base64"}}';
+    try {
+      await testPage.goto(base + 'app-icon.svg');
+      await testPage.evaluate(async ({ value, scope }) => {
+        const database = await new Promise((resolve, reject) => {
+          const request = indexedDB.open(`dailydigest:${scope}`, 1);
+          request.onupgradeneeded = () => request.result.createObjectStore('state');
+          request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error);
+        });
+        await new Promise((resolve, reject) => {
+          const transaction = database.transaction('state', 'readwrite');
+          transaction.objectStore('state').put(value, 'snapshot');
+          transaction.oncomplete = resolve; transaction.onerror = () => reject(transaction.error);
+        });
+        database.close();
+      }, { value: corrupt, scope: new URL(base).pathname });
+      await testPage.goto(base);
+      await testPage.locator('#recovery-tools').waitFor({ timeout: 300000 });
+      assert.equal(await testPage.locator('#startup .steam').first().evaluate(node => getComputedStyle(node).animationName), 'none');
+      const downloadEvent = testPage.waitForEvent('download');
+      await testPage.locator('#recovery-export').click();
+      const downloaded = await downloadEvent;
+      await downloaded.saveAs(`${output}/corrupt-raw-recovery.json`);
+      assert.equal(await readFile(`${output}/corrupt-raw-recovery.json`, 'utf8'), corrupt);
+      testPage.once('dialog', dialog => dialog.accept());
+      await testPage.locator('#recovery-reset').click();
+      await testPage.locator('#app').waitFor({ state: 'visible', timeout: 300000 });
+      const retained = await testPage.evaluate(async scope => {
+        const database = await new Promise(resolve => { const request = indexedDB.open(`dailydigest:${scope}`, 1); request.onsuccess = () => resolve(request.result); });
+        const rows = await new Promise(resolve => { const request = database.transaction('state').objectStore('state').getAllKeys(); request.onsuccess = () => resolve(request.result); });
+        database.close(); return rows;
+      }, new URL(base).pathname);
+      assert.ok(retained.some(key => String(key).startsWith('recovery:')));
+      return { rawDataUnchanged: true, explicitReset: true, originalRetained: true, startupRecovered: true };
+    } finally { await recovery.close(); }
+  });
+  await check('real-browser-route-checkpoints-match-full-export', async () => {
+    assert.ok(checkpointEvidence.length > 20, 'Expected real app requests across setup, feedback, reading and mocked brew.');
+    assert.deepEqual(checkpointEvidence.filter(row => !row.equal), []);
+    const changed = checkpointEvidence.filter(row => row.after > row.before);
+    for (const path of ['/setup', '/vote/', '/bookmark/', '/known/']) assert.ok(changed.some(row => row.path.includes(path)), `Missing mutation evidence: ${path}`);
+    assert.ok(checkpointEvidence.some(row => row.method === 'DELETE' && row.path.startsWith('/bookmark/')), 'Unsave must be checkpointed');
+    assert.ok(checkpointEvidence.some(row => row.path.includes('/reason/')), 'Rating reason must be checkpointed');
+    assert.ok(report.brewCheckpoints?.length > 0, 'Mocked brew completion must be checkpointed');
+    assert.ok(checkpointEvidence.some(row => row.method === 'GET' && row.before === row.after && row.path.startsWith('/setup')), 'Read-only setup must not dirty state.');
+    return {requests: checkpointEvidence.length, changed: changed.length, checkpoints: checkpointEvidence};
   });
 } catch (error) { report.fatal = error.stack; console.error(error.message); }
 finally {

@@ -20,6 +20,7 @@ import re
 import shutil
 import signal
 import subprocess
+import sys
 import tempfile
 import time
 
@@ -392,11 +393,18 @@ def _kill_process_group(proc: subprocess.Popen) -> None:
     surviving grandchild would otherwise hold open.
     """
     try:
-        if hasattr(os, "killpg"):
+        if sys.platform == "win32":
+            # /T terminates descendants retaining the CLI's stdout/stderr pipes.
+            # Use the OS utility directly; never interpolate a shell command.
+            subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                           timeout=5, check=False)
+            proc.kill()  # best effort if the process exited during taskkill
+        elif hasattr(os, "killpg"):
             os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-        else:  # Windows has no process groups here
+        else:
             proc.kill()
-    except (ProcessLookupError, PermissionError, OSError):
+    except (ProcessLookupError, PermissionError, OSError, subprocess.TimeoutExpired):
         try:
             proc.kill()
         except OSError:
