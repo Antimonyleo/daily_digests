@@ -33,3 +33,6 @@ def test_release_exercises_both_browser_kernels_before_upload():
     acceptance = next(i for i, step in enumerate(steps) if 'node browser/verify-semantic.mjs' in step.get('run', ''))
     upload = next(i for i, step in enumerate(steps) if step.get('uses', '').startswith('actions/upload-pages-artifact@'))
     assert acceptance < upload
+    # Both kernels must use the served project subpath, including the matcher
+    # whose standalone default differs from the full browser acceptance tool.
+    assert steps[acceptance].get("env", {}).get("DAILYDIGEST_BROWSER_URL") == "http://127.0.0.1:8767/daily_digests/"

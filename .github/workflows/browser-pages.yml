@@ -59,6 +59,8 @@ jobs:
       - name: Prepare isolated browser acceptance fixtures
         run: uv run python browser/make_test_fixture.py --output .full-review/browser-launch-2026-10-13
       - name: Full browser acceptance at the project subpath
+        env:
+          DAILYDIGEST_BROWSER_URL: http://127.0.0.1:8767/daily_digests/
         run: |
           mkdir -p browser/.build-cache/preview
           ln -s "$GITHUB_WORKSPACE/browser/dist" browser/.build-cache/preview/daily_digests
