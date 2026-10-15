@@ -8,7 +8,22 @@ export function computeStatusText(result) {
     ? 'GPU requested; using CPU fallback.'
     : completed ? `Used ${backend} for ${completed} new text comparisons this session.`
       : `${backend} selected; no new text comparisons completed this session.`;
-  return actual + (result.busy ? ' A brew is running. Stop it or wait for it to finish before changing Compute.' : ' Changes apply to the next brew.');
+  const fallback = result.stats?.fallbackReason === 'device-lost' ? ' The GPU device was lost.' : result.stats?.fallbackReason === 'model-failed' ? ' The GPU could not run this model.' : '';
+  const reason = fallback || (result.mode === 'gpu' && result.device !== 'webgpu' && result.gpu?.message ? ` ${result.gpu.message}` : '');
+  const reused = result.publicCache?.hits ? ` ${result.publicCache.hits} public text comparisons reused.` : '';
+  return actual + reason + reused + (result.busy ? ' A brew is running. Stop it or wait for it to finish before changing Compute.' : ' Changes apply to the next brew.');
+}
+
+
+export function publicSourceFreshness(summary, now = Date.now()) {
+  const fetched = Date.parse(summary?.oldest_fetched_at);
+  if (!Number.isFinite(fetched) || fetched > now + 300000) return null;
+  const hours = Math.max(0, (now - fetched) / 3600000);
+  if (hours > 48) return { level: 'expired', hours,
+    message: `Some public sources are ${Math.floor(hours)} hours old and have expired. A new brew may have reduced coverage; your saved digest is kept if research coverage fails.` };
+  if (hours > 24 || summary.carried_forward_sources > 0) return { level: 'warning', hours,
+    message: `Some public sources were last collected ${Math.floor(hours)} hours ago${summary.carried_forward_sources > 0 ? '; earlier successful records are being reused' : ''}. Check source coverage after brewing.` };
+  return { level: 'fresh', hours, message: '' };
 }
 
 export async function requestStorageProtection(storage) {
@@ -268,6 +283,13 @@ async function boot() {
   const startup = document.getElementById('startup');
   const status = document.getElementById('status');
   const startupStatus = document.getElementById('startup-status');
+  const updateStartupStages = stage => {
+    const dataStage = ['Restoring your data', 'Preparing reading desk', 'Ready'].includes(stage);
+    for (const node of document.querySelectorAll('[data-startup-stage]')) {
+      const name = node.dataset.startupStage;
+      node.dataset.state = stage === 'Waiting for previous tab' ? 'waiting' : stage === 'Ready' ? 'done' : name === 'python' ? dataStage ? 'done' : 'active' : name === 'data' ? dataStage ? 'active' : 'waiting' : 'waiting';
+    }
+  };
   const announcement = document.getElementById('announcements');
   const importNoticeKey = `dailydigest:import-notice:${location.pathname}`;
   const backupKey = `dailydigest:last-backup:${location.pathname}`;
@@ -329,6 +351,42 @@ async function boot() {
   const client = new WorkerClient(worker);
   const streams = new Map();
   let ready = false, companionBackends = [], themeObserver;
+  let computeBusy = false, dismissedRelease = '';
+  const releaseNotice = document.getElementById('release-notice');
+  const releaseReload = document.getElementById('release-reload');
+  const setReleaseState = () => {
+    releaseReload.disabled = computeBusy || !ready;
+    document.getElementById('release-message').textContent = computeBusy
+      ? 'A new version is available. Finish or stop this brew before reloading.' : 'A new version is available.';
+  };
+  const checkRelease = async () => {
+    if (document.hidden) return;
+    try {
+      const current = document.querySelector('meta[name="dailydigest-build"]')?.content;
+      if (!current) return;
+      const manifestURL = new URL('./assets/build-manifest.json', import.meta.url);
+      manifestURL.search = ''; // The update check must not stay tied to this release's cache token.
+      const response = await fetch(manifestURL, { cache: 'no-store' });
+      if (!response.ok) return;
+      const manifest = await response.json();
+      const freshness = publicSourceFreshness(manifest.public_sources);
+      const sourceNotice = document.getElementById('source-freshness');
+      sourceNotice.textContent = freshness?.message || ''; sourceNotice.hidden = !freshness?.message;
+      const next = manifest.build_id;
+      if (typeof next !== 'string' || !next || next === current || next === dismissedRelease) return;
+      releaseNotice.dataset.build = next; releaseNotice.hidden = false; setReleaseState();
+    } catch { /* An unavailable update check must not interrupt reading or brewing. */ }
+  };
+  document.getElementById('release-dismiss').onclick = () => { dismissedRelease = releaseNotice.dataset.build; releaseNotice.hidden = true; };
+  releaseReload.onclick = async () => {
+    releaseReload.disabled = true;
+    try { await companionCall({ type: 'prepare-reload' }); location.reload(); }
+    catch (error) { setReleaseState(); document.getElementById('release-message').textContent = error.message; }
+  };
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) checkRelease(); });
+  setInterval(checkRelease, 300000);
+  document.getElementById('interruption-dismiss').onclick = () => { document.getElementById('interruption-notice').hidden = true; };
+
   const sendCompanionCapabilities = () => frame.contentWindow.postMessage({ type: 'companion-capabilities', token, backends: companionBackends }, '*');
   let navigation = 0;
   let activePath = '/';
@@ -422,8 +480,13 @@ async function boot() {
       document.getElementById('companion-disconnect').disabled = !configured;
       for (const capability of ['email', 'inbound', 'state']) {
         const buttons = capability === 'state' ? ['push', 'pull'] : [capability];
-        for (const action of buttons) document.getElementById(`companion-${action}`).disabled = !configured || !capabilities[capability];
+        for (const action of buttons) {
+          const button = document.getElementById(`companion-${action}`);
+          button.disabled = !configured || !capabilities[capability];
+          button.hidden = !configured || !capabilities[capability];
+        }
       }
+      document.getElementById('sync-credentials').closest('label').hidden = !configured || !capabilities.state;
       document.getElementById('companion-summary-help').hidden = !configured || !capabilities.summarize?.length;
       document.getElementById('companion-schedule-help').hidden = !configured || !capabilities.scheduler;
       const labels = { summarize: 'summaries', email: 'email', inbound: 'email feedback', state: 'state transfer', scheduler: 'scheduled brews' };
@@ -441,24 +504,36 @@ async function boot() {
       const canEnableIsolation = 'serviceWorker' in navigator && isSecureContext && navigator.hardwareConcurrency > 1;
       select.querySelector('[value="multicore"]').disabled = !result.capabilities.multicore && !canEnableIsolation;
       document.getElementById('compute-support').textContent =
-        `${result.capabilities.gpu ? 'WebGPU is exposed by this browser; hardware availability is checked when used.' : 'GPU acceleration is unavailable in this browser.'} ${result.capabilities.multicore ? `Up to ${result.capabilities.threads} CPU cores are available.` : canEnableIsolation ? 'Selecting multiple cores will try enabling browser isolation and reload once. If unavailable, computation stays on one core.' : 'Multiple CPU cores are unavailable on this site or browser.'}`;
+        `${result.gpu?.message || (result.capabilities.gpu ? 'WebGPU is exposed by this browser; hardware availability is checked when used.' : 'GPU acceleration is unavailable in this browser.')} ${result.capabilities.multicore ? `Up to ${result.capabilities.threads} CPU cores are available.` : canEnableIsolation ? 'Selecting multiple cores will try enabling browser isolation and reload once. If unavailable, computation stays on one core.' : 'Multiple CPU cores are unavailable on this site or browser.'}`;
       document.getElementById('compute-status').textContent = computeStatusText(result);
+      computeBusy = result.busy; setReleaseState();
       document.getElementById('compute-apply').disabled = result.busy || computeApplying;
     } catch (error) { document.getElementById('compute-status').textContent = error.message; }
   }
   document.getElementById('compute-menu').addEventListener('toggle', event => {
     if (event.target.open && ready) refreshCompute({ keepSelection: true });
   });
+  document.getElementById('test-gpu').onclick = async () => {
+    const button = document.getElementById('test-gpu'), output = document.getElementById('gpu-test-result');
+    button.disabled = true; output.textContent = 'Checking GPU adapter; no model is downloaded…';
+    try {
+      const result = await companionCall({ type: 'probe-gpu' });
+      output.textContent = result.message + (result.info ? ` Vendor: ${result.info.vendor}; architecture: ${result.info.architecture}.` : '');
+    } catch (error) { output.textContent = error.message; }
+    finally { button.disabled = false; }
+  };
   document.getElementById('compute-form').onsubmit = async event => {
     event.preventDefault();
     if (computeApplying) return;
     computeApplying = true;
     document.getElementById('compute-apply').disabled = true;
     document.getElementById('compute-status').textContent = 'Saving your compute choice before reloading…';
+    let reloadPrepared = false;
     try {
       const mode = document.getElementById('compute-mode').value;
       const needsIsolation = mode === 'multicore' && !crossOriginIsolated;
       await companionCall({ type: 'configure-compute', mode, allowIsolationReload: needsIsolation });
+      reloadPrepared = true;
       if ('serviceWorker' in navigator && (needsIsolation || isolationRequested && mode !== 'multicore')) {
         const enable = mode === 'multicore';
         try { localStorage.setItem(isolationKey, String(enable)); } catch { /* no persistent opt-in */ }
@@ -476,9 +551,15 @@ async function boot() {
       }
       location.reload();
     } catch (error) {
+      let recoveryError;
+      if (reloadPrepared) {
+        try { await companionCall({ type: 'cancel-reload' }); }
+        catch (failed) { recoveryError = failed; }
+      }
       computeApplying = false;
-      await refreshCompute({ keepSelection: true });
-      document.getElementById('compute-status').textContent = error.message;
+      if (!recoveryError) await refreshCompute({ keepSelection: true });
+      document.getElementById('compute-status').textContent = error.message
+        + (recoveryError ? ' Reload preparation could not be cancelled. Reload the page to reconnect.' : '');
     }
   };
   const download = (body, type, filename) => {
@@ -525,6 +606,8 @@ async function boot() {
   worker.addEventListener('message', ({ data }) => {
     if (data.type === 'ready') {
       ready = true;
+      document.getElementById('test-gpu').disabled = false;
+      checkRelease();
       document.getElementById('export').disabled = false;
       document.getElementById('import').disabled = false;
       document.getElementById('companion-connect').disabled = false;
@@ -539,10 +622,18 @@ async function boot() {
         if (key) button.dataset.key = key;
       }).catch(() => {});
       navigate(routeFromHash(location.hash));
+    } else if (data.type === 'brew-interrupted') {
+      document.getElementById('interruption-message').textContent = data.message;
+      document.getElementById('interruption-notice').hidden = false;
+    } else if (data.type === 'startup-timings') {
+      // Public timing measurements only: no profile, content or saved-state details.
+      document.getElementById('startup').dataset.durationMs = String(Math.round(data.totalMs));
     } else if (data.type === 'compute-state') {
+      computeBusy = data.busy; setReleaseState();
       if (data.busy) document.getElementById('compute-apply').disabled = true;
       refreshCompute({ keepSelection: true });
     } else if (data.type === 'progress') {
+      if (!ready) updateStartupStages(data.stage);
       if (data.compute) {
         clearInterval(computeTimer); latestCompute = data.compute; computeReceivedAt = performance.now();
         displayCompute();
@@ -555,7 +646,7 @@ async function boot() {
       const notice = document.getElementById('storage-warning');
       notice.textContent = storageWarning; notice.hidden = !storageWarning;
       document.getElementById('storage-status').textContent = storageWarning || 'Your latest changes are saved in this browser.';
-      if (storageWarning) setStatus('Storage needs attention. Open Browser data to back up your changes.');
+      if (storageWarning) setStatus('Storage needs attention. Open Backup to save your changes.');
     }
     else if (data.type === 'error' && !data.id) report(new Error(data.message || data.error || 'Python startup failed'));
   });

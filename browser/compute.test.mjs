@@ -84,6 +84,8 @@ test('an inference failure restarts the entire embedding call on CPU', async () 
   assert.equal(result[0][3], 1);
   assert.equal(h.engine.device, 'wasm');
   assert.equal(h.engine.stats.cpuFallbacks, 1);
+  assert.equal(h.engine.stats.fallbackReason, 'device-lost');
+  assert.match(h.progress.find(row => row.phase === 'fallback').message, /device was lost/);
 });
 
 test('a broken GPU session can fail during disposal without preventing CPU fallback', async () => {

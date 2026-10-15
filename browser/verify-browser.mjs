@@ -38,6 +38,41 @@ await context.route('**/*', async route => {
     let source = await response.text();
     // Test-only instrumentation; never included in the published worker.
     source = source.replace("self.onmessage = async ({ data }) => {", `self.onmessage = async ({ data }) => {
+      if (data.type === 'acceptance-embedding-cache') {
+        try {
+          await initialize();
+          const rows=state.py.runPython(\`import json
+from sqlalchemy import select
+from dailydigest.store import ItemEmbeddingRow, session_scope
+with session_scope() as _acceptance_session:
+    _acceptance_rows = _acceptance_session.execute(select(ItemEmbeddingRow).order_by(ItemEmbeddingRow.item_id, ItemEmbeddingRow.model)).scalars().all()
+    _acceptance_cache = [[int(row.item_id), row.model, row.text_hash, int(row.dim), row.vector.hex()] for row in _acceptance_rows]
+json.dumps(_acceptance_cache)\`);
+          self.postMessage(response(data.id,rows));
+        } catch(error) {self.postMessage(response(data.id,String(error),500));}
+        return;
+      }
+      if (data.type === 'acceptance-committed-snapshot') {
+        try {await initialize();await persist({force:true});self.postMessage(response(data.id,(await readSnapshot()) || '{}'));}
+        catch(error) {self.postMessage(response(data.id,String(error),500));}
+        return;
+      }
+      if (data.type === 'acceptance-public-cache') {
+        try {
+          await initialize();
+          const before = state.engine.stats.completedInputs, hitsBefore = state.publicEmbeddings.stats.hits;
+          state.py.globals.set('_acceptance_public_texts', JSON.stringify(data.texts));
+          state.py.runPython(\`def _acceptance_public_vectors():
+    import json, numpy as np
+    from dailydigest.rank.embed import embed_texts
+    vectors = embed_texts(json.loads(_acceptance_public_texts), is_query=False)
+    return json.dumps({'vectors':int(vectors.shape[0]), 'valid':bool(vectors.shape[1] == 384 and np.isfinite(vectors).all() and np.allclose(np.linalg.norm(vectors, axis=1), 1, atol=1e-5))})\`);
+          const vectors = JSON.parse(await state.py.globals.get('_acceptance_public_vectors').callPromising());
+          self.postMessage(response(data.id, JSON.stringify({before, after:state.engine.stats.completedInputs,
+            hits:state.publicEmbeddings.stats.hits-hitsBefore, ...vectors})));
+        } catch(error) {self.postMessage(response(data.id,String(error),500));}
+        return;
+      }
       if (data.type === 'acceptance-state') {
         try {
           if (data.action === 'begin') state.py.runPython(\`from dailydigest.store import _engine
@@ -144,7 +179,7 @@ await page.addInitScript(() => {
       window.__appWorker = this;
       this.addEventListener('message', event => {
         const data = event.data;
-        window.__workerEvents.push({ type: data.type, stage: data.stage, detail: data.detail, message: data.message, id: data.id, status: data.status, body: data.type === 'stream' || data.status >= 400 ? data.body : undefined });
+        window.__workerEvents.push({ type: data.type, stage: data.stage, detail: data.detail, message: data.message, timings: data.type === 'startup-timings' ? {totalMs:data.totalMs, stages:data.stages} : undefined, id: data.id, status: data.status, body: data.type === 'stream' || data.status >= 400 ? data.body : undefined });
         if (data.type === 'acceptance-checkpoint') { window.__checkpoints ||= []; window.__checkpoints.push(data); window.__recordCheckpoint?.(data); }
         if (data.type === 'ready') window.__workerReady = true;
       });
@@ -186,7 +221,7 @@ async function startup() {
   await page.waitForFunction(() => window.__workerReady || document.getElementById('retry')?.hidden === false, undefined, { timeout: 300000 });
   assert.equal(await page.evaluate(() => Boolean(window.__workerReady)), true, await page.locator('#startup-status').textContent());
   await page.locator('#app').waitFor({ state: 'visible' });
-  return page.evaluate(() => ({ jspi: typeof WebAssembly.Suspending === 'function', title: document.querySelector('#app').contentDocument.title }));
+  return page.evaluate(() => ({ startupDurationMs: Number(document.querySelector('#startup').dataset.durationMs), timings: window.__workerEvents.find(row=>row.timings)?.timings, jspi: typeof WebAssembly.Suspending === 'function', title: document.querySelector('#app').contentDocument.title }));
 }
 async function route(path, selector) {
   await page.waitForFunction(() => typeof document.querySelector('#app')?.contentWindow?.ddNavigate === 'function');
@@ -263,6 +298,21 @@ try {
     return evidence;
   }));
   if (!initialReady) throw new Error('Startup failed; dependent acceptance checks cannot run.');
+  await check('fresh-profile-reuses-public-vectors-without-loading-model', async () => {
+    const response = await page.request.get(base+'assets/public-sources.json');
+    assert.equal(response.ok(),true);
+    const snapshot=await response.json();
+    const texts=[...new Set(Object.values(snapshot.sources).filter(row=>row.status==='ok').flatMap(row=>row.items || [])
+      .filter(item=>item.section==='research' && item.title?.trim())
+      .map(item=>item.abstract?.trim()?`${item.title.trim()}. ${item.abstract.trim()}`:item.title.trim()))].slice(0,12);
+    assert.equal(texts.length,12);
+    const result=await page.evaluate(texts=>window.__rpc({type:'acceptance-public-cache',texts}),texts);
+    assert.equal(result.status,200,result.body);
+    const evidence=JSON.parse(result.body);
+    assert.equal(evidence.before,0); assert.equal(evidence.after,0);
+    assert.equal(evidence.hits,12); assert.equal(evidence.valid,true);
+    return evidence;
+  });
   await check('dynamic-internal-links-support-modified-clicks', async () => {
     await page.evaluate(() => {
       const doc = document.querySelector('#app').contentDocument;
@@ -288,6 +338,9 @@ try {
     assert.equal(await page.evaluate(() => window.__storagePermissionCalls), 0);
     await page.locator('#browser-data-menu > summary').click();
     assert.match(await page.locator('#browser-data-menu').textContent(), /browser manages the local storage directory/);
+    assert.equal(await page.locator('#protect-storage').isHidden(),true,'Advanced storage controls start collapsed');
+    await page.locator('#browser-data-menu .data-tools > details > summary').click();
+    assert.equal(await page.locator('#protect-storage').isVisible(),true);
     await page.locator('#protect-storage').click();
     await page.waitForFunction(() => document.querySelector('#storage-status').textContent.includes('not granted'));
     assert.equal(await page.evaluate(() => window.__storagePermissionCalls), 1);
@@ -366,6 +419,31 @@ try {
     assert.deepEqual(await weights.evaluateAll(inputs => inputs.map(input => input.value)), ['50', '50']);
     await route('/setup', '#interest-editor');
     return { separateFields: true, shownEqualsSubmitted: true, underAndOverBlocked: true, addRemoveNormalizes: true };
+  });
+  await check('local-wording-variants-are-explicit-and-do-not-autosave', async () => {
+    await setTopics('quantum error correction (QEC) | 100');
+    const row = frame().locator('.interest-row').first();
+    const before=await snapshot(), spellingBefore=spellingRequests.length, externalBefore=report.requests.length;
+    await row.locator('summary').click();
+    assert.equal(await row.locator('[data-interest-aliases]').inputValue(),'');
+    await row.getByRole('button',{name:'Suggest wording variants',exact:true}).click();
+    assert.equal(await row.locator('[data-interest-aliases]').inputValue(),'');
+    await row.getByRole('button',{name:'Add “QEC”',exact:true}).click();
+    assert.equal(await row.locator('[data-interest-aliases]').inputValue(),'QEC');
+    assert.equal(await row.locator('[data-interest-name]').inputValue(),'quantum error correction (QEC)');
+    assert.match(await frame().locator('#interest-total').textContent(),/100%.*ready/);
+    assert.deepEqual((await snapshot()).files,before.files,'Local suggestions change only the unsaved form');
+    assert.equal(spellingRequests.length,spellingBefore);
+    assert.equal(report.requests.length,externalBefore);
+    await row.locator('[data-interest-name]').fill('Drug development');
+    await row.locator('[data-interest-aliases]').fill('');
+    await row.getByRole('button',{name:'Suggest wording variants',exact:true}).click();
+    await row.locator('.hint').filter({hasText:'No additional wording variants found locally'}).waitFor();
+    assert.equal(await row.locator('[data-interest-aliases]').inputValue(),'');
+    assert.equal(spellingRequests.length,spellingBefore);
+    assert.deepEqual((await snapshot()).files,before.files);
+    await route('/setup','#interest-editor');
+    return {noExternalRequest:true,noAutosave:true,explicitAcronym:true,topicAndPercentagePreserved:true,honestMissingVariants:true};
   });
   await check('interest-spelling-is-explicit-and-preserves-reader-control', async () => {
     await setTopics('induced provimity | 75\nassymetric catalysis | 25');
@@ -678,6 +756,37 @@ try {
     assert.equal(await frame().locator('.saved-card').count(), 0);
     return { cleared: true, searchFilters: true };
   });
+  await check('failed-compute-isolation-apply-leaves-feedback-usable', async () => {
+    await page.evaluate(()=>{
+      window.__originalSWRegister=navigator.serviceWorker.register;
+      navigator.serviceWorker.register=async()=>{throw Error('Fixture registration failed');};
+    });
+    try {
+      await page.locator('#compute-menu > summary').click();
+      await page.locator('#compute-mode').selectOption('multicore');
+      await page.locator('#compute-apply').click();
+      await page.waitForFunction(()=>document.querySelector('#compute-status').textContent.includes('Fixture registration failed'));
+      assert.equal(await page.locator('#compute-apply').isDisabled(),false);
+      const csrf=await page.evaluate(()=>{
+        const scripts=[...document.querySelector('#app').contentDocument.scripts].map(node=>node.textContent).join('\n');
+        return JSON.parse(scripts.match(/const CSRF_TOKEN\s*=\s*("[^"\n]+")/)[1]);
+      });
+      const vote=await page.evaluate(({id,csrf})=>window.__rpc({type:'request',method:'POST',path:`/vote/${id}/70`,headers:{'x-csrf-token':csrf}}),{id:itemId,csrf});
+      assert.equal(vote.status,200,vote.body);
+      assert.equal(JSON.parse(vote.body).new_grade,70);
+      const clear=await page.evaluate(({id,csrf})=>window.__rpc({type:'request',method:'DELETE',path:`/vote/${id}`,headers:{'x-csrf-token':csrf}}),{id:itemId,csrf});
+      assert.equal(clear.status,200,clear.body);
+    } finally {
+      await page.evaluate(()=>{
+        navigator.serviceWorker.register=window.__originalSWRegister;
+        localStorage.removeItem(`dailydigest:isolation:${location.pathname}`);
+      });
+      const reset=await page.evaluate(()=>window.__rpc({type:'configure-compute',mode:'cpu'}));
+      assert.equal(reset.status,200,reset.body);
+      await page.reload();await startup();
+    }
+    return {registrationRejected:true,applyUsableAgain:true,realFeedbackPostSucceeded:true,readingStatePreserved:true};
+  });
   await check('mobile-layout-and-keyboard', async () => {
     await page.setViewportSize({ width: 390, height: 844 });
     await route('/setup', '#interest-editor');
@@ -729,6 +838,49 @@ try {
     assert.equal(await page.locator('#compute-menu').getAttribute('open'), null);
     await page.setViewportSize({ width: 1360, height: 900 });
     return overflow;
+  });
+  await check('gpu-probe-does-not-load-model-and-explains-result', async () => {
+    const modelRequests = [];
+    const listener = request => {if (/\.onnx(?:\?|$)/.test(request.url())) modelRequests.push(request.url());};
+    page.on('request', listener);
+    try {
+      await page.locator('#compute-menu > summary').click();
+      await page.locator('#test-gpu').click();
+      await page.waitForFunction(() => !document.querySelector('#test-gpu').disabled);
+      const message = await page.locator('#gpu-test-result').textContent();
+      assert.match(message, /GPU|WebGPU/);
+      assert.equal(modelRequests.length, 0);
+      await page.locator('#compute-menu > summary').click();
+      return {message, modelRequests:0};
+    } finally {page.off('request', listener);}
+  });
+  await check('release-and-stale-source-notices-are-nondisruptive', async () => {
+    const hash = await page.evaluate(() => location.hash);
+    let stale = true;
+    const handler = async request => {
+      const response = await request.fetch();
+      const manifest = await response.json();
+      if (stale) {manifest.build_id='acceptance-next-release';manifest.public_sources={oldest_fetched_at:new Date(Date.now()-49*3600000).toISOString()};}
+      else manifest.public_sources={oldest_fetched_at:new Date().toISOString()};
+      await request.fulfill({response,body:JSON.stringify(manifest)});
+    };
+    await page.route('**/assets/build-manifest.json*', handler);
+    try {
+      await page.evaluate(()=>document.dispatchEvent(new Event('visibilitychange')));
+      await page.locator('#release-notice').waitFor({state:'visible'});
+      await page.locator('#source-freshness').waitFor({state:'visible'});
+      assert.match(await page.locator('#source-freshness').textContent(), /49 hours.*expired/);
+      assert.equal(await page.locator('#release-reload').isDisabled(),false);
+      assert.equal(await page.evaluate(()=>location.hash),hash);
+      await page.locator('#release-dismiss').click();
+      await page.evaluate(()=>document.dispatchEvent(new Event('visibilitychange')));
+      await page.waitForTimeout(50);
+      assert.equal(await page.locator('#release-notice').isHidden(),true);
+      stale=false;
+      await page.evaluate(()=>document.dispatchEvent(new Event('visibilitychange')));
+      await page.locator('#source-freshness').waitFor({state:'hidden'});
+      return {noAutomaticReload:true, originalTimestampAge:true, expiryVisible:true, dismissRememberedInTab:true};
+    } finally {await page.unroute('**/assets/build-manifest.json*',handler);}
   });
   await check('brew-cancellation-preserves-digest', async () => {
     const before = await digestIdentity();
@@ -787,6 +939,61 @@ try {
       await card.locator('.clear-rating').waitFor({ state: 'hidden' });
       return { cancelledDuringFetch: true, elapsedMs: Math.round(elapsedMs), savedDigestPreserved: true, midBrewVoteDurableAfterReload: true, computeSwitchBlockedDuringBrew: true, computeSwitchEnabledAfterStop: true };
     } finally { sourceMode = 'success'; pendingSlowSource = null; clearTimeout(timeout); }
+  });
+  await check('reload-during-brew-keeps-last-checkpoint-and-can-brew-again', async () => {
+    await successfulBrew('usual'); // Populate the actual SQLite item-embedding cache first.
+    const cachedBefore=await page.evaluate(()=>window.__rpc({type:'acceptance-embedding-cache'}));
+    assert.equal(cachedBefore.status,200,cachedBefore.body);
+    const embeddingRows=JSON.parse(cachedBefore.body);
+    assert.ok(embeddingRows.length>0,'Require real cached vectors before testing interrupted restoration');
+    const before = await digestIdentity();
+    let timeout;
+    const started = new Promise((resolve, reject) => {
+      pendingSlowSource = resolve;
+      timeout = setTimeout(() => reject(new Error('Slow reload fixture was not requested')), 30000);
+    });
+    sourceMode = 'slow';
+    try {
+      await route('/run?reading_mode=usual', '#brew-button');
+      await frame().locator('#brew-button').click();
+      await started; clearTimeout(timeout);
+      const checkpoint = await page.evaluate(()=>window.__rpc({type:'acceptance-committed-snapshot'}));
+      assert.equal(checkpoint.status,200,checkpoint.body);
+      const during = JSON.parse(checkpoint.body);
+      await page.route('**/assets/build-manifest.json*', async request => {
+        const response = await request.fetch(); const manifest = await response.json();
+        manifest.build_id = 'acceptance-busy-next-release';
+        await request.fulfill({response, body:JSON.stringify(manifest)});
+      }, {times:1});
+      await page.evaluate(()=>document.dispatchEvent(new Event('visibilitychange')));
+      await page.locator('#release-notice').waitFor({state:'visible'});
+      assert.equal(await page.locator('#release-reload').isDisabled(), true, 'Release update must wait for the active brew');
+      assert.match(await page.locator('#release-message').textContent(), /Finish or stop this brew/);
+      const requestsBefore = report.fixtureRequests.length;
+      await page.reload(); await startup();
+      await page.locator('#interruption-notice').waitFor({state:'visible'});
+      assert.match(await page.locator('#interruption-message').textContent(), /interrupted.*last saved digest and feedback/);
+      assert.ok((await page.evaluate(()=>location.hash)).startsWith('#/run'), 'Run route survives reload');
+      assert.equal(report.fixtureRequests.length, requestsBefore, 'Reload must not silently restart a brew');
+      const after = await snapshot();
+      assert.equal(after.files['data/digest.db'], during.files['data/digest.db'], 'Interrupted brew restores the exact committed SQLite checkpoint');
+      const cachedAfter=await page.evaluate(()=>window.__rpc({type:'acceptance-embedding-cache'}));
+      assert.equal(cachedAfter.status,200,cachedAfter.body);
+      assert.deepEqual(JSON.parse(cachedAfter.body),embeddingRows,'Committed vector bytes, model identity and text hashes must survive reload unchanged');
+      assert.equal(await digestIdentity(), before);
+      sourceMode = 'success'; pendingSlowSource = null;
+      await page.locator('#interruption-dismiss').click();
+      await successfulBrew('usual');
+      return {interruptedNotice:true, checkpointExact:true, committedEmbeddingRows:embeddingRows.length, runRouteRestored:true, noSilentRestart:true, releaseWaitsForBrew:true, nextBrewSucceeded:true};
+    } finally {
+      sourceMode = 'success'; pendingSlowSource = null; clearTimeout(timeout);
+      // A failed assertion must not leave a running fixture job for later cases.
+      const status=await page.evaluate(async()=>JSON.parse((await window.__rpc({type:'compute-status'})).body));
+      if(status.busy && await frame().locator('#cancel-button').count()) {
+        await frame().locator('#cancel-button').click();
+        await page.waitForFunction(()=>!document.querySelector('#compute-apply').disabled);
+      }
+    }
   });
   await check('brew-status-reconnect-without-starting-a-new-brew', async () => {
     const sourcesBefore = report.fixtureRequests.length;
@@ -1010,8 +1217,6 @@ try {
     assert.equal(status.isolated, true);
     assert.ok(status.threads > 1 && status.threads <= 4, JSON.stringify(status));
     await successfulBrew('usual');
-    const configured = await page.evaluate(() => window.__rpc({ type: 'configure-compute', mode: 'cpu' }));
-    assert.equal(configured.status, 200, configured.body);
     await page.locator('#compute-menu > summary').click();
     await page.locator('#compute-mode').selectOption('cpu');
     await Promise.all([page.waitForEvent('load'), page.locator('#compute-apply').click()]);
@@ -1085,7 +1290,7 @@ try {
   await check('visible-backup-error-and-keyboard-recovery', async () => {
     const before = await digestIdentity();
     const dataMenu = page.locator('.browser-bar > details:has(#export)');
-    if (await dataMenu.getAttribute('open') === null) await dataMenu.locator('summary').click();
+    if (await dataMenu.getAttribute('open') === null) await dataMenu.locator(':scope > summary').click();
     await page.locator('#export').focus();
     await page.locator('#import').setInputFiles({ name: 'invalid-backup.json', mimeType: 'application/json', buffer: Buffer.from('{invalid') });
     await page.locator('#app-error').waitFor({ state: 'visible' });

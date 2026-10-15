@@ -6,11 +6,14 @@ import { computeCapabilities, computeSelection, createEmbeddingEngine, formatCom
 import { createSnapshotWriter, validateRecoverySnapshot, validateStoredSnapshot } from './storage.mjs';
 import { createBrowserHttpBridge } from './http.mjs';
 import { createSemanticEngine } from './semantic.mjs';
+import { createPublicEmbeddingCache } from './public-embeddings.mjs';
 
 let companion = null;
 let boot, state, database, storageWriter, ownership, recoveryPy, startupFailed = false, startupReady = false, jobRunning = false, stateReplacing = false, computeMode = 'cpu';
-let configurationChanging = false;
+let configurationChanging = false, reloadPending = false;
 const progress = (stage, detail) => self.postMessage({ type: 'progress', stage, detail });
+let gpuProbe = null;
+
 const emit = text => self.postMessage(JSON.parse(text));
 const response = (id, body, status = 200) => ({ id, type: 'response', status, headers: { 'content-type': 'application/json' }, body });
 
@@ -38,22 +41,54 @@ function saveSnapshot(snapshot, key = 'snapshot') {
     transaction.onabort = () => reject(transaction.error || new Error('Browser storage transaction aborted'));
   });
 }
-async function ownStorage() {
+async function ownStorage({ timeoutMs = 60000 } = {}) {
   if (ownership) return ownership;
   if (!navigator.locks) throw new Error('This browser does not provide Web Locks required to protect saved reading state.');
+  const controller = new AbortController();
+  const waiting = setTimeout(() => progress('Waiting for previous tab', 'Waiting for the previous tab to stop…'), 250);
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
   ownership = new Promise((resolve, reject) => {
-    navigator.locks.request(`dailydigest:${new URL('.', self.location.href).pathname}`, { ifAvailable: true }, async lock => {
-      if (!lock) { reject(new Error('DailyDigest is open in another tab. Close that tab before opening this one.')); return; }
+    navigator.locks.request(`dailydigest:${new URL('.', self.location.href).pathname}`, { signal: controller.signal }, async () => {
+      clearTimeout(waiting); clearTimeout(timeout);
       resolve();
       await new Promise(() => {}); // Tab lifetime ownership; browser releases it on termination.
-    }).catch(reject);
+    }).catch(error => {
+      clearTimeout(waiting); clearTimeout(timeout); ownership = null;
+      reject(controller.signal.aborted
+        ? new Error('DailyDigest is still open in another tab, or the previous tab has not stopped. Close it and retry startup.') : error);
+    });
   });
   return ownership;
+}
+async function probeGPU() {
+  if (!navigator.gpu) return { available: false, reason: 'no-api', message: 'This browser does not expose WebGPU. Try a browser with WebGPU enabled.' };
+  try {
+    const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
+    if (!adapter) return { available: false, reason: 'no-adapter', message: 'WebGPU is exposed, but the browser could not find a usable GPU adapter. Check browser GPU settings and graphics drivers.' };
+    const info = adapter.info || {};
+    if (info.isFallbackAdapter) return { available: false, reason: 'software-adapter', message: 'Only a software GPU adapter is available; using CPU instead.' };
+    return { available: true, reason: 'available', message: 'A hardware GPU adapter is available. Model compatibility is checked when used.',
+      info: { vendor: info.vendor || 'not disclosed', architecture: info.architecture || 'not disclosed' }, adapter };
+  } catch {
+    return { available: false, reason: 'probe-failed', message: 'The browser could not check the GPU adapter. Check browser GPU settings and graphics drivers.' };
+  }
 }
 async function fetchAsset(path, kind) {
   const result = await fetch(path);
   if (!result.ok) throw new Error(`Could not load ${path}: HTTP ${result.status}`);
   return result[kind]();
+}
+async function loadPythonPackages(py, dependencies) {
+  const wheels = dependencies.micropip || [];
+  const packages = (dependencies.pyodide || []).filter(name => name !== 'micropip');
+  if (wheels.length) packages.push('micropip');
+  await py.loadPackage(packages);
+  // Pure Python wheels are already unpacked in app.zip in current builds.
+  // Importing micropip and asking it to install [] costs startup time for no work.
+  if (wheels.length) {
+    py.globals.set('browser_wheels', JSON.stringify(wheels.map(path => new URL(path, self.location.href).href)));
+    await py.runPythonAsync('import json, micropip\nawait micropip.install(json.loads(browser_wheels), deps=False)');
+  }
 }
 function companionEndpoint(value) {
   const url = new URL(value);
@@ -77,7 +112,7 @@ async function companionCall(path, payload = null, method = 'POST', timeout = 18
   return body;
 }
 function idleForCompanion() {
-  if (stateReplacing || configurationChanging || jobRunning || state.py.globals.get('has_jobs')()) {
+  if (stateReplacing || configurationChanging || reloadPending || jobRunning || state.py.globals.get('has_jobs')()) {
     const error = new Error('Wait for the current brew or state change before using this action.');
     error.status = 409;
     throw error;
@@ -152,17 +187,24 @@ async function initialize() {
     if (!WebAssembly.Suspending || !WebAssembly.promising) {
       throw new Error('DailyDigest requires WebAssembly JS Promise Integration to run the complete Python pipeline. Use a current Chromium browser. This browser cannot run the deployed application.');
     }
+    const startupStarted = performance.now(), timings = [];
+    let stageStarted = startupStarted, previousStage = 'storage-ownership';
+    const stage = (name, label, detail) => {
+      const now = performance.now(); timings.push({ stage: previousStage, durationMs: now - stageStarted });
+      previousStage = name; stageStarted = now; progress(label, detail);
+    };
     await ownStorage();
     database = await openDatabase();
-    progress('Loading Python', 'The full DailyDigest application runs in this browser.');
+    stage('application-assets', 'Loading application', 'Opening the local application…');
     const [bundle, source, dependencies, snapshot, savedCompanion, savedCompute] = await Promise.all([
       fetchAsset('./assets/app.zip?compute=v1', 'arrayBuffer'), fetchAsset('./assets/runtime.py?compute=v1', 'text'),
       fetchAsset('./assets/dependencies.json', 'json'), readSnapshot(), readSnapshot('companion'), readSnapshot('compute'),
     ]);
+    stage('python-runtime', 'Loading Python', 'Starting the Python runtime…');
     const py = await loadPyodide({ indexURL: new URL('./node_modules/pyodide/', self.location.href).href });
-    await py.loadPackage(['micropip', ...dependencies.pyodide]);
-    py.globals.set('browser_wheels', JSON.stringify(dependencies.micropip.map(path => new URL(path, self.location.href).href)));
-    await py.runPythonAsync('import json, micropip\nawait micropip.install(json.loads(browser_wheels), deps=False)');
+    stage('python-packages', 'Loading libraries', 'Preparing application libraries…');
+    await loadPythonPackages(py, dependencies);
+    stage('application-import', 'Opening application', 'Preparing your reading desk…');
     py.unpackArchive(bundle, 'zip', { extractDir: '/app' });
     py.runPython("import os, sys\nos.chdir('/app')\nsys.path.insert(0, '/app/src')\nsys.path.insert(0, '/app/browser')\nsys.path.insert(0, '/app/site-packages')");
     // Install browser HTTP transport before importing web/pipeline.
@@ -173,6 +215,7 @@ async function initialize() {
     await py.runPythonAsync('import network\nnetwork.install_httpx_transport()');
     await py.runPythonAsync(source);
     recoveryPy = py;
+    stage('snapshot-restore', 'Restoring your data', snapshot ? 'Restoring your saved reading desk…' : 'Preparing a new reading desk…');
     let snapshotLimitWarning = null;
     if (snapshot) {
       snapshotLimitWarning = validateStoredSnapshot(snapshot).warning;
@@ -180,6 +223,7 @@ async function initialize() {
       await py.runPythonAsync('validate_snapshot_sqlite(decode_snapshot(startup_snapshot))');
       py.globals.get('restore_snapshot')(snapshot);
     }
+    stage('application-setup', 'Preparing reading desk', 'Connecting the local application…');
     // Native ingest imports bind config.SETTINGS: restore .env before them.
     await py.runPythonAsync('network.install_public_source_fallback(public_source_url)');
     env.allowRemoteModels = false;
@@ -191,10 +235,9 @@ async function initialize() {
     const capabilities = computeCapabilities();
     if (computeMode === 'gpu' && capabilities.gpu) {
       progress('Checking GPU', 'Checking hardware acceleration on this device…');
-      let adapter;
-      try { adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' }); } catch { /* unavailable device */ }
-      capabilities.gpu = Boolean(adapter && !adapter.info?.isFallbackAdapter);
-      if (capabilities.gpu) env.backends.onnx.webgpu.adapter = adapter;
+      gpuProbe = await probeGPU();
+      capabilities.gpu = gpuProbe.available;
+      if (gpuProbe.available) env.backends.onnx.webgpu.adapter = gpuProbe.adapter;
     }
     const engine = createEmbeddingEngine({ mode: computeMode, capabilities, env: env.backends.onnx,
       loadTokenizer: options => AutoTokenizer.from_pretrained('bge-small', { local_files_only: true, ...options }),
@@ -229,9 +272,13 @@ async function initialize() {
         message: formatComputeProgress(compute), compute });
       },
     });
-    state = { py, engine, semanticEngine, capabilities };
+    const publicEmbeddings = createPublicEmbeddingCache({ signature: '__PUBLIC_EMBEDDING_SIGNATURE__',
+      backend: () => engine.cacheBackend, embed: texts => engine.embed(texts),
+      shouldCancel: () => Boolean(state.py.globals.get('browser_cancelled')()),
+      url: new URL('./assets/public-embeddings.json', self.location.href) });
+    state = { py, engine, semanticEngine, capabilities, publicEmbeddings };
     globalThis.browserYield = () => new Promise(resolve => setTimeout(resolve, 0));
-    globalThis.browserEmbed = texts => engine.embed(texts);
+    globalThis.browserEmbed = texts => publicEmbeddings.embed(texts);
     globalThis.browserSemanticScore = async payload => {
       semanticStarted = performance.now();
       return JSON.stringify(await semanticEngine.score(JSON.parse(payload)));
@@ -254,6 +301,13 @@ async function initialize() {
       warning: message => self.postMessage({ type: 'storage-warning', message: message || snapshotLimitWarning }),
     });
     if (snapshotLimitWarning) self.postMessage({ type: 'storage-warning', message: snapshotLimitWarning });
+    const interruptedBrew = await readSnapshot('brew-in-progress');
+    if (interruptedBrew) {
+      self.postMessage({ type: 'brew-interrupted', message: 'The previous brew was interrupted when its tab closed or reloaded. Your last saved digest and feedback are kept. Start a new brew when ready; it will reuse saved calculations.' });
+      await saveSnapshot(null, 'brew-in-progress');
+    }
+    stage('ready', 'Ready', 'Your reading desk is ready.');
+    self.postMessage({ type: 'startup-timings', totalMs: performance.now() - startupStarted, stages: timings });
     startupReady = true;
     progress('Ready', 'Your profile, votes and reading history stay in browser storage.');
     self.postMessage({ type: 'ready' });
@@ -267,6 +321,8 @@ async function persist(options = {}) {
 async function pumpJobs() {
   if (jobRunning || !state.py.globals.get('has_jobs')()) return;
   jobRunning = true;
+  try { await saveSnapshot({ startedAt: new Date().toISOString() }, 'brew-in-progress'); }
+  catch { self.postMessage({ type: 'storage-warning', message: 'Browser storage could not record brew recovery status. Keep this tab open and export a backup before reloading.' }); }
   self.postMessage({ type: 'compute-state', busy: true });
   try {
     while (state.py.globals.get('has_jobs')()) {
@@ -278,6 +334,7 @@ async function pumpJobs() {
   } finally {
     jobRunning = false;
     await persist({ force: true });
+    try { await saveSnapshot(null, 'brew-in-progress'); } catch { /* A stale marker only shows a cautious interruption notice. */ }
     self.postMessage({ type: 'compute-state', busy: false });
   }
 }
@@ -291,8 +348,17 @@ self.onmessage = async ({ data }) => {
     if (data.type === 'init') { await initialize(); return; }
     await initialize();
     if (data.type === 'cancel-request') { state.py.globals.get('cancel_request')(data.id); return; }
-    if (stateReplacing || configurationChanging) {
-      self.postMessage(response(data.id, JSON.stringify({ detail: stateReplacing
+    if (data.type === 'cancel-reload') {
+      if (stateReplacing || configurationChanging) {
+        self.postMessage(response(data.id, JSON.stringify({ detail: 'A state change is still being saved. Reload preparation cannot be cancelled yet.' }), 409));
+        return;
+      }
+      reloadPending = false;
+      self.postMessage(response(data.id, JSON.stringify({ ok: true })));
+      return;
+    }
+    if (stateReplacing || configurationChanging || reloadPending) {
+      self.postMessage(response(data.id, JSON.stringify({ detail: reloadPending ? 'The application is about to reload. Wait for the page to reopen.' : stateReplacing
         ? 'Backup import is replacing browser state. Wait for the page to reload.'
         : 'Browser settings are being saved. Retry this action after they finish.' }), 409));
       return;
@@ -303,8 +369,22 @@ self.onmessage = async ({ data }) => {
     }
     if (data.type === 'compute-status') {
       self.postMessage(response(data.id, JSON.stringify({ mode: computeMode, capabilities: state.capabilities,
-        device: state.engine.device, threads: state.engine.threads, stats: state.engine.stats,
+        gpu: gpuProbe && { available: gpuProbe.available, reason: gpuProbe.reason, message: gpuProbe.message, info: gpuProbe.info },
+        device: state.engine.device, threads: state.engine.threads, stats: state.engine.stats, publicCache: state.publicEmbeddings?.stats,
         busy: jobRunning || Boolean(state.py.globals.get('has_jobs')()) })));
+      return;
+    }
+    if (data.type === 'probe-gpu') {
+      const result = await probeGPU();
+      self.postMessage(response(data.id, JSON.stringify({ available: result.available, reason: result.reason, message: result.message, info: result.info })));
+      return;
+    }
+    if (data.type === 'prepare-reload') {
+      idleForCompanion();
+      if (!await persist({ force: true })) throw new Error('Your latest changes could not be saved. Export a backup before reloading.');
+      idleForCompanion();
+      reloadPending = true;
+      self.postMessage(response(data.id, JSON.stringify({ ok: true })));
       return;
     }
     if (data.type === 'configure-compute') {
@@ -318,6 +398,7 @@ self.onmessage = async ({ data }) => {
       configurationChanging = true;
       try { await saveSnapshot(data.mode, 'compute'); }
       finally { configurationChanging = false; }
+      reloadPending = true;
       self.postMessage(response(data.id, JSON.stringify({ ok: true, reload: true })));
       return;
     }

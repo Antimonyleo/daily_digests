@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { runInNewContext } from 'node:vm';
-import { localPath, routeFromHash, renderedDocument, WorkerClient, browserSupportError, friendlyLoadingStatus, publicRoute, announcementKey, computeStatusText, requestStorageProtection } from './app.mjs';
+import { readFileSync } from 'node:fs';
+import { localPath, routeFromHash, renderedDocument, WorkerClient, browserSupportError, friendlyLoadingStatus, publicRoute, announcementKey, computeStatusText, requestStorageProtection, publicSourceFreshness } from './app.mjs';
 
 test('compute feedback distinguishes selected, exercised, fallback and busy states', () => {
   const selected = { mode: 'gpu', device: 'webgpu', stats: { completedInputs: 0 } };
@@ -9,6 +10,7 @@ test('compute feedback distinguishes selected, exercised, fallback and busy stat
   assert.match(computeStatusText({ ...selected, stats: { completedInputs: 16 } }), /Used GPU for 16/);
   assert.match(computeStatusText({ ...selected, device: 'wasm' }), /GPU requested; using CPU fallback/);
   assert.match(computeStatusText({ ...selected, busy: true }), /Stop it or wait/);
+  assert.match(computeStatusText({ ...selected, publicCache: {hits:12} }), /12 public text comparisons reused/);
   assert.match(computeStatusText({ mode: 'multicore', device: 'wasm', threads: 4 }), /up to 4 cores/);
 });
 
@@ -164,4 +166,37 @@ test('worker request errors are visible and release pending calls', async () => 
   worker.respond({ id: 1, type: 'error', message: 'Profile write failed' });
   await assert.rejects(request, /Profile write failed/);
   assert.equal(client.pending.size, 0);
+});
+
+
+test('public-source warnings use original oldest success time and distinguish 24h warnings from 48h expiry', () => {
+  const now = Date.parse('2026-10-15T12:00:00Z');
+  const summary = hours => ({oldest_fetched_at:new Date(now - hours * 3600000).toISOString()});
+  assert.equal(publicSourceFreshness(summary(12), now).level, 'fresh');
+  assert.equal(publicSourceFreshness(summary(25), now).level, 'warning');
+  assert.match(publicSourceFreshness(summary(49), now).message, /49 hours.*expired/);
+  assert.equal(publicSourceFreshness({...summary(12), carried_forward_sources:1}, now).level, 'warning');
+  assert.equal(publicSourceFreshness({oldest_fetched_at:'invalid'}, now), null);
+  assert.equal(publicSourceFreshness(summary(-1), now), null);
+});
+
+
+for(const failure of ['registration','activation-timeout','redundant']) test(`Compute ${failure} failure cancels only its completed reload fence`,async()=>{
+  const source=readFileSync(new URL('./app.mjs',import.meta.url),'utf8');
+  const start=source.indexOf("  document.getElementById('compute-form').onsubmit =");
+  const handler=source.slice(start,source.indexOf('  const download =',start));
+  const nodes={'compute-form':{},'compute-apply':{disabled:false},'compute-status':{},'compute-mode':{value:'multicore'}};
+  const calls=[];let pending=false,refreshes=0,reloads=0;
+  runInNewContext(handler,{document:{getElementById:id=>nodes[id]},computeApplying:false,crossOriginIsolated:false,
+    navigator:{serviceWorker:{}},isolationRequested:false,isolationKey:'fixture-isolation',localStorage:{setItem(){}},
+    companionCall:async data=>{calls.push(data.type);if(data.type==='configure-compute')pending=true;if(data.type==='cancel-reload')pending=false;return{ok:true};},
+    registerWorker:async()=>{if(failure==='registration')throw Error('Fixture registration failed');return{installing:{state:failure==='redundant'?'redundant':'installing',addEventListener(){}}};},
+    setTimeout:callback=>{if(failure==='activation-timeout')callback();return 1;},clearTimeout(){},
+    refreshCompute:async()=>{if(pending)throw Error('HTTP409: reload pending');refreshes++;nodes['compute-apply'].disabled=false;},
+    location:{reload:()=>{reloads++;}}});
+  await nodes['compute-form'].onsubmit({preventDefault(){}});
+  assert.deepEqual(calls,['configure-compute','cancel-reload']);
+  assert.equal(pending,false);assert.equal(refreshes,1);assert.equal(reloads,0);
+  assert.equal(nodes['compute-apply'].disabled,false);
+  assert.match(nodes['compute-status'].textContent,/registration failed|could not start|unavailable/);
 });

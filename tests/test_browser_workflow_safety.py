@@ -36,3 +36,25 @@ def test_release_exercises_both_browser_kernels_before_upload():
     # Both kernels must use the served project subpath, including the matcher
     # whose standalone default differs from the full browser acceptance tool.
     assert steps[acceptance].get("env", {}).get("DAILYDIGEST_BROWSER_URL") == "http://127.0.0.1:8767/daily_digests/"
+
+
+def test_recurring_issue_is_scoped_to_strict_refreshes_and_its_own_permissions():
+    workflow = yaml.load((Path(__file__).resolve().parents[1]/'.github/workflows/browser-pages.yml').read_text(), Loader=yaml.BaseLoader)
+    job = workflow['jobs']['refresh-status']
+    assert job['needs'] == ['build', 'deploy']
+    assert job['permissions'] == {'contents': 'read', 'issues': 'write'}
+    assert "github.event_name == 'schedule'" in job['if']
+    assert "github.event_name == 'workflow_dispatch'" in job['if']
+    assert "needs.deploy.result == 'success'" in job['if']
+    report = next(step for step in job['steps'] if 'report_failure.py' in step.get('run', ''))
+    assert report['env']['DAILYDIGEST_ALERT_MODE'] == 'github-issue'
+    assert 'secrets.GITHUB_TOKEN' in report['env']['GITHUB_TOKEN']
+    assert 'needs.build.result' in report['env']['DAILYDIGEST_REFRESH_RESULT']
+
+
+def test_public_comparison_cache_is_restored_before_static_build():
+    workflow = yaml.load((Path(__file__).resolve().parents[1]/'.github/workflows/browser-pages.yml').read_text(), Loader=yaml.BaseLoader)
+    steps = workflow['jobs']['build']['steps']
+    restore = next(i for i, step in enumerate(steps) if 'fetch_public_embeddings.py' in step.get('run', ''))
+    build = next(i for i, step in enumerate(steps) if 'python browser/build.py' in step.get('run', ''))
+    assert restore < build

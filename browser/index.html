@@ -14,10 +14,9 @@
     <p class="eyebrow">DailyDigest in your browser</p>
     <div class="tea-cup" aria-hidden="true"><span class="steam s1"></span><span class="steam s2"></span><span class="steam s3"></span><span class="cup-bowl"></span><span class="cup-handle"></span></div>
     <h1 id="startup-title">Putting the kettle on…</h1>
-    <p>Get a reading list matched to your research interests. Your profile, ratings and saved papers are stored in this browser.</p>
-    <p>The first visit downloads the app and a local text model. <span id="download-size">The CPU model is about 66 MB, plus the Python runtime and libraries.</span> Later visits reuse cached downloads. Keep this tab open while brewing.</p>
-    <p>Brewing uses your device’s processor and memory, and may increase heat, fan noise and battery use. A first brew with thousands of articles can take 20 minutes or more on one CPU core. Choose optional acceleration in <strong>Compute</strong>.</p>
-    <p>Use <strong>Browser data</strong> to back up your reading desk or move it to another device. Optional services are available through <strong>Companion</strong>.</p>
+    <p>Your research reading desk runs on this device. Your profile and reading choices stay in this browser.</p>
+    <ol id="startup-stages" aria-label="Startup stages"><li data-startup-stage="python">Python and libraries</li><li data-startup-stage="data">Your saved data</li><li data-startup-stage="ready">Reading desk ready</li></ol>
+    <details class="startup-details"><summary>First visit and local computing</summary><p><span id="download-size">The CPU model is about 66 MB, plus the Python runtime and libraries.</span> Downloads are cached; models load when needed. Brewing uses processor and memory, and can increase heat, fan noise and battery use. Thousands of new papers may take 20+ minutes on one core. Keep this tab open while brewing. Choose acceleration in Compute and export copies in Backup.</p></details>
     <p id="startup-status">Warming up your reading desk. A fresh cup is on its way.</p>
     <button id="retry" hidden type="button">Retry startup</button>
     <div id="recovery-tools" hidden>
@@ -37,6 +36,9 @@
     <p id="transfer-message"></p>
     <button id="dismiss-transfer" type="button">Dismiss</button>
   </aside>
+  <aside id="source-freshness" class="storage-consent" role="status" hidden></aside>
+  <aside id="release-notice" class="release-notice" role="status" hidden><span id="release-message">A new version is available.</span> <button id="release-reload" type="button">Save and reload</button><button id="release-dismiss" type="button">Later</button></aside>
+  <aside id="interruption-notice" class="storage-consent" role="status" hidden><p id="interruption-message"></p><button id="interruption-dismiss" type="button">Dismiss</button></aside>
   <aside id="storage-consent" class="storage-consent" aria-label="Keep your reading desk" hidden>
     <p>Your reading desk is saved in this browser. Protect it from automatic clearing? Your browser chooses the storage location. Keep backups for device changes, loss or manual clearing.</p>
     <div><button id="consent-protect-storage" type="button">Protect local data</button><button id="dismiss-storage-consent" type="button">Not now</button></div>
@@ -49,7 +51,7 @@
     <details id="compute-menu">
       <summary>Compute</summary>
       <div class="data-tools">
-        <p>Brewing runs on this device. It can increase heat, fan noise and battery use. Thousands of new articles can take 20 minutes or more on one CPU core; later brews reuse saved calculations.</p>
+        <p>Brewing runs on your device. Choose optional acceleration for new text comparisons.</p>
         <form id="compute-form">
           <label for="compute-mode">Local computation</label>
           <select id="compute-mode" aria-describedby="compute-support">
@@ -60,20 +62,22 @@
           <p id="compute-support">Checking this browser’s capabilities…</p>
           <button id="compute-apply" disabled type="submit">Apply and reload</button>
         </form>
+        <button id="test-gpu" type="button" disabled>Test GPU</button><p id="gpu-test-result" role="status"></p>
         <p id="compute-status" role="status">CPU · one core. GPU acceleration is optional and may vary by device.</p>
-        <p>Choose a mode, then Apply and reload. Finish or stop an active brew first. Acceleration speeds new text comparisons; fetching and other work still use the CPU. Cached comparisons need no acceleration, and the existing digest does not change when you switch.</p>
+        <details><summary>More about computing</summary><p>Choose a mode, then Apply and reload. Finish or stop an active brew first. Acceleration speeds new text comparisons; fetching and other work still use the CPU. Cached comparisons need no acceleration, and the existing digest does not change when you switch.</p>
         <p>Switching between CPU and GPU can require recalculating saved text comparisons.</p>
         <p>First-time GPU setup downloads a separate model export, about 133 MB.</p>
-        <p>GPU support is experimental while hardware performance is being verified across devices. CPU fallback keeps the same ranking rules.</p>
+        <p>Brewing uses processor and memory and can increase heat, fan noise and battery use. Thousands of new articles may take 20 minutes or more on one CPU core. GPU support is experimental while hardware performance is being verified across devices. CPU fallback keeps the same ranking rules.</p></details>
       </div>
     </details>
     <details id="companion-menu">
-      <summary>Companion</summary>
+      <summary>Companion <span class="optional-label">(optional)</span></summary>
       <div class="data-tools">
-        <p>A companion can provide model summaries, email, inbound reading and optional state transfer. Connect only to a server you trust. Each action below is explicit.</p>
+        <p>An optional helper on your computer connects this page to your Claude or Codex login, email and scheduled brews. Skip it to read in the browser.</p>
+        <details><summary>Install the helper</summary>
         <p>Install DailyDigest on the companion computer, then run:</p>
         <code class="companion-command">dd companion --allowed-origin https://antimonyleo.github.io</code>
-        <p>The command prints the location of your reusable private token. Your Claude or Codex login must be on that computer.</p>
+        <p>The command prints the location of your reusable private token. Your Claude or Codex login must be on that computer. Connect only to a helper you trust.</p></details>
         <form id="companion-form">
           <label for="companion-endpoint">Local server URL</label>
           <input id="companion-endpoint" type="url" required placeholder="http://127.0.0.1:8768" autocomplete="url">
@@ -95,10 +99,13 @@
       </div>
     </details>
     <details id="browser-data-menu">
-      <summary>Browser data</summary>
+      <summary>Backup</summary>
       <div class="data-tools">
-        <p>Your reading data stays in this browser profile. People sharing a browser profile share this reading desk; use separate browser profiles for separate readers. Other project sites on this same hostname share its security origin.</p>
-        <p>Move your reading desk with an exported backup. Imports replace this device’s choices; they do not merge feedback from two devices. The installed shortcut still needs network access to start and collect papers.</p>
+        <p>Your ratings and saved papers live in this browser. Back them up before clearing browser data or switching computers.</p>
+        <button id="export" disabled type="button">Export backup</button>
+        <label class="file-button">Import backup<input id="import" type="file" accept="application/json,.json" disabled></label>
+        <p>Importing replaces this reading desk. People sharing this browser profile see the same reading desk.</p>
+        <details><summary>More about storage</summary><p>Other project sites on this hostname share its security origin. Use separate browser profiles for separate readers.</p>
         <p id="storage-status" role="status">Checking storage protection…</p>
         <p>Your browser manages the local storage directory on macOS, Windows and Linux. Protect storage to reduce automatic clearing; export a backup to keep a copy in a folder you choose. No account is required.</p>
         <p id="storage-usage"></p>
@@ -108,8 +115,7 @@
         <p id="retained-recovery-help" hidden>Recovery copies can include credentials. Keep the downloaded file private.</p>
         <label><input id="include-credentials" type="checkbox"> Include saved API keys and credentials in backup</label>
         <p>Portable backups exclude credentials by default. You may need to configure a provider again on another device.</p>
-        <button id="export" disabled type="button">Export backup</button>
-        <label class="file-button">Import backup<input id="import" type="file" accept="application/json,.json" disabled></label>
+        </details>
       </div>
     </details>
   </footer>

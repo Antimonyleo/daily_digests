@@ -54,3 +54,15 @@ button:disabled, .file-button:has(input:disabled) { opacity: .5; cursor: default
   .browser-bar { flex-wrap: wrap; justify-content: flex-end; }
   #status { flex-basis: 100%; }
 }
+
+#startup-stages { display: flex; gap: 18px; padding: 0; list-style: none; font-size: 13px; flex-wrap: wrap; }
+#startup-stages li { opacity: .55; }
+#startup-stages li[data-state="active"] { opacity: 1; font-weight: 700; }
+#startup-stages li[data-state="done"]::before { content: "✓ "; }
+.startup-details { font-size: 13px; }
+.startup-details summary { padding-left: 0; }
+.release-notice { flex-shrink: 0; padding: 8px 16px; background: #e8f3ec; font-size: 13px; }
+:root[data-theme="dark"] .release-notice { background: #1b3426; }
+.optional-label { font-size: 10px; }
+@media (max-width: 600px) { .optional-label { display: none; } }
+.data-tools > details { font-size: 12px; }

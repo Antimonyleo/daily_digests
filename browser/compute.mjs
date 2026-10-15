@@ -54,13 +54,13 @@ export function createEmbeddingEngine({ mode, capabilities, env, loadTokenizer, 
   env.wasm.numThreads = selection.threads;
   let device = selection.device, tokenizer, model, task = 0;
   const exportKind = device === 'webgpu' ? 'gpu' : 'cpu';
-  const stats = { calls: 0, completedInputs: 0, encodingMs: 0, cpuFallbacks: 0 };
+  const stats = { calls: 0, completedInputs: 0, encodingMs: 0, cpuFallbacks: 0, fallbackReason: '' };
   const backend = () => device === 'webgpu' ? 'GPU' : selection.threads > 1 ? `CPU · ${selection.threads} cores` : 'CPU · one core';
   const report = (phase, fields = {}) => progress({ phase, task, backend: backend(), ...fields });
   const downloadProgress = event => {
     if (event.status === 'progress') report('loading', { file: event.file?.split('/').at(-1), percent: event.progress });
   };
-  async function useCPU() {
+  async function useCPU(error) {
     // A lost GPU can also reject disposal. CPU initialization must still run;
     // an error from the CPU path itself remains fatal.
     try { await model?.dispose?.(); } catch { /* failed GPU session */ }
@@ -69,7 +69,8 @@ export function createEmbeddingEngine({ mode, capabilities, env, loadTokenizer, 
     // Cached profile/history vectors may already have been read before the
     // first inference call. Keep one export for this entire worker session.
     stats.cpuFallbacks++;
-    report('fallback', { message: 'GPU acceleration was unavailable or stopped. Continuing locally on CPU.' });
+    stats.fallbackReason = /GPU device lost/i.test(error?.message || '') ? 'device-lost' : 'model-failed';
+    report('fallback', { message: stats.fallbackReason === 'device-lost' ? 'The GPU device was lost. Continuing locally on CPU.' : 'The GPU could not run this model. Continuing locally on CPU.' });
     model = await loadModel({ device, exportKind, dtype: 'fp32', progress_callback: downloadProgress });
   }
   async function embed(texts) {
@@ -80,7 +81,7 @@ export function createEmbeddingEngine({ mode, capabilities, env, loadTokenizer, 
       report('loading');
       tokenizer ||= await loadTokenizer({ progress_callback: downloadProgress });
       try { model = await loadModel({ device, exportKind, dtype: 'fp32', progress_callback: downloadProgress }); }
-      catch (error) { if (device !== 'webgpu') throw error; await useCPU(); }
+      catch (error) { if (device !== 'webgpu') throw error; await useCPU(error); }
     }
     stats.calls++;
     const ordered = Array.from(texts).map((text, index) => ({ text, index })).sort((a, b) => Array.from(a.text).length - Array.from(b.text).length);
@@ -98,7 +99,7 @@ export function createEmbeddingEngine({ mode, capabilities, env, loadTokenizer, 
         try { output = await model(inputs); }
         catch (error) {
           if (device !== 'webgpu') throw error;
-          await useCPU();
+          await useCPU(error);
           // Discard this call's GPU vectors; don't return a partially computed matrix.
           return await embed(texts);
         }

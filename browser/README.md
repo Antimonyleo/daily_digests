@@ -236,7 +236,7 @@ or Linux; GPU mode remains experimental and opt-in.
 
 Corrupt startup state exposes raw download, validated restore and an explicitly
 confirmed fresh start. Replacement retains the original state in IndexedDB;
-Browser data can download that retained copy. Raw recovery copies may contain
+Backup can download that retained copy. Raw recovery copies may contain
 credentials and should be kept private. External imports are limited to 10,000 files
 and 128 Mi characters of JSON; larger existing checkpoints remain restorable and
 exportable without truncation, with a storage warning. Portable backups and Companion state
@@ -317,7 +317,7 @@ the additional model has not demonstrated a separate selection gain, so normal
 brewing avoids downloading/loading it. The corrected venue-independent topic
 gate remains active. No online model provider receives reader text for checks.
 
-The browser toolbar follows the reading desk's theme. Browser data shows site
+The browser toolbar follows the reading desk's theme. Backup shows site
 storage estimates and the last backup-export attempt on this device. Separate
 people should use separate browser profiles. Import and companion restore replace
 state; they do not merge independently accumulated feedback. An installed shortcut
@@ -327,11 +327,15 @@ Configured research sources span different fields unevenly. Grants.gov covers US
 funding and the EMBL event stream is limited; these sections are not exhaustive.
 The interface states these limits before opt-in and retains conservative eligibility.
 
-For operations, the Pages workflow reports build and deploy failures. An optional
-repository secret `DAILYDIGEST_ALERT_WEBHOOK` enables a JSON webhook accepting a
-`text` field containing only the public workflow link and a failure notice.
-Without it, Actions emits configuration guidance; enable repository Actions
-notifications to receive alerts. No webhook was configured or contacted in tests.
+For scheduled/manual source refreshes, the Pages workflow maintains one recurring
+GitHub issue: failure creates or reopens it, subsequent failures update it, and a
+successful strict refresh closes it. Only the reporting job has `issues: write`;
+issue bodies contain public workflow links, never reader data or logs. Issue
+support/permissions and future notification delivery still need verification after
+publishing. Tests use a fake GitHub API and send no live alerts.
+The optional `DAILYDIGEST_ALERT_WEBHOOK` remains available for build/deploy failure
+notices; configure it explicitly if desired. Snapshot warnings use the original
+source fetch time (24-hour warning, 48-hour expiry), not application build time.
 Native-only main retains a bootstrap workflow checking out the browser prototype
 until browser deployment is integrated into main; keep that branch available.
 
@@ -342,3 +346,31 @@ latency targets. Physical Intel WebGPU inference was verified separately on two
 inputs. Phone performance, Firefox/WebKit application behavior and production
 cold-brew performance remain unverified. English is the validated interface and
 model baseline; multilingual relevance has not been established.
+
+
+## Public comparisons and first use
+
+A validated public source snapshot can ship CPU article comparisons, computed
+once during the build using the same browser BGE export, tokenizer and pooling.
+A new visitor still computes their profile and uncovered papers locally. Reader
+interests, votes and query text are never uploaded for this optimization.
+
+The builder caps this cache at 10,000 documents and 16 MB of float32 vectors from
+the existing 21-day public snapshot. It binds vectors to model files, preprocessing
+and dependency identity, and matches exact encoded text. Missing, changed,
+corrupt or incompatible assets fall back to ordinary local computation. The
+unfused GPU export, including its CPU fallback, does not mix these CPU vectors.
+
+Before building, CI restores the previous public cache with
+`uv run python browser/fetch_public_embeddings.py`. Local builds reuse
+`browser/.build-cache/public-embeddings/public-embeddings.json` and its referenced
+content-addressed `.f32` file. The bounded precompute checkpoints every 128 texts;
+a 20-minute limit retains valid partial progress and leaves missing work local.
+Missing Chromium or an unavailable public cache does not block a code hotfix.
+Inspect `assets/build-manifest.json` for actual computed/reused/missing coverage.
+
+Startup records named phase timings and skips micropip when no wheels require
+installation. Python/runtime/package initialization still has a cost on every
+opening; cached downloads do not imply instantaneous startup. Reload during a
+brew keeps committed state, explains interruption, and waits for an explicit new
+brew. A release notice never reloads a running brew automatically.

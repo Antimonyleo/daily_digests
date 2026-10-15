@@ -108,7 +108,7 @@ def test_full_build_manifest_identifies_lazy_semantic_assets_and_ships_engine(tm
     browser.mkdir()
     cache.rename(browser / '.build-cache')
     original = builder.HERE
-    for name in ('index.html', 'app.mjs', 'compute.mjs', 'semantic.mjs', 'http.mjs', 'storage.mjs',
+    for name in ('index.html', 'app.mjs', 'compute.mjs', 'public-embeddings.mjs', 'semantic.mjs', 'http.mjs', 'storage.mjs',
                  'style.css', 'worker.mjs', 'manifest.webmanifest', 'app-icon.svg', 'sw.js', 'runtime.py',
                  'requirements-browser.txt'):
         (browser / name).write_bytes((original / name).read_bytes())
@@ -130,6 +130,8 @@ def test_full_build_manifest_identifies_lazy_semantic_assets_and_ships_engine(tm
     monkeypatch.setattr(builder, 'pure_package_files', lambda cache: [])
     monkeypatch.setattr(builder, 'resolve_pyodide_packages', lambda lock, names: [])
     monkeypatch.setattr(builder, 'gpu_model_files', lambda root, output, cache: output.mkdir(parents=True))
+    monkeypatch.setattr(builder, 'publish_public_embeddings', lambda *args: {
+        'published': 0, 'complete': False, 'warning': 'No public snapshot in semantic asset fixture'})
     def archive(path, wheels):
         with zipfile.ZipFile(path, 'w') as output:
             output.writestr('public.py', '# public')
@@ -143,3 +145,4 @@ def test_full_build_manifest_identifies_lazy_semantic_assets_and_ships_engine(tm
     assert manifest['semantic_model']['lazy'] is True
     assert manifest['private_data_included'] is False
     assert (output / 'semantic.mjs').is_file()
+    assert (output / 'public-embeddings.mjs').is_file()

@@ -15,7 +15,7 @@ function harness(overrides = {}) {
   const replies = [], writes = [], requests = [];
   const context = vm.createContext({ self: { postMessage: row => replies.push(row) },
     initialize: async () => {}, persist: async () => true, stateReplacing: false,
-    validateRecoverySnapshot, configurationChanging: false, jobRunning: false, companion: null,
+    validateRecoverySnapshot, configurationChanging: false, reloadPending: false, jobRunning: false, companion: null, gpuProbe: null,
     state: { py: { globals: { get: key => key === 'handle_request' ? { callPromising: async payload => {
       requests.push(JSON.parse(payload)); return '{}';
     } } : () => false } } },
@@ -135,4 +135,48 @@ test('oversized import is rejected before checkpoint or private state replacemen
   assert.equal(checkpoints, 0);
   assert.equal(imports, 0);
   assert.equal(h.context.stateReplacing, false);
+});
+
+
+test('release reload never bypasses an active brew or an unsaved checkpoint', async () => {
+  const busy = harness({ jobRunning: true });
+  await busy.send({ id: 11, type: 'prepare-reload' });
+  assert.equal(busy.replies[0].status, 409);
+  const unsaved = harness({ persist: async () => false });
+  await unsaved.send({ id: 12, type: 'prepare-reload' });
+  assert.equal(unsaved.replies[0].status, 500);
+  assert.match(unsaved.replies[0].body, /backup before reloading/);
+  const saved = harness();
+  await saved.send({ id: 13, type: 'prepare-reload' });
+  assert.equal(saved.replies[0].status, 200);
+});
+
+test('a confirmed release reload fences later mutations before the old worker is terminated', async () => {
+  const h = harness();
+  await h.send({id:20,type:'prepare-reload'});
+  await h.send({id:21,type:'request',method:'POST',path:'/setup'});
+  assert.equal(h.replies.find(row=>row.id===20).status,200);
+  assert.equal(h.replies.find(row=>row.id===21).status,409);
+  assert.equal(h.requests.length,0);
+});
+
+test('failed reload preparation can explicitly reopen the reading desk after a committed Compute choice', async () => {
+  const h=harness();
+  await h.send({id:30,type:'configure-compute',mode:'multicore',allowIsolationReload:true});
+  assert.equal(h.replies.find(row=>row.id===30).status,200);
+  await h.send({id:31,type:'request',method:'POST',path:'/setup'});
+  assert.equal(h.replies.find(row=>row.id===31).status,409);
+  assert.equal(h.requests.length,0);
+  await h.send({id:32,type:'cancel-reload'});
+  assert.equal(h.replies.find(row=>row.id===32).status,200);
+  await h.send({id:33,type:'request',method:'POST',path:'/setup'});
+  assert.equal(h.requests.length,1,'An isolation setup failure must leave subsequent settings/votes usable');
+});
+
+for(const flag of ['stateReplacing','configurationChanging']) test(`cancel-reload cannot interrupt ${flag}`,async()=>{
+  const h=harness({reloadPending:true,[flag]:true});
+  await h.send({id:40,type:'cancel-reload'});
+  assert.equal(h.replies[0].status,409);
+  assert.equal(h.context.reloadPending,true);
+  assert.equal(h.context[flag],true);
 });

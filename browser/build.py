@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime
 import hashlib
 import importlib.util
 import json
 import math
 import re
 import shutil
+import subprocess
 import urllib.request
+import uuid
 import zipfile
 from pathlib import Path
 
@@ -176,6 +179,68 @@ def relocate_runtime(output: Path, dependency_id: str) -> str:
     return relative
 
 
+def public_source_summary(snapshot: dict) -> dict:
+    """Public collection age comes from original fetches, never build time."""
+    sources = snapshot.get('sources', {}).values()
+    healthy = [row for row in sources if row.get('status') == 'ok' and row.get('fetched_at')]
+    oldest = min(healthy, key=lambda row: datetime.fromisoformat(row['fetched_at']), default=None)
+    return {'oldest_fetched_at': oldest['fetched_at'] if oldest else None,
+            'successful_sources': len(healthy),
+            'failed_sources': sum(row.get('status') != 'ok' for row in snapshot.get('sources', {}).values()),
+            'carried_forward_sources': sum(bool(row.get('carried_forward')) for row in healthy)}
+
+
+def publish_public_embeddings(output, snapshot, model_root, model_path, runtime_path, cache):
+    """Use exact browser CPU inference; reuse a compatible prior public cache.
+
+    Missing Chromium or an interrupted optional precompute retains compatible
+    records and leaves other documents to the visitor's normal local encoder.
+    """
+    spec = importlib.util.spec_from_file_location('public_embedding_builder', HERE / 'public_embeddings.py')
+    helper = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(helper)
+    signature = helper.embedding_signature(model_root, HERE / 'compute.mjs',
+                                           PROTO / 'bge-tokenizer.mjs', PROTO / 'package-lock.json')
+    worker = output / 'worker.mjs'
+    worker.write_text(worker.read_text().replace('__PUBLIC_EMBEDDING_SIGNATURE__', signature))
+    if snapshot is None:
+        return {'published': 0, 'complete': False, 'warning': 'No public source snapshot; using local comparisons.'}
+    previous = cache / 'public-embeddings/public-embeddings.json'
+
+    def infer(texts):
+        job = cache / 'public-embedding-jobs' / uuid.uuid4().hex
+        job.mkdir(parents=True)
+        plan, result = job / 'plan.json', job / 'vectors.f32'
+        plan.write_text(json.dumps({'texts': texts, 'runtimePath': runtime_path, 'modelPath': model_path}))
+        import numpy as np
+        try:
+            completed = helper.run_precompute(['node', str(HERE / 'precompute-public-embeddings.mjs'),
+                                               str(output), str(plan), str(result)], cwd=ROOT)
+            (job / 'report.json').write_text(completed.stdout)
+            (job / 'progress.log').write_text(completed.stderr)
+        except (subprocess.TimeoutExpired, subprocess.CalledProcessError):
+            if not result.exists():
+                raise
+            raw = result.read_bytes()
+            # Only complete float32 rows from completed public chunks are usable.
+            complete_bytes = len(raw) // (helper.DIMENSION * 4) * helper.DIMENSION * 4
+            values = np.frombuffer(raw[:complete_bytes], dtype='<f4').reshape(-1, helper.DIMENSION)
+            return {'partial': True, 'vectors': values,
+                    'warning': 'Public CPU precompute was interrupted; missing articles use local comparisons.'}
+        return np.frombuffer(result.read_bytes(), dtype='<f4').reshape(-1, helper.DIMENSION)
+
+    report = helper.publish_vectors(output / 'assets', snapshot, signature, infer, previous=previous)
+    # Content-addressed binary first, manifest last; incomplete pairs fail closed.
+    manifest = json.loads((output / 'assets/public-embeddings.json').read_text())
+    previous.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(output / 'assets' / manifest['file'], previous.parent / manifest['file'])
+    temporary = previous.with_suffix('.json.part')
+    shutil.copyfile(output / 'assets/public-embeddings.json', temporary)
+    temporary.replace(previous)
+    print(json.dumps({'public_embeddings': report}))
+    return report
+
+
 
 def relocate_models(output: Path) -> tuple[str, str]:
     """Give model graphs and tokenizers one content-addressed, reusable root."""
@@ -266,7 +331,7 @@ def build(output: Path) -> dict:
     cache = HERE / ".build-cache"
     wheels = list(pure_package_files(cache / "wheels"))
     manifest = source_archive(assets / "app.zip", wheels)
-    for name in ("index.html", "app.mjs", "compute.mjs", "semantic.mjs", "http.mjs", "storage.mjs", "style.css", "worker.mjs", "manifest.webmanifest",
+    for name in ("index.html", "app.mjs", "compute.mjs", "public-embeddings.mjs", "semantic.mjs", "http.mjs", "storage.mjs", "style.css", "worker.mjs", "manifest.webmanifest",
                  "app-icon.svg", "sw.js"):
         shutil.copyfile(HERE / name, output / name)
     shutil.copyfile(HERE / "runtime.py", assets / "runtime.py")
@@ -300,12 +365,15 @@ def build(output: Path) -> dict:
     model_path, model_id = relocate_models(output)
     semantic_model = semantic_model_files(output, cache)
     public_snapshot = cache / "public-sources.json"
+    snapshot = None
     if public_snapshot.is_file():
         validate_public_snapshot(public_snapshot)
         shutil.copyfile(public_snapshot, assets / "public-sources.json")
+        snapshot = json.loads(public_snapshot.read_text())
     dependency_id = hashlib.sha256((PROTO / "package-lock.json").read_bytes()
                                    + (runtime / "pyodide-lock.json").read_bytes()).hexdigest()[:16]
     runtime_path = relocate_runtime(output, dependency_id)
+    public_embeddings = publish_public_embeddings(output, snapshot, model_root, model_path, runtime_path, cache)
     # GitHub Pages must serve the node_modules directory without Jekyll filtering.
     (output / ".nojekyll").write_text("")
     release_inputs = {"source_hashes": manifest,
@@ -313,7 +381,9 @@ def build(output: Path) -> dict:
         path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in output.iterdir()
         if path.is_file()}, "runtime": hashlib.sha256((assets / "runtime.py").read_bytes()).hexdigest(),
         "dependencies": hashlib.sha256((assets / "dependencies.json").read_bytes()).hexdigest(),
-        "semantic_model": semantic_model,
+        "semantic_model": semantic_model, "public_embeddings": {
+            path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in sorted(assets.glob('public-embeddings*')) if path.is_file()},
         "browser_lock": hashlib.sha256((PROTO / "package-lock.json").read_bytes()).hexdigest()}
     build_id = hashlib.sha256(json.dumps(release_inputs, sort_keys=True).encode()).hexdigest()[:16]
     stamp_release(output, build_id)
@@ -321,6 +391,8 @@ def build(output: Path) -> dict:
     report = {"schema_version": 1, "build_id": build_id, "runtime_path": runtime_path,
               "dependency_id": dependency_id, "model_path": model_path, "model_id": model_id,
               "semantic_model": semantic_model,
+              "public_embeddings": public_embeddings,
+              "public_sources": public_source_summary(snapshot or {}),
               "private_data_included": False,
               "source_hashes": manifest, "pyodide": "0.28.3", "bytes": total,
               "gpu_model": {"publisher": "Xenova/bge-small-en-v1.5", "revision": GPU_MODEL_REVISION,

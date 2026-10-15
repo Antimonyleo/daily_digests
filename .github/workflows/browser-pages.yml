@@ -54,6 +54,8 @@ jobs:
           curl --fail --location --max-time 30 --output browser/.build-cache/previous-public-sources.json https://antimonyleo.github.io/daily_digests/assets/public-sources.json || rm -f browser/.build-cache/previous-public-sources.json
       - name: Collect and validate public source metadata
         run: uv run python browser/collect_sources.py --output browser/.build-cache/public-sources.json --previous browser/.build-cache/previous-public-sources.json --event "${{ github.event_name }}" --days 21
+      - name: Restore compatible public comparison cache
+        run: uv run python browser/fetch_public_embeddings.py
       - name: Build static application
         run: uv run python browser/build.py
       - name: Large-checkpoint startup and recovery regression
@@ -103,4 +105,21 @@ jobs:
         continue-on-error: true
         env:
           DAILYDIGEST_ALERT_WEBHOOK: ${{ secrets.DAILYDIGEST_ALERT_WEBHOOK }}
+        run: python browser/report_failure.py
+  refresh-status:
+    needs: [build, deploy]
+    if: ${{ always() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && (needs.build.result == 'failure' || needs.deploy.result == 'failure' || needs.deploy.result == 'success') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+      - name: Maintain recurring source refresh issue
+        env:
+          DAILYDIGEST_ALERT_MODE: github-issue
+          DAILYDIGEST_REFRESH_RESULT: ${{ needs.build.result == 'success' && needs.deploy.result == 'success' && 'success' || 'failure' }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python browser/report_failure.py
