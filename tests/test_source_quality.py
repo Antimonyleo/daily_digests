@@ -21,6 +21,32 @@ from dailydigest.rank.source_quality import (
 REAL_SOURCES = Path(__file__).resolve().parents[1] / "config" / "sources.yaml"
 
 
+@pytest.mark.parametrize("venue", [
+    "Advanced science (Weinheim, Baden-Wurttemberg, Germany)",
+    "Advanced science (Weinheim, Baden-Württemberg, Germany)",
+    "Adv Sci (Weinh)",
+])
+def test_advanced_science_nlm_titles_keep_existing_journal_identity(venue):
+    from types import SimpleNamespace
+    from dailydigest.rank.source_quality import source_diversity_key
+
+    row = SimpleNamespace(source="PubMed topics", section="research", metadata={"venue": venue})
+    canonical = SimpleNamespace(source="Advanced Science", section="research", metadata={})
+    assert infer_source_quality(venue, "research") == infer_source_quality("Advanced Science", "research")
+    assert source_bucket(row) == source_bucket(canonical) == "published_journal"
+    assert source_diversity_key(row) == source_diversity_key(canonical)
+    row.venue_low_impact = True
+    assert source_bucket(row) == "low_impact_journal"
+
+
+@pytest.mark.parametrize("venue", [
+    "Advanced Science Research", "Advanced science (Unverified publisher)",
+    "Advanced science (Weinheim, Baden-Wurttemberg, Germany) Letters",
+])
+def test_advanced_science_aliases_do_not_promote_similarly_named_venues(venue):
+    assert infer_source_quality(venue, "research").quality_tier == "unknown"
+
+
 def _clear_source_quality_cache() -> None:
     _configured_sources_cached.cache_clear()
 

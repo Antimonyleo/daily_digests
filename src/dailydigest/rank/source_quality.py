@@ -17,7 +17,7 @@ from typing import Any
 
 from ..models import SourceSpec
 
-RANKER_VERSION = "2026-10-15-nlm-venue-alias-v15"
+RANKER_VERSION = "2026-10-15-advanced-science-alias-v16"
 
 _ARXIV_CS_RE = re.compile(r"\barxiv[\s:_\-]*cs[\s:./\-]", re.IGNORECASE)
 
@@ -152,6 +152,10 @@ _VENUE_ALIASES = {
     "small (weinheim an der bergstrasse, germany)": "small (wiley)",
     # NLM Catalog 9885358 uses this disambiguated title.
     "advanced materials (deerfield beach, fla)": "advanced materials",
+    # NLM Catalog 101664569 / ISSN 2198-3844: exact title and abbreviation.
+    "advanced science (weinheim, baden-wurttemberg, germany)": "advanced science",
+    "advanced science (weinheim, baden-württemberg, germany)": "advanced science",
+    "adv sci (weinh)": "advanced science",
     # NLM Catalog 0370543: uniform title and international-edition other title.
     "angewandte chemie (international ed in english)": "angewandte chemie international edition",
     "phys rev lett": "physical review letters",
