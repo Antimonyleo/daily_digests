@@ -278,7 +278,8 @@ def test_pubmed_profile_search_does_not_independently_admit_clinical_trials(monk
     monkeypatch.setattr(pubmed.PubMedSource, "_esearch", lambda self, client, query: queries.append(query) or [])
     source = pubmed.PubMedSource()
     assert source.fetch(_spec("pubmed", profile_driven=True, query="clinical trial[pt]")) == []
-    assert queries == ['("RNA design"[tiab])']
+    assert queries == ['("RNA design"[tiab] OR (rna[tiab] AND design[tiab]))']
+    assert all('clinical trial' not in query for query in queries)
 
 
 def test_pubmed_explicit_nonprofile_query_is_unchanged(monkeypatch):

@@ -266,7 +266,7 @@ def test_setup_defaults_load_canonical_weights_and_handle_missing_priority(
 
     form = web._load_existing_form_defaults()
 
-    assert form["topics"] == "protein design | 18\nRNA delivery | 1"
+    assert form["topics"] == "protein design | 18\nRNA delivery | 9.0"
 
 
 def test_setup_defaults_replace_removed_backend_with_extractive(monkeypatch):

@@ -26,7 +26,7 @@ def profile_search_terms(max_terms: int = 32) -> list[str]:
 
 
 def profile_search_term_groups(
-    max_terms: int = 32, *, canonical_order: bool = False
+    max_terms: int = 32, *, canonical_order: bool = False, include_aliases: bool = True
 ) -> tuple[list[str], list[str]]:
     """Keep core and context separate so adapters can reserve core query budget.
 
@@ -40,10 +40,19 @@ def profile_search_term_groups(
     except Exception as e:  # noqa: BLE001
         logger.warning("profile_search_terms: could not load profile: %s", e)
         return [], []
+    # Search synonyms only when explicitly supplied by the reader. Canonical
+    # names remain included even for profiles with different legacy keywords.
+    canonical = getattr(prof, "canonical_facets", None) or {}
+    keywords = list(getattr(prof, "keywords", []) or [])
+    extras = []
+    for label, spec in canonical.items():
+        if label.casefold() not in {str(term).casefold() for term in keywords}:
+            keywords.append(label)
+        extras.extend(getattr(spec, "aliases", [])[:3])
     seen: set[str] = set()
     groups: list[list[str]] = []
     for field in ("keywords", "context_keywords"):
-        terms = [str(kw).strip() for kw in getattr(prof, field, []) or []]
+        terms = [str(kw).strip() for kw in (keywords + (extras if include_aliases else []) if field == "keywords" else getattr(prof, field, []) or [])]
         if canonical_order:
             terms.sort(key=lambda term: (term.casefold(), term))
         distinct = []

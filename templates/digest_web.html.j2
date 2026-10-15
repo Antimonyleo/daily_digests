@@ -838,7 +838,7 @@
     <div class="cup-details">
       {% if overview.topic_mix %}
       <div class="cup-row">
-        <span class="cup-row-label">Themes</span>
+        <span class="cup-row-label">Selected topics</span>
         {% for topic in overview.topic_mix %}<span class="cup-chip">{{ topic.title }} · {{ topic.count }}</span>{% endfor %}
       </div>
       {% endif %}
@@ -853,6 +853,21 @@
   {% endif %}
 
 
+
+  {% if interest_coverage %}
+  <section class="source-coverage" aria-label="Your configured interests">
+    <details><summary>Your interests · {{ interest_coverage|length }} configured</summary>
+      <p>These are your configured interests. Counts describe the saved digest, which may predate your latest settings. Percentages guide relative priority; they do not reserve digest slots. A topic without a selected paper may still have matching papers.</p>
+      <ul>{% for interest in interest_coverage %}
+        <li><strong>{{ interest.title }} · {{ interest.selected }} selected</strong>
+          {% if interest.candidates is not none %}<span>{{ interest.candidates }} scored matches · {{ interest.eligible }} passed eligibility{% if interest.queries %} · Searches: {{ interest.queries|join(', ') }}{% endif %}</span>{% endif %}
+          <span>{{ interest.explanation }}</span>
+          {% for search in interest.searches|default([]) %}<span>{{ search.source }}: {% if search.returned_count == 0 %}This search returned no papers{% else %}{{ search.status }}{% endif %}{% if search.query %} · Searched: <code>{{ search.query }}</code>{% endif %}.</span>{% endfor %}
+          {% if interest.rejections %}<span>Not selected: {% for stage, count in interest.rejections.items() %}{{ stage|replace('_', ' ') }} {{ count }}{% if not loop.last %}; {% endif %}{% endfor %}.</span>{% endif %}
+        </li>{% endfor %}</ul>
+    </details>
+  </section>
+  {% endif %}
 
   {% if source_coverage is defined %}
   <section class="source-coverage" aria-label="Source coverage and freshness">

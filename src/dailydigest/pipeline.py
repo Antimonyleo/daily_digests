@@ -6,8 +6,9 @@ import logging
 import re
 import time
 import uuid
-from copy import deepcopy
+from collections import Counter
 from collections.abc import Callable
+from copy import deepcopy
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timezone
 from typing import Any
@@ -316,6 +317,39 @@ def apply_reading_mode(
     )
 
 
+def _interest_coverage_audit(snapshot: dict) -> list[dict]:
+    """Report best-match attribution without inventing missing supply counts."""
+    profile = snapshot.get("profile") or {}
+    names = list(profile.get("canonical_facets") or {}) or list(profile.get("keywords") or [])
+    rows = []
+    for name in names:
+        attributed = [candidate for candidate in snapshot.get("candidates", [])
+                      if str(candidate.get("features", {}).get("primary_facet", "")).casefold() == name.casefold()]
+        rejected = Counter(str(candidate.get("first_rejected_stage") or "selection budget")
+                           for candidate in attributed if not candidate.get("selected"))
+        queries = []
+        searches = []
+        for source in snapshot.get("source_health", []):
+            for diagnostic in (source.get("diagnostics") or {}).get("queries", []):
+                # An OR query can be acknowledged as shared work, but its total
+                # must never become an individual interest's result count.
+                if str(diagnostic.get("interest", diagnostic.get("query", ""))).casefold() == name.casefold():
+                    status = ("not run" if diagnostic.get("attempted") is False else
+                              "failed" if diagnostic.get("failure") else
+                              "limited" if diagnostic.get("truncated") else "completed")
+                    queries.append(status)
+                    count = diagnostic.get("returned_count")
+                    searches.append({"source": source.get("source") or "Source",
+                                     "query": str(diagnostic.get("query") or ""), "status": status,
+                                     "returned_count": count if status in {"completed", "limited"}
+                                     and type(count) is int and count >= 0 else None})
+        rows.append({"title": name, "candidates": len(attributed),
+                     "eligible": sum(bool(candidate.get("eligible")) for candidate in attributed),
+                     "queries": queries, "searches": searches, "rejections": dict(rejected),
+                     "explanation": "Counts show scored papers attributed to this interest, not all retrieved papers. Unscored rejections and shared searches cannot establish an individual supply count."})
+    return rows
+
+
 def ingest_all(
     progress_callback: ProgressCallback | None = None,
     days: int = 2,
@@ -345,6 +379,12 @@ def ingest_all(
         if (getattr(spec, "section", "research") or "research") == "research"
         if (family := _research_source_family(spec))
     }
+    personalized_sources = {
+        str(spec.name) for spec in specs
+        if bool(getattr(spec, "profile_driven", False))
+        and (getattr(spec, "section", "research") or "research") == "research"
+    }
+    personalized_responded: set[str] = set()
     successful_research_families: set[str] = set()
     configured_deadline_sections = {
         str(getattr(spec, "section", "") or "")
@@ -415,6 +455,8 @@ def ingest_all(
     for index in range(len(specs)):
         spec, fetched, stat = fetched_by_index[index]
         stats.append(stat)
+        if stat.ok and str(spec.name) in personalized_sources:
+            personalized_responded.add(str(spec.name))
         all_items.extend(fetched)
         section = str(getattr(spec, "section", "") or "")
         if stat.ok and section in configured_deadline_sections:
@@ -465,6 +507,13 @@ def ingest_all(
         raise RuntimeError(
             f"{label} source coverage is degraded: every configured provider failed. "
             "Brew stopped so a partial slate does not replace the current digest. "
+            "Check source health and retry."
+        )
+    if personalized_sources and not personalized_responded:
+        raise RuntimeError(
+            "Personalized research source coverage is degraded: every configured "
+            "profile-driven research provider failed. Brew stopped so generic "
+            "feeds do not replace the current personalized digest. "
             "Check source health and retry."
         )
     # A handful of results from one surviving aggregator is not a healthy
@@ -1917,6 +1966,7 @@ def run_all(
             "missed_top_journals": top_journal_audit,
             "reading_mode_overflow": reading_mode_overflow,
             "candidate_funnel": [funnel_audit],
+            "interest_coverage": _interest_coverage_audit(ranking_snapshot),
             # An ordinary same-day rebrew must clear a catch-up briefing that
             # was created by an earlier explicit backfill.
             "catch_up_synthesis": [],

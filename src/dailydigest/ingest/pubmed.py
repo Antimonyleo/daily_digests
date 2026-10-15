@@ -33,6 +33,32 @@ _RETRY = retry(
 )
 
 
+def _profile_query(term: str, aliases: list[str]) -> str:
+    """Keep a phrase match while allowing the original words out of order.
+
+    The two bounded inflection pairs correct common verb/adjective wording;
+    they add Boolean alternatives inside one request, not extra searches or
+    scoring inputs. Reader-supplied aliases remain literal phrases.
+    """
+    phrase = f'"{term.replace(chr(34), "")}"[tiab]'
+    words = re.findall(r"[^\W_]+(?:[-'][^\W_]+)*", term.casefold())
+    inflections = {
+        "target": ("target", "targeted"), "targeted": ("target", "targeted"),
+        "induce": ("induce", "induced"), "induced": ("induce", "induced"),
+    }
+    clauses = [phrase]
+    if len(words) > 1:
+        required = []
+        for word in dict.fromkeys(words):
+            alternatives = inflections.get(word, (word,))
+            clause = " OR ".join(f"{value}[tiab]" for value in alternatives)
+            required.append(f"({clause})" if len(alternatives) > 1 else clause)
+        clauses.append("(" + " AND ".join(required) + ")")
+    clauses.extend(f'"{alias.replace(chr(34), "")}"[tiab]'
+                   for alias in dict.fromkeys(aliases[:3]) if alias.strip())
+    return "(" + " OR ".join(dict.fromkeys(clauses)) + ")"
+
+
 class PubMedSource:
     """Two-step PubMed ingest: esearch -> efetch (XML).
 
@@ -50,21 +76,74 @@ class PubMedSource:
         self.last_fetch_diagnostics: dict[str, Any] = {"queries": []}
 
     def fetch(self, spec: SourceSpec, days: int = 2) -> list[Item]:
+        if spec.profile_driven:
+            from ..config import load_profile
+            from ._terms import profile_search_term_groups
+
+            core, context = profile_search_term_groups(
+                12, canonical_order=True, include_aliases=False
+            )
+            try:
+                profile = load_profile()
+            except Exception:  # profile_search_term_groups already logs failure
+                profile = None
+            canonical = getattr(profile, "canonical_facets", None) or {}
+            # Search each primary interest separately, reserving a bounded share
+            # before broad topics or context can exhaust the result pool.
+            terms = core + context
+            if terms:
+                self.last_fetch_diagnostics = {"queries": [], "returned_count": 0,
+                                               "item_budget": self.MAX_ITEMS}
+                out: list[Item] = []
+                seen: set[str] = set()
+                remaining = self.MAX_ITEMS
+                failures = 0
+                attempted = 0
+                core_attempted = core_failures = 0
+                context_budget = min(20, len(context) * 5) if core else 0
+                for index, term in enumerate(terms):
+                    if index:
+                        time.sleep(self.SLEEP)
+                    remaining_group = (len(core) if index < len(core) else len(terms)) - index
+                    available = remaining - context_budget if index < len(core) else remaining
+                    cap = (available + remaining_group - 1) // remaining_group
+                    if not cap:
+                        self.last_fetch_diagnostics["queries"].append({
+                            "interest": term, "query": term, "attempted": False,
+                            "truncated": True, "stop_reason": "item_budget", "failure": None,
+                        })
+                        continue
+                    facet = next((value for name, value in canonical.items() if name.casefold() == term.casefold()), None)
+                    query = _profile_query(term, getattr(facet, "aliases", []))
+                    attempted += 1
+                    if index < len(core):
+                        core_attempted += 1
+                    child = type(self)()
+                    child.RETMAX = child.MAX_ITEMS = cap
+                    try:
+                        fetched = child.fetch(spec.model_copy(update={"profile_driven": False, "query": query}), days)
+                    except RuntimeError:
+                        failures += 1
+                        if index < len(core):
+                            core_failures += 1
+                        fetched = []
+                    for diagnostic in child.last_fetch_diagnostics.get("queries", []):
+                        diagnostic["interest"] = term
+                        self.last_fetch_diagnostics["queries"].append(diagnostic)
+                    # Reserve the raw result budget, not only unique parsed rows.
+                    remaining -= cap
+                    for item in fetched:
+                        if item.external_id not in seen:
+                            seen.add(item.external_id)
+                            out.append(item)
+                self.last_fetch_diagnostics["returned_count"] = len(out)
+                if core_attempted and core_failures == core_attempted:
+                    raise RuntimeError(f"{spec.name}: all core profile searches failed")
+                if attempted and failures == attempted:
+                    raise RuntimeError(f"{spec.name}: all profile searches failed")
+                return out
         self.last_fetch_diagnostics = {"queries": [], "returned_count": 0}
         query = spec.query or ""
-        if spec.profile_driven:
-            from ._terms import profile_search_terms
-
-            terms = profile_search_terms(12)
-            if terms:
-                # OR the profile keywords over title/abstract so PubMed actively
-                # searches for the user's topics across all indexed journals.
-                clauses = " OR ".join(f'"{t}"[tiab]' for t in terms)
-                # The configured query is a fallback when no profile terms exist.
-                # OR-ing it independently admits off-topic clinical trials and
-                # can consume the date-sorted retrieval budget. Explicit custom
-                # queries remain unchanged when profile_driven is disabled.
-                query = f"({clauses})"
         if not query:
             return []
         diagnostic: dict[str, Any] = {

@@ -16,6 +16,12 @@
   }
   textarea { min-height: 110px; resize: vertical; line-height: 1.5; }
   .hint { font-size: 11px; color: var(--muted); margin-top: 4px; }
+  .interest-row { border: 1px solid var(--border); padding: 12px; border-radius: 8px; margin: 10px 0; }
+  .interest-heading { display: grid; grid-template-columns: minmax(0, 1fr) 90px auto; gap: 8px; align-items: end; }
+  .interest-heading label { min-width: 0; }
+  .interest-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .interest-row textarea { min-height: 70px; }
+  @media(max-width: 480px) { .interest-heading { grid-template-columns: minmax(0, 1fr) 80px; } .interest-heading button { grid-column: 1 / -1; justify-self: start; } }
   #topics { min-height: 245px; font-size: 15px; }
   textarea::placeholder, input::placeholder { color: var(--muted); opacity: 1; }
   .example-note { color: var(--muted); font-size: 12px; line-height: 1.5; margin: 8px 0; }
@@ -147,10 +153,16 @@
     <div class="step">
       <h2>Your research interests</h2>
       <label for="topics">What would you like to read about?</label>
+      <div id="interest-editor" hidden>
+        <div id="interest-rows"></div>
+        <div class="interest-actions"><button type="button" class="btn" id="add-interest">Add interest</button><button type="button" class="btn" id="even-interests">Distribute evenly</button><button type="button" class="btn" id="normalize-interests">Normalize to 100%</button><output id="interest-total" aria-live="polite"></output></div>
+        <p class="hint">Percentages guide relative priority, not guaranteed digest slots. Use specific alternative terms to help searches find your vocabulary. Your description explains what makes a paper useful. Old relative weights are shown as percentages; their exact values are kept until you edit a percentage or use Normalize or Distribute evenly.</p>
+      </div>
+      <textarea id="topic-details" name="topic_details" hidden disabled>{{ form.topic_details | default('') }}</textarea>
       <textarea id="topics" name="topics" required aria-describedby="topics-hint example-profile-note" placeholder="DNA nanotechnology&#10;RNA nanotechnology&#10;nucleic acid delivery&#10;mRNA therapeutics&#10;gene therapy&#10;protein engineering&#10;protein structure prediction&#10;colloidal self-assembly&#10;superlattice materials&#10;machine learning for biomolecular design">{{ form.topics }}</textarea>
       <p class="example-note" id="example-profile-note">The gray text is a research profile example. Add your own interests, or use the example and edit it before saving.</p>
       {% if not form.topics %}<button class="btn" id="use-example-profile" type="button">Use example interests</button>{% endif %}
-      <div class="hint" id="topics-hint">Add 1–10 specific interests, one per line. Optional: use <code>RNA delivery | 3</code> to give a topic extra weight. Plain topics have weight 1; saved weights are preserved. Use the optional bio below to describe what makes a paper useful to you.</div>
+      <div class="hint" id="topics-hint">Add 1–10 specific interests. Without JavaScript, use one topic per line with an optional relative weight, such as <code>RNA delivery | 3</code>. All positive weights work; percentages express the same relative priorities.</div>
 
       <details class="settings-disclosure" id="profile-options"{% if errors %} open{% endif %}>
         <summary>Personal details &amp; topics to see less often
@@ -447,20 +459,106 @@
 {% block scripts %}
 <script>
 (function () {
-  const exampleButton = document.getElementById("use-example-profile");
-  if (exampleButton) {
-    const topics = document.getElementById("topics");
-    topics.addEventListener("input", () => { exampleButton.disabled = Boolean(topics.value.trim()); });
-    exampleButton.addEventListener("click", () => {
-      if (topics.value.trim()) return;
-      topics.value = topics.getAttribute("placeholder");
-      const bio = document.getElementById("bio");
-      if (!bio.value.trim()) bio.value = bio.getAttribute("placeholder");
-      exampleButton.disabled = true;
-      document.getElementById("example-profile-note").textContent = "Example loaded. Make it your own, then save when you’re ready.";
-      topics.focus();
-    });
+  const topics = document.getElementById("topics");
+  const details = document.getElementById("topic-details");
+  const rows = document.getElementById("interest-rows");
+  const editor = document.getElementById("interest-editor");
+  let metadata = {};
+  try { metadata = JSON.parse(details.value || "{}"); } catch (_) {}
+  function percentages(weights) {
+    const count = weights.length;
+    if (!count) return [];
+    const sum = weights.reduce((a, b) => a + b, 0);
+    if (!(sum > 0)) return percentages(weights.map(() => 1));
+    const raw = weights.map(weight => 100 * weight / sum);
+    const allocated = raw.map(weight => Math.max(1, Math.floor(weight)));
+    let difference = 100 - allocated.reduce((a, b) => a + b, 0);
+    const order = raw.map((weight, index) => ({index, fraction: weight % 1})).sort((a, b) => b.fraction - a.fraction || a.index - b.index);
+    for (let i = 0; difference > 0; i++, difference--) allocated[order[i % count].index]++;
+    // Very small legacy weights can require the 1% floor. Remove those
+    // extra points from the most overallocated remaining interests.
+    while (difference < 0) {
+      const index = allocated.map((weight, index) => ({index, excess: weight - raw[index]})).filter(row => allocated[row.index] > 1).sort((a, b) => b.excess - a.excess || a.index - b.index)[0].index;
+      allocated[index]--; difference++;
+    }
+    return allocated;
   }
+  function useDisplayedWeights() {
+    for (const row of rows.children) row.dataset.originalWeight = '';
+  }
+  function serialize() {
+    const result = [], data = {};
+    for (const row of rows.children) {
+      const name = row.querySelector('[data-interest-name]').value.trim();
+      const weight = row.dataset.originalWeight || row.querySelector('[data-interest-weight]').value;
+      if (name) {
+        result.push(`${name} | ${weight}`);
+        data[name] = {aliases: row.querySelector('[data-interest-aliases]').value.split(';').map(term => term.trim()).filter(Boolean), description: row.querySelector('[data-interest-description]').value.trim()};
+      }
+    }
+    topics.value = result.join('\n'); details.value = JSON.stringify(data);
+    const sum = [...rows.querySelectorAll('[data-interest-weight]')].reduce((total, input) => total + Number(input.value || 0), 0);
+    document.getElementById('interest-total').textContent = `Total: ${sum}%${sum === 100 ? '' : ' · normalize when ready'}`;
+    document.getElementById('add-interest').disabled = rows.children.length >= 10;
+  }
+  function addRow(name = '', weight = 1, detail = {}, originalWeight = weight) {
+    const row = document.createElement('div'); row.className = 'interest-row'; row.dataset.originalWeight = String(originalWeight);
+    // This markup is constant; reader text is assigned through .value only.
+    row.innerHTML = '<div class="interest-heading"><label>Interest<input data-interest-name type="text" required maxlength="160" placeholder="e.g. targeted protein degradation"></label><label>Priority %<input data-interest-weight type="number" min="1" max="100" step="1" required></label><button class="btn" type="button">Remove</button></div><details><summary>Alternative terms &amp; description (optional)</summary><label>Alternative search terms, separated by semicolons<input data-interest-aliases type="text" placeholder="targeted protein degradation; PROTAC; molecular glue"></label><label>What would make a paper useful?<textarea data-interest-description maxlength="600" placeholder="e.g. New degrader designs and transferable methods; basic signaling is lower priority."></textarea></label></details>';
+    row.querySelector('[data-interest-name]').value = name;
+    row.querySelector('[data-interest-weight]').value = weight;
+    row.querySelector('[data-interest-weight]').addEventListener('input', useDisplayedWeights);
+    row.querySelector('[data-interest-aliases]').value = (detail.aliases || []).join('; ');
+    row.querySelector('[data-interest-description]').value = detail.description || '';
+    row.querySelector('button').addEventListener('click', () => { row.remove(); serialize(); });
+    const wordingHint = document.createElement('p'); wordingHint.className = 'hint';
+    wordingHint.textContent = 'Searching all words helps with word order. Add alternative spellings or field terms for better coverage, e.g. induced proximity; molecular glue.';
+    row.append(wordingHint);
+    const updateWordingHint = () => { wordingHint.hidden = row.querySelector('[data-interest-name]').value.trim().split(/\s+/).length < 2 || Boolean(row.querySelector('[data-interest-aliases]').value.trim()); };
+    row.addEventListener('input', () => { updateWordingHint(); serialize(); }); updateWordingHint(); rows.append(row);
+  }
+  function loadRows() {
+    try { metadata = JSON.parse(details.value || '{}'); } catch (_) { metadata = {}; }
+    const configured = topics.value.split('\n').filter(line => line.trim()).map(line => {
+      const [name, weight = '1'] = line.split('|'); return {name: name.trim(), weight: Number(weight.trim()) || 1};
+    });
+    const weights = configured.map(row => row.weight);
+    const converted = weights.reduce((a, b) => a + b, 0) === 100 && weights.every(weight => Number.isInteger(weight) && weight >= 1) ? weights : percentages(weights);
+    rows.replaceChildren();
+    configured.forEach((row, index) => addRow(row.name, converted[index], metadata[row.name] || {}, row.weight));
+    if (!configured.length) addRow();
+    serialize();
+  }
+  loadRows(); editor.hidden = false; topics.hidden = true; topics.required = false; details.disabled = false;
+  document.getElementById('topics-hint').hidden = true;
+  topics.addEventListener('input', loadRows); topics.addEventListener('change', loadRows);
+  document.getElementById('add-interest').addEventListener('click', () => {
+    if (rows.children.length >= 10) return;
+    const previous = [...rows.children];
+    const shown = previous.reduce((sum, row) => sum + Number(row.querySelector('[data-interest-weight]').value || 0), 0);
+    const raw = previous.reduce((sum, row) => sum + Number(row.dataset.originalWeight || row.querySelector('[data-interest-weight]').value || 0), 0);
+    addRow('', 1, {}, shown > 0 ? raw / shown : 1);
+    serialize(); rows.lastElementChild.querySelector('input').focus();
+  });
+  function distribute(even) {
+    const inputs = [...rows.querySelectorAll('[data-interest-weight]')];
+    const weights = percentages(inputs.map(input => even ? 1 : Math.max(0, Number(input.value) || 0)));
+    inputs.forEach((input, index) => { input.value = weights[index]; });
+    useDisplayedWeights();
+    serialize();
+  }
+  document.getElementById('normalize-interests').addEventListener('click', () => distribute(false));
+  document.getElementById('even-interests').addEventListener('click', () => distribute(true));
+  topics.form.addEventListener('submit', serialize);
+  const exampleButton = document.getElementById('use-example-profile');
+  if (exampleButton) exampleButton.addEventListener('click', () => {
+    if ([...rows.querySelectorAll('[data-interest-name]')].some(input => input.value.trim())) return;
+    topics.value = topics.getAttribute('placeholder'); loadRows();
+    const bio = document.getElementById('bio'); if (!bio.value.trim()) bio.value = bio.getAttribute('placeholder');
+    exampleButton.disabled = true;
+    document.getElementById('example-profile-note').textContent = 'Example loaded. Make it your own, then save when you’re ready.';
+    rows.querySelector('input').focus();
+  });
   const timezoneInput = document.getElementById("user-timezone");
   try {
     const browserTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;

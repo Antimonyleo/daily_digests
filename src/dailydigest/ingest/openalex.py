@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import html
+import json
 import logging
 import re
 from datetime import datetime, timedelta, timezone
@@ -158,8 +159,14 @@ class OpenAlexSource:
         headers = self._headers(spec)
         if spec.profile_driven:
             core, context = profile_search_term_groups(
-                self.PROFILE_MAX_TERMS, canonical_order=True
+                self.PROFILE_MAX_TERMS, canonical_order=True, include_aliases=False
             )
+            from ..config import load_profile
+            try:
+                canonical = getattr(load_profile(), "canonical_facets", None) or {}
+            except Exception:  # query helper already logs unreadable profiles
+                canonical = {}
+            aliases = {name.casefold(): list(facet.aliases[:3]) for name, facet in canonical.items()}
             if not core and not context and spec.query:
                 core = [spec.query]
             terms = core + context
@@ -195,13 +202,23 @@ class OpenAlexSource:
                         "stop_reason": "item_budget", "failure": None,
                     })
                     continue
+                # One OR search per parent keeps overlapping synonyms from
+                # returning the same small slice repeatedly. Keep the original
+                # unquoted: OpenAlex quotes impose phrase adjacency, so adding
+                # an alias must not narrow the original stemmed word search.
+                # Explicit aliases remain quoted literal phrases.
+                phrases = list(dict.fromkeys([term, *aliases.get(term.casefold(), [])]))
+                query = term if len(phrases) == 1 else (
+                    "((" + term + ") OR "
+                    + " OR ".join(json.dumps(phrase, ensure_ascii=False) for phrase in phrases[1:]) + ")"
+                )
                 fetched = self._fetch_works(
-                    spec, days, headers, cap=cap, query=term,
+                    spec, days, headers, cap=cap, query=query,
                     upgrade_venue=True, max_pages=1,
                 )
                 diagnostic = self.last_fetch_diagnostics["queries"][-1]
-                # Count raw rows, including duplicates/invalid records: otherwise
-                # duplicate-heavy queries could silently expand API work.
+                diagnostic["interest"] = term
+                # Count raw rows, including duplicates/invalid records.
                 remaining -= min(cap, diagnostic["fetched_count"])
                 before = len(out)
                 for item in fetched:

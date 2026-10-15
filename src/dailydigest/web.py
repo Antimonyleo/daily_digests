@@ -348,7 +348,7 @@ def _digest_overview(sections: list[dict]) -> dict:
         "source_mix": source_mix,
         "topic_mix": [
             {"title": topic, "count": count}
-            for topic, count in topic_counts.most_common(4)
+            for topic, count in topic_counts.most_common()
         ],
         "reading_minutes": reading_minutes,
         "top_journals_shown": sum(
@@ -853,6 +853,48 @@ def _parse_ranked_topics(value: str | None) -> tuple[list[tuple[str, float]], li
     return topics, errors
 
 
+def _parse_topic_details(value: str | None, topics: list[tuple[str, float]]) -> tuple[dict, list[str]]:
+    """Validate optional enhanced-editor details; legacy forms omit this field."""
+    if not value:
+        return {}, []
+    try:
+        details = json.loads(value)
+    except (TypeError, ValueError):
+        return {}, ["Interest details must be valid JSON."]
+    if not isinstance(details, dict):
+        return {}, ["Interest details must be an object."]
+    names = {name for name, _ in topics}
+    clean = {}
+    for name, detail in details.items():
+        if name not in names or not isinstance(detail, dict):
+            return {}, ["Interest details must match the listed interests."]
+        aliases, description = detail.get("aliases", []), detail.get("description", "")
+        if (not isinstance(aliases, list) or len(aliases) > 3
+                or any(not isinstance(alias, str) or not alias.strip() or len(alias) > 160 or "|" in alias or "\n" in alias for alias in aliases)
+                or not isinstance(description, str) or len(description) > 600):
+            return {}, ["Use up to 3 alternative terms (160 characters each) and a description of up to 600 characters."]
+        clean[name] = {"aliases": list(dict.fromkeys(alias.strip() for alias in aliases)),
+                       "description": description.strip()}
+    return clean, []
+
+
+def _interest_coverage(sections: list[dict], audits: list[dict]) -> list[dict]:
+    profile = _profile_data()
+    names = list(profile.get("canonical_facets") or {}) or list(profile.get("keywords") or [])
+    recorded = {str(row.get("title", "")).casefold(): row for row in audits}
+    selected = Counter(str(entry.get("ranking", {}).get("primary_facet") or "").casefold()
+                       for section in sections for entry in section.get("entries", []))
+    rows = []
+    for name in names:
+        row = dict(recorded.get(str(name).casefold(), {}))
+        row.update(title=name, selected=selected[str(name).casefold()])
+        row.setdefault("candidates", None)
+        row.setdefault("eligible", None)
+        row.setdefault("explanation", "Candidate attribution was not recorded for this saved digest; zero selected does not mean no papers were found.")
+        rows.append(row)
+    return rows
+
+
 def _keywords_after_topic_edit(
     profile: dict[str, Any], topics: list[tuple[str, float]]
 ) -> list[str]:
@@ -885,6 +927,7 @@ def _load_existing_form_defaults() -> dict[str, str]:
         "name": "",
         "bio": "",
         "topics": "",
+        "topic_details": "",
         "downweight": "",
         "llm_backend": backend,
         "llm_base_url": SETTINGS.llm_base_url,
@@ -924,13 +967,33 @@ def _load_existing_form_defaults() -> dict[str, str]:
             out["bio"] = (data.get("bio") or "").strip()
             canonical = data.get("canonical_facets") or {}
             if isinstance(canonical, dict) and canonical:
-                lines = []
+                resolved_priorities = []
+                legacy_priorities = {str(name).casefold(): value
+                                     for name, value in (data.get("topic_priorities") or {}).items()}
                 for topic, spec in canonical.items():
-                    priority = spec.get("priority", 1) if isinstance(spec, dict) else 1
+                    priority = spec.get("priority") if isinstance(spec, dict) else None
                     if priority is None:
-                        priority = 1
-                    lines.append(f"{topic} | {priority}")
+                        names = [topic, *(spec.get("aliases") or [])] if isinstance(spec, dict) else [topic]
+                        matched = []
+                        for name in names:
+                            try:
+                                value = float(legacy_priorities.get(str(name).casefold(), 0))
+                            except (TypeError, ValueError):
+                                continue
+                            if 0 < value <= 100:
+                                matched.append(value)
+                        priority = max(matched) if matched else None
+                    resolved_priorities.append((topic, priority))
+                positive_priorities = [float(priority) for _topic, priority in resolved_priorities
+                                       if isinstance(priority, (int, float)) and 0 < priority <= 100]
+                # Attribution supplies 0.5 for an unlisted facet once another
+                # explicit priority exists. Preserve that effective ratio on a
+                # name/provider-only Save instead of silently replacing it by 1.
+                unlisted_priority = max(positive_priorities) / 2 if positive_priorities else 1
+                lines = [f"{topic} | {priority if priority is not None else unlisted_priority}"
+                         for topic, priority in resolved_priorities]
                 out["topics"] = "\n".join(lines)
+                out["topic_details"] = json.dumps({str(name): {"aliases": spec.get("aliases", []), "description": spec.get("description", "")} for name, spec in canonical.items() if isinstance(spec, dict)})
             else:
                 priorities = data.get("topic_priorities") or {}
                 out["topics"] = "\n".join(
@@ -1087,6 +1150,8 @@ def _validate_setup(form: dict[str, str]) -> list[str]:
         errors.append(f"Unknown backend: {backend}")
     _topics, topic_errors = _parse_ranked_topics(form.get("topics"))
     errors.extend(topic_errors)
+    _details, detail_errors = _parse_topic_details(form.get("topic_details"), _topics)
+    errors.extend(detail_errors)
     if backend in {"api", "anthropic"}:
         if not (form.get("llm_base_url") or "").strip():
             errors.append("API backend requires a base URL.")
@@ -1333,6 +1398,7 @@ def index(request: Request, digest_id: str = "") -> Response:
             "empty_enabled_sections": empty_enabled_sections,
             "overview": overview,
             "source_coverage": health.coverage_summary(),
+            "interest_coverage": _interest_coverage(sections, load_digest_audit(digest_id, "interest_coverage") if brewed else []),
             "top_journal_audit": top_journal_audit,
             "overflow_audit": overflow_audit,
             "overflow_saved": overflow_saved,
@@ -1816,6 +1882,7 @@ async def setup_post(request: Request) -> Response:
         "name": str(raw.get("name", "")),
         "bio": str(raw.get("bio", "")),
         "topics": str(raw.get("topics", "")),
+        "topic_details": str(raw.get("topic_details", "")),
         "downweight": str(raw.get("downweight", "")),
         "llm_backend": str(raw.get("llm_backend", "extractive")),
         "llm_base_url": str(raw.get("llm_base_url", "")),
@@ -1900,6 +1967,7 @@ async def setup_post(request: Request) -> Response:
         return response
 
     topics, _topic_errors = _parse_ranked_topics(form["topics"])
+    details, _detail_errors = _parse_topic_details(form.get("topic_details"), topics)
     # Write the private user profile. Keywords drive retrieval; unchanged facet
     # edits preserve any more-specific retrieval phrases already stored, while
     # facets carry relative priority for attribution and selection.
@@ -1916,6 +1984,8 @@ async def setup_post(request: Request) -> Response:
         spec = dict(previous) if isinstance(previous, dict) else {}
         if not spec.get("anchors"):
             spec["anchors"] = [topic]
+        if topic in details:
+            spec.update(details[topic])
         spec["priority"] = weight
         canonical_facets[topic] = spec
     # The weighted-topic editor supersedes these older parallel weighting maps.
