@@ -12,6 +12,13 @@ source card shows the latest attempted check, source response coverage and
 available public-feed update times separately from paper publication dates.
 Unavailable or limited feeds remain visible, including after a failed brew.
 
+Each interest has an optional **Check wording** action. It sends only that
+phrase to PubMed for spelling suggestions; it does not run while typing.
+Accepting a suggestion updates the editor, and saving applies the corrected
+name to retrieval and ranking while retaining its weights and research details.
+Specialist vocabulary may have no suggestion, and unavailable checks leave the
+interest unchanged.
+
 The **Compute** menu defaults to one CPU core. GPU acceleration is an explicit,
 per-device opt-in and falls back to CPU if initialization or inference fails.
 Device-loss signals are watched directly because a lost GPU can leave the
@@ -102,8 +109,9 @@ The positive build allowlist is covered by privacy regression tests.
 Use a browser supporting WebAssembly JavaScript Promise Integration and Web
 Locks; runtime startup checks both. This implementation has been tested in
 Chrome. Safari/Firefox and real phone performance are not claimed verified.
-The static package is approximately 276 MB including public metadata and both exports; model files
-are downloaded lazily for the first embedding job. Normal browser HTTP caching
+The static package is approximately 368 MB including public metadata, both embedding exports
+and the optional topic-check model. Embedding models download on the first applicable
+job; the additional topic-check model downloads only when explicitly enabled. Normal browser HTTP caching
 applies; a storage-eviction-proof offline installation is not promised.
 
 Data belongs to the browser and site origin. Export backups before clearing
@@ -202,10 +210,13 @@ or Linux; GPU mode remains experimental and opt-in.
 Corrupt startup state exposes raw download, validated restore and an explicitly
 confirmed fresh start. Replacement retains the original state in IndexedDB;
 Browser data can download that retained copy. Raw recovery copies may contain
-credentials and should be kept private. Portable backups and Companion state
+credentials and should be kept private. External imports are limited to 10,000 files
+and 128 Mi characters of JSON; larger existing checkpoints remain restorable and
+exportable without truncation, with a storage warning. Portable backups and Companion state
 transfers exclude credential values by default; including them is explicit.
 Internal checkpoints remain complete, and a redacted import preserves existing
-credentials on the destination device.
+credentials on the destination device. Imports that would attach an omitted API key
+or mailbox password to a different endpoint or account are rejected before replacing state.
 
 Writes are serialized only after private state changes, including reading
 impressions and votes during a brew. Quota failures show a persistent warning;
@@ -223,3 +234,79 @@ interests are shown separately from selected-paper topics. Editable alternative
 terms and descriptions feed search and relevance; percentages are relative
 priorities rather than guaranteed slot allocations. Research and venue-quality
 gates remain in force.
+
+## Broader-reader verification
+
+Settings now keep each interest compact, with spelling, alternative terms and
+intent behind Search details. Optional biology, chemistry and computing examples
+load only into an empty editor. Advanced interests expose followed authors,
+representative works and background topics. Save remains visible while scrolling;
+unrelated edits preserve existing exact weights and private profile details.
+
+The browser reports which CLI providers its connected companion advertises.
+Direct API settings have an explicit Test API connection action: one small,
+potentially billable request, no reader profile or paper metadata, no save.
+Anthropic Messages calls acquire the official browser-access header only in the
+browser transport for the authenticated official endpoint. Native clients are
+unchanged. Mocked success, failure, bad URLs and stale replies are checked; live
+provider credentials and organization CORS policy remain unverified.
+
+Unknown publication venues are distinct from observed low-impact venues. Both
+remain bounded and require strong raw-topic relevance; missing venue metadata
+cannot bypass those limits. Exact journal aliases prevent known venues from
+falling into the unknown bucket. CS preprints use the same publication-status
+policy as other fields. Explicit zero allowances remain zero, including fallback
+selection. Venue priors do not verify article validity or scientific alignment.
+
+The cross-field evaluation fixture contains 96 provisional metadata judgments
+across eight scenarios. Its retrospective split is not independent expert gold,
+and retrieved pools cannot establish upstream recall. Use
+`python -m dailydigest.rank.cross_field_evaluation --help` for offline replay.
+A failed semantic experiment is retained as evidence rather than enabled.
+
+An optional experimental local topic check processes at most 48 research
+papers, balanced across interests and including current ranking leaders. It uses
+explicit per-interest descriptions and aliases; it does not invent a reader's
+intended meaning. A separate pinned model (~92 MB) loads on first use and runs on
+the CPU, even when embedding acceleration is selected. Native and browser paths
+share the same title-preserving first/middle/last token windows and coverage flags.
+Long descriptions retain the named topic and report partial coverage when bounded.
+
+This check modestly lowers selection priority on strong model disagreement or
+recovers a strongly matched borderline paper. It preserves eligibility for
+otherwise-related papers, original quality/preference scores and all source-quality
+floors and quotas. Journal reputation no longer admits otherwise off-topic work.
+Raw logits are not relevance probabilities, and the check does not reliably
+distinguish background mentions from the paper's contribution. Missing/unchecked
+evidence keeps the existing ranking; a failed model pass stops publication.
+The stronger score-replacement experiment and a slower NLI alternative were not
+promoted after adversarial evaluation. `SEMANTIC_MATCHING=false` is the default:
+the additional model has not demonstrated a separate selection gain, so normal
+brewing avoids downloading/loading it. The corrected venue-independent topic
+gate remains active. No online model provider receives reader text for checks.
+
+The browser toolbar follows the reading desk's theme. Browser data shows site
+storage estimates and the last backup-export attempt on this device. Separate
+people should use separate browser profiles. Import and companion restore replace
+state; they do not merge independently accumulated feedback. An installed shortcut
+does not promise offline startup or background computation.
+
+Configured research sources span different fields unevenly. Grants.gov covers US
+funding and the EMBL event stream is limited; these sections are not exhaustive.
+The interface states these limits before opt-in and retains conservative eligibility.
+
+For operations, the Pages workflow reports build and deploy failures. An optional
+repository secret `DAILYDIGEST_ALERT_WEBHOOK` enables a JSON webhook accepting a
+`text` field containing only the public workflow link and a failure notice.
+Without it, Actions emits configuration guidance; enable repository Actions
+notifications to receive alerts. No webhook was configured or contacted in tests.
+Native-only main retains a bootstrap workflow checking out the browser prototype
+until browser deployment is integrated into main; keep that branch available.
+
+Local Chrome CPU inference over 16 and 32 captured abstracts (three warm rounds)
+measured approximately 3.2x and 3.1x speedups with four threads, identical vectors
+and measured parallel CPU use. These are component measurements, not full-brew
+latency targets. Physical Intel WebGPU inference was verified separately on two
+inputs. Phone performance, Firefox/WebKit application behavior and production
+cold-brew performance remain unverified. English is the validated interface and
+model baseline; multilingual relevance has not been established.

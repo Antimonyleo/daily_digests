@@ -308,6 +308,21 @@ votes, database, and settings as the browser app.
 
 ### Checking ranking quality
 
+Normal brewing requires research papers to clear the reader's topic floor
+independently of journal prestige. Quality evidence still orders eligible work.
+Longer abstracts are retained and profile-driven OpenAlex searches include
+preprints. Add aliases and describe useful papers in each interest's search
+details to clarify ambiguous terms; no model guarantees literature coverage or
+verifies scientific validity.
+
+An experimental local joint topic check is available with `SEMANTIC_MATCHING=true`
+but disabled by default: it has not demonstrated an additional selection gain.
+It checks up to 48 papers, records partial text coverage, preserves existing
+quality/preference scores, and never vetoes an otherwise-related paper. First use
+caches about 92 MB of public weights; reader text stays local. `SEMANTIC_MODEL_DIR`
+can provision the exact pinned files offline. Normal brewing avoids this download
+and computation. The improved relevance gate remains active in either mode.
+
 Every new brew captures the complete local candidate pool, rejected stages,
 scores, source classifications, profile, selection settings, source diagnostics,
 and final display order in a compressed local run record. Rebrewing the same day
