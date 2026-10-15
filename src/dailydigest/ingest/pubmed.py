@@ -187,7 +187,10 @@ class PubMedSource:
                 if not ids:
                     if diagnostic["total_available"]:
                         raise RuntimeError("PubMed returned no IDs for a nonempty result count")
-                    diagnostic.update(exhausted=True, stop_reason="exhausted")
+                    diagnostic.update(
+                        exhausted=not diagnostic["truncated"],
+                        stop_reason="search_warning" if diagnostic["truncated"] else "exhausted",
+                    )
                     return out
                 time.sleep(self.SLEEP)
                 diagnostic["request_count"] += 1
@@ -241,6 +244,8 @@ class PubMedSource:
             diagnostic.update(truncated=True, stop_reason="search_cap")
         elif len(articles) < len(ids):
             diagnostic.update(truncated=True, stop_reason="incomplete_fetch")
+        elif diagnostic["truncated"]:
+            diagnostic.update(stop_reason="search_warning")
         elif total is not None and total <= len(ids):
             diagnostic.update(exhausted=True, stop_reason="exhausted")
         else:
@@ -261,7 +266,7 @@ class PubMedSource:
             "datetype": "pdat",
             "reldate": str(getattr(self, "_reldate", 2)),
             "retmax": str(self.RETMAX),
-            "sort": "date",
+            "sort": "pub date",
         }
         resp = client.get(f"{self.BASE}/esearch.fcgi", params=params)
         resp.raise_for_status()
@@ -274,6 +279,22 @@ class PubMedSource:
         count = result.get("count")
         if count is not None and self.last_fetch_diagnostics["queries"]:
             self.last_fetch_diagnostics["queries"][-1]["total_available"] = int(count)
+        warninglist = result.get("warninglist") or {}
+        warnings = {key: messages for key, messages in warninglist.items() if messages}
+        if warnings:
+            # Keep provider wording: limits and ignored phrases change what was
+            # searched. A plain empty-result notice is informational instead.
+            empty_notice = (
+                not result["idlist"] and str(count) == "0"
+                and set(warnings) == {"outputmessages"}
+                and all(message == "No items found." for message in warnings["outputmessages"])
+            )
+            if self.last_fetch_diagnostics["queries"]:
+                self.last_fetch_diagnostics["queries"][-1].update(
+                    warnings=warnings, truncated=not empty_notice,
+                )
+            if not empty_notice:
+                logger.warning("PubMed search warnings: %r", warnings)
         return result["idlist"]
 
     @_RETRY

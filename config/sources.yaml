@@ -102,6 +102,8 @@ research:
   - name: OpenAlex (your topics)
     kind: openalex
     profile_driven: true
+    # Topic retrieval also covers preprints outside the direct arXiv categories.
+    openalex_types: article|preprint
     quality_tier: aggregator
     prestige_score: 0.34
     query: biotechnology OR therapeutic OR drug discovery

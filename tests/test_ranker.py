@@ -859,7 +859,7 @@ class TestPickTopPerSection:
     def test_research_selection_caps_arxiv_cs_when_journals_are_available(self):
         # arXiv CS items score higher but journals must still appear due to mandatory
         # quality fill. Per-source cap (Fix 7) means a single journal source is also
-        # capped, so we check the arXiv ceiling and that journals are present.
+        # capped, so we check the common source ceiling and that journals are present.
         arxiv_items = []
         for idx in range(12):
             row = _make_row(f"arXiv CS method {idx}", "research")
@@ -880,7 +880,7 @@ class TestPickTopPerSection:
             1 for row, _score in result
             if row.source in journal_sources
         )
-        assert arxiv_count <= 1
+        assert arxiv_count <= 2
         assert journal_count >= 6
 
     def test_research_selection_protects_top_journal_papers_below_preprints(self):

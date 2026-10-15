@@ -1,0 +1,664 @@
+{
+  "schema_version": 1,
+  "provenance": {
+    "labeler": "independent_codex_agent_metadata_review",
+    "label_status": "provisional_not_expert_gold",
+    "captured_records": "Copied exactly from local captured public metadata fixture; no external lookup or empirical claims added.",
+    "controlled_records": "Explicit fictional contrasts, never evidence of real scientific findings.",
+    "exposure": "Independent scoring-blind selection from an existing captured pool, with some records previously labeled for different or similar profiles. Not a fresh-document or prospective holdout.",
+    "training_use": "forbidden; challenge-only; do not tune thresholds or prompts against these labels.",
+    "quality_policy": "Scientific validity and venue quality are unassessed and separate from reader-task alignment."
+  },
+  "label_policy": {
+    "core": "Central contribution directly serves the stated reader task, including descriptive studies or applications when the reader welcomes them.",
+    "context": "Substantive adjacent biology, applications, background or mechanisms useful at lower priority for this task.",
+    "offtopic": "Contribution does not serve the task; incidental words or prospective applications do not suffice.",
+    "uncertain": "Metadata cannot establish the relevant contribution; excluded from ordinal and binary denominators."
+  },
+  "profiles": [
+    {
+      "id": "marine_topic",
+      "bio": "I study marine microbial ecology: community diversity, interactions and responses to ocean change.",
+      "keywords": [
+        "marine microbial ecology"
+      ],
+      "intent": "General topic interest; descriptive natural-system studies are directly useful."
+    },
+    {
+      "id": "marine_tools",
+      "bio": "I develop transferable computational tools for marine microbial community profiling; prioritize new reusable methods over descriptive ecosystem studies.",
+      "keywords": [
+        "marine microbial ecology",
+        "computational methods"
+      ],
+      "intent": "New transferable tools are core; natural-system context remains useful at lower priority."
+    },
+    {
+      "id": "gnn_topic",
+      "bio": "I follow graph neural networks, including their applications, benchmarks, and methodological developments.",
+      "keywords": [
+        "graph neural networks"
+      ],
+      "intent": "Applications are welcome; do not impose an unstated new-method restriction."
+    },
+    {
+      "id": "gnn_methods",
+      "bio": "I develop new graph neural network architectures. Prioritize reusable architectures over papers applying existing weather models.",
+      "keywords": [
+        "graph neural networks"
+      ],
+      "intent": "Method contribution rather than mere model application."
+    },
+    {
+      "id": "asymmetric",
+      "bio": "I study asymmetric organocatalysis using small organic catalysts.",
+      "keywords": [
+        "asymmetric organocatalysis"
+      ],
+      "intent": "Both organic catalyst class and asymmetric transformation matter."
+    },
+    {
+      "id": "topological",
+      "bio": "I study topological photonics and optical-field topology.",
+      "keywords": [
+        "topological photonics"
+      ],
+      "intent": "Topology must be a substantive optical contribution, not a prospective application."
+    },
+    {
+      "id": "protein_methods",
+      "bio": "I develop transferable protein design and prediction methods. Prioritize reusable engineering approaches over descriptions of native protein mechanisms.",
+      "keywords": [
+        "protein design",
+        "protein prediction"
+      ],
+      "intent": "Explicit engineering and transferable-method preference."
+    },
+    {
+      "id": "tau_topic",
+      "bio": "I study tau aggregation mechanisms and fibril propagation.",
+      "keywords": [
+        "tau aggregation"
+      ],
+      "intent": "Natural-system mechanism is directly useful."
+    },
+    {
+      "id": "gnn_alias",
+      "bio": "I follow GNNs, including applications and benchmarks.",
+      "keywords": [
+        "GNNs"
+      ],
+      "intent": "Explicit alias of graph neural networks."
+    },
+    {
+      "id": "gnn_typo",
+      "bio": "I follow graph nerual networks, including applications and benchmarks.",
+      "keywords": [
+        "graph nerual networks"
+      ],
+      "intent": "Single transposition typo in neural."
+    }
+  ],
+  "cases": [
+    {
+      "id": "sic-01",
+      "profile_id": "marine_topic",
+      "record_kind": "captured_real",
+      "article": {
+        "title": "Symbiotic interactions and climate change implications of the octocoral microbiome.",
+        "abstract": "Octocorals are vital components of tropical, temperate, and cold-water benthic marine ecosystems. Their associated microbiomes, comprising microeukaryotes, prokaryotes, and viruses, are increasingly recognised as central to host health, nutrient cycling, and chemical defence. Metagenomics and amplicon sequencing have uncovered taxonomic and functional complexity within these microbial communities, revealing patterns of host specificity and health status, along with seasonality and geographic structuring. However, anthropogenic stressors, particularly those associated with global climate change, exert intense pressure on coral-dominated ecosystems, leading to complex and poorly understood local and regional patterns of octocoral expansion and mortality. Microbial interactions may be a main driver of these contrasting outcomes by mediating the ecological resilience of octocorals to environmental stress. We synthesise the current state of research on the diversity, organisation, and function of the octocoral microbiome, and identify critical knowledge gaps on octocoral holobionts relative to scleractinian corals. Our meta-analysis of 79 publicly available bacterial genomes from octocorals reveals group-specific specialisation in denitrification and nitrate assimilation, along with widespread capacities for essential amino acid, cofactor, and vitamin production, suggesting important contributions to nutrient cycling in the holobiont. While sampling efforts between cultured and uncultured lineages are even, our genomic survey reveals strong sampling bias toward the Atlantic Ocean, temperate gorgonians, and healthy host states, whereas bacterial genomes representing the pathobiome, tropical and/or deep-sea regions, and other octocoral taxa remain underrepresented. Accordingly, we propose future research directions to advance understanding of octocoral microbiome ecology and its role in the resilience of tropical, temperate and cold-water coral reefs.",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/42742264/",
+        "external_id": "42742264",
+        "source": "pubmed"
+      },
+      "source_fixture": "tests/fixtures/cross_field_alignment.json",
+      "source_profile": "marine_microbial_ecology",
+      "source_index": 28,
+      "label": "core",
+      "rationale": "Review and genome analysis concern octocoral microbial ecology directly; no engineering requirement was stated.",
+      "challenge": "general_topic_natural_system",
+      "quality": "not_assessed",
+      "split": "challenge"
+    },
+    {
+      "id": "sic-02",
+      "profile_id": "marine_tools",
+      "record_kind": "captured_real",
+      "article": {
+        "title": "Symbiotic interactions and climate change implications of the octocoral microbiome.",
+        "abstract": "Octocorals are vital components of tropical, temperate, and cold-water benthic marine ecosystems. Their associated microbiomes, comprising microeukaryotes, prokaryotes, and viruses, are increasingly recognised as central to host health, nutrient cycling, and chemical defence. Metagenomics and amplicon sequencing have uncovered taxonomic and functional complexity within these microbial communities, revealing patterns of host specificity and health status, along with seasonality and geographic structuring. However, anthropogenic stressors, particularly those associated with global climate change, exert intense pressure on coral-dominated ecosystems, leading to complex and poorly understood local and regional patterns of octocoral expansion and mortality. Microbial interactions may be a main driver of these contrasting outcomes by mediating the ecological resilience of octocorals to environmental stress. We synthesise the current state of research on the diversity, organisation, and function of the octocoral microbiome, and identify critical knowledge gaps on octocoral holobionts relative to scleractinian corals. Our meta-analysis of 79 publicly available bacterial genomes from octocorals reveals group-specific specialisation in denitrification and nitrate assimilation, along with widespread capacities for essential amino acid, cofactor, and vitamin production, suggesting important contributions to nutrient cycling in the holobiont. While sampling efforts between cultured and uncultured lineages are even, our genomic survey reveals strong sampling bias toward the Atlantic Ocean, temperate gorgonians, and healthy host states, whereas bacterial genomes representing the pathobiome, tropical and/or deep-sea regions, and other octocoral taxa remain underrepresented. Accordingly, we propose future research directions to advance understanding of octocoral microbiome ecology and its role in the resilience of tropical, temperate and cold-water coral reefs.",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/42742264/",
+        "external_id": "42742264",
+        "source": "pubmed"
+      },
+      "source_fixture": "tests/fixtures/cross_field_alignment.json",
+      "source_profile": "marine_microbial_ecology",
+      "source_index": 28,
+      "label": "context",
+      "rationale": "Microbiome biology informs tool development but this is a synthesis and genome survey, not a reusable computational profiling tool.",
+      "challenge": "reader_intent_reversal",
+      "quality": "not_assessed",
+      "split": "challenge"
+    },
+    {
+      "id": "sic-03",
+      "profile_id": "marine_topic",
+      "record_kind": "captured_real",
+      "article": {
+        "title": "Leviathan: fast, memory-efficient, and scalable taxonomic and pathway profiling for (pan)genome-resolved metagenomics and metatranscriptomics.",
+        "abstract": "Functional profiling of meta-omics is essential for understanding microbial communities, yet support for custom genome-resolved reference databases is limited. We introduce Leviathan for integrated taxonomic and functional profiling at both genome and pangenome resolution. Leviathan combines Sylph for ultrafast alignment-free taxonomic profiling with Salmon for pseudo-alignment-based read quantification in DNA space against (pan)genome-resolved gene catalogs, producing dual metrics per (pan)genome: pathway abundance and graph-based pathway coverage. Benchmarking alignment backends on synthetic metagenomes, we show that DNA-space pseudo-alignments retain competitive (pan)genome-level classification performance compared to traditional alignment, reducing resource requirements, while translated searches in protein space lose classification resolution from ambiguous mapping events. Leviathan's utility is demonstrated through two case studies: a marine plastisphere metagenomics data set analyzing metabolic shifts between early and mature biofilm communities, and a dental caries metatranscriptomics data set where co-expression network analysis identified organism-specific transcriptional patterns diagnostic of health and disease states. Leviathan is available at https://github.com/jolespin/leviathan.IMPORTANCEUnderstanding what microbes can do, not just which ones are present, is central to translating microbiome research into actionable insight. Existing functional profiling tools either rely on fixed reference databases or require complex multi-step pipelines when applied to custom genome collections, and none natively compute per-(pan)genome pathway abundance and graph-based pathway completeness in a single workflow. This limits the ability for researchers to directly compare functional profiles to tangential analyses on their specific genome catalogs. Leviathan addresses this gap with integrated taxonomic and functional profiling against user-defined (pan)genome-resolved references using pseudo-alignment, achieving competitive classification accuracy, with lower resource requirements compared to current methods. Native pangenome support enables routine quantification of metabolic potential and transcriptional activity at both genome and pangenome resolution, revealing functional variation across related strains that single-genome or community-level analyses obscure.",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/42831621/",
+        "external_id": "42831621",
+        "source": "pubmed"
+      },
+      "source_fixture": "tests/fixtures/cross_field_alignment.json",
+      "source_profile": "marine_microbial_ecology",
+      "source_index": 23,
+      "label": "core",
+      "rationale": "Introduces profiling software with an actual marine plastisphere analysis; directly useful for the stated topic.",
+      "challenge": "application_plus_method",
+      "quality": "not_assessed",
+      "split": "challenge"
+    },
+    {
+      "id": "sic-04",
+      "profile_id": "marine_tools",
+      "record_kind": "captured_real",
+      "article": {
+        "title": "Leviathan: fast, memory-efficient, and scalable taxonomic and pathway profiling for (pan)genome-resolved metagenomics and metatranscriptomics.",
+        "abstract": "Functional profiling of meta-omics is essential for understanding microbial communities, yet support for custom genome-resolved reference databases is limited. We introduce Leviathan for integrated taxonomic and functional profiling at both genome and pangenome resolution. Leviathan combines Sylph for ultrafast alignment-free taxonomic profiling with Salmon for pseudo-alignment-based read quantification in DNA space against (pan)genome-resolved gene catalogs, producing dual metrics per (pan)genome: pathway abundance and graph-based pathway coverage. Benchmarking alignment backends on synthetic metagenomes, we show that DNA-space pseudo-alignments retain competitive (pan)genome-level classification performance compared to traditional alignment, reducing resource requirements, while translated searches in protein space lose classification resolution from ambiguous mapping events. Leviathan's utility is demonstrated through two case studies: a marine plastisphere metagenomics data set analyzing metabolic shifts between early and mature biofilm communities, and a dental caries metatranscriptomics data set where co-expression network analysis identified organism-specific transcriptional patterns diagnostic of health and disease states. Leviathan is available at https://github.com/jolespin/leviathan.IMPORTANCEUnderstanding what microbes can do, not just which ones are present, is central to translating microbiome research into actionable insight. Existing functional profiling tools either rely on fixed reference databases or require complex multi-step pipelines when applied to custom genome collections, and none natively compute per-(pan)genome pathway abundance and graph-based pathway completeness in a single workflow. This limits the ability for researchers to directly compare functional profiles to tangential analyses on their specific genome catalogs. Leviathan addresses this gap with integrated taxonomic and functional profiling against user-defined (pan)genome-resolved references using pseudo-alignment, achieving competitive classification accuracy, with lower resource requirements compared to current methods. Native pangenome support enables routine quantification of metabolic potential and transcriptional activity at both genome and pangenome resolution, revealing functional variation across related strains that single-genome or community-level analyses obscure.",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/42831621/",
+        "external_id": "42831621",
+        "source": "pubmed"
+      },
+      "source_fixture": "tests/fixtures/cross_field_alignment.json",
+      "source_profile": "marine_microbial_ecology",
+      "source_index": 23,
+      "label": "core",
+      "rationale": "Introduces reusable taxonomic and functional profiling against custom genome references, including a marine use case.",
+      "challenge": "long_abstract_contribution",
+      "quality": "not_assessed",
+      "split": "challenge"
+    },
+    {
+      "id": "sic-05",
+      "profile_id": "marine_topic",
+      "record_kind": "captured_real",
+      "article": {
+        "title": "Making waves: Rethinking antiscalants in seawater desalination - Balancing scaling control, biofouling risk, and ecological consequences.",
+        "abstract": "Antiscalants used in reverse osmosis (RO) desalination are commonly treated as simple operational additives, yet their chemical properties can significantly influence microbial dynamics, thereby creating a critical operational paradox. While antiscalants inhibit mineral scaling, they may simultaneously promote biofouling through poorly resolved mechanisms. Current vendor-driven selection prioritizes scaling control but overlooks microbial and environmental consequences. This opacity obscures molecular composition, impurity profiles, and transformation pathways, introducing uncertainty across the desalination lifecycle. Undisclosed chemical composition limits risk assessment, while interactions with marine microbial communities that drive biofouling lack mechanistic clarity. Emerging evidence indicates that antiscalants can both stimulate microbial growth via orthophosphate impurities, a readily bioavailable inorganic phosphorus source, and labile organic fractions, but may also inhibit growth through trace metal sequestration, particularly the sequestration of bioavailable iron, a metabolically essential micronutrient. The contribution of this inhibitory mechanism under seawater desalination conditions remains to be quantified. The net outcome is formulation-specific and environmental context-dependent. Beyond the treatment plant, the fate and impacts of discharged antiscalants remain insufficiently constrained, introducing uncertainty for marine ecosystems. We argue that antiscalant selection should shift from empirical practices to a predictive, mechanism-based strategy. Accordingly, we propose a Predictive Ecological Chemistry framework grounded in three principles: transparent chemical characterization, mechanistic evaluation of microbial responses, and environmental accountability. This framework offers a pathway toward data-driven selection that balances operational performance with ecological responsibility.",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/42470985/",
+        "external_id": "42470985",
+        "source": "pubmed"
+      },
+      "source_fixture": "tests/fixtures/cross_field_alignment.json",
+      "source_profile": "marine_microbial_ecology",
+      "source_index": 0,
+      "label": "core",
+      "rationale": "Marine microbial responses and biofouling ecology form a substantive contribution even though desalination is the application.",
+      "challenge": "application_is_substantive",
+      "quality": "not_assessed",
+      "split": "challenge"
+    },
+    {
+      "id": "sic-06",
+      "profile_id": "marine_tools",
+      "record_kind": "captured_real",
+      "article": {
+        "title": "Making waves: Rethinking antiscalants in seawater desalination - Balancing scaling control, biofouling risk, and ecological consequences.",
+        "abstract": "Antiscalants used in reverse osmosis (RO) desalination are commonly treated as simple operational additives, yet their chemical properties can significantly influence microbial dynamics, thereby creating a critical operational paradox. While antiscalants inhibit mineral scaling, they may simultaneously promote biofouling through poorly resolved mechanisms. Current vendor-driven selection prioritizes scaling control but overlooks microbial and environmental consequences. This opacity obscures molecular composition, impurity profiles, and transformation pathways, introducing uncertainty across the desalination lifecycle. Undisclosed chemical composition limits risk assessment, while interactions with marine microbial communities that drive biofouling lack mechanistic clarity. Emerging evidence indicates that antiscalants can both stimulate microbial growth via orthophosphate impurities, a readily bioavailable inorganic phosphorus source, and labile organic fractions, but may also inhibit growth through trace metal sequestration, particularly the sequestration of bioavailable iron, a metabolically essential micronutrient. The contribution of this inhibitory mechanism under seawater desalination conditions remains to be quantified. The net outcome is formulation-specific and environmental context-dependent. Beyond the treatment plant, the fate and impacts of discharged antiscalants remain insufficiently constrained, introducing uncertainty for marine ecosystems. We argue that antiscalant selection should shift from empirical practices to a predictive, mechanism-based strategy. Accordingly, we propose a Predictive Ecological Chemistry framework grounded in three principles: transparent chemical characterization, mechanistic evaluation of microbial responses, and environmental accountability. This framework offers a pathway toward data-driven selection that balances operational performance with ecological responsibility.",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/42470985/",
+        "external_id": "42470985",
+        "source": "pubmed"
+      },
+      "source_fixture": "tests/fixtures/cross_field_alignment.json",
+      "source_profile": "marine_microbial_ecology",
+      "source_index": 0,
+      "label": "context",
+      "rationale": "Mechanistic ecological chemistry framework is relevant context but not a reusable computational profiling implementation.",
+      "challenge": "framework_vs_computational_tool",
+      "quality": "not_assessed",
+      "split": "challenge"
+    },
+    {
+      "id": "sic-07",
+      "profile_id": "marine_topic",
+      "record_kind": "captured_real",
+      "article": {
+        "title": "Synoptic and regional-scale meteorological controls of stratus altitude in the Namib Desert",
+        "abstract": "Abstract. In the Namib Desert, fog is an essential water source and occurs when and where advected marine stratus clouds intersect with the land surface. However, the meteorological controls of the cloud base height are still insufficiently understood. This study aims to develop a basic understanding of the relevant processes. We combine satellite and in situ observations with large-scale meteorological data from reanalysis data (ERA5) to compare fog events to lifted stratus at the coast (low-cloud events). In fog situations, the marine boundary layer is shallower along the entire coastline than in low-cloud situations. This is found to be related to the large-scale high-pressure systems. Fog situations exhibit a weaker Atlantic High but elevated continental pressure. The weaker Atlantic High is connected to less pronounced near-surface winds along the coastline, less cold advection, and heat fluxes upstream of the study region, leading to the shallower marine boundary layer. Increased continental pressure facilitates the development of regional mountain-plain winds that may reduce the height of the coastal inversion. These mechanisms are highlighted in a case study of an off-season fog event. To assess the predictive power of the two high-pressure systems and the regional pressure pattern, a logistic regression is trained with three corresponding features. The classification outperformed a climatological baseline by ≈ 10 %, suggesting that the features contain relevant process information. The results improve our understanding of the processes that determine the seasonal and day-to-day variability of fog versus elevated low-cloud occurrence in the Namib.",
+        "url": "https://doi.org/10.5194/acp-26-14367-2026",
+        "external_id": "10.5194/acp-26-14367-2026",
+        "source": "openalex"
+      },
+      "source_fixture": "tests/fixtures/cross_field_alignment.json",
+      "source_profile": "marine_microbial_ecology",
+      "source_index": 10,
+      "label": "offtopic",
+      "rationale": "Marine boundary layer refers to meteorology; no microbial community contribution is established.",
+      "challenge": "shared_word_wrong_object",
+      "quality": "not_assessed",
+      "split": "challenge"
+    },
+    {
+      "id": "sic-08",
+      "profile_id": "marine_topic",
+      "record_kind": "captured_real",
+      "article": {
+        "title": "Dynamics, Characteristics, and Sinking Velocities of Small, Gel-Like Ocean Particles (24–1000 μm): Insights from Shadowgraph Imaging and Turbulence Modeling",
+        "abstract": "Particle concentration and sinking velocity control the export flux and transfer efficiency of the biological carbon pump, and are therefore key parameters in ocean biogeochemical models. Gel-like particles form an important part of the particulate organic carbon pool, but their contribution is difficult to quantify because they are fragile and nearly transparent to conventional optical instruments. Here, a focused shadowgraph imaging system (FoSI) was applied to marine gel research to examine the ecological significance, distribution, and transport of gel-like particles along a transect from the Azores to the upwelling region off northwest Africa. A new image processing protocol was developed for FoSI to detect small, low-contrast particles, combining illumination correction, image subtraction, edge detection, and artifact removal to resolve particle edges for segmentation. Gel-like particles showed distinct geometrical characteristics between depth layers and regions, and were one to two orders of magnitude more abundant than opaque particles. The same system was deployed at 600 m in the Sargasso Sea off Bermuda to relate sinking velocity to particle size and morphology for particles 24–631 μm. Size alone explained 25% of the variance in sinking velocity, while adding particle characteristics through deep learning increased the predictive power by nearly 29%. Because mixing transports small particles efficiently, a one-dimensional Mellor–Yamada turbulence model was applied to resolve the mixed layer pump. Strong particle detrainment in winter and spring injected slow-sinking particles from the surface into the mesopelagic zone, with weaker detrainment in summer, providing an additional organic carbon source to the deep sea. Small and gel-like particles may therefore contribute more to the biological carbon pump than previously recognized, indicating that their role in marine biogeochemical cycling has likely been underestimated. Further quantification of this elusive particle pool is needed, as improved estimates of its abundance, distribution, and vertical transport may require reassessment of particulate organic carbon inventories and their parameterization in ocean biogeochemical models.",
+        "url": "https://doi.org/10.25777/qwnc-ab63",
+        "external_id": "10.25777/qwnc-ab63",
+        "source": "openalex"
+      },
+      "source_fixture": "tests/fixtures/cross_field_alignment.json",
+      "source_profile": "marine_microbial_ecology",
+      "source_index": 21,
+      "label": "context",
+      "rationale": "Ocean organic-carbon export is useful biogeochemical context but the contribution measures particles rather than microbial communities.",
+      "challenge": "adjacent_object",
+      "quality": "not_assessed",
+      "split": "challenge"
+    },
+    {
+      "id": "sic-09",
+      "profile_id": "gnn_topic",
+      "record_kind": "captured_real",
+      "article": {
+        "title": "Physics vs. AI in weather prediction: evaluating GraphCast, AIFS, and FuXi against an observation-corrected WRF model for flash floods",
+        "abstract": "Abstract. Data-driven artificial intelligence (AI) weather models are increasingly positioned as alternatives or complements to physics-based numerical weather prediction (NWP) systems, yet systematic model evaluation studies that compare both paradigms under controlled experimental conditions remain limited. Here we present a structured model evaluation framework applying standardised verification metrics to assess a regional WRF configuration against three publicly available AI models – GraphCast, AIFS Single 1.0, and FuXi – over three high-impact flood events in Luxembourg and the Greater Region (2016, 2018, and 2021), comprising 90 simulation days and over 7300 matched forecast-observation pairs. The WRF model employs a three-dimensional variational (3D-VAR) data assimilation scheme ingesting GNSS Zenith Total Delay and conventional observations on a 6-hourly Rapid Update Cycle. All systems are initialised from ERA5 reanalysis to ensure consistent initial conditions. Categorical precipitation scores at the 1 mm threshold and continuous temperature metrics at surface stations serve as verification targets. Data assimilation measurably improves WRF's categorical precipitation skill (Critical Success Index: 0.306 to 0.341) while leaving near-surface temperature largely unchanged, demonstrating the value of the assimilation scheme. AIFS achieves the highest detection rate (POD 0.765) and net categorical skill (CSI 0.370), GraphCast and AIFS reduce temperature RMSE by ~10 % relative to assimilated WRF, and WRF alone reproduces the observed mesoscale precipitation structure of the catastrophic July 2021 flood. The per-event breakdown reveals no skill degradation for AI models on out-of-sample events, suggesting that meteorological regime rather than training-data overlap governs model performance. These results provide a replicable model evaluation methodology for benchmarking emerging data-driven NWP systems against observation-corrected regional models.",
+        "url": "https://doi.org/10.5194/gmd-19-9831-2026",
+        "external_id": "10.5194/gmd-19-9831-2026",
+        "source": "openalex"
+      },
+      "source_fixture": "tests/fixtures/cross_field_alignment.json",
+      "source_profile": "graph_neural_networks",
+      "source_index": 19,
+      "label": "core",
+      "rationale": "Benchmarking GraphCast against other weather models is a substantive application and evaluation welcome to this general-topic reader.",
+      "challenge": "general_topic_application",
+      "quality": "not_assessed",
+      "split": "challenge"
+    },
+    {
+      "id": "sic-10",
+      "profile_id": "gnn_methods",
+      "record_kind": "captured_real",
+      "article": {
+        "title": "Physics vs. AI in weather prediction: evaluating GraphCast, AIFS, and FuXi against an observation-corrected WRF model for flash floods",
+        "abstract": "Abstract. Data-driven artificial intelligence (AI) weather models are increasingly positioned as alternatives or complements to physics-based numerical weather prediction (NWP) systems, yet systematic model evaluation studies that compare both paradigms under controlled experimental conditions remain limited. Here we present a structured model evaluation framework applying standardised verification metrics to assess a regional WRF configuration against three publicly available AI models – GraphCast, AIFS Single 1.0, and FuXi – over three high-impact flood events in Luxembourg and the Greater Region (2016, 2018, and 2021), comprising 90 simulation days and over 7300 matched forecast-observation pairs. The WRF model employs a three-dimensional variational (3D-VAR) data assimilation scheme ingesting GNSS Zenith Total Delay and conventional observations on a 6-hourly Rapid Update Cycle. All systems are initialised from ERA5 reanalysis to ensure consistent initial conditions. Categorical precipitation scores at the 1 mm threshold and continuous temperature metrics at surface stations serve as verification targets. Data assimilation measurably improves WRF's categorical precipitation skill (Critical Success Index: 0.306 to 0.341) while leaving near-surface temperature largely unchanged, demonstrating the value of the assimilation scheme. AIFS achieves the highest detection rate (POD 0.765) and net categorical skill (CSI 0.370), GraphCast and AIFS reduce temperature RMSE by ~10 % relative to assimilated WRF, and WRF alone reproduces the observed mesoscale precipitation structure of the catastrophic July 2021 flood. The per-event breakdown reveals no skill degradation for AI models on out-of-sample events, suggesting that meteorological regime rather than training-data overlap governs model performance. These results provide a replicable model evaluation methodology for benchmarking emerging data-driven NWP systems against observation-corrected regional models.",
+        "url": "https://doi.org/10.5194/gmd-19-9831-2026",
+        "external_id": "10.5194/gmd-19-9831-2026",
+        "source": "openalex"
+      },
+      "source_fixture": "tests/fixtures/cross_field_alignment.json",
+      "source_profile": "graph_neural_networks",
+      "source_index": 19,
+      "label": "context",
+      "rationale": "Evaluates existing weather prediction models; no new reusable GNN architecture is claimed.",
+      "challenge": "reader_intent_reversal",
+      "quality": "not_assessed",
+      "split": "challenge"
+    },
+    {
+      "id": "sic-11",
+      "profile_id": "gnn_topic",
+      "record_kind": "captured_real",
+      "article": {
+        "title": "A cascaded probabilistic framework for stealth-aware MITRE ATT&CK path prediction in active directory adversary emulation",
+        "abstract": "Abstract Proactive adversary emulation requires anticipating multi-step attack trajectories, yet existing approaches rely on static attack graphs or single-signal models that cannot jointly satisfy coherence, tactical realism, and evasiveness. We propose a cascaded probabilistic framework for MITRE ATT&CK technique-path prediction in Active Directory environments, where exhaustive enumeration is intractable. Its contribution is a three-stage architecture that decouples these objectives instead of blending them. Stage 1, a two-layer unidirectional LSTM trained on observed threat-actor chains, emits a five-candidate pool rather than one technique. Stage 2, an empirical Markov tactic-transition gate, admits only attested transitions, including self-loops and backward moves a strict linear kill chain excludes. Stage 3 re-ranks survivors against a detection-rule corpus, favoring evasive over merely probable techniques. Candidates are masked at inference to Windows-applicable techniques, so outputs are technique chains, not instantiated paths. Under a prefix-disjoint protocol in which no evaluation context occurs in training, the true continuation is retained in the five-candidate pool more often than by a first-order predictor or an exact prefix-lookup table on identical pairs. Because Stage 3 both selects on and is scored by detection-rule density, the chains are re-scored against independently maintained corpora the selector never accesses; the exposure reduction persists there, and it is that transferred result that carries the evasiveness claim. Novel here is that structural admissibility is a hard constraint rather than a soft weight, so tactical realism cannot be traded away for likelihood or stealth. A case study initiated from a single initial-access technique further indicates that all tactic transitions within the returned path portfolio have attested support in the corpus transition matrix, and that no predicted step violates the ATT&CK-declared phase set of its technique.",
+        "url": "https://doi.org/10.1038/s41598-026-71934-z",
+        "external_id": "10.1038/s41598-026-71934-z",
+        "source": "openalex"
+      },
+      "source_fixture": "tests/fixtures/cross_field_alignment.json",
+      "source_profile": "graph_neural_networks",
+      "source_index": 3,
+      "label": "offtopic",
+      "rationale": "Attack graphs are background; the introduced architecture uses an LSTM, a Markov gate and reranking, not a GNN.",
+      "challenge": "background_vs_actual_architecture",
+      "quality": "not_assessed",
+      "split": "challenge"
+    },
+    {
+      "id": "sic-12",
+      "profile_id": "gnn_topic",
+      "record_kind": "captured_real",
+      "article": {
+        "title": "Parsing altered brain connectivity in neurodevelopmental disorders by integrating graph-based normative modeling and deep generative networks",
+        "abstract": "Divergent brain connectivity is thought to underlie the behavioral and cognitive symptoms observed in many neurodevelopmental disorders. Quantifying divergence from neurotypical connectivity patterns offers a promising pathway to inform diagnosis and therapeutic interventions. While advanced neuroimaging techniques, such as diffusion MRI (dMRI), have facilitated the mapping of brain's structural connectome, the challenge lies in accurately modeling developmental trajectories within these complex networked structures to create robust neurodivergence markers. In this work, we present the Brain Representation via Individualized Deep Generative Embedding (BRIDGE) framework, which integrates normative modeling with a bio-inspired deep generative model to create a reference trajectory of connectivity transformation as part of neurotypical development. This will enable the assessment of neurodivergence by comparing individuals to the established neurotypical trajectory. BRIDGE provides a global neurodivergence score based on the difference between connectivity-based brain age and chronological age, along with region-wise neurodivergence maps that highlight localized connectivity differences. Application of BRIDGE to a large cohort of children with autism spectrum disorder demonstrates that the global neurodivergence score correlates with clinical assessments in autism, and the regional map offers insights into the heterogeneity at the individual level in neurodevelopmental disorders. Together, the neurodivergence score and map form powerful tools for quantifying developmental divergence in connectivity patterns, advancing the development of imaging markers for personalized diagnosis and intervention in various clinical contexts.",
+        "url": "https://doi.org/10.1038/s43856-026-01783-4",
+        "external_id": "10.1038/s43856-026-01783-4",
+        "source": "openalex"
+      },
+      "source_fixture": "tests/fixtures/cross_field_alignment.json",
+      "source_profile": "graph_neural_networks",
+      "source_index": 8,
+      "label": "uncertain",
+      "rationale": "Graph-based deep generative modeling is explicit, but the abstract does not establish a graph neural architecture.",
+      "challenge": "insufficient_architecture_evidence",
+      "quality": "not_assessed",
+      "split": "challenge"
+    },
+    {
+      "id": "sic-13",
+      "profile_id": "gnn_methods",
+      "record_kind": "captured_real",
+      "article": {
+        "title": "scDGCN: A Graph-Based Deep Clustering Framework for Single-Cell Transcriptomics via Neighborhood-Enhanced Context Representation Learning.",
+        "abstract": "Self-supervised and context-aware representation learning offers a powerful strategy for extracting robust features from high-dimensional, sparse, and noisy single-cell data. Here, we present scDGCN, a graph-based deep clustering framework for single-cell RNA sequencing (scRNA-seq) analysis. scDGCN models intercellular similarity as a graph and leverages local neighborhood context to guide expression reconstruction, thereby learning robust cell representations. The method integrates a network enhancement module to denoise the cell similarity graph, a neighborhood-enhanced autoencoder that reconstructs gene expression using topological neighborhood context, and a graph neural network to preserve structural semantics among cells. By embedding each cell's expression profile within its neighbors, scDGCN captures subtle transcriptional variation and identifies cell subtypes without labeled references. Across ten scRNA-seq datasets from diverse human and mouse tissues, scDGCN achieves competitive adjusted Rand index (ARI), normalized mutual information (NMI), and clustering accuracy (ACC), supporting unsupervised identification of cellular subpopulations. These results demonstrate that combining graph denoising, neighborhood-enhanced context reconstruction, and graph-structured representation learning improves unsupervised single-cell clustering and facilitates high-resolution cell atlas construction.",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/42870190/",
+        "external_id": "42870190",
+        "source": "pubmed"
+      },
+      "source_fixture": "tests/fixtures/cross_field_alignment.json",
+      "source_profile": "graph_neural_networks",
+      "source_index": 6,
+      "label": "core",
+      "rationale": "Introduces a framework incorporating graph neural representation learning and graph denoising, tested across multiple datasets.",
+      "challenge": "domain_application_with_new_method",
+      "quality": "not_assessed",
+      "split": "challenge"
+    },
+    {
+      "id": "sic-14",
+      "profile_id": "gnn_alias",
+      "record_kind": "captured_real",
+      "article": {
+        "title": "scDGCN: A Graph-Based Deep Clustering Framework for Single-Cell Transcriptomics via Neighborhood-Enhanced Context Representation Learning.",
+        "abstract": "Self-supervised and context-aware representation learning offers a powerful strategy for extracting robust features from high-dimensional, sparse, and noisy single-cell data. Here, we present scDGCN, a graph-based deep clustering framework for single-cell RNA sequencing (scRNA-seq) analysis. scDGCN models intercellular similarity as a graph and leverages local neighborhood context to guide expression reconstruction, thereby learning robust cell representations. The method integrates a network enhancement module to denoise the cell similarity graph, a neighborhood-enhanced autoencoder that reconstructs gene expression using topological neighborhood context, and a graph neural network to preserve structural semantics among cells. By embedding each cell's expression profile within its neighbors, scDGCN captures subtle transcriptional variation and identifies cell subtypes without labeled references. Across ten scRNA-seq datasets from diverse human and mouse tissues, scDGCN achieves competitive adjusted Rand index (ARI), normalized mutual information (NMI), and clustering accuracy (ACC), supporting unsupervised identification of cellular subpopulations. These results demonstrate that combining graph denoising, neighborhood-enhanced context reconstruction, and graph-structured representation learning improves unsupervised single-cell clustering and facilitates high-resolution cell atlas construction.",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/42870190/",
+        "external_id": "42870190",
+        "source": "pubmed"
+      },
+      "source_fixture": "tests/fixtures/cross_field_alignment.json",
+      "source_profile": "graph_neural_networks",
+      "source_index": 6,
+      "label": "core",
+      "rationale": "GNN is the explicit reader alias; the record introduces a graph neural network method.",
+      "challenge": "alias",
+      "quality": "not_assessed",
+      "split": "challenge"
+    },
+    {
+      "id": "sic-15",
+      "profile_id": "gnn_typo",
+      "record_kind": "captured_real",
+      "article": {
+        "title": "scDGCN: A Graph-Based Deep Clustering Framework for Single-Cell Transcriptomics via Neighborhood-Enhanced Context Representation Learning.",
+        "abstract": "Self-supervised and context-aware representation learning offers a powerful strategy for extracting robust features from high-dimensional, sparse, and noisy single-cell data. Here, we present scDGCN, a graph-based deep clustering framework for single-cell RNA sequencing (scRNA-seq) analysis. scDGCN models intercellular similarity as a graph and leverages local neighborhood context to guide expression reconstruction, thereby learning robust cell representations. The method integrates a network enhancement module to denoise the cell similarity graph, a neighborhood-enhanced autoencoder that reconstructs gene expression using topological neighborhood context, and a graph neural network to preserve structural semantics among cells. By embedding each cell's expression profile within its neighbors, scDGCN captures subtle transcriptional variation and identifies cell subtypes without labeled references. Across ten scRNA-seq datasets from diverse human and mouse tissues, scDGCN achieves competitive adjusted Rand index (ARI), normalized mutual information (NMI), and clustering accuracy (ACC), supporting unsupervised identification of cellular subpopulations. These results demonstrate that combining graph denoising, neighborhood-enhanced context reconstruction, and graph-structured representation learning improves unsupervised single-cell clustering and facilitates high-resolution cell atlas construction.",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/42870190/",
+        "external_id": "42870190",
+        "source": "pubmed"
+      },
+      "source_fixture": "tests/fixtures/cross_field_alignment.json",
+      "source_profile": "graph_neural_networks",
+      "source_index": 6,
+      "label": "core",
+      "rationale": "One transposition in neural does not change the stated task.",
+      "challenge": "spelling",
+      "quality": "not_assessed",
+      "split": "challenge"
+    },
+    {
+      "id": "sic-16",
+      "profile_id": "asymmetric",
+      "record_kind": "captured_real",
+      "article": {
+        "title": "Organocatalytic Formal (3+2+1)-Cycloaddition of Allenoates, Michael Acceptors, and Carbaldehydes.",
+        "abstract": "Employing secondary amines as covalently interacting Lewis basic organocatalysts allows for the activation of electron-deficient allenes (allenoates) for unprecedented formal (3+2+1)-cycloadditions with Michael acceptors and aromatic carbaldehydes. This strategy is proposed to proceed via nucleophilic addition of the catalyst to the allenoate's β-carbon first, followed by γ-addition to the Michael acceptor, a subsequent aldol-type step, and the final ring closure and catalyst liberation. Hereby, direct access to various highly functionalized spirocyclic cyclohexanone-derivatives (17 examples) in good to excellent yields (up to 98%) and a first proof-of-concept for an asymmetric variant (around 75:25 er) by using chiral secondary amine catalysts has been obtained as well.",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/42244085/",
+        "external_id": "42244085",
+        "source": "pubmed"
+      },
+      "source_fixture": "tests/fixtures/cross_field_alignment.json",
+      "source_profile": "asymmetric_organocatalysis",
+      "source_index": 24,
+      "label": "core",
+      "rationale": "The final abstract sentence establishes an asymmetric variant using chiral secondary amine catalysts.",
+      "challenge": "late_contribution",
+      "quality": "not_assessed",
+      "split": "challenge"
+    },
+    {
+      "id": "sic-17",
+      "profile_id": "asymmetric",
+      "record_kind": "captured_real",
+      "article": {
+        "title": "Metal‐Free Synthesis of Oxa Spiro‐indene‐1,3‐dione Tetrahydrofurans and Pyrans via [3+2]/[4+2] Spirocyclization of 2‐Arylidene‐1,3‐indanedione With Haloalcohols",
+        "abstract": "ABSTRACT A concise and efficient method has been developed for the synthesis of pharmacologically important spiro‐indene‐1,3‐dione‐ fused tetrahydrofurans and pyrans via a base‐mediated cascade [3+2]/[4+2] spirocyclization of 2‐arylidene‐1,3‐indandiones and 2‐(3‐phenylallylidene)‐indandione with haloalcohols. This protocol offers several advantages, including a straightforward reaction process, short reaction times, broad substrate scope, high product yields, and mild, transition‐metal‐free reaction conditions. The practicality of this approach has been validated through gram‐scale synthesis, which furnished the desired products in good yields.",
+        "url": "https://doi.org/10.1002/ajoc.70539",
+        "external_id": "10.1002/ajoc.70539",
+        "source": "openalex"
+      },
+      "source_fixture": "tests/fixtures/cross_field_alignment.json",
+      "source_profile": "asymmetric_organocatalysis",
+      "source_index": 17,
+      "label": "offtopic",
+      "rationale": "Metal-free base-mediated synthesis alone establishes neither asymmetric induction nor a small-organic-catalyst asymmetric contribution.",
+      "challenge": "necessary_conditions",
+      "quality": "not_assessed",
+      "split": "challenge"
+    },
+    {
+      "id": "sic-18",
+      "profile_id": "topological",
+      "record_kind": "captured_real",
+      "article": {
+        "title": "Non-reciprocity preserved non-diffracting propagation of truncated Airy beams in a Hatano--Nelson system",
+        "abstract": "",
+        "url": "https://doi.org/10.1364/ol.615589",
+        "external_id": "10.1364/ol.615589",
+        "source": "openalex"
+      },
+      "source_fixture": "tests/fixtures/cross_field_alignment.json",
+      "source_profile": "topological_photonics",
+      "source_index": 14,
+      "label": "uncertain",
+      "rationale": "Title suggests an adjacent non-Hermitian optical system, but the missing abstract prevents confident attribution of topology.",
+      "challenge": "missing_evidence",
+      "quality": "not_assessed",
+      "split": "challenge"
+    },
+    {
+      "id": "sic-19",
+      "profile_id": "topological",
+      "record_kind": "captured_real",
+      "article": {
+        "title": "Highly pure electric-field skyrmions from a zonally modulated metasurface.",
+        "abstract": "Optical skyrmions are widely investigated in topological photonics, yet generating their vector textures in three dimensions purely within the electric field remains a challenge. Here, we show that a single-layer dielectric metasurface can overcome this constraint through a zonal modulation strategy to decouple focal field control. By using a low numerical aperture (NA) inner core largely governing the transverse field and a high-NA outer ring mainly contributing to the longitudinal field, highly pure Néel-type and Bloch-type electric field skyrmions are successfully generated. This zonal design strategy clarifies how tightly focused vector fields can be decomposed into separate transverse-texture and longitudinal-polarity functions, providing a compact route for generating electric-field skyrmions with flat optics.",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/42821937/",
+        "external_id": "42821937",
+        "source": "pubmed"
+      },
+      "source_fixture": "tests/fixtures/cross_field_alignment.json",
+      "source_profile": "topological_photonics",
+      "source_index": 23,
+      "label": "core",
+      "rationale": "Generation of optical skyrmion field textures is the central metasurface contribution.",
+      "challenge": "actual_optical_topology",
+      "quality": "not_assessed",
+      "split": "challenge"
+    },
+    {
+      "id": "sic-20",
+      "profile_id": "topological",
+      "record_kind": "captured_real",
+      "article": {
+        "title": "Ideal magnetic quadrupole radiators.",
+        "abstract": "High-purity magnetic quadrupole (MQ) radiation is fundamentally limited by ultralow radiative transition rates and severe mode mixing. Here, we propose a synergistic strategy combining parity-selective mode filtering and anapole engineering to realize ideal MQ radiation. Our design achieves an MQ mode-purity-factor (MPF) exceeding 99.5% under both far-field plane-wave and near-field dipole excitations. Critically, this mechanism enables the direct, contamination-free conversion of fundamental electric dipole (ED) emission into pure MQ radiation. This work establishes a robust paradigm for deterministic high-order magnetic multipole manipulation, with immediate applications in quantum light sources and topological photonics.",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/42743518/",
+        "external_id": "42743518",
+        "source": "pubmed"
+      },
+      "source_fixture": "tests/fixtures/cross_field_alignment.json",
+      "source_profile": "topological_photonics",
+      "source_index": 26,
+      "label": "context",
+      "rationale": "Multipole radiation engineering lists topological photonics as a future application; an actual topological contribution is not shown.",
+      "challenge": "prospective_application_only",
+      "quality": "not_assessed",
+      "split": "challenge"
+    },
+    {
+      "id": "sic-21",
+      "profile_id": "protein_methods",
+      "record_kind": "captured_real",
+      "article": {
+        "title": "A water-pinning hot spot drives templated tau aggregation",
+        "abstract": "Tau assembles into fibrillar aggregates that are pathological hallmarks of a group of neurodegenerative diseases collectively called tauopathies. Templated aggregation of naïve tau to seeding-competent fibrils that proceed from cell to cell is a key driver of prion-like progression of tauopathies. This study tests the hypothesis that tau, an intrinsically disordered protein, achieves in-register stacking to form seed-competent fibrils by a pinning action of tau to each other and/or the seed surface via a single dominant hotspot to avoid mismatch in tau stacking to fibrils. Structured solvation water has been proposed to be a signature of such hot spots at both the tau fibril-end surface and soluble tau monomers. Although jR2R3-P301L tau exhibits a heterogeneous hydration landscape in its intrinsically disordered state, with enhanced water structuring near the P301L mutation site, it is unclear whether a localized hotspot exists at the fibril end surface and surface water facilitates the initial contacts in templated aggregation. Using rapid 1 H- 15 N SOFAST-HMQC NMR to track seed-induced aggregation of jR2R3-P301L in real time, complemented by molecular dynamics simulation of fibril surface hydration, we identify a residue-specific pinning hotspot that is prone to dewetting followed by sequential folding and incorporation of the remaining segment in a two-step dock-and-lock process. Site-specific spin labeling further demonstrates that blocking this pinning hotspot disrupts templated aggregation, leading to shorter fibrils. The identification of a dominant pinning site will facilitate the rational design of binders to effectively disrupt fibril extension or serve as diagnostic or therapeutic strategies.",
+        "url": "https://doi.org/10.1073/pnas.2611158123",
+        "external_id": "10.1073/pnas.2611158123",
+        "source": "Proceedings of the National Academy of Sciences"
+      },
+      "source_fixture": "tests/fixtures/cross_field_alignment.json",
+      "source_profile": "targeted_protein_degradation",
+      "source_index": 120,
+      "label": "context",
+      "rationale": "Native tau aggregation mechanism and proposed future binder design provide context, not an introduced prediction or engineering method.",
+      "challenge": "native_mechanism_vs_design",
+      "quality": "not_assessed",
+      "split": "challenge"
+    },
+    {
+      "id": "sic-22",
+      "profile_id": "tau_topic",
+      "record_kind": "captured_real",
+      "article": {
+        "title": "A water-pinning hot spot drives templated tau aggregation",
+        "abstract": "Tau assembles into fibrillar aggregates that are pathological hallmarks of a group of neurodegenerative diseases collectively called tauopathies. Templated aggregation of naïve tau to seeding-competent fibrils that proceed from cell to cell is a key driver of prion-like progression of tauopathies. This study tests the hypothesis that tau, an intrinsically disordered protein, achieves in-register stacking to form seed-competent fibrils by a pinning action of tau to each other and/or the seed surface via a single dominant hotspot to avoid mismatch in tau stacking to fibrils. Structured solvation water has been proposed to be a signature of such hot spots at both the tau fibril-end surface and soluble tau monomers. Although jR2R3-P301L tau exhibits a heterogeneous hydration landscape in its intrinsically disordered state, with enhanced water structuring near the P301L mutation site, it is unclear whether a localized hotspot exists at the fibril end surface and surface water facilitates the initial contacts in templated aggregation. Using rapid 1 H- 15 N SOFAST-HMQC NMR to track seed-induced aggregation of jR2R3-P301L in real time, complemented by molecular dynamics simulation of fibril surface hydration, we identify a residue-specific pinning hotspot that is prone to dewetting followed by sequential folding and incorporation of the remaining segment in a two-step dock-and-lock process. Site-specific spin labeling further demonstrates that blocking this pinning hotspot disrupts templated aggregation, leading to shorter fibrils. The identification of a dominant pinning site will facilitate the rational design of binders to effectively disrupt fibril extension or serve as diagnostic or therapeutic strategies.",
+        "url": "https://doi.org/10.1073/pnas.2611158123",
+        "external_id": "10.1073/pnas.2611158123",
+        "source": "Proceedings of the National Academy of Sciences"
+      },
+      "source_fixture": "tests/fixtures/cross_field_alignment.json",
+      "source_profile": "targeted_protein_degradation",
+      "source_index": 120,
+      "label": "core",
+      "rationale": "The central experiment and simulation address tau fibril propagation directly.",
+      "challenge": "reader_intent_reversal",
+      "quality": "not_assessed",
+      "split": "challenge"
+    },
+    {
+      "id": "sic-23",
+      "profile_id": "gnn_methods",
+      "record_kind": "controlled_fictional",
+      "article": {
+        "title": "Fictional contrast: New message-passing rule",
+        "abstract": "We introduce a graph neural network message-passing rule for arbitrary graphs and compare it across graph learning tasks."
+      },
+      "label": "core",
+      "rationale": "The graph architecture itself is introduced.",
+      "challenge": "actual_contribution",
+      "contrast_family": "gnn_ownership",
+      "quality": "not_assessed",
+      "split": "challenge"
+    },
+    {
+      "id": "sic-24",
+      "profile_id": "gnn_methods",
+      "record_kind": "controlled_fictional",
+      "article": {
+        "title": "Fictional contrast: Existing message-passing rule",
+        "abstract": "We apply an existing graph neural network message-passing rule to one regional flood event. Our contribution is the analysis of that event."
+      },
+      "label": "context",
+      "rationale": "The GNN is an applied tool; the contribution is one case analysis.",
+      "challenge": "background_vs_actual_contribution",
+      "contrast_family": "gnn_ownership",
+      "quality": "not_assessed",
+      "split": "challenge"
+    },
+    {
+      "id": "sic-25",
+      "profile_id": "gnn_topic",
+      "record_kind": "controlled_fictional",
+      "article": {
+        "title": "Fictional contrast: Existing message-passing rule",
+        "abstract": "We apply an existing graph neural network message-passing rule to one regional flood event. Our contribution is the analysis of that event."
+      },
+      "label": "core",
+      "rationale": "General GNN interest explicitly includes applications.",
+      "challenge": "general_topic_application",
+      "contrast_family": "gnn_ownership",
+      "quality": "not_assessed",
+      "split": "challenge"
+    },
+    {
+      "id": "sic-26",
+      "profile_id": "gnn_topic",
+      "record_kind": "controlled_fictional",
+      "article": {
+        "title": "Fictional contrast: Graphs in the introduction",
+        "abstract": "Graph neural networks motivate our discussion. We introduce a linear regression model using independent scalar features; no graph is an input to the model."
+      },
+      "label": "offtopic",
+      "rationale": "Mentioning GNNs as motivation does not make linear regression a GNN contribution.",
+      "challenge": "background_mention",
+      "contrast_family": "gnn_ownership",
+      "quality": "not_assessed",
+      "split": "challenge"
+    },
+    {
+      "id": "sic-27",
+      "profile_id": "protein_methods",
+      "record_kind": "controlled_fictional",
+      "article": {
+        "title": "Fictional contrast: Reusable sequence design procedure",
+        "abstract": "We introduce a procedure that designs protein sequences against specified structural targets and provide an implementation for reuse across protein families."
+      },
+      "label": "core",
+      "rationale": "Designed sequences and transferable procedure match explicit engineering intent.",
+      "challenge": "transferable_engineering",
+      "contrast_family": "protein_ownership",
+      "quality": "not_assessed",
+      "split": "challenge"
+    },
+    {
+      "id": "sic-28",
+      "profile_id": "protein_methods",
+      "record_kind": "controlled_fictional",
+      "article": {
+        "title": "Fictional contrast: Native protein described",
+        "abstract": "We describe the conformational states of one naturally occurring protein using an existing structural prediction program. The contribution is interpretation of the native mechanism."
+      },
+      "label": "context",
+      "rationale": "Prediction is an existing tool; a natural mechanism is the output.",
+      "challenge": "natural_context",
+      "contrast_family": "protein_ownership",
+      "quality": "not_assessed",
+      "split": "challenge"
+    },
+    {
+      "id": "sic-29",
+      "profile_id": "asymmetric",
+      "record_kind": "controlled_fictional",
+      "article": {
+        "title": "Fictional contrast: Relevant result after long introduction",
+        "abstract": "Asymmetric organocatalysis is mentioned as prior work. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We introduce an achiral iron catalyst for racemic alkene coupling; this work does not develop asymmetric organocatalysis."
+      },
+      "label": "offtopic",
+      "rationale": "Final contribution explicitly uses an achiral metal catalyst; the opening topic mention is background.",
+      "challenge": "long_conclusion_negative",
+      "contrast_family": "long_conclusion",
+      "quality": "not_assessed",
+      "split": "challenge"
+    },
+    {
+      "id": "sic-30",
+      "profile_id": "asymmetric",
+      "record_kind": "controlled_fictional",
+      "article": {
+        "title": "Fictional contrast: Contribution after long setup",
+        "abstract": "We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We discuss reaction setup and routine analytical characterization. We introduce a chiral secondary amine organocatalyst for enantioselective carbon-carbon bond formation."
+      },
+      "label": "core",
+      "rationale": "The final sentence establishes an on-task organic catalyst and asymmetric transformation.",
+      "challenge": "long_conclusion_positive",
+      "contrast_family": "long_conclusion",
+      "quality": "not_assessed",
+      "split": "challenge"
+    }
+  ]
+}

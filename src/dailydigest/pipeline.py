@@ -51,7 +51,7 @@ from .rank.source_quality import (
     is_high_quality_journal_source,
     should_skip_item,
     source_bucket,
-    venue_relevance_credit,
+    venue_relevance_credit as venue_relevance_credit,  # compatibility export
 )
 from .store import (
     DigestRow,
@@ -708,12 +708,9 @@ def _dynamic_section_caps(
         section = row.section or ""
         feat = features.get(_row_feature_key(row), {})
         if section == "research":
-            v = feat.get("topic_score", feat.get("confidence_score", fused))
-            neg = float(feat.get("negative_interest_penalty", 0.0) or 0.0)
-            if (
-                v is not None
-                and float(v) + venue_relevance_credit(row) - neg >= topic_floor
-            ):
+            effective = dict(feat)
+            effective.setdefault("topic_score", feat.get("confidence_score", fused))
+            if _research_relevant(row, effective, topic_floor):
                 counts[section] += 1
         elif section in ("industry", "world"):
             v = feat.get("confidence_score", fused)
@@ -740,6 +737,41 @@ def _dynamic_section_caps(
     return caps
 
 
+def _apply_topic_alignment(scored, features, profile, settings, *, check_cancel=None):
+    """Run the bounded local matcher before eligibility, preserving raw scores.
+
+    An explicitly configured experimental reranker takes precedence. Failure
+    propagates so an interrupted model pass cannot publish a partial digest.
+    """
+    if not getattr(settings, "semantic_matching", False) or getattr(settings, "contribution_reranker_path", ""):
+        return scored
+    from .rank.semantic_alignment import apply_topic_alignment
+
+    return apply_topic_alignment(
+        scored, features, profile, model_dir=getattr(settings, "semantic_model_dir", "") or None,
+        check_cancel=check_cancel,
+    )
+
+
+def _research_relevant(row, feature, topic_floor, *, adaptive=True):
+    """One eligibility rule shared by filtering and adaptive section counts."""
+    match = feature.get("topic_alignment") or {}
+    logit = match.get("logit")
+    if not adaptive:
+        return True
+    topic = feature.get("topic_score")
+    if topic is None:
+        return True
+    negative = float(feature.get("negative_interest_penalty", 0.0) or 0.0)
+    # Quality selection still uses the original topic cosine. A strong joint
+    # match may rescue only a borderline embedding miss, never a negative vote
+    # preference or a low-quality-source floor.
+    rescue = logit is not None and float(logit) >= 4.0 and negative == 0.0 and float(topic) >= topic_floor - .08
+    # Publication reputation orders already relevant work. It cannot prove
+    # personal topic fit, including when the optional model is disabled.
+    return rescue or float(topic) - negative >= topic_floor
+
+
 def _filter_off_topic(
     scored: list[tuple[ItemRow, float]],
     features: ScoreFeatureMap,
@@ -760,8 +792,7 @@ def _filter_off_topic(
     snapshot is missing (so a scoring fallback never silently empties a section).
     """
     s = get_settings()
-    if not getattr(s, "adaptive_section_sizes", False):
-        return scored
+    adaptive = bool(getattr(s, "adaptive_section_sizes", False))
     topic_floor = float(getattr(s, "min_topic_relevance", 0.65))
     news_floor = float(getattr(s, "min_news_quality", 0.45))
     opportunity_floor = float(getattr(s, "min_opportunity_relevance", 0.58))
@@ -770,16 +801,11 @@ def _filter_off_topic(
         section = row.section or ""
         feat = features.get(_row_feature_key(row), {})
         if section == "research":
-            t = feat.get("topic_score")
-            neg = float(feat.get("negative_interest_penalty", 0.0) or 0.0)
-            # Effective relevance = topic cosine + venue credit − negative-interest
-            # penalty. The venue credit rescues borderline top-venue work; the
-            # negative penalty excludes off-field items whose cosine clears the floor.
-            if (
-                t is not None
-                and float(t) + venue_relevance_credit(row) - neg < topic_floor
-            ):
+            if not _research_relevant(row, feat, topic_floor, adaptive=adaptive):
                 continue
+        elif not adaptive:
+            out.append((row, score))
+            continue
         elif section in ("industry", "world"):
             c = feat.get("confidence_score")
             if c is not None and float(c) < news_floor:
@@ -955,6 +981,17 @@ def _apply_topic_selection_preferences(
             if coverage_bonus:
                 ordering_bonus[idx] = ordering_bonus.get(idx, 0.0) + coverage_bonus
                 feat["topic_coverage_bonus"] = round(coverage_bonus, 4)
+
+    # A generic retrieval model can miss specialized terminology. Disagreement
+    # lowers priority modestly; it never proves an otherwise-related paper is
+    # out of scope. Incomplete text cannot support even this negative nudge.
+    for idx, (row, _score) in enumerate(scored):
+        if (row.section or "") != "research":
+            continue
+        feat = features.get(_row_feature_key(row), {})
+        match = feat.get("topic_alignment") or {}
+        if match.get("complete") is True and float(match.get("logit", 0.0)) < -9.5:
+            ordering_bonus[idx] = ordering_bonus.get(idx, 0.0) - .06
 
     for idx, bonus in ordering_bonus.items():
         feat = features.get(_row_feature_key(scored[idx][0]), {})
@@ -1585,6 +1622,9 @@ def run_all(
     # before the separate citation adjustment and within-day dedupe.
     pickable = _filter_actionable_opportunities(scored, opportunity_profile)
     after_actionable = list(pickable)
+    pickable = _apply_topic_alignment(
+        pickable, score_features, profile, section_settings, check_cancel=check_cancel,
+    )
     pickable = _filter_off_topic(pickable, score_features)
     after_topic = list(pickable)
 
@@ -1888,6 +1928,7 @@ def run_all(
                     contribution_rerank=_feature(row).get("contribution_rerank"),
                     contribution_claims=_feature(row).get("contribution_claims"),
                     article_evidence=_feature(row).get("article_evidence"),
+                    topic_alignment=_feature(row).get("topic_alignment"),
                 ),
             )
             for row, score, label in labeled

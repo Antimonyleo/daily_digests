@@ -51,6 +51,9 @@ def _isolate_env(tmp_path, tmp_path_factory, monkeypatch):
     monkeypatch.setenv("OPPORTUNITY_PROFILE_PATH", str(isolated_root / "opportunities.yaml"))
     monkeypatch.setenv("LLM_BACKEND", "extractive")
     monkeypatch.setenv("LLM_API_KEY", "")
+    # General unit tests never download/load ML models. Dedicated semantic
+    # integration tests opt in and inject their backend explicitly.
+    monkeypatch.setenv("SEMANTIC_MATCHING", "false")
     monkeypatch.setenv("USER_TZ", "UTC")
     # A developer's private opportunity settings must not change validation of
     # ordinary setup-form tests. Tests that exercise these sections opt in.

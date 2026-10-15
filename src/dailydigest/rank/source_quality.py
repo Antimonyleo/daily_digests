@@ -20,7 +20,7 @@ from typing import Any
 
 from ..models import SourceSpec
 
-RANKER_VERSION = "2026-10-10-content-fidelity-v12"
+RANKER_VERSION = "2026-10-15-local-topic-verification-v14"
 
 _ARXIV_CS_RE = re.compile(r"\barxiv[\s:_\-]*cs[\s:./\-]", re.IGNORECASE)
 
@@ -133,6 +133,9 @@ STRONG_TIER_NAMES = (
     "angewandte chemie",
     "angewandte chemie international edition",
     "advanced materials",
+    # Exact journal identities: journals.aps.org/prl/about and jmlr.org.
+    "physical review letters",
+    "journal of machine learning research",
     "advanced functional materials",
     "advanced science",
     "small (wiley)",
@@ -148,6 +151,10 @@ def _normalize_venue_name(value: str) -> str:
 
 _VENUE_ALIASES = {
     "small": "small (wiley)",
+    # NLM Catalog 9885358 uses this disambiguated title.
+    "advanced materials (deerfield beach, fla)": "advanced materials",
+    "phys rev lett": "physical review letters",
+    "jmlr": "journal of machine learning research",
     "chemical society reviews": "chem soc rev",
     "proceedings of the national academy of sciences": "pnas",
     "proceedings of the national academy of sciences of the united states of america": "pnas",
@@ -620,7 +627,7 @@ def _infer_source_quality_by_name(source_lc: str, section_lc: str) -> SourceQual
         if "openalex" in source_lc:
             return SourceQuality(0.34, "aggregator", None)
         if is_arxiv_cs_source(source_lc):
-            return SourceQuality(0.48, "repository", None)
+            return SourceQuality(0.56, "repository", None)
         venue_tier = _known_venue_tier(source_lc)
         if venue_tier == "top":
             return SourceQuality(0.99, "top", 7.0)
@@ -769,7 +776,8 @@ def source_bucket(row: Any) -> str:
         return "published_journal"
 
     if is_aggregator and not venue:
-        return "aggregator" if "openalex" in source_lc else "low_impact_journal"
+        # Missing publication evidence is uncertainty, even on a trusted index.
+        return "unknown_journal"
 
     quality = infer_source_quality(quality_source, section)
     if quality.quality_tier in {"top", "high", "strong"}:
@@ -778,15 +786,17 @@ def source_bucket(row: Any) -> str:
     # that aren't matched by the explicit string checks above.
     if quality.quality_tier in {"repository", "preprint"}:
         return "preprint_other"
-    # Unknown / low-prestige peer-reviewed venues. These are the low-impact
-    # journals that should appear only rarely even when topically relevant.
+    # Absence from the curated table is uncertainty, not measured low impact.
+    # Selection bounds unknown venues separately and requires strong topic fit.
+    if quality.quality_tier == "unknown":
+        return "unknown_journal"
     if quality.prestige_score < LOW_RESEARCH_PRESTIGE:
         return "low_impact_journal"
     return "other_research"
 
 
 def is_low_impact_research(row: Any) -> bool:
-    """Return True for low-impact / unknown peer-reviewed research venues."""
+    """Return True for observed or configured low-impact research venues."""
     return source_bucket(row) == "low_impact_journal"
 
 
@@ -1111,6 +1121,7 @@ def breakdown_payload(
     contribution_rerank: dict[str, Any] | None = None,
     contribution_claims: dict[str, Any] | None = None,
     article_evidence: dict[str, Any] | None = None,
+    topic_alignment: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Return a JSON-serializable rank explanation for persistence/UI."""
     breakdown = score_breakdown(
@@ -1163,6 +1174,8 @@ def breakdown_payload(
         payload["contribution_claims"] = dict(contribution_claims)
     if article_evidence is not None:
         payload["article_evidence"] = dict(article_evidence)
+    if topic_alignment is not None:
+        payload["topic_alignment"] = dict(topic_alignment)
     return payload
 
 
@@ -1277,14 +1290,10 @@ def quality_adjusted_score(row: Any, base_score: float) -> float:
         # Apply a mild penalty so a peer-reviewed paper with similar topic fit
         # is preferred. Fades to zero at high base scores so a highly relevant
         # preprint can still surface over a weakly matched journal paper.
-        # arXiv CS gets a slightly higher penalty but we take the MAX of the two,
-        # not both, to avoid double-stacking.
+        # The same publication status receives the same penalty across fields.
         if is_preprint_source(row) and not exceptional:
             preprint_smooth = max(0.0, min(1.0, (0.76 - base) / 0.26))
-            arxiv_smooth = max(0.0, min(1.0, (0.76 - base) / 0.20)) if is_arxiv_cs_source(row) else 0.0
-            # Instead of stacking both penalties, use the larger of the two
-            preprint_or_arxiv_penalty = max(0.15 * preprint_smooth, 0.18 * arxiv_smooth)
-            score -= preprint_or_arxiv_penalty
+            score -= 0.15 * preprint_smooth
         # Penalize editorial/commentary pieces that aren't primary research
         ctype = content_type(row)
         if ctype in {"editorial", "commentary"} and not exceptional:

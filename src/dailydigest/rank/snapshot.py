@@ -17,6 +17,7 @@ SELECTION_SETTINGS = (
     "research_final_score_min_keep", "adaptive_relevance_floor",
 )
 RANKING_SETTINGS = SELECTION_SETTINGS + (
+    "semantic_matching",
     "min_topic_relevance", "negative_interest_weight", "negative_interest_margin",
     "research_quality_weight", "venue_relevance_credit", "topic_priority_bonus_scale",
     "topic_coverage_bonus_scale", "within_day_dedupe", "within_day_dedupe_threshold",

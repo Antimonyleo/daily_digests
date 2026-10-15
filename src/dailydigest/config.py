@@ -73,6 +73,10 @@ class Settings(BaseSettings):
     # Optional local contribution-evidence ordering; zero preserves current
     # ordering. This leaves raw relevance/quality scores and eligibility intact.
     contribution_order_strength: float = Field(default=0.0, ge=0.0, le=0.1)
+    # Optional experimental local topic verification. Offline testing has not
+    # established an extra selection benefit, so normal brewing avoids its cost.
+    semantic_matching: bool = False
+    semantic_model_dir: str = ""
     # Explicit local learned reranker. Empty paths keep normal ranking unchanged.
     # Provision an evaluated artifact and its exact encoder assets together.
     contribution_reranker_path: str = ''
@@ -207,17 +211,8 @@ class Settings(BaseSettings):
     # lower it to be more inclusive. (Stable now that profile cosine is a true
     # unit cosine; ~0.5–0.6 is weak/off-topic, ~0.65+ is a solid match.)
     min_topic_relevance: float = Field(default=0.65, ge=0.0, le=1.0)
-    # Venue-aware relaxation of the topic floor. A top/high/strong-tier journal in
-    # the reader's field is itself a strong quality prior, so it should clear the
-    # relevance gate at a slightly lower raw topic cosine than an anonymous
-    # preprint or aggregator hit. The effective topic score used at the gate is
-    # ``topic + venue_relevance_credit * prestige_excess`` (research only), where
-    # prestige_excess = prestige - 0.50. At 0.10, a high-tier venue (prestige
-    # 0.90, excess 0.40) gets +0.04; a top-tier venue (0.99) gets ~+0.049.
-    # Because the credit is small, an OFF-topic prestigious paper (low cosine)
-    # still fails the gate — it only rescues genuinely borderline top-venue work
-    # that bge-small's compressed cosine scores just under the floor. Set to 0 to
-    # restore the pure venue-blind floor.
+    # Retained for older experiment/replay configurations. Current relevance
+    # gating never uses publication reputation to establish reader topic fit.
     venue_relevance_credit: float = Field(default=0.10, ge=0.0, le=0.5)
     # FINAL-fused-score cutoff for the research section. Section SIZING gates on
     # topic cosine (min_topic_relevance), but the picker then fills those slots by

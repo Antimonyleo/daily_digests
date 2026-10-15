@@ -107,11 +107,11 @@ def test_tool_use_without_completed_engineered_output_is_not_promoted(abstract):
     assert analyze_contribution("A study", abstract, FACETS)["priority"] <= 0
 
 
-def test_unknown_venue_evidence_does_not_change_conservative_bucket():
+def test_unknown_venue_evidence_has_a_distinct_conservative_bucket():
     article = row()
     article.source = "Unlisted Specialist Journal"
     payload = quality.breakdown_payload(article, .8)
-    assert payload["source_bucket"] == "low_impact_journal"
+    assert payload["source_bucket"] == "unknown_journal"
     assert payload["venue_evidence"]["status"] == "unknown"
     assert "unknown_venue" in payload["quality_tags"]
     assert "Venue quality unverified" in payload["tags"]

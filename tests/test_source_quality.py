@@ -379,7 +379,7 @@ def test_unlisted_venue_cannot_inherit_prestige_from_name_substring(venue):
                           metadata={"venue": venue}, title="DNA nanostructure methods", abstract="")
     assert recognized_research_venue(venue) is None
     assert infer_source_quality(venue, "research").quality_tier == "unknown"
-    assert source_bucket(row) == "low_impact_journal"
+    assert source_bucket(row) == "unknown_journal"
     assert not is_high_quality_journal_source(row)
     assert venue_relevance_credit(row) == 0.0
 

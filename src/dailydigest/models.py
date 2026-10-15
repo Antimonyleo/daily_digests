@@ -37,7 +37,9 @@ class Item(BaseModel):
     def _cap_abstract(cls, v: object) -> str:
         if not v:
             return ""
-        return str(v)[:4000]
+        # Preserve late contributions for semantic window extraction while
+        # keeping provider input bounded before persistence and scoring.
+        return str(v)[:16000]
 
     @field_validator("section")
     @classmethod

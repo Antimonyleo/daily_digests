@@ -290,6 +290,26 @@ def test_pubmed_explicit_nonprofile_query_is_unchanged(monkeypatch):
     assert queries == [query]
 
 
+def test_pubmed_requests_supported_publication_date_sort(monkeypatch):
+    requests = []
+
+    class Response:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"esearchresult": {"idlist": [], "count": "0"}}
+
+    def get(client, url, *, params):
+        requests.append(params)
+        return Response()
+
+    monkeypatch.setattr(pubmed.httpx.Client, "get", get)
+    assert pubmed.PubMedSource().fetch(_spec("pubmed", query='"gene therapy"[tiab]')) == []
+    assert requests[0]["sort"] == "pub date"
+    assert requests[0]["datetype"] == "pdat"
+
+
 def test_pubmed_no_profile_terms_uses_configured_fallback(monkeypatch):
     _profile(monkeypatch, [])
     queries = []
@@ -349,6 +369,72 @@ def test_pubmed_search_total_and_item_cap_are_recorded(monkeypatch):
     assert query["request_count"] == 2
     assert query["stop_reason"] == "item_cap"
     assert query["truncated"] and not query["exhausted"]
+
+
+@pytest.mark.parametrize("ids", [[], ["123"]])
+@pytest.mark.parametrize("warnings", [
+    {"outputmessages": ["Wildcard search used only the first available variations."]},
+    {"phrasesignored": ["protein*"]},
+    {"quotedphrasesnotfound": ["protein engineering"]},
+    {"outputmessages": ["No items found.", "Search expansion was limited."]},
+])
+def test_pubmed_search_warnings_preserve_results_without_claiming_exhaustion(
+    monkeypatch, caplog, ids, warnings,
+):
+    from dailydigest import health
+
+    class Response:
+        text = """<PubmedArticleSet><PubmedArticle><MedlineCitation>
+        <PMID>123</PMID><Article><ArticleTitle>Protein engineering</ArticleTitle>
+        </Article></MedlineCitation></PubmedArticle></PubmedArticleSet>"""
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"esearchresult": {
+                "idlist": ids, "count": str(len(ids)), "warninglist": warnings,
+            }}
+
+    monkeypatch.setattr(pubmed.httpx.Client, "get", lambda *args, **kwargs: Response())
+    monkeypatch.setattr(pubmed.time, "sleep", lambda *args: None)
+    source = pubmed.PubMedSource()
+    items = source.fetch(_spec("pubmed", query="protein*[tiab]"))
+    assert [item.external_id for item in items] == ids
+    query = source.last_fetch_diagnostics["queries"][0]
+    assert query["warnings"] == warnings
+    assert query["truncated"] and not query["exhausted"]
+    assert query["stop_reason"] == "search_warning"
+    assert query["failure"] is None
+    assert query["request_count"] == (2 if ids else 1)
+    assert "PubMed search warnings" in caplog.text
+    monkeypatch.setattr(health, "_load_existing", lambda path: {"latest": [{
+        "source": "PubMed", "ok": True, "items": len(items),
+        "diagnostics": source.last_fetch_diagnostics,
+    }]})
+    assert health.coverage_summary()["limited"] == 1
+
+
+@pytest.mark.parametrize("warnings", [
+    {},
+    {"phrasesignored": [], "quotedphrasesnotfound": [], "outputmessages": []},
+    {"outputmessages": ["No items found."]},
+])
+def test_pubmed_empty_result_notice_is_not_a_coverage_failure(monkeypatch, caplog, warnings):
+    class Response:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"esearchresult": {"idlist": [], "count": "0", "warninglist": warnings}}
+
+    monkeypatch.setattr(pubmed.httpx.Client, "get", lambda *args, **kwargs: Response())
+    source = pubmed.PubMedSource()
+    assert source.fetch(_spec("pubmed", query="protein*[tiab]")) == []
+    query = source.last_fetch_diagnostics["queries"][0]
+    assert query["exhausted"] and not query["truncated"]
+    assert query["stop_reason"] == "exhausted"
+    assert "PubMed search warnings" not in caplog.text
 
 
 @pytest.mark.parametrize("payload,reason", [

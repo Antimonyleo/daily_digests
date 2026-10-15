@@ -713,6 +713,9 @@ def test_run_all_enriches_only_candidates_that_clear_free_gates(
     from dailydigest import store as store_mod
     from dailydigest.rank import enrich as enrich_mod
 
+    # Exercise negative-interest accounting at a fixed topic floor rather than
+    # inheriting a developer's stricter private setting or relying on venue credit.
+    monkeypatch.setenv("MIN_TOPIC_RELEVANCE", "0.65")
     _reset_store(tmp_path, monkeypatch)
     with store_mod.session_scope() as session:
         rows = [

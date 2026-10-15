@@ -132,6 +132,41 @@ class LocalCrossEncoder:
         """Explicit offline inspection; never changes scores or model provenance."""
         return pair_input_diagnostics(self._tokenizer, pairs, max_length=self.provenance["max_length"])
 
+    def score_records(self, records: list[dict], *, check_cancel=None) -> list[dict]:
+        """Score title/abstract windows without losing queries or late conclusions.
+
+        Max window logits are relative match signals. Incomplete coverage must
+        never be interpreted as evidence that the paper is off-interest.
+        """
+        from .semantic_windows import prepare_semantic_records
+
+        if not hasattr(self, "_window_tokenizer"):
+            from tokenizers import Tokenizer
+
+            self._window_tokenizer = Tokenizer.from_str(self._tokenizer.to_str())
+            self._window_tokenizer.no_truncation()
+            self._window_tokenizer.no_padding()
+        prepared = prepare_semantic_records(self._window_tokenizer, records)
+        result = [{**record, "logit": float("-inf")} for record in prepared["records"]]
+        windows = prepared["windows"]
+        for start in range(0, len(windows), self.batch_size):
+            if check_cancel is not None:
+                check_cancel()
+            batch = windows[start:start + self.batch_size]
+            width = max(len(row["input_ids"]) for row in batch)
+            feed = {name: np.asarray([
+                row[name] + [0] * (width - len(row[name])) for row in batch
+            ], dtype=np.int64) for name in self._inputs}
+            logits = np.asarray(self._session.run([self._output], feed)[0], dtype=np.float64)
+            if logits.shape not in ((len(batch),), (len(batch), 1)) or not np.isfinite(logits).all():
+                raise ValueError("Semantic encoder must return one finite logit per window")
+            for row, value in zip(batch, logits.reshape(-1), strict=True):
+                summary = result[row["recordIndex"]]
+                summary["logit"] = max(summary["logit"], float(value))
+        if check_cancel is not None:
+            check_cancel()
+        return result
+
     def score_pairs(self, pairs: list[tuple[str, str]]) -> np.ndarray:
         """Return one finite raw logit per pair; never silently truncate queries."""
         _validate_pairs(pairs)

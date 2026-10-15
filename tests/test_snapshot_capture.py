@@ -140,7 +140,9 @@ def test_captured_selection_inputs_replay_without_current_profile_or_settings(ca
                  "is_published_journal_source", "is_high_quality_journal_source",
                  "is_low_impact_research"):
         monkeypatch.setattr(snapshot_mod.quality, name, lambda _row: pytest.fail("consulted source facts"))
-        monkeypatch.setattr(ranker, name, lambda _row: pytest.fail("consulted source facts"))
+        # Selection no longer has a field-specific CS preprint dependency.
+        if name != "is_arxiv_cs_source":
+            monkeypatch.setattr(ranker, name, lambda _row: pytest.fail("consulted source facts"))
     assert validate_replay(roundtrip, frozen_selection)["status"] == "matched"
 
 

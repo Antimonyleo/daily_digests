@@ -22,7 +22,6 @@ from ..store import ItemRow
 from .embedding_cache import embed_item_rows, item_text
 from .source_quality import (
     RANKER_VERSION,
-    is_arxiv_cs_source,
     is_high_quality_journal_source,
     is_low_impact_research,
     is_preprint_source,
@@ -969,8 +968,8 @@ def pick_top_per_section(
 ) -> list[tuple[ItemRow, float]]:
     """Take up to caps[section] while protecting research source diversity.
 
-    Research needs editorial balance, not just the top cosine/LR scores. arXiv
-    CS and other preprints are allowed through when they are strong matches, but
+    Research needs editorial balance, not just the top cosine/LR scores.
+    Preprints across fields are allowed through when they are strong matches, but
     they cannot consume most of the research section when high-quality journal
     articles are available. ``catch_up`` relaxes that balance so a post-gap
     backlog (which the date-backfilling preprint/aggregator sources dominate)
@@ -1017,9 +1016,6 @@ def _pick_research_balanced(
     def _bucket(row):
         return fact(row, "source_bucket", source_bucket)
 
-    def _arxiv_cs(row):
-        return fact(row, "is_arxiv_cs", is_arxiv_cs_source)
-
     def _preprint(row):
         return fact(row, "is_preprint", is_preprint_source)
 
@@ -1049,21 +1045,29 @@ def _pick_research_balanced(
         # their current window. Relax the source-diversity caps so on-topic
         # backlog papers actually fill the (expanded) section; relevance beats
         # editorial balance when catching up.
-        max_arxiv_cs = math.ceil(cap * 0.35)
         max_preprints = math.ceil(cap * 0.75)
         max_aggregators = math.ceil(cap * 0.60)
         max_per_source = max(3, math.ceil(cap * 0.60))
     else:
-        max_arxiv_cs = max(1, min(3, math.ceil(cap * 0.10)))
         try:
             from ..config import get_settings as _gs
 
             _preprint_frac = float((settings if settings is not None else _gs()).max_preprint_research_frac)
         except Exception:  # noqa: BLE001
             _preprint_frac = 0.55
-        max_preprints = max(max_arxiv_cs, math.ceil(cap * _preprint_frac))
+        max_preprints = max(0, min(cap, math.ceil(cap * _preprint_frac)))
         max_aggregators = max(1, math.ceil(cap * 0.10))
         max_per_source = max(2, math.ceil(cap * 0.20)) if cap >= 5 else None
+    # Catch-up may relax positive budgets, but an explicit zero remains absolute.
+    if catch_up:
+        try:
+            from ..config import get_settings as _preprint_settings
+
+            controls = settings if settings is not None else _preprint_settings()
+            if float(controls.max_preprint_research_frac) <= 0:
+                max_preprints = 0
+        except Exception:  # noqa: BLE001
+            pass
     min_high_quality = min(math.ceil(cap * 0.20), _available(scored, _high_quality))
     min_published = min(math.ceil(cap * 0.30), _available(scored, _published))
 
@@ -1073,7 +1077,9 @@ def _pick_research_balanced(
 
         _s = settings if settings is not None else get_settings()
         _low_impact_frac = float(_s.max_low_impact_research_frac)
-        max_low_impact = int(cap * _low_impact_frac) if _low_impact_frac > 0 else 0
+        # A positive allowance permits one exceptional match in small digests.
+        # Zero remains an absolute exclusion; no slot is reserved.
+        max_low_impact = min(cap, max(1, int(cap * _low_impact_frac))) if _low_impact_frac > 0 else 0
         low_impact_floor = float(_s.low_impact_relevance_floor)
         # The calibrator is trained on final scores, so it is valid only for
         # legacy callers that do not provide raw topic snapshots.
@@ -1082,7 +1088,7 @@ def _pick_research_balanced(
 
             low_impact_floor = _adaptive_floor(low_impact_floor)
     except Exception:  # noqa: BLE001
-        max_low_impact = cap // 6
+        max_low_impact = max(1, cap // 6)
         low_impact_floor = 0.72
 
     selected: list[tuple[ItemRow, float]] = []
@@ -1096,19 +1102,27 @@ def _pick_research_balanced(
         score: float,
         *,
         enforce_source_cap: bool = True,
+        allow_preprint_overflow: bool = False,
     ) -> bool:
         row_id = getattr(row, "id", None)
         key = int(row_id) if isinstance(row_id, int) else id(row)
         if key in selected_ids or len(selected) >= cap:
             return False
-        if _low_impact(row):
+        if _preprint(row) and (
+            max_preprints == 0 or not allow_preprint_overflow
+            and sum(preprint_source_counts.values()) >= max_preprints
+        ):
+            return False
+        if _low_impact(row) or _bucket(row) == "unknown_journal":
             # The frequency cap and relevance floor remain hard quality gates,
             # including during last-resort filling.
             feature = (score_features or {}).get(_row_feature_key(row), {})
             topic_score = feature.get("topic_score", score)
             if float(topic_score) < low_impact_floor:
                 return False
-            if bucket_counts.get("low_impact_journal", 0) >= max_low_impact:
+            # Unknown evidence has its own conservative budget; it must not
+            # consume the measured-low budget or become unrestricted fill.
+            if bucket_counts.get(_bucket(row), 0) >= max_low_impact:
                 return False
         source = _source_key(row)
         if (
@@ -1150,7 +1164,7 @@ def _pick_research_balanced(
             if not added:
                 break
 
-    exceptional_preprint_slots = max(1, min(max_preprints, math.ceil(cap * 0.10)))
+    exceptional_preprint_slots = min(max_preprints, math.ceil(cap * 0.10))
     # Compute dynamic exceptional threshold from all section scores
     _all_scores = [s for _, s in scored]
     _exceptional_threshold = max(0.55, float(np.percentile(_all_scores, 90)) if len(_all_scores) >= 5 else 0.75)
@@ -1168,16 +1182,12 @@ def _pick_research_balanced(
             break
         if score < _exceptional_threshold:
             continue
-        if _arxiv_cs(row) and bucket_counts.get(_bucket(row), 0) >= max_arxiv_cs:
-            continue
         add(row, score)
 
     for row, score in scored:
         if len(selected) >= cap:
             break
         bucket = _bucket(row)
-        if _arxiv_cs(row) and bucket_counts.get(bucket, 0) >= max_arxiv_cs:
-            continue
         if _preprint(row):
             preprint_count = sum(
                 count
@@ -1213,16 +1223,15 @@ def _pick_research_balanced(
 
     # Safety valve: only use preprints/aggregators as final fill when the section
     # has no non-preprint items at all (e.g., a purely arXiv research feed).
-    if len(selected) < cap:
-        all_limited = all(
-            _preprint(row) or _bucket(row) == "aggregator"
-            for row, _ in scored
-        )
-        if all_limited:
-            for row, score in scored:
-                if len(selected) >= cap:
-                    break
-                add(row, score)
+    all_limited = all(
+        _preprint(row) or _bucket(row) == "aggregator"
+        for row, _ in scored
+    )
+    if len(selected) < cap and all_limited:
+        for row, score in scored:
+            if len(selected) >= cap:
+                break
+            add(row, score, allow_preprint_overflow=True)
 
     # Last resort: fill only up to a small hard minimum while relaxing source
     # diversity. Quality gates remain absolute; a short section is preferable to
@@ -1232,7 +1241,7 @@ def _pick_research_balanced(
         for row, score in scored:
             if len(selected) >= hard_min:
                 break
-            add(row, score, enforce_source_cap=False)
+            add(row, score, enforce_source_cap=False, allow_preprint_overflow=all_limited)
 
     return _apply_final_score_cutoff(selected, settings=settings)
 

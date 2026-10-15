@@ -100,7 +100,7 @@ def test_configured_preprint_kind_vetoes_journal_protection_under_custom_name(mo
     assert quality.venue_relevance_credit(article) == 0
 
 
-def test_custom_arxiv_cs_category_obeys_specific_preprint_cap(monkeypatch):
+def test_custom_arxiv_cs_category_obeys_common_source_cap(monkeypatch):
     name = 'Machine learning updates'
     monkeypatch.setattr(quality, '_configured_sources_cached', lambda: {
         name.lower(): SourceSpec(name=name, kind='arxiv', category='cs.LG', section='research',
@@ -112,7 +112,7 @@ def test_custom_arxiv_cs_category_obeys_specific_preprint_cap(monkeypatch):
     pool = [(row(i, name), .99) for i in range(1, 4)]
     pool += [(row(i, source), .8) for i, source in enumerate(['Nature', 'Nature', 'Cell', 'Cell', 'Science'], 4)]
     picked = pick_top_per_section(pool, {'research': 6}, settings=settings())
-    assert sum(item.source == name for item, _ in picked) <= 1
+    assert sum(item.source == name for item, _ in picked) <= 2
 
 
 @pytest.mark.parametrize('metadata', [
@@ -134,7 +134,7 @@ def test_prestigious_name_substrings_do_not_grant_journal_protection(venue):
     assert quality.recognized_research_venue(venue) is None
     assert not quality.is_high_quality_journal_source(article)
     assert quality.venue_relevance_credit(article) == 0
-    assert quality.source_bucket(article) == 'low_impact_journal'
+    assert quality.source_bucket(article) == 'unknown_journal'
 
 
 @pytest.mark.parametrize('learned_signal', [0., .5, 1.])
@@ -150,7 +150,7 @@ def test_minimum_fill_cannot_bypass_low_impact_frequency_cap(cap):
     pool = [(row(i, 'Nature', venue_low_impact=True), .99) for i in range(1, cap + 2)]
     features = {article.id: {'topic_score': .99} for article, _ in pool}
     picked = pick_top_per_section(pool, {'research': cap}, score_features=features, settings=settings())
-    assert len(picked) <= int(cap * .2)
+    assert len(picked) <= max(1, int(cap * .2))
 
 
 def test_exploration_preserves_low_impact_frequency_gate():
