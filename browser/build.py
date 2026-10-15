@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
+import math
+import re
 import shutil
 import urllib.request
 import zipfile
@@ -110,6 +113,114 @@ def gpu_model_files(model_root: Path, output: Path, cache: Path) -> None:
     shutil.copyfile(graph, output / "onnx/model.onnx")
 
 
+def stamp_urls(text: str, build_id: str) -> str:
+    """Version application URLs; metadata revalidates independently of releases."""
+    def replace(match):
+        path, query = match.group(1), match.group(2) or ""
+        if path.startswith(("./assets/models/", "./assets/model-bundles/")):
+            return match.group(0)
+        parts = [part for part in query.lstrip("?").split("&")
+                 if part and not part.startswith(("compute=", "build="))]
+        parts.append("build=" + build_id)
+        return path + "?" + "&".join(parts)
+    return re.sub(r"(\./[^\s'\"`<>?]+\.(?:mjs|json|js|css|webmanifest|svg|zip|py))(?![a-zA-Z0-9_.])(\?[^\s'\"`<>]*)?", replace, text)
+
+
+def validate_public_snapshot(path: Path) -> dict:
+    snapshot = json.loads(path.read_text())
+    spec = importlib.util.spec_from_file_location("public_snapshot_validator", HERE / "collect_sources.py")
+    validator = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(validator)
+    return validator.validate_report(snapshot, allow_carry_forward=True)
+
+
+def relocate_runtime(output: Path, dependency_id: str) -> str:
+    """Content-address transitive JS/WASM/package URLs without duplicating assets."""
+    relative = f"runtime/{dependency_id}/node_modules/"
+    target = output / relative
+    target.parent.mkdir(parents=True, exist_ok=True)
+    (output / "node_modules").rename(target)
+    for path in output.glob("*.mjs"):
+        path.write_text(path.read_text().replace("./node_modules/", "./" + relative))
+    return relative
+
+
+
+def relocate_models(output: Path) -> tuple[str, str]:
+    """Give model graphs and tokenizers one content-addressed, reusable root."""
+    source = output / "assets/models"
+    digest = hashlib.sha256()
+    for path in sorted(source.rglob("*")):
+        if path.is_file():
+            digest.update(path.relative_to(source).as_posix().encode())
+            digest.update(b"\0")
+            digest.update(hashlib.sha256(path.read_bytes()).digest())
+    model_id = digest.hexdigest()[:16]
+    relative = f"assets/model-bundles/{model_id}/"
+    target = output / relative
+    target.parent.mkdir(parents=True, exist_ok=True)
+    source.rename(target)
+    worker = output / "worker.mjs"
+    worker.write_text(worker.read_text().replace("./assets/models/", "./" + relative))
+    return relative, model_id
+
+def stamp_release(output: Path, build_id: str) -> None:
+    """Guard mixed cached shells/bundles before restoring any private state."""
+    for path in output.iterdir():
+        if path.is_file() and path.suffix in {".mjs", ".js", ".html", ".css", ".webmanifest"}:
+            text = stamp_urls(path.read_text(), build_id)
+            if path.name == "sw.js":
+                text = text.replace("manifest.webmanifest'", "manifest.webmanifest?build=" + build_id + "'")
+                text = text.replace("app-icon.svg'", "app-icon.svg?build=" + build_id + "'")
+                text = text.replace(":v1`", ":" + build_id + "`")
+            path.write_text(text)
+    index = output / "index.html"
+    html = index.read_text().replace("<head>", '<head>\n  <meta name="dailydigest-build" content="' + build_id + '">', 1)
+    initial_bytes = sum(path.stat().st_size for path in output.rglob("*")
+                        if path.is_file() and "bge-small-webgpu" not in path.parts)
+    html = re.sub(r'(<span id="download-size">)[^<]*(</span>)',
+                  lambda match: match[1] + f"up to {math.ceil(initial_bytes / 1_000_000)} MB including the CPU model; cached files are reused" + match[2], html)
+    index.write_text(html)
+    app = output / "app.mjs"
+    guard = """// One cache-busting reload repairs an HTML/application release mismatch.
+if (typeof document !== 'undefined' && document.querySelector('meta[name="dailydigest-build"]')?.content !== BUILD_ID) {
+  const fresh = new URL(location.href);
+  if (fresh.searchParams.get('__dd_build') !== BUILD_ID) {
+    fresh.searchParams.set('__dd_build', BUILD_ID);
+    location.replace(fresh.href);
+    await new Promise(() => {});
+  }
+  const message = 'Application release changed. Reload this page to finish updating.';
+  const startup = document.getElementById?.('startup');
+  if (startup) startup.dataset.state = 'error';
+  const title = document.getElementById?.('startup-title');
+  if (title) title.textContent = 'Couldn’t finish updating your reading desk';
+  for (const id of ['startup-status', 'status']) {
+    const element = document.getElementById?.(id);
+    if (element) element.textContent = message;
+  }
+  const retry = document.getElementById?.('retry');
+  if (retry) { retry.hidden = false; retry.onclick = () => location.reload(); }
+  throw new Error(message);
+}
+""".replace("BUILD_ID", json.dumps(build_id))
+    app.write_text(guard + app.read_text())
+    with zipfile.ZipFile(output / "assets/app.zip", "a", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("browser/build.json", json.dumps({"build_id": build_id}))
+    runtime = output / "assets/runtime.py"
+    runtime.write_text(runtime.read_text() + "\nBROWSER_BUILD_ID = " + repr(build_id) + "\n")
+    worker = output / "worker.mjs"
+    text = worker.read_text()
+    text = text.replace("py.unpackArchive(bundle, 'zip', { extractDir: '/app' });",
+        "py.unpackArchive(bundle, 'zip', { extractDir: '/app' });\n"
+        + "    if (py.runPython(\"__import__('json').loads(open('/app/browser/build.json').read())['build_id']\") !== "
+        + json.dumps(build_id) + ") throw new Error('Application release changed. Reload the page to finish updating.');")
+    text = text.replace("await py.runPythonAsync(source);", "await py.runPythonAsync(source);\n"
+        + "    if (py.globals.get('BROWSER_BUILD_ID') !== " + json.dumps(build_id)
+        + ") throw new Error('Python runtime release changed. Reload the page to finish updating.');")
+    worker.write_text(text)
+
+
 def build(output: Path) -> dict:
     if output.exists() and any(output.iterdir()):
         raise ValueError("Output must be a new or empty directory; choose --output")
@@ -123,7 +234,7 @@ def build(output: Path) -> dict:
     cache = HERE / ".build-cache"
     wheels = list(pure_package_files(cache / "wheels"))
     manifest = source_archive(assets / "app.zip", wheels)
-    for name in ("index.html", "app.mjs", "compute.mjs", "style.css", "worker.mjs", "manifest.webmanifest",
+    for name in ("index.html", "app.mjs", "compute.mjs", "http.mjs", "storage.mjs", "style.css", "worker.mjs", "manifest.webmanifest",
                  "app-icon.svg", "sw.js"):
         shutil.copyfile(HERE / name, output / name)
     shutil.copyfile(HERE / "runtime.py", assets / "runtime.py")
@@ -154,16 +265,28 @@ def build(output: Path) -> dict:
         raise ValueError("Prepare prototype model assets with npm run prepare-fixture first")
     shutil.copytree(model_root, assets / "models/bge-small")
     gpu_model_files(model_root, assets / "models/bge-small-webgpu", cache)
+    model_path, model_id = relocate_models(output)
     public_snapshot = cache / "public-sources.json"
     if public_snapshot.is_file():
-        snapshot = json.loads(public_snapshot.read_text())
-        if snapshot.get("public_only") is not True:
-            raise ValueError("Source snapshot must explicitly contain public metadata only")
+        validate_public_snapshot(public_snapshot)
         shutil.copyfile(public_snapshot, assets / "public-sources.json")
+    dependency_id = hashlib.sha256((PROTO / "package-lock.json").read_bytes()
+                                   + (runtime / "pyodide-lock.json").read_bytes()).hexdigest()[:16]
+    runtime_path = relocate_runtime(output, dependency_id)
     # GitHub Pages must serve the node_modules directory without Jekyll filtering.
     (output / ".nojekyll").write_text("")
+    release_inputs = {"source_hashes": manifest,
+        "builder": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(), "frontend": {
+        path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in output.iterdir()
+        if path.is_file()}, "runtime": hashlib.sha256((assets / "runtime.py").read_bytes()).hexdigest(),
+        "dependencies": hashlib.sha256((assets / "dependencies.json").read_bytes()).hexdigest(),
+        "browser_lock": hashlib.sha256((PROTO / "package-lock.json").read_bytes()).hexdigest()}
+    build_id = hashlib.sha256(json.dumps(release_inputs, sort_keys=True).encode()).hexdigest()[:16]
+    stamp_release(output, build_id)
     total = sum(p.stat().st_size for p in output.rglob("*") if p.is_file())
-    report = {"schema_version": 1, "private_data_included": False,
+    report = {"schema_version": 1, "build_id": build_id, "runtime_path": runtime_path,
+              "dependency_id": dependency_id, "model_path": model_path, "model_id": model_id,
+              "private_data_included": False,
               "source_hashes": manifest, "pyodide": "0.28.3", "bytes": total,
               "gpu_model": {"publisher": "Xenova/bge-small-en-v1.5", "revision": GPU_MODEL_REVISION,
                             "sha256": GPU_MODEL_SHA256, "dtype": "fp32", "graph_optimization": "disabled"},

@@ -25,9 +25,11 @@ CPU, including when cached feedback vectors have already been read. The
 only when GPU acceleration is used. Physical GPU
 performance and browser/device support vary; this remains experimental.
 Multicore CPU uses at most four cores and is offered only with cross-origin
-isolation and SharedArrayBuffer support. GitHub Pages currently does not provide
-the required isolation headers, so that option is unavailable there. Detection
-uses browser capabilities on macOS, Windows and Linux, with no OS allowlist.
+isolation and SharedArrayBuffer support. The Compute menu can opt in to a project-scoped service worker that adds
+isolation headers, then reloads once before work starts. If the browser cannot
+enable isolation, computation falls back to one core. Detection uses browser
+capabilities on macOS, Windows and Linux, with no OS allowlist. Actual hardware
+performance still needs device testing.
 
 Brewing notices explain processor, memory, heat and battery use. The main brew
 panel displays completed embedding counts and elapsed time independently of
@@ -48,8 +50,12 @@ publication gates and the previously saved digest.
 * Existing interface: setup, digest, saved reading, ratings/reasons, known items,
   Time Machine, progress/reconnect/cancellation, display controls and Pip.
 * Public feed collection: GitHub Actions gathers configured non-profile-driven
-  RSS/arXiv metadata twice daily. A matching successful snapshot under 24 hours
-  old is usable; expired or failed collection remains a genuine source failure.
+  RSS/arXiv metadata twice daily. Matching successful records remain usable for
+  48 hours, with a freshness warning after 24 hours. Expired or failed records
+  remain genuine source failures. Scheduled and manual refreshes require fresh
+  coverage of every section and provider kind. A partially failed push can retain
+  the whole previous validated snapshot within 48 hours, preserving original
+  timestamps and showing an earlier-snapshot warning. All-error collections fail.
   Profile-driven sources still run on the visitor's device. No personal profile,
   votes, reading history or private database enters the published artifact.
 
@@ -69,6 +75,23 @@ uv run python browser/collect_sources.py --output browser/.build-cache/public-so
 uv run python browser/build.py
 python -m http.server 8767 --bind 127.0.0.1 --directory browser/dist
 ```
+
+For an offline verification build, reuse an existing validated public snapshot in
+`browser/.build-cache/public-sources.json` instead of running the collector. Then:
+
+```bash
+uv run python browser/build.py --output .full-review/clean-release/site
+uv run python browser/make_test_fixture.py --output .full-review/clean-release/fixtures
+# Serve the site at /daily_digests/ before running the acceptance check.
+DAILYDIGEST_BROWSER_URL=http://127.0.0.1:8767/daily_digests/ \
+DAILYDIGEST_BROWSER_FIXTURE=.full-review/clean-release/fixtures/fixture-backup.json \
+DAILYDIGEST_BROWSER_FEED=.full-review/clean-release/fixtures/research-feed.xml \
+DAILYDIGEST_BROWSER_REPORT=.full-review/clean-release/acceptance \
+node browser/verify-browser.mjs
+```
+
+The browser check intercepts external requests with fictional fixtures. It also
+reads the built public metadata; it does not perform a live brew or call providers.
 
 Build output must be new or empty; `--output PATH` selects another directory.
 Do not publish the entire repository, development caches, `data/`, or `.env`.
@@ -102,11 +125,12 @@ budgets and extractive fallback, and invalidates cached summaries when the
 companion's provider identity changes.
 
 ```bash
-uv run python browser/companion.py --allowed-origin https://antimonyleo.github.io
+dd companion --allowed-origin https://antimonyleo.github.io
 ```
 
 The command prints a private token file path, never the token itself. Enter the
-endpoint and token in the site's Companion menu. The default bind is localhost;
+endpoint and token in the site's Companion menu. The private default token file
+is reused across launches; an explicit `--token-file` remains available. The default bind is localhost;
 a remote companion needs an explicitly configured HTTPS reverse proxy. Native
 local defaults are unchanged, and the browser never forwards a normal brew.
 Explicit email and state-transfer actions are separate buttons.
@@ -133,10 +157,13 @@ parity is not evidence of improved scientific relevance or article quality.
 6. Publish through `.github/workflows/browser-pages.yml`; bootstrap the same
    workflow on the default branch so scheduled refreshes actually execute.
 7. Verify the HTTPS project URL and freshly published source snapshot.
+   A severely degraded collection fails before replacing the published snapshot.
+   Valid public records remain usable for 48 hours and warn after 24 hours;
+   carried records retain their original collection time and latest error.
 8. Record unsupported integrations and browser/device limitations honestly.
 
 Run the full native suite before release. Browser bridge tests run with
-`node --test --test-isolation=none browser/frontend.test.mjs browser/compute.test.mjs`. Real-browser
+`node --test --test-isolation=none browser/*.test.mjs`. Real-browser
 acceptance is `node browser/verify-browser.mjs`; it expects isolated fictional
 backup and feed artifacts and blocks arbitrary external services. It is not a
 live brew against the reader's database or configured providers.
@@ -169,3 +196,30 @@ software adapters and uses CPU instead. A 64-input isolated-host CPU comparison
 took 53s on one core versus 19s on four cores with identical vectors. These
 development measurements do not establish physical GPU speed on macOS, Windows
 or Linux; GPU mode remains experimental and opt-in.
+
+## Recovery and portable data
+
+Corrupt startup state exposes raw download, validated restore and an explicitly
+confirmed fresh start. Replacement retains the original state in IndexedDB;
+Browser data can download that retained copy. Raw recovery copies may contain
+credentials and should be kept private. Portable backups and Companion state
+transfers exclude credential values by default; including them is explicit.
+Internal checkpoints remain complete, and a redacted import preserves existing
+credentials on the destination device.
+
+Writes are serialized only after private state changes, including reading
+impressions and votes during a brew. Quota failures show a persistent warning;
+read-only pages remain usable. Protect browser storage requests persistence,
+but browser permission and backup practices still matter. Other project sites
+on the same hostname share a security origin; a dedicated hostname provides
+actual isolation.
+
+## Release identity and research interests
+
+Application assets carry one release identity, and Python bundles are checked
+before restoring state. Transitive runtime dependencies use a lock-derived path;
+public snapshots are revalidated separately from model downloads. All configured
+interests are shown separately from selected-paper topics. Editable alternative
+terms and descriptions feed search and relevance; percentages are relative
+priorities rather than guaranteed slot allocations. Research and venue-quality
+gates remain in force.

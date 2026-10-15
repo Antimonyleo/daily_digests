@@ -2,16 +2,14 @@ name: DailyDigest browser Pages
 
 on:
   push:
-    branches: [codex/browser-compute-prototype]
-    paths: [browser/**, src/**, templates/**, config/sources.yaml, prototypes/browser-compute/**, .github/workflows/browser-pages.yml, uv.lock]
+    branches: [main, codex/browser-compute-prototype]
+    paths: [browser/**, src/**, templates/**, tests/**, pyproject.toml, .github/workflows/ci.yml, config/sources.yaml, prototypes/browser-compute/**, .github/workflows/browser-pages.yml, uv.lock]
   workflow_dispatch:
   schedule:
     - cron: '17 */12 * * *'
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
   group: dailydigest-pages
@@ -21,30 +19,39 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      # The event commit is authoritative; scheduled/manual runs use their selected branch.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: codex/browser-compute-prototype
-      - uses: astral-sh/setup-uv@v6
+          ref: ${{ github.sha }}
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
         with:
           enable-cache: true
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '24'
           cache: npm
           cache-dependency-path: prototypes/browser-compute/package-lock.json
       - run: uv sync --frozen --group dev
       - name: Python regression checks
-        run: uv run pytest tests/test_browser_build.py tests/test_browser_runtime.py tests/test_browser_network.py tests/test_browser_companion.py tests/test_browser_compute_prototype.py tests/test_quality_gate_invariants.py tests/test_pipeline_persistence.py tests/test_feedback_recovery.py tests/test_publication_version_cooldown.py -q
+        run: uv run pytest -q
+        env:
+          HF_HUB_OFFLINE: "1"
+          TRANSFORMERS_OFFLINE: "1"
+          LLM_API_KEY: ""
       - name: Browser bridge checks
-        run: node --test --test-isolation=none browser/frontend.test.mjs browser/compute.test.mjs
+        run: node --test --test-isolation=none browser/*.test.mjs
       - name: Install browser dependencies
         working-directory: prototypes/browser-compute
         run: npm ci --ignore-scripts
       - name: Prepare public model and runtime assets
         working-directory: prototypes/browser-compute
         run: npm run prepare-fixture
-      - name: Collect public source metadata
-        run: uv run python browser/collect_sources.py --output browser/.build-cache/public-sources.json --days 21
+      - name: Read previous public snapshot for bounded carryforward
+        run: |
+          mkdir -p browser/.build-cache
+          curl --fail --location --max-time 30 --output browser/.build-cache/previous-public-sources.json https://antimonyleo.github.io/daily_digests/assets/public-sources.json || rm -f browser/.build-cache/previous-public-sources.json
+      - name: Collect and validate public source metadata
+        run: uv run python browser/collect_sources.py --output browser/.build-cache/public-sources.json --previous browser/.build-cache/previous-public-sources.json --event "${{ github.event_name }}" --days 21
       - name: Build static application
         run: uv run python browser/build.py
       - name: Prepare isolated browser acceptance fixtures
@@ -57,17 +64,20 @@ jobs:
           task_preview_pid=$!
           trap 'kill "$task_preview_pid" 2>/dev/null || true' EXIT
           node browser/verify-browser.mjs
-      - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3
         with:
           path: browser/dist
   deploy:
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
+      - uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5
       - name: Publish website
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4

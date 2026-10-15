@@ -15,8 +15,8 @@ jobs:
       TRANSFORMERS_OFFLINE: "1"
       LLM_API_KEY: ""
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
         with:
           enable-cache: true
           python-version: "3.12"
@@ -36,11 +36,11 @@ jobs:
       TRANSFORMERS_OFFLINE: "1"
       LLM_API_KEY: ""
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
         with:
           enable-cache: true
           python-version: "3.12"
       - run: uv sync --frozen --group dev
       - name: Native launcher fixtures and asset paths
-        run: uv run --no-sync pytest tests/test_windows_launcher.py tests/test_start_script.py tests/test_package_assets.py -rs
+        run: uv run --no-sync pytest tests/test_windows_launcher.py tests/test_start_script.py tests/test_package_assets.py tests/test_cli_process_tree.py tests/test_companion_cli.py -rs
