@@ -20,7 +20,7 @@ from typing import Any
 
 from ..models import SourceSpec
 
-RANKER_VERSION = "2026-10-15-local-topic-verification-v14"
+RANKER_VERSION = "2026-10-15-nlm-venue-alias-v15"
 
 _ARXIV_CS_RE = re.compile(r"\barxiv[\s:_\-]*cs[\s:./\-]", re.IGNORECASE)
 
@@ -151,8 +151,12 @@ def _normalize_venue_name(value: str) -> str:
 
 _VENUE_ALIASES = {
     "small": "small (wiley)",
+    # NLM Catalog 101235338: Small, published by Wiley-VCH in Weinheim.
+    "small (weinheim an der bergstrasse, germany)": "small (wiley)",
     # NLM Catalog 9885358 uses this disambiguated title.
     "advanced materials (deerfield beach, fla)": "advanced materials",
+    # NLM Catalog 0370543: uniform title and international-edition other title.
+    "angewandte chemie (international ed in english)": "angewandte chemie international edition",
     "phys rev lett": "physical review letters",
     "jmlr": "journal of machine learning research",
     "chemical society reviews": "chem soc rev",

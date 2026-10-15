@@ -140,6 +140,34 @@ def test_frozen_selection_replays_real_policy_without_current_settings(monkeypat
     assert validate_replay(snap, frozen_selection)["status"] == "matched"
 
 
+def test_v14_replay_keeps_historical_source_facts_after_journal_identity_fix():
+    from dailydigest.rank.replay import frozen_selection
+    from dailydigest.rank.source_quality import source_bucket
+    from types import SimpleNamespace
+
+    snap = selection_snapshot()
+    snap["reading_mode"] = "full"
+    first = snap["candidates"][0]
+    first["metadata"].update(
+        source="PubMed (your topics)",
+        metadata_json='{"venue":"Angewandte Chemie (International ed. in English)"}',
+    )
+    # New work recognizes the journal; historical replay must use the recorded
+    # unknown-source floor and score, not silently rescore old evidence.
+    assert source_bucket(SimpleNamespace(**first["metadata"], section="research")) == "published_journal"
+    first["features"]["topic_score"] = .69
+    first["selection_facts"].update(
+        source_bucket="unknown_journal", is_published=False, is_high_quality=False,
+    )
+    expected = frozen_selection(snap)
+    assert 1 not in expected["research"]
+    snap["scorer_version"] = "2026-10-15-local-topic-verification-v14"
+    assert frozen_selection(snap) == expected
+    snap["scorer_version"] = "unknown-future-selector"
+    with pytest.raises(ValueError, match="incompatible"):
+        frozen_selection(snap)
+
+
 def test_frozen_selection_uses_raw_topic_floor_and_source_caps():
     from dailydigest.rank.replay import frozen_selection
     snap = selection_snapshot()

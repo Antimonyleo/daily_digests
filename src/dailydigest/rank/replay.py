@@ -275,10 +275,13 @@ def frozen_selection(snapshot: dict, feedback: dict | None = None) -> dict[str, 
     from ..pipeline import apply_reading_mode
 
     recorded_version = snapshot.get("scorer_version")
-    # v11 changes upstream quality scoring/enrichment, not the selection rules.
-    # v10 freezes the same source facts, scores, and eligibility, so its slates
-    # remain replayable. Revisit this list when selection policy itself changes.
-    compatible_versions = {RANKER_VERSION, "2026-10-14-cross-field-venues-v13", "2026-10-02-quality-guards-v10"}
+    # v15 fixes upstream journal identity; historical source facts and scores
+    # remain frozen. This compatibility proves selection only, not rescoring
+    # with the corrected identities. Revisit when selection policy changes.
+    compatible_versions = {
+        RANKER_VERSION, "2026-10-15-local-topic-verification-v14",
+        "2026-10-14-cross-field-venues-v13", "2026-10-02-quality-guards-v10",
+    }
     if recorded_version is not None and recorded_version not in compatible_versions:
         raise IncompleteReplay("captured scorer version is incompatible with current selection policy")
     required = ("selection_settings", "catch_up", "exploration_slots", "decision_local_date")
