@@ -35,6 +35,19 @@ export function createSnapshotWriter({ generation, capture, save, ready = () => 
 const MAX_IMPORT_FILES = 10000, MAX_IMPORT_CHARACTERS = 128 * 1024 * 1024;
 const exceedsImportLimit = (payload, names) => names.length > MAX_IMPORT_FILES || payload.length > MAX_IMPORT_CHARACTERS;
 
+function validBase64(value) {
+  if (value.length % 4 !== 0) return false;
+  const end = value.length - (value.endsWith('==') ? 2 : value.endsWith('=') ? 1 : 0);
+  // A quantified group over an entire database can overflow the JS regexp
+  // stack. Scan the alphabet instead, leaving the supplied bytes untouched.
+  for (let index = 0; index < end; index++) {
+    const code = value.charCodeAt(index);
+    if (!(code >= 65 && code <= 90 || code >= 97 && code <= 122
+      || code >= 48 && code <= 57 || code === 43 || code === 47)) return false;
+  }
+  return true;
+}
+
 export function validateRecoverySnapshot(payload, { enforceLimits = true } = {}) {
   const snapshot = JSON.parse(payload);
   if (snapshot?.format !== 'dailydigest-browser-v1' || !snapshot.files ||
@@ -49,7 +62,7 @@ export function validateRecoverySnapshot(payload, { enforceLimits = true } = {})
     if (name !== '.env' && (parts.length < 2 || parts[0] !== 'data') ||
         parts.some(part => !part || part === '.' || part === '..' || part === '.compute.lock') ||
         name.includes('\\') || typeof snapshot.files[name] !== 'string') throw new Error('Backup contains an invalid private path.');
-    if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(snapshot.files[name])) throw new Error('Backup contains invalid encoded data.');
+    if (!validBase64(snapshot.files[name])) throw new Error('Backup contains invalid encoded data.');
     if (parts.some((_, index) => index > 0 && paths.has(parts.slice(0, index).join('/')))) throw new Error('Backup contains conflicting paths.');
   }
   return snapshot;

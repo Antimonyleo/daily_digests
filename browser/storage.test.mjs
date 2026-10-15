@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createSnapshotWriter, validateRecoverySnapshot } from './storage.mjs';
+import { createSnapshotWriter, validateRecoverySnapshot, validateStoredSnapshot } from './storage.mjs';
 
 test('read-only requests do not capture state; concurrent mutations save in order', async () => {
   let generation = 0, captures = 0;
@@ -81,4 +81,47 @@ test('trusted stored state above import limits restores with a warning and stays
   assert.equal(JSON.stringify(trusted.snapshot), payload);
   assert.equal(validateStoredSnapshot(JSON.stringify({ format: 'dailydigest-browser-v1', files: {} })).warning, null);
   assert.throws(() => validateStoredSnapshot(JSON.stringify({ format: 'dailydigest-browser-v1', files: { 'data/../escape': '' } })), /invalid/);
+});
+
+
+for (const [kind, validate] of [['import', payload => validateRecoverySnapshot(payload)],
+  ['stored startup', payload => validateStoredSnapshot(payload).snapshot]]) {
+  test(`multi-megabyte ${kind} snapshots retain every database byte without stack overflow`, () => {
+    const bytes = Buffer.alloc(4 * 1024 * 1024);
+    for (let i = 0; i < bytes.length; i++) bytes[i] = i % 256;
+    bytes.write('SQLite format 3\0', 0, 'ascii');
+    const encoded = bytes.toString('base64');
+    const payload = JSON.stringify({ format: 'dailydigest-browser-v1',
+      files: { 'data/digest.db': encoded, 'data/profile.yaml': 'Zml4dHVyZQ==' } });
+    const snapshot = validate(payload);
+    assert.equal(snapshot.files['data/digest.db'], encoded);
+    assert.ok(Buffer.from(snapshot.files['data/digest.db'], 'base64').equals(bytes));
+    assert.equal(snapshot.files['data/profile.yaml'], 'Zml4dHVyZQ==');
+  });
+}
+
+test('base64 alphabet and terminal padding rules hold for imported and stored snapshots', () => {
+  const payload = encoded => JSON.stringify({ format: 'dailydigest-browser-v1', files: { 'data/file': encoded } });
+  for (const validate of [validateRecoverySnapshot, value => validateStoredSnapshot(value).snapshot]) {
+    for (const encoded of ['', 'AA==', 'AAA=', 'AAAA', 'AB==', 'AAB=', 'AA+/', '////', '++++']) {
+      assert.equal(validate(payload(encoded)).files['data/file'], encoded);
+    }
+    for (const encoded of ['A', 'AA', 'AAA', 'AAAAA', '====', 'A===', '=AAA', 'AA=A',
+      'A=AA', 'AA==AAAA', 'AAA=AAAA', 'AAAA\n', 'AAA ', 'AA-=', 'AA_=', 'éAAA', '💡AA']) {
+      assert.throws(() => validate(payload(encoded)), /invalid encoded data/, JSON.stringify(encoded));
+    }
+    const largeInvalid = 'A'.repeat(4 * 1024 * 1024 - 1) + '!';
+    assert.throws(() => validate(payload(largeInvalid)), /invalid encoded data/);
+  }
+});
+
+test('linear validation preserves conflicting path and import count protections', () => {
+  const payload = files => JSON.stringify({ format: 'dailydigest-browser-v1', files });
+  const files = { 'data/parent': '', 'data/parent-child': '', 'data/parent/child': '' };
+  assert.throws(() => validateRecoverySnapshot(payload(files)), /conflicting paths/);
+  assert.throws(() => validateStoredSnapshot(payload(files)), /conflicting paths/);
+  assert.equal(Object.keys(validateRecoverySnapshot(payload({ 'data/parent': '', 'data/parent-child': '' })).files).length, 2);
+  const many = Object.fromEntries(Array.from({ length: 10001 }, (_, i) => [`data/file${i}`, 'AA==']));
+  assert.throws(() => validateRecoverySnapshot(payload(many)), /recovery limit/);
+  assert.equal(Object.keys(validateStoredSnapshot(payload(many)).snapshot.files).length, 10001);
 });

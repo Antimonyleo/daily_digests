@@ -180,6 +180,23 @@ transport, checking that browser-decoded responses are not decompressed twice.
 Mobile viewport checks establish layout only; production-scale latency and
 actual Android/iOS or other browser engines still need separate verification.
 
+Run the large-checkpoint startup and recovery regression against a fresh build:
+
+```bash
+DAILYDIGEST_STORAGE_SITE=.full-review/clean-release/site \
+DAILYDIGEST_STORAGE_REPORT=.full-review/clean-release/storage-startup \
+node browser/verify-storage-startup.mjs
+```
+
+This check starts its own loopback server and an isolated Chromium session. It
+uses only synthetic SQLite, embedding, and profile files, blocks non-local
+requests, and never calls providers or runs a brew. It verifies startup, refresh,
+checkpoint restore, and downloaded backup bytes without resetting the saved state.
+The report is `DAILYDIGEST_STORAGE_REPORT/report.json`; synthetic fixtures stay in
+the same directory. Chromium uses
+`CHROME_PATH` when set, otherwise `/usr/bin/google-chrome`. The Pages build runs
+this check against `browser/dist` before uploading its publication artifact.
+
 The earlier 400-paper frozen replay (328 public records and 72 controlled scope cases)
 matched the native ten-paper slate and ordering; maximum score drift was below
 0.00015. On the desktop test machine, native cold/warm brewing took 22/2.4 seconds
