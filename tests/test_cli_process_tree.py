@@ -53,9 +53,14 @@ def _running(pid: int) -> bool:
     return bool(status.stdout.strip()) and not status.stdout.lstrip().startswith('Z')
 
 
-def test_cli_timeout_terminates_real_descendant_holding_output_pipe(tmp_path, monkeypatch):
+@pytest.mark.parametrize('redirect_child', [False, True])
+def test_cli_timeout_terminates_real_descendant_holding_output_pipe(tmp_path, monkeypatch, redirect_child):
     pid_file = tmp_path / 'fixture-pids.json'
     child = "import os,sys,time; from pathlib import Path; Path(sys.argv[1]).write_text(str(os.getpid())); print('descendant-ready',flush=True); time.sleep(30)"
+    if redirect_child:
+        # Windows virtualenv executables may be redirectors: Popen.pid belongs
+        # to a launcher, while os.getpid() belongs to the Python descendant.
+        child = "import subprocess,sys; sys.exit(subprocess.call([sys.executable,'-u','-c'," + repr(child) + ",sys.argv[1]]))"
     parent = "import json,os,subprocess,sys,time; from pathlib import Path; child=subprocess.Popen([sys.executable,'-u','-c',sys.argv[2],sys.argv[3]]); Path(sys.argv[1]).write_text(json.dumps({'parent':os.getpid(),'child':child.pid})); time.sleep(30)"
     ready_file = tmp_path / 'descendant-ready'
     parents = []
@@ -68,6 +73,7 @@ def test_cli_timeout_terminates_real_descendant_holding_output_pipe(tmp_path, mo
 
     monkeypatch.setattr(summarize.subprocess, 'Popen', record_process)
     child_pid = None
+    pids = {}
     started = time.monotonic()
     try:
         with pytest.raises(subprocess.TimeoutExpired) as caught:
@@ -76,20 +82,22 @@ def test_cli_timeout_terminates_real_descendant_holding_output_pipe(tmp_path, mo
                                        'fixture input', str(tmp_path), timeout=3)
         assert pid_file.exists() and ready_file.exists(), 'Fixture descendant did not start before timeout'
         pids = json.loads(pid_file.read_text())
-        child_pid = pids['child']
-        assert int(ready_file.read_text()) == child_pid
+        child_pid = int(ready_file.read_text())
+        process_ids = {child_pid, pids['child'], pids['parent']}
         assert 'descendant-ready' in (caught.value.output or b'').decode()
         deadline = time.monotonic() + 2
-        while _running(child_pid) and time.monotonic() < deadline:
+        while any(_running(pid) for pid in process_ids) and time.monotonic() < deadline:
             time.sleep(0.02)
-        assert not _running(child_pid), 'Timeout left the output-pipe-holding descendant running'
+        assert not any(_running(pid) for pid in process_ids), 'Timeout left a launcher or output-pipe-holding descendant running'
         assert parents[0].poll() is not None, 'Timeout did not reap its direct child'
         assert time.monotonic() - started < 9, 'Process-tree timeout cleanup took too long'
     finally:
-        if child_pid is None and pid_file.exists():
-            child_pid = json.loads(pid_file.read_text()).get('child')
+        if pid_file.exists():
+            pids = json.loads(pid_file.read_text())
+        if child_pid is None and ready_file.exists():
+            child_pid = int(ready_file.read_text())
         if sys.platform == 'win32':
-            for pid in [parents[0].pid if parents else None, child_pid]:
+            for pid in {parents[0].pid if parents else None, child_pid, pids.get('parent'), pids.get('child')}:
                 if pid is not None and _running(pid):
                     subprocess.run(['taskkill', '/PID', str(pid), '/T', '/F'],
                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
