@@ -56,7 +56,7 @@ def _running(pid: int) -> bool:
 @pytest.mark.parametrize('redirect_child', [False, True])
 def test_cli_timeout_terminates_real_descendant_holding_output_pipe(tmp_path, monkeypatch, redirect_child):
     pid_file = tmp_path / 'fixture-pids.json'
-    child = "import os,sys,time; from pathlib import Path; Path(sys.argv[1]).write_text(str(os.getpid())); print('descendant-ready',flush=True); time.sleep(30)"
+    child = "import os,sys,time; from pathlib import Path; print('descendant-ready',flush=True); Path(sys.argv[1]).write_text(str(os.getpid())); time.sleep(30)"
     if redirect_child:
         # Windows virtualenv executables may be redirectors: Popen.pid belongs
         # to a launcher, while os.getpid() belongs to the Python descendant.
@@ -76,7 +76,7 @@ def test_cli_timeout_terminates_real_descendant_holding_output_pipe(tmp_path, mo
     pids = {}
     started = time.monotonic()
     try:
-        with pytest.raises(subprocess.TimeoutExpired) as caught:
+        with pytest.raises(subprocess.TimeoutExpired):
             summarize._run_cli_process([sys.executable, '-u', '-c', parent,
                                         str(pid_file), child, str(ready_file)],
                                        'fixture input', str(tmp_path), timeout=3)
@@ -84,7 +84,10 @@ def test_cli_timeout_terminates_real_descendant_holding_output_pipe(tmp_path, mo
         pids = json.loads(pid_file.read_text())
         child_pid = int(ready_file.read_text())
         process_ids = {child_pid, pids['child'], pids['parent']}
-        assert 'descendant-ready' in (caught.value.output or b'').decode()
+        # Windows communicate() times out before its reader thread publishes
+        # partial output. The readiness file is written after stdout flush;
+        # verify pipe closure directly rather than assuming exception.output.
+        assert parents[0].stdout.closed
         deadline = time.monotonic() + 2
         while any(_running(pid) for pid in process_ids) and time.monotonic() < deadline:
             time.sleep(0.02)
