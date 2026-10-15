@@ -1074,6 +1074,11 @@ def _validate_setup(form: dict[str, str]) -> list[str]:
         errors.append(f"Unknown backend: {backend}")
     _topics, topic_errors = _parse_ranked_topics(form.get("topics"))
     errors.extend(topic_errors)
+    if form.get("topic_weight_mode") == "percentage" and (
+        any(not weight.is_integer() for _, weight in _topics)
+        or sum(weight for _, weight in _topics) != 100
+    ):
+        errors.append("Use whole-number percentages totaling 100% for your research interests.")
     _details, detail_errors = _parse_topic_details(form.get("topic_details"), _topics)
     errors.extend(detail_errors)
     for key, label in (
@@ -1846,6 +1851,7 @@ async def setup_post(request: Request) -> Response:
         "bio": str(raw.get("bio", "")),
         "topics": str(raw.get("topics", "")),
         "topic_details": str(raw.get("topic_details", "")),
+        "topic_weight_mode": str(raw.get("topic_weight_mode", "")),
         "downweight": str(raw.get("downweight", "")),
         "llm_backend": str(raw.get("llm_backend", "extractive")),
         "llm_base_url": str(raw.get("llm_base_url", "")),

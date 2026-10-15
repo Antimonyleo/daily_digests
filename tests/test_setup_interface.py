@@ -97,6 +97,40 @@ def test_plain_interests_default_to_equal_weights_and_explicit_weights_survive()
     assert _parse_ranked_topics("RNA | nope")[1]
 
 
+@pytest.mark.parametrize("weights", ["RNA delivery | 40\nProtein design | 50", "RNA delivery | 60\nProtein design | 50", "RNA delivery | 49.5\nProtein design | 50.5"])
+def test_percentage_editor_rejects_invalid_totals_without_writing(monkeypatch, tmp_path, weights):
+    from dailydigest import web
+
+    profile = tmp_path / "profile.yaml"
+    original = "keywords: [Existing interest]\n"
+    profile.write_text(original)
+    monkeypatch.setattr(web, "_get_profile_path", lambda: profile)
+    monkeypatch.setattr(web, "_ENV_PATH", tmp_path / ".env")
+    response = asyncio.run(web.setup_post(_request("POST", "/setup", form={
+        "_csrf_token": web._CSRF_TOKEN, "topics": weights,
+        "topic_weight_mode": "percentage", "llm_backend": "extractive",
+    })))
+    assert response.status_code == 400
+    assert "whole-number percentages totaling 100%" in response.body.decode()
+    assert profile.read_text() == original
+    assert not (tmp_path / ".env").exists()
+
+
+def test_percentage_editor_saves_exact_displayed_priorities(monkeypatch, tmp_path):
+    from dailydigest import web
+
+    profile = tmp_path / "profile.yaml"
+    monkeypatch.setattr(web, "_get_profile_path", lambda: profile)
+    monkeypatch.setattr(web, "_ENV_PATH", tmp_path / ".env")
+    response = asyncio.run(web.setup_post(_request("POST", "/setup", form={
+        "_csrf_token": web._CSRF_TOKEN, "topics": "RNA delivery | 75\nProtein design | 25",
+        "topic_weight_mode": "percentage", "llm_backend": "extractive",
+    })))
+    assert response.status_code == 303
+    saved = yaml.safe_load(profile.read_text())["canonical_facets"]
+    assert {name: spec["priority"] for name, spec in saved.items()} == {"RNA delivery": 75, "Protein design": 25}
+
+
 def test_saving_plain_interests_preserves_existing_explicit_weight_and_context(monkeypatch, tmp_path):
     from dailydigest import web
 
