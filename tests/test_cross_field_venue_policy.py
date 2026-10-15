@@ -37,6 +37,42 @@ def test_cross_field_known_venues_have_exact_priors(venue):
     assert quality.source_bucket(article) == "published_journal"
 
 
+def test_nlm_angewandte_identity_keeps_its_curated_prior_without_spending_unknown_quota():
+    # NLM Catalog 0370543 lists this uniform title and the existing canonical
+    # title as the same journal: https://www.ncbi.nlm.nih.gov/nlmcatalog/0370543
+    venue = "Angewandte Chemie (International ed. in English)"
+    article = row(1, "PubMed (topics)")
+    article.metadata_json = json.dumps({"venue": venue})
+    canonical = row(2, "Angewandte Chemie International Edition")
+    unknown = row(3, "Unlisted nucleic acid journal")
+    second_unknown = row(4, "Another unlisted journal")
+    assert quality.recognized_research_venue(venue) == venue
+    assert quality.infer_source_quality(venue, "research") == quality.infer_source_quality(
+        canonical.source, "research")
+    assert quality.source_bucket(article) == "published_journal"
+    assert quality.is_high_quality_journal_source(article)
+    assert quality.source_diversity_key(article) == quality.source_diversity_key(canonical)
+    assert quality.quality_adjusted_score(article, .8) == pytest.approx(
+        quality.quality_adjusted_score(canonical, .8))
+    pool = [(unknown, .99), (article, .98), (second_unknown, .97)]
+    selected = pick_top_per_section(pool, {"research": 3}, settings=settings(),
+                                   score_features={i: {"topic_score": .8} for i in [1, 3, 4]})
+    assert {item.id for item, _ in selected} == {1, 3}
+
+
+def test_nlm_small_identity_matches_existing_wiley_journal_prior():
+    # NLM Catalog 101235338 identifies this uniform title as Small, Wiley-VCH.
+    venue = "Small (Weinheim an der Bergstrasse, Germany)"
+    article = row(1, "PubMed (topics)")
+    article.metadata_json = json.dumps({"venue": venue})
+    assert quality.recognized_research_venue(venue) == venue
+    assert quality.source_bucket(article) == "published_journal"
+    assert quality.infer_source_quality(venue, "research") == quality.infer_source_quality(
+        "Small (Wiley)", "research")
+    assert quality.source_diversity_key(article) == quality.source_diversity_key(
+        row(2, "Small")) == quality.source_diversity_key(row(3, "Small (Wiley)"))
+
+
 @pytest.mark.parametrize("source,venue,expected", [
     ("Unlisted Computing Proceedings", None, "unknown_journal"),
     ("PubMed (topics)", "Unlisted Mathematics Journal", "unknown_journal"),
@@ -125,6 +161,10 @@ def test_explicit_configured_low_tier_keeps_weak_source_penalty_and_bucket(monke
 @pytest.mark.parametrize("venue", [
     "Physical Review Letters Plus", "Journal of Machine Learning Research Applications",
     "Advanced Materials Research (Deerfield Beach, Fla.)",
+    "Angewandte Chemie (International ed. in English) Research",
+    "Angewandte Chemie (International ed. in French)",
+    "Small Ruminant Research (Weinheim an der Bergstrasse, Germany)",
+    "Small (Weinheim an der Bergstrasse, Germany) Reports",
 ])
 def test_alias_fixes_do_not_promote_similar_titles(venue):
     assert quality.recognized_research_venue(venue) is None
