@@ -20,6 +20,7 @@ import re
 import shutil
 import signal
 import subprocess
+import sys
 import tempfile
 import time
 
@@ -268,9 +269,9 @@ def _filter_to_batch_ids(summaries: dict[int, str], batch: list[ItemRow]) -> dic
     return {item_id: summary for item_id, summary in summaries.items() if item_id in allowed}
 
 
-def _call_llm(batch: list[ItemRow]) -> dict[int, str]:
+def _call_llm(batch: list[ItemRow], *, settings=None, timeout: float = _TIMEOUT) -> dict[int, str]:
     from .config import get_settings
-    cfg = get_settings()
+    cfg = settings if settings is not None else get_settings()
     sys_prompt, user_prompt = _build_prompt(batch)
     body = {
         "model": cfg.llm_model,
@@ -287,7 +288,7 @@ def _call_llm(batch: list[ItemRow]) -> dict[int, str]:
         "Content-Type": "application/json",
     }
     url = cfg.llm_base_url.rstrip("/") + "/chat/completions"
-    with httpx.Client(timeout=_TIMEOUT) as client:
+    with httpx.Client(timeout=timeout) as client:
         resp = client.post(url, headers=headers, json=body)
         resp.raise_for_status()
         data = resp.json()
@@ -298,10 +299,12 @@ def _call_llm(batch: list[ItemRow]) -> dict[int, str]:
     return _filter_to_batch_ids(_parse_id_summary_map(content), batch)
 
 
-def _anthropic_text(system: str, user: str, max_tokens: int) -> str:
+def _anthropic_text(
+    system: str, user: str, max_tokens: int, *, settings=None, timeout: float = _TIMEOUT
+) -> str:
     from .config import get_settings
 
-    cfg = get_settings()
+    cfg = settings if settings is not None else get_settings()
     body = {
         "model": cfg.llm_model,
         "system": system,
@@ -314,7 +317,7 @@ def _anthropic_text(system: str, user: str, max_tokens: int) -> str:
         "Content-Type": "application/json",
     }
     url = cfg.llm_base_url.rstrip("/") + "/messages"
-    with httpx.Client(timeout=_TIMEOUT) as client:
+    with httpx.Client(timeout=timeout) as client:
         resp = client.post(url, headers=headers, json=body)
         resp.raise_for_status()
         data = resp.json()
@@ -325,12 +328,16 @@ def _anthropic_text(system: str, user: str, max_tokens: int) -> str:
     ).strip()
 
 
-def _call_anthropic(batch: list[ItemRow]) -> dict[int, str]:
+def _call_anthropic(
+    batch: list[ItemRow], *, settings=None, timeout: float = _TIMEOUT
+) -> dict[int, str]:
     sys_prompt, user_prompt = _build_prompt(batch)
     content = _anthropic_text(
         sys_prompt,
         user_prompt,
         max_tokens=min(300 * len(batch) + 300, 2048),
+        settings=settings,
+        timeout=timeout,
     )
     return _filter_to_batch_ids(_parse_id_summary_map(content), batch)
 
@@ -342,11 +349,18 @@ def _kill_process_group(proc: subprocess.Popen) -> None:
     surviving grandchild would otherwise hold open.
     """
     try:
-        if hasattr(os, "killpg"):
+        if sys.platform == "win32":
+            # /T terminates descendants retaining the CLI's stdout/stderr pipes.
+            # Use the OS utility directly; never interpolate a shell command.
+            subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                           timeout=5, check=False)
+            proc.kill()  # best effort if the process exited during taskkill
+        elif hasattr(os, "killpg"):
             os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-        else:  # Windows has no process groups here
+        else:
             proc.kill()
-    except (ProcessLookupError, PermissionError, OSError):
+    except (ProcessLookupError, PermissionError, OSError, subprocess.TimeoutExpired):
         try:
             proc.kill()
         except OSError:
@@ -399,10 +413,11 @@ def _cli_text(
     backend: str,
     *,
     timeout: float = _CLI_TIMEOUT,
+    settings=None,
 ) -> str:
     from .config import get_settings
 
-    cfg = get_settings()
+    cfg = settings if settings is not None else get_settings()
     executable_name = "claude" if backend == "claude_cli" else "codex"
     executable = shutil.which(executable_name)
     if not executable:
@@ -470,10 +485,10 @@ def _cli_text(
 
 
 def _call_cli(
-    batch: list[ItemRow], backend: str, *, timeout: float = _CLI_TIMEOUT
+    batch: list[ItemRow], backend: str, *, timeout: float = _CLI_TIMEOUT, settings=None
 ) -> dict[int, str]:
     sys_prompt, user_prompt = _build_prompt(batch)
-    content = _cli_text(sys_prompt, user_prompt, backend, timeout=timeout)
+    content = _cli_text(sys_prompt, user_prompt, backend, timeout=timeout, settings=settings)
     return _filter_to_batch_ids(
         _parse_id_summary_map(_extract_json_object(content)), batch
     )
@@ -484,13 +499,15 @@ def _summarize_via_api(items: list[ItemRow]) -> dict[int, str]:
 
 
 def _summarize_via_provider_with_provenance(
-    items: list[ItemRow], backend: str
+    items: list[ItemRow], backend: str, *, settings=None, diagnostics=None
 ) -> tuple[dict[int, str], dict[int, str]]:
     out: dict[int, str] = {}
     provenance: dict[int, str] = {}
     is_cli = backend in {"claude_cli", "codex_cli"}
     started = time.monotonic()
     budget_hit = False
+    provider_calls = 0
+    failures = 0
     for i in range(0, len(items), _BATCH_SIZE):
         batch = items[i : i + _BATCH_SIZE]
         cli_timeout = _CLI_TIMEOUT
@@ -509,16 +526,29 @@ def _summarize_via_provider_with_provenance(
                     budget_hit = True
                 continue
             cli_timeout = min(_CLI_TIMEOUT, remaining)
+        request_timeout = cli_timeout
+        if not is_cli and settings is not None:
+            remaining = float(getattr(settings, "llm_summary_budget_seconds", 180)) - (time.monotonic() - started)
+            if remaining <= 0 or failures >= int(getattr(settings, "llm_summary_max_failures", 2)):
+                budget_hit = True
+                break
+            request_timeout = min(_TIMEOUT, remaining)
         try:
+            provider_calls += 1
             if backend == "anthropic":
-                generated = _call_anthropic(batch)
+                generated = (_call_anthropic(batch) if settings is None else
+                             _call_anthropic(batch, settings=settings, timeout=request_timeout))
             elif backend in {"claude_cli", "codex_cli"}:
-                generated = _call_cli(batch, backend, timeout=cli_timeout)
+                generated = (_call_cli(batch, backend, timeout=cli_timeout) if settings is None else
+                             _call_cli(batch, backend, timeout=request_timeout, settings=settings))
             else:
-                generated = _call_llm(batch)
+                generated = (_call_llm(batch) if settings is None else
+                             _call_llm(batch, settings=settings, timeout=request_timeout))
+            failures = 0 if generated else failures + 1
             out.update(generated)
             provenance.update({item_id: backend for item_id in generated})
         except Exception as e:  # noqa: BLE001
+            failures += 1
             logger.warning(
                 "LLM summarize failed for batch %d: %s: %s; falling back",
                 i, type(e).__name__, str(e)[:200],
@@ -533,6 +563,9 @@ def _summarize_via_provider_with_provenance(
             item_id = int(row.id)
             out[item_id] = _extractive(row)
             provenance[item_id] = "extractive_fallback"
+    if diagnostics is not None:
+        diagnostics.update(provider_calls=provider_calls, provider_stopped=budget_hit,
+                           fallback_items=sum(value == "extractive_fallback" for value in provenance.values()))
     return out, provenance
 
 
@@ -544,11 +577,11 @@ def _summarize_extractive(items: list[ItemRow]) -> dict[int, str]:
     return {int(row.id): _extractive(row) for row in items if row.id is not None}
 
 
-def effective_summary_backend() -> str:
+def effective_summary_backend(*, settings=None) -> str:
     """Return the backend that a new summary attempt will actually use."""
     from .config import get_settings
 
-    settings = get_settings()
+    settings = settings if settings is not None else get_settings()
     backend = (settings.llm_backend or "extractive").lower()
     if backend in {"api", "anthropic"} and not settings.llm_api_key:
         return "extractive"
@@ -586,18 +619,20 @@ def summary_signature(
 
 
 def summarize_items_with_provenance(
-    items: list[ItemRow], profile: object | None = None
+    items: list[ItemRow], profile: object | None = None, *, settings=None, diagnostics=None
 ) -> tuple[dict[int, str], dict[int, str]]:
     """Return summaries plus the actual backend used for every item."""
     _set_reader_context(profile)
     if not items:
         return {}, {}
 
-    backend = effective_summary_backend()
+    backend = effective_summary_backend(settings=settings)
     if backend == "extractive":
         summaries = _summarize_extractive(items)
         return summaries, {item_id: "extractive" for item_id in summaries}
-    return _summarize_via_provider_with_provenance(items, backend)
+    if settings is None and diagnostics is None:
+        return _summarize_via_provider_with_provenance(items, backend)
+    return _summarize_via_provider_with_provenance(items, backend, settings=settings, diagnostics=diagnostics)
 
 
 def summarize_items(items: list[ItemRow], profile: object | None = None) -> dict[int, str]:
@@ -613,11 +648,11 @@ def summarize_items(items: list[ItemRow], profile: object | None = None) -> dict
     return summarize_items_with_provenance(items, profile=profile)[0]
 
 
-def _llm_text(system: str, user: str) -> str:
+def _llm_text(system: str, user: str, *, settings=None, timeout: float | None = None) -> str:
     """Single plain-text completion via the configured backend. '' if no LLM."""
     from .config import get_settings
 
-    s = get_settings()
+    s = settings if settings is not None else get_settings()
     backend = (s.llm_backend or "extractive").lower()
     if backend == "api" and s.llm_api_key:
         body = {
@@ -627,14 +662,20 @@ def _llm_text(system: str, user: str) -> str:
         }
         headers = {"Authorization": f"Bearer {s.llm_api_key}", "Content-Type": "application/json"}
         url = s.llm_base_url.rstrip("/") + "/chat/completions"
-        with httpx.Client(timeout=_TIMEOUT) as client:
+        with httpx.Client(timeout=min(_TIMEOUT, timeout) if timeout is not None else _TIMEOUT) as client:
             resp = client.post(url, headers=headers, json=body)
             resp.raise_for_status()
             return (resp.json()["choices"][0]["message"]["content"] or "").strip()
     if backend == "anthropic" and s.llm_api_key:
-        return _anthropic_text(system, user, max_tokens=500)
+        return _anthropic_text(
+            system, user, max_tokens=500, settings=s,
+            timeout=min(_TIMEOUT, timeout) if timeout is not None else _TIMEOUT,
+        )
     if backend in {"claude_cli", "codex_cli"}:
-        return _cli_text(system, user, backend)
+        return _cli_text(
+            system, user, backend, settings=s,
+            timeout=min(_CLI_TIMEOUT, timeout) if timeout is not None else _CLI_TIMEOUT,
+        )
     return ""
 
 

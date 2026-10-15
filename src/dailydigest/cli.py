@@ -29,6 +29,15 @@ logging.basicConfig(
 )
 
 
+@app.command("companion", context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
+             add_help_option=False)
+def companion_cmd(ctx: typer.Context):
+    """Run the optional authenticated local companion (``dd companion --help``)."""
+    from .companion import main
+
+    main(ctx.args)
+
+
 def _run_compute_job(action):
     """Run one memory-heavy CLI action without overlapping another process."""
     try:
