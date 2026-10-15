@@ -12,6 +12,9 @@ import hashlib
 import json
 import sqlite3
 import tempfile
+import weakref
+import sys
+from io import StringIO
 from collections import deque
 from concurrent.futures import Future
 from datetime import date
@@ -80,6 +83,112 @@ def run_job():
     return target(*args, **kwargs)
 
 
+# One startup checkpoint canonicalizes restored state before trusting clean reads.
+_STATE_GENERATION = 1
+_STATE_TRACKING_INSTALLED = False
+_STATE_WRITERS = weakref.WeakSet()
+
+
+def state_generation():
+    return _STATE_GENERATION
+
+
+def _mark_state_changed():
+    global _STATE_GENERATION
+    _STATE_GENERATION += 1
+
+
+def snapshot_ready():
+    """Never copy database/WAL files while a SQL writer is suspended."""
+    return not any(connection.in_transaction() for connection in _STATE_WRITERS)
+
+
+def private_write_audit(event, args, *, root=ROOT):
+    """Observe actual private write attempts, including non-route migrations."""
+    paths = ()
+    if event == 'dailydigest.private_write':
+        paths = args[:1]
+    elif event == 'open' and len(args) >= 3:
+        mode, flags = args[1:3]
+        import os
+        if (isinstance(mode, str) and any(letter in mode for letter in 'wax+')
+                or isinstance(flags, int) and flags & (os.O_WRONLY | os.O_RDWR | os.O_CREAT)):
+            paths = args[:1]
+    elif event in {'os.remove', 'os.rmdir', 'os.mkdir', 'os.rename'}:
+        paths = args[:2] if event == 'os.rename' else args[:1]
+    for value in paths:
+        if not isinstance(value, (str, bytes, Path)):
+            continue
+        try:
+            path = Path(value.decode() if isinstance(value, bytes) else value).absolute()
+            relative = path.relative_to(root.absolute())
+        except (ValueError, OSError):
+            continue
+        if relative == Path('.env') or relative.parts and relative.parts[0] == 'data':
+            if event == 'os.mkdir' and path.exists():
+                continue
+            if relative.name != '.compute.lock':
+                _mark_state_changed()
+                return
+
+
+def install_state_tracking():
+    global _STATE_TRACKING_INSTALLED
+    if _STATE_TRACKING_INSTALLED:
+        return
+    from sqlalchemy import event
+    from sqlalchemy.engine import Engine
+
+    sys.addaudithook(private_write_audit)
+    # SQL writes bypass Python's open audit event. Read-only transactions must
+    # not dirty state just because SQLAlchemy rolls them back on close.
+    def before_cursor(connection, cursor, statement, parameters, context, executemany):
+        context._browser_sql_changes = getattr(cursor.connection, 'total_changes', None)
+        connection.info.setdefault('_browser_tx_start_changes', context._browser_sql_changes)
+
+    def after_cursor(connection, cursor, statement, parameters, context, executemany):
+        command = statement.lstrip().split(None, 1)[0].upper() if statement.strip() else ''
+        changed = (context.isinsert or context.isupdate or context.isdelete
+                   or command in {'INSERT', 'UPDATE', 'DELETE', 'REPLACE', 'CREATE',
+                                  'ALTER', 'DROP', 'VACUUM', 'REINDEX'}
+                   or command == 'PRAGMA' and '=' in statement)
+        total = getattr(cursor.connection, 'total_changes', None)
+        if total is not None and (context.isinsert or context.isupdate or context.isdelete
+                                  or command in {'INSERT', 'UPDATE', 'DELETE', 'REPLACE', 'WITH'}):
+            changed = total != context._browser_sql_changes
+        if changed:
+            connection.info['_browser_private_changed'] = True
+            _STATE_WRITERS.add(connection)
+
+    def finish_transaction(connection):
+        _STATE_WRITERS.discard(connection)
+        changed = connection.info.pop('_browser_private_changed', False)
+        before = connection.info.pop('_browser_tx_start_changes', None)
+        after = getattr(connection.connection.driver_connection, 'total_changes', None)
+        if changed or before is not None and after != before:
+            _mark_state_changed()
+
+    event.listen(Engine, 'before_cursor_execute', before_cursor)
+    event.listen(Engine, 'after_cursor_execute', after_cursor)
+    for name in ('commit', 'rollback'):
+        event.listen(Engine, name, finish_transaction)
+    _STATE_TRACKING_INSTALLED = True
+
+
+def _credential_key(key):
+    value = key.upper()
+    return any(word in value for word in ('PASSWORD', 'SECRET', 'TOKEN', 'API_KEY'))
+
+
+def _environment(payload):
+    from dotenv import dotenv_values
+    return dict(dotenv_values(stream=StringIO(payload), interpolate=False))
+
+
+def _environment_text(values):
+    return ''.join(f'{key}={json.dumps(value or "")}\n' for key, value in values.items())
+
+
 def _snapshot_paths(root):
     data = root / 'data'
     if data.exists():
@@ -88,13 +197,52 @@ def _snapshot_paths(root):
         yield root / '.env'
 
 
-def export_snapshot(root=ROOT):
-    """Copy only virtual private state; no deployed code or model artifacts."""
-    return json.dumps({'format': 'dailydigest-browser-v1', 'files': {
-        str(path.relative_to(root)): base64.b64encode(path.read_bytes()).decode('ascii')
-        for path in _snapshot_paths(root)
-        if path.name != '.compute.lock'
-    }})
+def _sqlite_shared_memory(path):
+    if not path.name.endswith('-shm'):
+        return False
+    database = path.with_name(path.name[:-4])
+    try:
+        with database.open('rb') as stream:
+            return stream.read(16) == b'SQLite format 3\0'
+    except OSError:
+        return False
+
+
+def export_snapshot(root=ROOT, *, include_credentials=True):
+    """Internal recovery is complete; portable exports omit credentials by default."""
+    if not snapshot_ready():
+        raise RuntimeError('Private SQL transaction is still active; retry after commit')
+    files = {str(path.relative_to(root)): base64.b64encode(path.read_bytes()).decode('ascii')
+             for path in sorted(_snapshot_paths(root)) if path.name != '.compute.lock' and not _sqlite_shared_memory(path)}
+    snapshot = {'format': 'dailydigest-browser-v1', 'files': files}
+    if not include_credentials:
+        omitted = []
+        if '.env' in files:
+            values = _environment(base64.b64decode(files['.env']).decode())
+            omitted = [key for key in values if _credential_key(key)]
+            text = _environment_text({key: value for key, value in values.items() if key not in omitted})
+            files['.env'] = base64.b64encode(text.encode()).decode('ascii')
+        snapshot.update(credentialsIncluded=False, omittedCredentialKeys=omitted)
+    return json.dumps(snapshot)
+
+
+def export_portable_snapshot(include_credentials=False, *, root=ROOT):
+    return export_snapshot(root, include_credentials=bool(include_credentials))
+
+
+def preserve_omitted_credentials(payload, *, root=ROOT):
+    """A portable import must not erase credentials already on this device."""
+    snapshot = json.loads(payload)
+    if snapshot.get('credentialsIncluded') is not False or not (root / '.env').is_file():
+        return payload
+    decoded = decode_snapshot(payload)
+    imported = _environment(decoded.get(Path('.env'), b'').decode())
+    previous = _environment((root / '.env').read_text())
+    for key, value in previous.items():
+        if _credential_key(key) and key not in imported:
+            imported[key] = value
+    snapshot['files']['.env'] = base64.b64encode(_environment_text(imported).encode()).decode('ascii')
+    return json.dumps(snapshot)
 
 
 def decode_snapshot(payload):
@@ -170,6 +318,7 @@ def validate_snapshot_sqlite(decoded, *, scratch_root=None):
 
 async def transactional_import(payload, commit, *, root=ROOT, scratch_root=None):
     """Apply an explicit import only when browser storage commits successfully."""
+    payload = preserve_omitted_credentials(payload, root=root)
     validate_snapshot_sqlite(decode_snapshot(payload), scratch_root=scratch_root)
     close_app()
     previous = export_snapshot(root)
@@ -429,6 +578,7 @@ def install_companion_providers(summarize, supports, call, identity=lambda _back
 
 def install_browser():
     global _WEB
+    install_state_tracking()
     import threading
     import fastapi.dependencies.utils
     import fastapi.routing

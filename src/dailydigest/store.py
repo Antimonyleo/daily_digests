@@ -4,6 +4,7 @@ import hashlib
 import json
 import logging
 import sqlite3
+import sys
 import uuid
 import zlib
 from collections.abc import Iterable
@@ -41,6 +42,11 @@ from sqlalchemy.orm import DeclarativeBase, Session, relationship, sessionmaker
 
 from .config import SETTINGS, ensure_data_dir
 from .models import Item
+
+
+def mark_private_state_changed(path: str | Path) -> None:
+    """Notify browser persistence about writes performed by native SQLite APIs."""
+    sys.audit("dailydigest.private_write", str(path))
 
 
 class Base(DeclarativeBase):
@@ -532,6 +538,7 @@ def _migrate_sqlite_schema(eng) -> None:
             backup_file.parent.mkdir(parents=True, exist_ok=True)
             with sqlite3.connect(db_file) as source, sqlite3.connect(backup_file) as target:
                 source.backup(target)
+            mark_private_state_changed(backup_file)
 
     with eng.begin() as conn:
         for table_name, columns in required_columns.items():

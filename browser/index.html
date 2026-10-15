@@ -15,11 +15,17 @@
     <div class="tea-cup" aria-hidden="true"><span class="steam s1"></span><span class="steam s2"></span><span class="steam s3"></span><span class="cup-bowl"></span><span class="cup-handle"></span></div>
     <h1 id="startup-title">Putting the kettle on…</h1>
     <p>Get a reading list matched to your research interests. Your profile, ratings and saved papers are stored in this browser.</p>
-    <p>The first visit downloads what the app needs. A large first brew can take a minute or more; later brews reuse saved calculations. Keep this tab open while brewing. Some sources may be unavailable if they block browser access.</p>
+    <p>The first visit downloads the app and a local text model. <span id="download-size">The CPU model is about 66 MB, plus the Python runtime and libraries.</span> Later visits reuse cached downloads. Keep this tab open while brewing.</p>
     <p>Brewing uses your device’s processor and memory, and may increase heat, fan noise and battery use. A first brew with thousands of articles can take 20 minutes or more on one CPU core. Choose optional acceleration in <strong>Compute</strong>.</p>
     <p>Use <strong>Browser data</strong> to back up your reading desk or move it to another device. Optional services are available through <strong>Companion</strong>.</p>
-    <p id="startup-status" role="status">Warming up your reading desk. A fresh cup is on its way.</p>
+    <p id="startup-status">Warming up your reading desk. A fresh cup is on its way.</p>
     <button id="retry" hidden type="button">Retry startup</button>
+    <div id="recovery-tools" hidden>
+      <p>Your saved data has not been removed. Download the original data before trying recovery. Raw recovery files may include credentials.</p>
+      <button id="recovery-export" type="button">Download original data</button>
+      <label class="file-button recovery-import-label">Restore a backup<input id="recovery-import" type="file" accept="application/json,.json"></label>
+      <button id="recovery-reset" type="button">Start a fresh reading desk</button>
+    </div>
   </main>
   <iframe id="app" title="DailyDigest reading desk" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-downloads" hidden></iframe>
   <aside id="app-error" class="app-error" role="alert" hidden>
@@ -27,8 +33,14 @@
     <button id="reload-app" type="button">Reload app</button>
     <button id="dismiss-error" type="button">Dismiss</button>
   </aside>
+  <aside id="transfer-notice" class="app-error" role="status" hidden>
+    <p id="transfer-message"></p>
+    <button id="dismiss-transfer" type="button">Dismiss</button>
+  </aside>
   <footer class="browser-bar">
-    <span id="status" role="status">Opening your reading desk…</span>
+    <span id="storage-warning" class="storage-warning" role="alert" hidden></span>
+    <span id="status">Opening your reading desk…</span>
+    <span id="announcements" class="visually-hidden" role="status" aria-live="polite" aria-atomic="true"></span>
     <button id="install" type="button" hidden title="Install a DailyDigest browser app shortcut">Install</button>
     <details id="compute-menu">
       <summary>Compute</summary>
@@ -47,12 +59,16 @@
         <p id="compute-status" role="status">CPU · one core. GPU acceleration is optional and may vary by device.</p>
         <p>Switching between CPU and GPU can require recalculating saved text comparisons.</p>
         <p>First-time GPU setup downloads a separate model export, about 133 MB.</p>
+        <p>GPU support is experimental while hardware performance is being verified across devices. CPU fallback keeps the same ranking rules.</p>
       </div>
     </details>
     <details id="companion-menu">
       <summary>Companion</summary>
       <div class="data-tools">
         <p>A companion can provide model summaries, email, inbound reading and optional state transfer. Connect only to a server you trust. Each action below is explicit.</p>
+        <p>Install DailyDigest on the companion computer, then run:</p>
+        <code class="companion-command">dd companion --allowed-origin https://antimonyleo.github.io</code>
+        <p>The command prints the location of your reusable private token. Your Claude or Codex login must be on that computer.</p>
         <form id="companion-form">
           <label for="companion-endpoint">Local server URL</label>
           <input id="companion-endpoint" type="url" required placeholder="http://127.0.0.1:8768" autocomplete="url">
@@ -65,6 +81,7 @@
         <p id="companion-summary-help" hidden>Select a provider supported by your companion in Settings to use its summaries during a brew. Provider credentials stay on the companion.</p>
         <p id="companion-schedule-help" hidden>For scheduled brews, send browser state once and keep the companion running. Restore companion state to retrieve its latest digest.</p>
         <div class="companion-actions">
+          <label><input id="sync-credentials" type="checkbox"> Include credentials when sending browser state</label>
           <button id="companion-email" disabled type="button">Send latest digest email</button>
           <button id="companion-inbound" disabled type="button">Import email feedback</button>
           <button id="companion-push" disabled type="button">Send browser state</button>
@@ -75,7 +92,13 @@
     <details id="browser-data-menu">
       <summary>Browser data</summary>
       <div class="data-tools">
-        <p>Data is private to this browser and site. Export a backup before clearing browser storage. Imported backups replace this browser’s DailyDigest data.</p>
+        <p>Your reading data stays in this browser. Other project sites on this same hostname share its security origin. Export a backup before clearing browser storage. Imports replace this reading desk.</p>
+        <p id="storage-status" role="status">Checking storage protection…</p>
+        <button id="protect-storage" type="button">Protect browser storage</button>
+        <button id="retained-recovery" type="button" hidden>Download previous recovery copy</button>
+        <p id="retained-recovery-help" hidden>Recovery copies can include credentials. Keep the downloaded file private.</p>
+        <label><input id="include-credentials" type="checkbox"> Include saved API keys and credentials in backup</label>
+        <p>Portable backups exclude credentials by default. You may need to configure a provider again on another device.</p>
         <button id="export" disabled type="button">Export backup</button>
         <label class="file-button">Import backup<input id="import" type="file" accept="application/json,.json" disabled></label>
       </div>

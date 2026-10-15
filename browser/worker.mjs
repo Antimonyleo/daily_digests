@@ -3,8 +3,11 @@ import { AutoTokenizer, AutoModel, Tensor, env } from './node_modules/@huggingfa
 import { prepareBertBatch } from './bge-tokenizer.mjs';
 import { computeCapabilities, computeSelection, createEmbeddingEngine, formatComputeProgress, guardGPUModel } from './compute.mjs';
 
+import { createSnapshotWriter, validateRecoverySnapshot } from './storage.mjs';
+import { createBrowserHttpBridge } from './http.mjs';
+
 let companion = null;
-let boot, state, database, jobRunning = false, stateReplacing = false, computeMode = 'cpu';
+let boot, state, database, storageWriter, ownership, recoveryPy, startupFailed = false, startupReady = false, jobRunning = false, stateReplacing = false, computeMode = 'cpu';
 const progress = (stage, detail) => self.postMessage({ type: 'progress', stage, detail });
 const emit = text => self.postMessage(JSON.parse(text));
 const response = (id, body, status = 200) => ({ id, type: 'response', status, headers: { 'content-type': 'application/json' }, body });
@@ -34,14 +37,16 @@ function saveSnapshot(snapshot, key = 'snapshot') {
   });
 }
 async function ownStorage() {
+  if (ownership) return ownership;
   if (!navigator.locks) throw new Error('This browser does not provide Web Locks required to protect saved reading state.');
-  await new Promise((resolve, reject) => {
+  ownership = new Promise((resolve, reject) => {
     navigator.locks.request(`dailydigest:${new URL('.', self.location.href).pathname}`, { ifAvailable: true }, async lock => {
       if (!lock) { reject(new Error('DailyDigest is open in another tab. Close that tab before opening this one.')); return; }
       resolve();
       await new Promise(() => {}); // Tab lifetime ownership; browser releases it on termination.
     }).catch(reject);
   });
+  return ownership;
 }
 async function fetchAsset(path, kind) {
   const result = await fetch(path);
@@ -75,6 +80,7 @@ function idleForCompanion() {
 async function replaceState(payload) {
   stateReplacing = true;
   try {
+    await persist({ force: true });
     await state.py.globals.get('handle_import').callPromising(payload, saveSnapshot);
   } catch (error) {
     stateReplacing = false;
@@ -82,6 +88,52 @@ async function replaceState(payload) {
   }
   // Remain closed to requests until UI reloads the successful replacement.
 }
+function recoveryKeys() {
+  return new Promise((resolve, reject) => {
+    const request = database.transaction('state').objectStore('state').getAllKeys();
+    request.onsuccess = () => resolve(request.result.filter(key => typeof key === 'string' && key.startsWith('recovery:')).sort());
+    request.onerror = () => reject(request.error);
+  });
+}
+async function recoveryRequest(data) {
+  await ownStorage();
+  database ||= await openDatabase();
+  if (data.type === 'recovery-status') {
+    const snapshot = await readSnapshot();
+    const quarantined = await recoveryKeys();
+    return { available: snapshot != null || quarantined.length > 0, failed: startupFailed, ready: startupReady,
+      bytes: typeof snapshot === 'string' ? snapshot.length : 0, quarantined };
+  }
+  if (data.type === 'recovery-export') {
+    if (data.key && !String(data.key).startsWith('recovery:')) throw new Error('Invalid recovery key.');
+    if (data.key) return (await readSnapshot(data.key)) ?? '';
+    return (await readSnapshot()) ?? (await readSnapshot((await recoveryKeys()).at(-1))) ?? '';
+  }
+  if (!startupFailed || startupReady) throw new Error('Recovery replacement is available only after startup fails.');
+  if (data.overwrite !== true) throw new Error('Recovery requires explicit confirmation to replace browser state.');
+  const next = data.type === 'recovery-reset' ? null : data.body;
+  if (next !== null) {
+    validateRecoverySnapshot(next);
+    if (recoveryPy) {
+      recoveryPy.globals.set('recovery_payload', next);
+      await recoveryPy.runPythonAsync('validate_snapshot_sqlite(decode_snapshot(recovery_payload))');
+    }
+  }
+  const previous = await readSnapshot();
+  const key = `recovery:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+  await new Promise((resolve, reject) => {
+    const transaction = database.transaction('state', 'readwrite');
+    const store = transaction.objectStore('state');
+    if (previous != null) store.put(previous, key);
+    if (next === null) store.delete('snapshot'); else store.put(next, 'snapshot');
+    transaction.oncomplete = resolve;
+    transaction.onerror = () => reject(transaction.error);
+    transaction.onabort = () => reject(transaction.error || new Error('Recovery was not saved; original state is unchanged.'));
+  });
+  return { ok: true, reload: true, quarantined: previous != null, recoveryKey: previous != null ? key : null,
+    credentialsOmitted: next !== null && JSON.parse(next).credentialsIncluded === false };
+}
+
 async function initialize() {
   if (boot) return boot;
   boot = (async () => {
@@ -102,10 +154,19 @@ async function initialize() {
     py.unpackArchive(bundle, 'zip', { extractDir: '/app' });
     py.runPython("import os, sys\nos.chdir('/app')\nsys.path.insert(0, '/app/src')\nsys.path.insert(0, '/app/browser')\nsys.path.insert(0, '/app/site-packages')");
     // Install browser HTTP transport before importing web/pipeline.
+    const httpBridge = createBrowserHttpBridge({ shouldCancel: () => Boolean(state?.py.globals.get('browser_cancelled')?.()) });
+    globalThis.browserHttpRequest = httpBridge.request;
+    globalThis.browserHttpWait = httpBridge.wait;
     py.globals.set('public_source_url', new URL('./assets/public-sources.json', self.location.href).href);
     await py.runPythonAsync('import network\nnetwork.install_httpx_transport()');
     await py.runPythonAsync(source);
-    if (snapshot) py.globals.get('restore_snapshot')(snapshot);
+    recoveryPy = py;
+    if (snapshot) {
+      validateRecoverySnapshot(snapshot);
+      py.globals.set('startup_snapshot', snapshot);
+      await py.runPythonAsync('validate_snapshot_sqlite(decode_snapshot(startup_snapshot))');
+      py.globals.get('restore_snapshot')(snapshot);
+    }
     // Native ingest imports bind config.SETTINGS: restore .env before them.
     await py.runPythonAsync('network.install_public_source_fallback(public_source_url)');
     env.allowRemoteModels = false;
@@ -146,34 +207,50 @@ async function initialize() {
       ? JSON.stringify([companion.endpoint, companion.provider_identities?.[backend] || 'legacy-provider']) : '';
     globalThis.browserCompanion = companionCall;
     py.globals.get('install_browser')();
+    storageWriter = createSnapshotWriter({
+      generation: () => Number(py.globals.get('state_generation')()),
+      ready: () => Boolean(py.globals.get('snapshot_ready')()),
+      capture: () => py.globals.get('export_snapshot')(), save: saveSnapshot,
+      warning: message => self.postMessage({ type: 'storage-warning', message }),
+    });
+    startupReady = true;
     progress('Ready', 'Your profile, votes and reading history stay in browser storage.');
     self.postMessage({ type: 'ready' });
     return state;
-  })();
+  })().catch(error => { startupFailed = true; throw error; });
   return boot;
 }
-async function persist() {
-  await saveSnapshot(state.py.globals.get('export_snapshot')());
+async function persist(options = {}) {
+  return storageWriter ? storageWriter.flush(options) : true;
 }
 async function pumpJobs() {
-  if (jobRunning) return;
+  if (jobRunning || !state.py.globals.get('has_jobs')()) return;
   jobRunning = true;
   try {
     while (state.py.globals.get('has_jobs')()) {
-      await state.py.globals.get('run_job').callPromising();
-      await persist();
+      try { await state.py.globals.get('run_job').callPromising(); }
+      finally { await persist({ force: true }); }
     }
   } catch (error) {
     self.postMessage({ type: 'error', message: error.message || String(error) });
-  } finally { jobRunning = false; }
+  } finally { jobRunning = false; await persist({ force: true }); }
 }
 self.onmessage = async ({ data }) => {
   try {
+    if (['recovery-status', 'recovery-export', 'recovery-import', 'recovery-reset'].includes(data.type)) {
+      const result = await recoveryRequest(data);
+      self.postMessage(response(data.id, typeof result === 'string' ? result : JSON.stringify(result)));
+      return;
+    }
     if (data.type === 'init') { await initialize(); return; }
     await initialize();
     if (data.type === 'cancel-request') { state.py.globals.get('cancel_request')(data.id); return; }
     if (stateReplacing) {
       self.postMessage(response(data.id, JSON.stringify({ detail: 'Backup import is replacing browser state. Wait for the page to reload.' }), 409));
+      return;
+    }
+    if (data.type === 'storage-status') {
+      self.postMessage(response(data.id, JSON.stringify(storageWriter?.status() || {})));
       return;
     }
     if (data.type === 'compute-status') {
@@ -183,8 +260,11 @@ self.onmessage = async ({ data }) => {
     }
     if (data.type === 'configure-compute') {
       if (jobRunning || state.py.globals.get('has_jobs')()) throw new Error('Wait for the current brew before changing compute settings.');
+      if (!await persist({ force: true })) {
+        throw new Error('Compute settings were not changed because your reading state could not be saved. Export a backup before reloading.');
+      }
       const selection = computeSelection(data.mode, computeCapabilities());
-      if (selection.fallback) throw new Error(selection.fallback);
+      if (selection.fallback && !(data.mode === 'multicore' && data.allowIsolationReload === true)) throw new Error(selection.fallback);
       await saveSnapshot(data.mode, 'compute');
       self.postMessage(response(data.id, JSON.stringify({ ok: true, reload: true })));
       return;
@@ -216,6 +296,7 @@ self.onmessage = async ({ data }) => {
       idleForCompanion();
       stateReplacing = true;
       try {
+        await persist({ force: true });
         const applied = JSON.parse(await state.py.globals.get('handle_inbound').callPromising(replies, saveSnapshot));
         if (applied.mail_ids.length) {
           try {
@@ -235,13 +316,12 @@ self.onmessage = async ({ data }) => {
     if (data.type === 'companion-email' || data.type === 'companion-push') {
       idleForCompanion();
       const payload = data.type === 'companion-email' ? state.py.globals.get('companion_email_payload')()
-        : data.type === 'companion-push' ? JSON.stringify({ snapshot: state.py.globals.get('export_snapshot')() }) : '{}';
+        : data.type === 'companion-push' ? JSON.stringify({ snapshot: state.py.globals.get('export_portable_snapshot')(data.includeCredentials === true) }) : '{}';
       const path = data.type === 'companion-email' ? '/email' : data.type === 'companion-push' ? '/state' : '/inbound';
       const body = await companionCall(path, payload, data.type === 'companion-push' ? 'PUT' : 'POST');
       if (data.type === 'companion-email' && JSON.parse(body).sent === true) {
         state.py.globals.get('companion_email_sent')(JSON.parse(payload).digest_id);
-        try { await persist(); }
-        catch (error) { throw new Error(`The companion sent the email, but saving the browser delivery confirmation failed: ${error.message}`); }
+        if (!await persist({ force: true })) throw new Error('The companion sent the email, but saving the browser delivery confirmation failed. Keep this tab open and export a backup.');
       }
       self.postMessage(response(data.id, body)); return;
     }
@@ -249,22 +329,26 @@ self.onmessage = async ({ data }) => {
       idleForCompanion();
       if (data.overwrite !== true) throw new Error('Pulling companion state requires explicit browser-state overwrite confirmation.');
       stateReplacing = true;
+      let credentialsOmitted = false;
       try {
         const remote = JSON.parse(await companionCall('/state', null, 'GET'));
         await replaceState(remote.snapshot);
+        credentialsOmitted = JSON.parse(remote.snapshot).credentialsIncluded === false;
       } catch (error) { stateReplacing = false; throw error; }
-      self.postMessage(response(data.id, JSON.stringify({ ok: true, reload: true }))); return;
+      self.postMessage(response(data.id, JSON.stringify({ ok: true, reload: true, credentialsOmitted }))); return;
     }
     if (data.type === 'export') {
       if (jobRunning || state.py.globals.get('has_jobs')()) throw new Error('Wait for the current brew or ranking job before exporting.');
-      self.postMessage(response(data.id, state.py.globals.get('export_snapshot')()));
+      self.postMessage(response(data.id, state.py.globals.get('export_portable_snapshot')(data.includeCredentials === true)));
       return;
     }
     if (data.type === 'import') {
       if (jobRunning || state.py.globals.get('has_jobs')()) throw new Error('Wait for the current brew or ranking job before importing.');
       if (data.overwrite !== true) throw new Error('Import requires explicit confirmation to overwrite browser state.');
       await replaceState(data.body);
-      self.postMessage(response(data.id, JSON.stringify({ ok: true, reload: true })));
+      const imported = JSON.parse(data.body);
+      self.postMessage(response(data.id, JSON.stringify({ ok: true, reload: true,
+        credentialsOmitted: imported.credentialsIncluded === false, omittedCredentialKeys: imported.omittedCredentialKeys || [] })));
       return;
     }
     if (data.type !== 'request') throw new Error('Unknown browser request type.');
@@ -283,11 +367,18 @@ self.onmessage = async ({ data }) => {
       }
     }
     const result = await state.py.globals.get('handle_request').callPromising(JSON.stringify(data), emit);
-    if (!jobRunning && data.path.split('?')[0] !== '/run/stream') await persist();
-    emit(result);
+    // Python tracks mutations, including impressions on GET and votes mid-brew.
+    // A failed checkpoint warns about durability without changing a valid HTTP response.
+    const saved = await persist();
+    if (!saved) {
+      const unsaved = JSON.parse(result);
+      unsaved.headers = { ...unsaved.headers, 'x-dailydigest-storage': 'unsaved' };
+      emit(JSON.stringify(unsaved));
+    } else emit(result);
     // Start native background targets only after the start response reaches UI.
     setTimeout(() => { void pumpJobs(); }, 0);
   } catch (error) {
+    if (state && !stateReplacing) await persist({ force: true });
     if (data.id != null) self.postMessage(response(data.id, JSON.stringify({ detail: error.message || String(error) }), 500));
     else self.postMessage({ type: 'error', message: error.message || String(error) });
   }

@@ -13,6 +13,17 @@ export function routeFromHash(hash) {
   catch { return '/'; }
 }
 
+export function publicRoute(path, base = 'https://example.invalid/') {
+  const url = new URL(base);
+  url.hash = localPath(path);
+  return url.href;
+}
+
+export function announcementKey(info) {
+  if (info.phase !== 'encoding') return info.phase;
+  return `encoding:${Math.floor(10 * (info.completed || 0) / Math.max(1, info.total || 1))}`;
+}
+
 export function browserSupportError(environment = globalThis) {
   if (!environment.WebAssembly?.Suspending || !environment.WebAssembly?.promising || !environment.navigator?.locks) {
     return 'This browser is missing features DailyDigest needs. Try a current desktop Chrome browser.';
@@ -72,11 +83,12 @@ export class WorkerClient {
 }
 
 // This function is serialized into each trusted, Python-rendered document.
-function frameBridge(token, path, origin) {
+function frameBridge(token, path, origin, publicBase) {
   let sequence = 0;
   const pending = new Map();
   const notify = (payload) => parent.postMessage({ ...payload, token }, '*');
   const route = (value) => {
+    if (publicBase && String(value).startsWith(publicBase + '#/')) value = String(value).slice(publicBase.length + 1);
     const url = new URL(value, origin + path);
     if (url.origin !== origin) throw new Error('External fetch requires an explicitly configured provider.');
     return url.pathname + url.search;
@@ -149,12 +161,39 @@ function frameBridge(token, path, origin) {
     close() { this.readyState = 2; this.request.cancel(); }
   }
   window.EventSource = LocalEventSource;
+  document.addEventListener('DOMContentLoaded', () => {
+    const field = document.getElementById('llm_api_key');
+    if (field) {
+      const notice = document.createElement('p');
+      notice.className = 'hint';
+      notice.textContent = 'API keys entered here are stored in this browser. A Companion can keep provider credentials on your own computer instead. Portable backups exclude credentials unless you choose to include them.';
+      field.parentElement.append(notice);
+    }
+  });
+  if (publicBase && typeof MutationObserver !== 'undefined') {
+    const rewrite = node => {
+      for (const link of [node, ...node.querySelectorAll?.('a[href]') || []]) {
+        if (link.tagName !== 'A') continue;
+        const href = link.getAttribute('href') || '';
+        if (href.startsWith('/') && !href.startsWith('//')) link.setAttribute('href', publicBase + '#' + href);
+      }
+    };
+    new MutationObserver(records => {
+      for (const record of records) {
+        if (record.type === 'attributes') rewrite(record.target);
+        else for (const node of record.addedNodes) rewrite(node);
+      }
+    }).observe(document.documentElement, { subtree: true, childList: true, attributes: true, attributeFilter: ['href'] });
+  }
   window.addEventListener('dd-compute-stop', () => notify({ type: 'compute-stop' }));
   document.addEventListener('click', (event) => {
     const anchor = event.target.closest?.('a[href]');
     if (!anchor || event.defaultPrevented || event.button || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
     const href = anchor.getAttribute('href');
     if (href.startsWith('#')) return;
+    if (publicBase && href.startsWith(publicBase + '#/')) {
+      event.preventDefault(); window.ddNavigate(href); return;
+    }
     const url = new URL(href, origin + path);
     if (url.origin !== origin) { anchor.target = '_blank'; anchor.rel = 'noopener noreferrer'; return; }
     event.preventDefault(); window.ddNavigate(href);
@@ -171,7 +210,7 @@ function frameBridge(token, path, origin) {
   });
 }
 
-export function renderedDocument(html, token, path) {
+export function renderedDocument(html, token, path, publicURL) {
   // Templates use location for a small number of navigation operations. Route
   // these through the outer hash router; the Pages subpath never becomes an API.
   html = html.replace(/window\.location\.href\s*=\s*([^;]+);/g, 'window.ddNavigate($1);')
@@ -180,7 +219,13 @@ export function renderedDocument(html, token, path) {
     .replace(/window\.history\.replaceState/g, 'window.ddReplaceState')
     .replace(/navigator\.serviceWorker\.register\("\/sw\.js"\)/g, 'Promise.reject(new Error("Browser worker owns runtime"))')
     .replace(/<link[^>]+href="\/(?:manifest\.webmanifest|app-icon\.svg)"[^>]*>/g, '');
-  const args = [token, path, LOCAL_ORIGIN].map(value => JSON.stringify(value).replace(/</g, '\\u003c')).join(',');
+  let publicBase = '';
+  if (publicURL) {
+    const url = new URL(publicURL); url.hash = ''; publicBase = url.href;
+    html = html.replace(/(<a\b[^>]*\bhref=["'])(\/(?!\/)[^"']*)(["'])/gi,
+      (_match, before, href, quote) => before + publicRoute(href, publicBase) + quote);
+  }
+  const args = [token, path, LOCAL_ORIGIN, publicBase].map(value => JSON.stringify(value).replace(/</g, '\\u003c')).join(',');
   const bridge = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; connect-src 'none'; form-action 'none'; base-uri 'none'"><script>(${frameBridge.toString()})(${args});</script>`;
   return html.replace(/<head[^>]*>/i, match => match + bridge);
 }
@@ -192,7 +237,27 @@ async function boot() {
   const startup = document.getElementById('startup');
   const status = document.getElementById('status');
   const startupStatus = document.getElementById('startup-status');
-  const setStatus = (message) => { status.textContent = message; startupStatus.textContent = message; };
+  const announcement = document.getElementById('announcements');
+  const importNoticeKey = `dailydigest:import-notice:${location.pathname}`;
+  const rememberImportNotice = result => {
+    if (!result.credentialsOmitted) return;
+    try { sessionStorage.setItem(importNoticeKey, 'This portable backup excluded credentials. Check Settings and configure your chosen provider if credentials are missing.'); } catch { /* browser storage may be disabled */ }
+  };
+  const transferNotice = document.getElementById('transfer-notice');
+  try {
+    const message = sessionStorage.getItem(importNoticeKey);
+    if (message) { document.getElementById('transfer-message').textContent = message; transferNotice.hidden = false; sessionStorage.removeItem(importNoticeKey); }
+  } catch { /* no notice persisted */ }
+  document.getElementById('dismiss-transfer').onclick = () => { transferNotice.hidden = true; };
+  let storageWarning = '';
+  const setStatus = (message, announce = true) => {
+    if (storageWarning && message.includes('saved in this browser')) message = 'Your reading desk · changes need a backup';
+    status.textContent = message; status.title = message;
+    if (!startup.hidden) startupStatus.textContent = message;
+    if (announce && announcement.textContent !== message) announcement.textContent = message;
+  };
+  const toolbar = document.querySelector('.browser-bar');
+  new ResizeObserver(() => document.documentElement.style.setProperty('--browser-bar-height', `${toolbar.getBoundingClientRect().height}px`)).observe(toolbar);
   let installPrompt;
   const installButton = document.getElementById('install');
   window.addEventListener('beforeinstallprompt', event => {
@@ -208,10 +273,16 @@ async function boot() {
     installButton.hidden = true;
   };
   window.addEventListener('appinstalled', () => { installPrompt = null; installButton.hidden = true; });
-  if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register(new URL('./sw.js', import.meta.url), { scope: new URL('.', import.meta.url).pathname })
-      .catch(error => { status.textContent = `App shortcut unavailable: ${error.message}`; });
-  }
+  const isolationKey = `dailydigest:isolation:${location.pathname}`;
+  let isolationRequested = false;
+  try { isolationRequested = localStorage.getItem(isolationKey) === 'true'; } catch { /* storage can be disabled */ }
+  const registerWorker = async isolate => {
+    const url = new URL('./sw.js', import.meta.url);
+    if (isolate) url.searchParams.set('isolate', '1');
+    return navigator.serviceWorker.register(url, { scope: new URL('.', import.meta.url).pathname });
+  };
+  if ('serviceWorker' in navigator) registerWorker(isolationRequested)
+    .catch(error => { setStatus(`App shortcut unavailable: ${error.message}`); });
   let token = crypto.randomUUID();
   const worker = new Worker(new URL('./worker.mjs?compute=v1', import.meta.url), { type: 'module' });
   const client = new WorkerClient(worker);
@@ -219,17 +290,24 @@ async function boot() {
   let ready = false;
   let navigation = 0;
   let activePath = '/';
-  let computeTimer, latestCompute, computeReceivedAt;
+  let computeTimer, latestCompute, computeReceivedAt, lastAnnouncement;
   const computeNotice = 'Brewing uses this device’s processor and memory, and can increase heat, fan noise and battery use. Thousands of new articles may take 20 minutes or more on one CPU core. Choose optional acceleration in Compute. Keep this tab open until the brew finishes to save its calculations.';
   frame.addEventListener('load', () => {
     frame.contentWindow.postMessage({ type: 'compute-config', token, message: computeNotice }, '*');
+    const heading = frame.contentDocument?.querySelector('h1, main, [role="main"]');
+    if (heading) { heading.setAttribute('tabindex', '-1'); heading.focus({ preventScroll: true }); }
+    frame.contentDocument?.addEventListener('click', () => {
+      for (const menu of document.querySelectorAll('.browser-bar > details[open]')) menu.open = false;
+    });
   });
   const displayCompute = () => {
     if (!latestCompute) return;
     const info = { ...latestCompute };
     if (info.phase === 'encoding') info.elapsed_ms += performance.now() - computeReceivedAt;
     info.message = formatComputeProgress(info);
-    setStatus(info.message);
+    const milestone = announcementKey(info);
+    setStatus(info.message, milestone !== lastAnnouncement);
+    lastAnnouncement = milestone;
     frame.contentWindow.postMessage({ type: 'compute-progress', token, compute: info }, '*');
   };
   const errorPanel = document.getElementById('app-error');
@@ -242,7 +320,14 @@ async function boot() {
   });
   const report = (error) => {
     const message = error.message || String(error);
-    if (!ready) { startup.dataset.state = 'error'; document.getElementById('startup-title').textContent = 'Couldn’t open your reading desk'; setStatus(message); document.getElementById('retry').hidden = false; return; }
+    if (!ready || frame.hidden) {
+      startup.dataset.state = 'error'; document.getElementById('startup-title').textContent = 'Couldn’t open your reading desk';
+      setStatus(message); document.getElementById('retry').hidden = false;
+      document.getElementById('recovery-tools').hidden = false;
+      document.getElementById('recovery-reset').hidden = ready;
+      document.querySelector('.recovery-import-label').hidden = ready;
+      return;
+    }
     setStatus('Action needs attention');
     if (errorPanel.hidden) errorFocus = document.activeElement;
     document.getElementById('app-error-message').textContent = message;
@@ -250,9 +335,13 @@ async function boot() {
     document.getElementById('dismiss-error').focus();
   };
   const companionStatus = document.getElementById('companion-status');
+  document.querySelector('.companion-command').textContent = `dd companion --allowed-origin ${location.origin}`;
   const companionEndpoint = document.getElementById('companion-endpoint');
   const companionToken = document.getElementById('companion-token');
   const browserMenus = [...document.querySelectorAll('.browser-bar > details')];
+  document.addEventListener('click', event => {
+    for (const menu of browserMenus) if (menu.open && !menu.contains(event.target)) menu.open = false;
+  });
   for (const menu of browserMenus) {
     menu.addEventListener('toggle', () => {
       if (menu.open) for (const other of browserMenus) if (other !== menu) other.open = false;
@@ -295,9 +384,10 @@ async function boot() {
       const select = document.getElementById('compute-mode');
       select.value = result.mode;
       select.querySelector('[value="gpu"]').disabled = !result.capabilities.gpu;
-      select.querySelector('[value="multicore"]').disabled = !result.capabilities.multicore;
+      const canEnableIsolation = 'serviceWorker' in navigator && isSecureContext && navigator.hardwareConcurrency > 1;
+      select.querySelector('[value="multicore"]').disabled = !result.capabilities.multicore && !canEnableIsolation;
       document.getElementById('compute-support').textContent =
-        `${result.capabilities.gpu ? 'WebGPU is exposed by this browser; device availability is checked when used.' : 'GPU acceleration is unavailable in this browser.'} ${result.capabilities.multicore ? `Up to ${result.capabilities.threads} CPU cores are available.` : 'Multiple CPU cores require an isolated host and are unavailable here.'}`;
+        `${result.capabilities.gpu ? 'WebGPU is exposed by this browser; hardware availability is checked when used.' : 'GPU acceleration is unavailable in this browser.'} ${result.capabilities.multicore ? `Up to ${result.capabilities.threads} CPU cores are available.` : canEnableIsolation ? 'Selecting multiple cores will try enabling browser isolation and reload once. If unavailable, computation stays on one core.' : 'Multiple CPU cores are unavailable on this site or browser.'}`;
       document.getElementById('compute-status').textContent = result.mode === 'gpu'
         ? result.device === 'webgpu' ? 'GPU acceleration selected (experimental). If it cannot run, this device will use CPU.' : 'GPU hardware is unavailable here; using CPU.'
         : result.threads > 1 ? `CPU · up to ${result.threads} cores.` : 'CPU · one core. GPU acceleration is opt-in.';
@@ -307,7 +397,24 @@ async function boot() {
   document.getElementById('compute-form').onsubmit = async event => {
     event.preventDefault();
     try {
-      await companionCall({ type: 'configure-compute', mode: document.getElementById('compute-mode').value });
+      const mode = document.getElementById('compute-mode').value;
+      const needsIsolation = mode === 'multicore' && !crossOriginIsolated;
+      await companionCall({ type: 'configure-compute', mode, allowIsolationReload: needsIsolation });
+      if ('serviceWorker' in navigator && (needsIsolation || isolationRequested && mode !== 'multicore')) {
+        const enable = mode === 'multicore';
+        try { localStorage.setItem(isolationKey, String(enable)); } catch { /* no persistent opt-in */ }
+        document.getElementById('compute-status').textContent = 'Preparing browser isolation before reloading…';
+        const registration = await registerWorker(enable);
+        const candidate = registration.installing || registration.waiting;
+        if (candidate) await new Promise((resolve, reject) => {
+          const timeout = setTimeout(() => reject(new Error('Browser isolation could not start. Reload to continue on CPU.')), 15000);
+          const changed = () => {
+            if (candidate.state === 'activated') { clearTimeout(timeout); resolve(); }
+            else if (candidate.state === 'redundant') { clearTimeout(timeout); reject(new Error('Browser isolation is unavailable; use one CPU core.')); }
+          };
+          candidate.addEventListener('statechange', changed); changed();
+        });
+      }
       location.reload();
     } catch (error) { document.getElementById('compute-status').textContent = error.message; }
   };
@@ -346,8 +453,9 @@ async function boot() {
       clearInterval(computeTimer); latestCompute = null;
       history.replaceState(null, '', '#' + path);
       token = crypto.randomUUID();
-      frame.srcdoc = renderedDocument(response.body, token, path);
+      frame.srcdoc = renderedDocument(response.body, token, path, location.href);
       frame.hidden = false; startup.hidden = true;
+      startup.dataset.state = 'ready';
       setStatus('Your reading desk · saved in this browser');
     } catch (error) { if (version === navigation) report(error); }
   }
@@ -359,6 +467,13 @@ async function boot() {
       document.getElementById('companion-connect').disabled = false;
       refreshCompanion();
       refreshCompute();
+      companionCall({ type: 'recovery-status' }).then(result => {
+        const key = result.quarantined?.at(-1);
+        const button = document.getElementById('retained-recovery');
+        button.hidden = !key;
+        document.getElementById('retained-recovery-help').hidden = !key;
+        if (key) button.dataset.key = key;
+      }).catch(() => {});
       navigate(routeFromHash(location.hash));
     } else if (data.type === 'progress') {
       if (data.compute) {
@@ -367,6 +482,13 @@ async function boot() {
         if (data.compute.phase === 'encoding') computeTimer = setInterval(displayCompute, 1000);
         if (data.compute.phase === 'fallback') document.getElementById('compute-status').textContent = data.compute.message;
       } else setStatus(data.message || friendlyLoadingStatus(data.stage, data.detail) || 'Putting the kettle on…');
+    }
+    else if (data.type === 'storage-warning') {
+      storageWarning = data.message || '';
+      const notice = document.getElementById('storage-warning');
+      notice.textContent = storageWarning; notice.hidden = !storageWarning;
+      document.getElementById('storage-status').textContent = storageWarning || 'Your latest changes are saved in this browser.';
+      if (storageWarning) setStatus('Storage needs attention. Open Browser data to back up your changes.');
     }
     else if (data.type === 'error' && !data.id) report(new Error(data.message || data.error || 'Python startup failed'));
   });
@@ -396,9 +518,53 @@ async function boot() {
     }
   });
   document.getElementById('retry').onclick = () => location.reload();
+  document.getElementById('recovery-export').onclick = async () => {
+    try {
+      const response = await client.call({ type: 'recovery-export' });
+      if (response.status >= 400) throw new Error(response.body);
+      download(response.body, 'application/json', 'dailydigest-raw-recovery.json');
+      setStatus('Original browser data downloaded. Recovery files can contain credentials; keep this file private.');
+    } catch (error) { report(error); }
+  };
+  document.getElementById('retained-recovery').onclick = async event => {
+    try {
+      const response = await client.call({ type: 'recovery-export', key: event.currentTarget.dataset.key });
+      if (response.status >= 400) throw new Error(response.body);
+      download(response.body, 'application/json', 'dailydigest-original-recovery.json');
+    } catch (error) { report(error); }
+  };
+  document.getElementById('recovery-import').onchange = async event => {
+    const file = event.target.files[0]; if (!file) return;
+    try {
+      if (!confirm('Restore this backup? Your current stored state will be retained for recovery.')) return;
+      const body = await file.text();
+      await companionCall({ type: 'recovery-import', body, overwrite: true });
+      rememberImportNotice({ credentialsOmitted: JSON.parse(body).credentialsIncluded === false });
+      location.reload();
+    } catch (error) { report(new Error(`Recovery import failed: ${error.message}`)); }
+    finally { event.target.value = ''; }
+  };
+  document.getElementById('recovery-reset').onclick = async () => {
+    if (!confirm('Start a fresh reading desk? Your original stored state will be retained for recovery. Download it first if you need a separate copy.')) return;
+    try { await companionCall({ type: 'recovery-reset', overwrite: true }); location.reload(); }
+    catch (error) { report(error); }
+  };
+  document.getElementById('protect-storage').onclick = async () => {
+    try {
+      const granted = await navigator.storage?.persist?.();
+      document.getElementById('storage-status').textContent = granted
+        ? 'Persistent storage granted. Keep backups for device changes or manual clearing.'
+        : 'Persistent storage was not granted. Export backups regularly; this browser may clear site data.';
+    } catch (error) { document.getElementById('storage-status').textContent = `Storage protection unavailable: ${error.message}`; }
+  };
+  if (navigator.storage?.persisted) navigator.storage.persisted().then(granted => {
+    document.getElementById('storage-status').textContent = granted ? 'Persistent storage is enabled.' : 'Stored on this device. Export a backup before clearing browser data.';
+  }).catch(() => {});
   document.getElementById('export').onclick = async () => {
     try {
-      const response = await client.call({ type: 'export' });
+      const includeCredentials = document.getElementById('include-credentials').checked;
+      if (includeCredentials && !confirm('Include saved API keys and credentials in this backup? Keep the downloaded file private.')) return;
+      const response = await client.call({ type: 'export', includeCredentials });
       if (response.status >= 400) throw new Error(response.body);
       download(response.body, 'application/json', 'dailydigest-browser-backup.json');
       setStatus('Browser backup exported.');
@@ -411,6 +577,7 @@ async function boot() {
       if (!confirm('Replace this browser’s DailyDigest profile, votes and saved reading with this backup? Export your current data first if you need to keep it.')) return;
       const response = await client.call({ type: 'import', body, overwrite: true });
       if (response.status >= 400) throw new Error(response.body);
+      rememberImportNotice(JSON.parse(response.body));
       location.reload();
     } catch (error) { report(new Error(`Backup import failed: ${error.message}`)); }
     finally { event.target.value = ''; }
@@ -432,13 +599,14 @@ async function boot() {
     const button = document.getElementById(`companion-${action}`);
     button.onclick = async () => {
       if (action === 'email' && !confirm('Send your latest saved digest to the recipient configured on your companion?')) return;
-      if (action === 'push' && !confirm('Send this browser’s profile, feedback and reading history to your companion?')) return;
+      const includeCredentials = action === 'push' && document.getElementById('sync-credentials').checked;
+      if (action === 'push' && !confirm(`Send this browser’s profile, feedback and reading history to your companion? ${includeCredentials ? 'This also sends saved API keys and credentials.' : 'Saved API keys and credentials are excluded.'}`)) return;
       if (action === 'pull' && !confirm('Replace this browser’s DailyDigest profile, feedback and reading history with companion state? Export a browser backup first if you need to keep it.')) return;
       button.disabled = true;
       companionStatus.textContent = 'Running requested companion action…';
       try {
-        const result = await companionCall({ type: `companion-${action}`, ...(action === 'pull' ? { overwrite: true } : {}) });
-        if (action === 'pull' && result.reload) { location.reload(); return; }
+        const result = await companionCall({ type: `companion-${action}`, ...(action === 'pull' ? { overwrite: true } : {}), ...(action === 'push' ? { includeCredentials } : {}) });
+        if (action === 'pull' && result.reload) { rememberImportNotice(result); location.reload(); return; }
         if (action === 'inbound') {
           const up = Number(result.votes_up || 0);
           const down = Number(result.votes_down || 0);
@@ -458,6 +626,6 @@ if (typeof document !== 'undefined') boot().catch(error => {
   document.getElementById('startup-title').textContent = 'Couldn’t open your reading desk';
   document.getElementById('startup-status').textContent = error.message;
   document.getElementById('status').textContent = error.message;
-  document.getElementById('retry').hidden = false;
+  document.getElementById('retry').hidden = Boolean(browserSupportError());
   document.getElementById('retry').onclick = () => location.reload();
 });

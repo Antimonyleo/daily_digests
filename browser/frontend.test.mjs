@@ -1,7 +1,22 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { runInNewContext } from 'node:vm';
-import { localPath, routeFromHash, renderedDocument, WorkerClient, browserSupportError, friendlyLoadingStatus } from './app.mjs';
+import { localPath, routeFromHash, renderedDocument, WorkerClient, browserSupportError, friendlyLoadingStatus, publicRoute, announcementKey } from './app.mjs';
+
+test('modified internal links retain the public project path and deep route', () => {
+  assert.equal(publicRoute('/saved?section=research', 'https://example.test/daily_digests/#/setup'),
+    'https://example.test/daily_digests/#/saved?section=research');
+  const html = renderedDocument('<html><head></head><body><a href="/saved">Saved</a></body></html>', 'token', '/', 'https://example.test/daily_digests/');
+  assert.match(html, /href="https:\/\/example.test\/daily_digests\/#\/saved"/);
+  assert.throws(() => publicRoute('//another.test/'), /local DailyDigest/);
+});
+
+test('screen reader progress announces milestones, not each clock tick', () => {
+  assert.equal(announcementKey({ phase: 'encoding', completed: 4, total: 100, elapsed_ms: 1000 }),
+    announcementKey({ phase: 'encoding', completed: 5, total: 100, elapsed_ms: 2000 }));
+  assert.notEqual(announcementKey({ phase: 'encoding', completed: 4, total: 100 }),
+    announcementKey({ phase: 'encoding', completed: 14, total: 100 }));
+});
 
 test('waiting messages describe real stages without a made-up countdown', () => {
   assert.match(friendlyLoadingStatus('Loading Python'), /kettle/);

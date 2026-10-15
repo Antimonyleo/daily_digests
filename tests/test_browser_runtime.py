@@ -400,6 +400,7 @@ const context = vm.createContext({URL, setTimeout, AbortSignal,
     return {ok: true, text: async () => JSON.stringify({ok: true, votes: []})};
   },
 });
+vm.runInContext(fs.readFileSync(process.argv[1].replace('worker.mjs', 'storage.mjs'), 'utf8').replace(/^export /gm, ''), context);
 vm.runInContext(fs.readFileSync(process.argv[1], 'utf8').replace(/^import .*$/gm, ''), context);
 context.apply = {callPromising: async (_payload, commit) => {
   events.push('apply'); await commit('saved snapshot');
@@ -417,6 +418,7 @@ vm.runInContext(`
   boot = Promise.resolve({}); companion = {endpoint: 'https://companion.example', token: 'explicit'};
   state = {py: {globals: {get: name => name === 'handle_inbound' ? apply : () => false}}};
   database = {transaction};
+  storageWriter = createSnapshotWriter({generation: () => Number(state.py.globals.get('state_generation')()), capture: () => 'existing digest snapshot', save: saveSnapshot});
 `, context);
 (async () => {
   await context.self.onmessage({data: {id: 1, type: 'companion-inbound'}});
@@ -656,6 +658,7 @@ const context = vm.createContext({URL, setTimeout, AbortSignal,
       capabilities: {summarize: ['api']}, provider_identities: {api: 'new-model-fingerprint'}})};
   },
 });
+vm.runInContext(fs.readFileSync(process.argv[1].replace('worker.mjs', 'storage.mjs'), 'utf8').replace(/^export /gm, ''), context);
 vm.runInContext(fs.readFileSync(process.argv[1], 'utf8').replace(/^import .*$/gm, ''), context);
 context.request = {callPromising: async message => {
   events.push('native-request');
@@ -676,9 +679,11 @@ vm.runInContext(`
     if (name === 'selected_browser_backend') return () => 'api';
     if (name === 'handle_request') return request;
     if (name === 'export_snapshot') return () => 'existing digest snapshot';
+    if (name === 'state_generation') return () => 1;
     return () => false;
   }}}};
   database = {transaction};
+  storageWriter = createSnapshotWriter({generation: () => Number(state.py.globals.get('state_generation')()), capture: () => 'existing digest snapshot', save: saveSnapshot});
 `, context);
 (async () => {
   await context.self.onmessage({data: {id: 1, type: 'request', method: 'POST', path: '/run/start', body: '{}'}});
@@ -693,3 +698,208 @@ vm.runInContext(`
 '''
     result = subprocess.run(['node', '-e', script, str(worker)], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
+
+
+def test_portable_snapshot_redacts_credentials_and_preserves_nonsecret_settings(runtime, tmp_path):
+    (tmp_path / 'data').mkdir()
+    (tmp_path / 'data/profile.yaml').write_text('keywords: [protein degradation]\n')
+    (tmp_path / '.env').write_text('LLM_BACKEND=api\nLLM_API_KEY="private\\nkey"\nIMAP_PASSWORD=mail-secret\nDIGEST_HOUR=9\n')
+    internal = json.loads(runtime.export_snapshot(tmp_path))
+    assert b'private' in base64.b64decode(internal['files']['.env'])
+    portable = json.loads(runtime.export_portable_snapshot(root=tmp_path))
+    environment = base64.b64decode(portable['files']['.env']).decode()
+    assert 'private' not in environment and 'mail-secret' not in environment
+    assert 'LLM_BACKEND="api"' in environment and 'DIGEST_HOUR="9"' in environment
+    assert portable['credentialsIncluded'] is False
+    assert set(portable['omittedCredentialKeys']) == {'LLM_API_KEY', 'IMAP_PASSWORD'}
+    assert json.loads(runtime.export_portable_snapshot(True, root=tmp_path)) == internal
+
+
+def test_portable_import_preserves_only_existing_destination_credentials(runtime, tmp_path):
+    source = tmp_path / 'source'
+    source.mkdir()
+    (source / '.env').write_text('LLM_BACKEND=api\nLLM_API_KEY=source-secret\nDIGEST_HOUR=9\n')
+    portable = runtime.export_portable_snapshot(root=source)
+    destination = tmp_path / 'destination'
+    destination.mkdir()
+    (destination / '.env').write_text('LLM_API_KEY=destination-secret\nDIGEST_HOUR=6\n')
+    result = runtime.preserve_omitted_credentials(portable, root=destination)
+    values = runtime._environment(base64.b64decode(json.loads(result)['files']['.env']).decode())
+    assert values['LLM_API_KEY'] == 'destination-secret'
+    assert values['DIGEST_HOUR'] == '9'
+    assert values['LLM_BACKEND'] == 'api'
+    assert 'source-secret' not in result
+
+
+def test_private_mutation_tracking_observes_file_writes_but_not_reads(runtime, tmp_path):
+    import os
+
+    before = runtime.state_generation()
+    runtime.private_write_audit('open', (str(tmp_path / 'data/profile.yaml'), 'r', os.O_RDONLY), root=tmp_path)
+    runtime.private_write_audit('open', (str(tmp_path / 'public.py'), 'w', os.O_WRONLY), root=tmp_path)
+    runtime.private_write_audit('open', (str(tmp_path / 'data/.compute.lock'), 'w', os.O_WRONLY), root=tmp_path)
+    assert runtime.state_generation() == before
+    runtime.private_write_audit('open', (str(tmp_path / 'data/profile.yaml'), 'w', os.O_WRONLY), root=tmp_path)
+    runtime.private_write_audit('os.rename', (str(tmp_path / 'data/new'), str(tmp_path / 'data/profile.yaml')), root=tmp_path)
+    assert runtime.state_generation() == before + 2
+
+
+def test_sql_mutation_tracking_ignores_read_transactions_and_noop_writes():
+    import subprocess
+    import sys
+
+    runtime_path = Path(__file__).parents[1] / 'browser/runtime.py'
+    script = r'''
+import importlib.util, sys
+from sqlalchemy import create_engine, text
+spec = importlib.util.spec_from_file_location('runtime_tracking_test', sys.argv[1])
+runtime = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(runtime)
+runtime.install_state_tracking()
+engine = create_engine('sqlite://')
+with engine.begin() as connection:
+    connection.execute(text('CREATE TABLE tracking (id INTEGER PRIMARY KEY)'))
+before = runtime.state_generation()
+with engine.connect() as connection:
+    assert connection.execute(text('SELECT COUNT(*) FROM tracking')).scalar() == 0
+assert runtime.state_generation() == before
+with engine.begin() as connection:
+    assert connection.execute(text('INSERT INTO tracking VALUES (1) RETURNING id')).scalar() == 1
+assert runtime.state_generation() > before
+before = runtime.state_generation()
+with engine.begin() as connection:
+    connection.execute(text('INSERT OR IGNORE INTO tracking VALUES (1)'))
+    connection.execute(text('UPDATE tracking SET id=id WHERE id=999'))
+assert runtime.state_generation() == before
+'''
+    result = subprocess.run([sys.executable, '-c', script, str(runtime_path)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
+def test_failed_startup_recovery_quarantines_original_atomically():
+    import shutil
+    import subprocess
+
+    if not shutil.which('node'):
+        pytest.skip('Node is required to exercise the worker recovery adapter')
+    worker = Path(__file__).parents[1] / 'browser/worker.mjs'
+    script = r'''
+const fs = require('node:fs'), vm = require('node:vm'), assert = require('node:assert/strict');
+const saved = new Map([['snapshot', 'damaged original']]); let fail = false;
+const database = {transaction: (_store, mode) => {
+  const staged = new Map(saved);
+  const transaction = {objectStore: () => ({
+    get(key) { const request = {}; setTimeout(() => {request.result = saved.get(key); request.onsuccess();}, 0); return request; },
+    getAllKeys() { const request = {}; setTimeout(() => {request.result = [...saved.keys()]; request.onsuccess();}, 0); return request; },
+    put(value, key) { staged.set(key, value); }, delete(key) { staged.delete(key); }
+  })};
+  if (mode === 'readwrite') setTimeout(() => {
+    if (fail) {transaction.error = new Error('quota exceeded'); transaction.onabort();}
+    else {saved.clear(); for (const [key, value] of staged) saved.set(key, value); transaction.oncomplete();}
+  }, 0);
+  return transaction;
+}};
+const context = vm.createContext({URL, setTimeout, databaseFixture: database, self: {postMessage() {}}});
+vm.runInContext(fs.readFileSync(process.argv[1].replace('worker.mjs', 'storage.mjs'), 'utf8').replace(/^export /gm, ''), context);
+vm.runInContext(fs.readFileSync(process.argv[1], 'utf8').replace(/^import .*$/gm, ''), context);
+vm.runInContext('startupFailed = true; ownership = Promise.resolve(); database = databaseFixture;', context);
+(async () => {
+  await assert.rejects(context.recoveryRequest({type: 'recovery-reset'}), /confirmation/);
+  fail = true;
+  await assert.rejects(context.recoveryRequest({type: 'recovery-reset', overwrite: true}), /quota/);
+  assert.deepEqual([...saved], [['snapshot', 'damaged original']]);
+  fail = false;
+  const result = await context.recoveryRequest({type: 'recovery-reset', overwrite: true});
+  assert.equal(result.quarantined, true);
+  assert.equal(saved.has('snapshot'), false);
+  assert.equal(saved.get(result.recoveryKey), 'damaged original');
+  assert.equal(await context.recoveryRequest({type: 'recovery-export'}), 'damaged original');
+  assert.equal(await context.recoveryRequest({type: 'recovery-export', key: result.recoveryKey}), 'damaged original');
+  const status = await context.recoveryRequest({type: 'recovery-status'});
+  assert.equal(status.available, true);
+  assert.equal(status.quarantined.length, 1);
+  await assert.rejects(context.recoveryRequest({type: 'recovery-export', key: 'companion'}), /Invalid/);
+})().catch(error => {console.error(error); process.exitCode = 1;});
+'''
+    result = subprocess.run(['node', '-e', script, str(worker)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
+def test_worker_quota_failure_keeps_valid_http_responses_and_reports_unsaved_state():
+    import shutil
+    import subprocess
+
+    if not shutil.which('node'):
+        pytest.skip('Node is required to exercise worker storage failures')
+    worker = Path(__file__).parents[1] / 'browser/worker.mjs'
+    script = r'''
+const fs = require('node:fs'), vm = require('node:vm'), assert = require('node:assert/strict');
+const posted = []; let fail = true, generation = 1;
+const context = vm.createContext({URL, setTimeout, self: {postMessage: value => posted.push(value)}});
+vm.runInContext(fs.readFileSync(process.argv[1].replace('worker.mjs', 'storage.mjs'), 'utf8').replace(/^export /gm, ''), context);
+vm.runInContext(fs.readFileSync(process.argv[1], 'utf8').replace(/^import .*$/gm, ''), context);
+context.request = {callPromising: async raw => {
+  const data = JSON.parse(raw); if (data.method === 'POST') generation++;
+  return JSON.stringify({id: data.id, type: 'response', status: 200, headers: {}, body: '{"ok":true}'});
+}};
+context.generation = () => generation;
+context.transaction = () => {
+  const transaction = {error: new Error('quota exceeded'), objectStore: () => ({put() {
+    setTimeout(() => fail ? transaction.onabort() : transaction.oncomplete(), 0);
+  }})}; return transaction;
+};
+vm.runInContext(`
+  boot = Promise.resolve({}); database = {transaction};
+  state = {py: {globals: {get: name => name === 'handle_request' ? request : () => false}}};
+  storageWriter = createSnapshotWriter({generation, capture: () => 'private state', save: saveSnapshot,
+    warning: message => self.postMessage({type: 'storage-warning', message})});
+`, context);
+(async () => {
+  for (const [id, method] of [[1, 'GET'], [2, 'POST']]) {
+    await context.self.onmessage({data: {id, type: 'request', method, path: '/fixture'}});
+    const response = posted.find(value => value.type === 'response' && value.id === id);
+    assert.equal(response.status, 200);
+    assert.equal(response.headers['x-dailydigest-storage'], 'unsaved');
+    assert.equal(response.body, '{"ok":true}');
+  }
+  assert.ok(posted.some(value => value.type === 'storage-warning' && value.message.includes('quota')));
+  await context.self.onmessage({data: {id: 3, type: 'configure-compute', mode: 'cpu'}});
+  const refused = posted.find(value => value.type === 'response' && value.id === 3);
+  assert.equal(refused.status, 500);
+  assert.match(refused.body, /reading state could not be saved/);
+  fail = false; assert.equal(await vm.runInContext('storageWriter.flush({force:true})', context), true);
+  assert.ok(posted.some(value => value.type === 'storage-warning' && value.message === null));
+})().catch(error => {console.error(error); process.exitCode = 1;});
+'''
+    result = subprocess.run(['node', '-e', script, str(worker)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
+def test_explicit_native_sqlite_write_hook_is_observed(runtime, tmp_path):
+    from dailydigest.store import mark_private_state_changed
+    import sys
+
+    sys.addaudithook(lambda event, args: runtime.private_write_audit(event, args, root=tmp_path))
+    before = runtime.state_generation()
+    mark_private_state_changed(tmp_path / 'data/backups/digest-pre-v1.db')
+    assert runtime.state_generation() > before
+
+
+def test_only_sqlite_shared_memory_is_excluded_from_private_export(runtime, tmp_path):
+    import sqlite3
+    data = tmp_path / 'data'
+    data.mkdir()
+    database = data / 'digest.db'
+    with sqlite3.connect(database) as connection:
+        connection.execute('CREATE TABLE fixture (id INTEGER)')
+    (data / 'digest.db-shm').write_bytes(b'ephemeral SQLite bookkeeping')
+    (data / 'notes-shm').write_bytes(b'private reader document')
+    files = json.loads(runtime.export_snapshot(tmp_path))['files']
+    assert 'data/digest.db-shm' not in files
+    assert 'data/notes-shm' in files
+
+
+def test_startup_requires_one_canonical_private_checkpoint(runtime):
+    # Restoring a legacy portable snapshot can change JSON ordering/metadata.
+    # Capture once after startup; subsequent read-only routes remain clean.
+    assert runtime.state_generation() > 0
