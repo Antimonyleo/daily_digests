@@ -50,7 +50,7 @@ from urllib.parse import parse_qs, urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import yaml
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import (
     HTMLResponse,
     JSONResponse,
@@ -285,7 +285,7 @@ def _breakdown_payload(row: ItemRow, persisted: dict | None = None) -> dict:
         }
         if isinstance(persisted.get("contribution_rerank"), dict):
             payload["contribution_rerank"] = dict(persisted["contribution_rerank"])
-        for field in ('contribution_claims', 'article_evidence'):
+        for field in ('contribution_claims', 'article_evidence', 'topic_alignment'):
             if isinstance(persisted.get(field), dict):
                 payload[field] = dict(persisted[field])
         return payload
@@ -875,6 +875,13 @@ def _parse_topic_details(value: str | None, topics: list[tuple[str, float]]) -> 
             return {}, ["Use up to 3 alternative terms (160 characters each) and a description of up to 600 characters."]
         clean[name] = {"aliases": list(dict.fromkeys(alias.strip() for alias in aliases)),
                        "description": description.strip()}
+        previous_name = detail.get("previous_name")
+        if previous_name is not None:
+            if (not isinstance(previous_name, str) or not previous_name.strip()
+                    or len(previous_name) > 160 or "\n" in previous_name or "|" in previous_name
+                    or (previous_name != name and previous_name in names)):
+                return {}, ["A corrected interest must refer to one original interest."]
+            clean[name]["previous_name"] = previous_name.strip()
     return clean, []
 
 
@@ -929,6 +936,9 @@ def _load_existing_form_defaults() -> dict[str, str]:
         "topics": "",
         "topic_details": "",
         "downweight": "",
+        "authors_of_interest": "",
+        "seed_works": "",
+        "context_keywords": "",
         "llm_backend": backend,
         "llm_base_url": SETTINGS.llm_base_url,
         "llm_api_key": "***" if SETTINGS.llm_api_key else "",
@@ -1001,6 +1011,8 @@ def _load_existing_form_defaults() -> dict[str, str]:
                     for topic in (data.get("keywords") or [])
                 )
             out["downweight"] = ", ".join(data.get("downweight") or [])
+            for key in ("authors_of_interest", "seed_works", "context_keywords"):
+                out[key] = "\n".join(str(value) for value in data.get(key) or [])
         except Exception as e:  # noqa: BLE001
             logger.warning("could not parse existing profile.yaml: %s", e)
     if _get_opportunity_profile_path().exists():
@@ -1137,6 +1149,18 @@ def _env_value_has_control_chars(value: str | None) -> bool:
     return any(ch in str(value or "") for ch in ("\r", "\n", "\0"))
 
 
+def _parse_advanced_interest_list(value: str) -> list[str]:
+    return list(dict.fromkeys(line.strip() for line in value.splitlines() if line.strip()))
+
+
+def _saved_api_key_matches(backend: str, base_url: str) -> bool:
+    from .provider_check import api_provider_binding
+
+    selected = api_provider_binding(backend, base_url)
+    saved = api_provider_binding(SETTINGS.llm_backend, SETTINGS.llm_base_url)
+    return selected is not None and selected == saved
+
+
 def _validate_setup(form: dict[str, str]) -> list[str]:
     errors: list[str] = []
     backend = form.get("llm_backend", "extractive")
@@ -1152,15 +1176,27 @@ def _validate_setup(form: dict[str, str]) -> list[str]:
     errors.extend(topic_errors)
     _details, detail_errors = _parse_topic_details(form.get("topic_details"), _topics)
     errors.extend(detail_errors)
+    for key, label in (
+        ("authors_of_interest", "Authors, labs and institutions"),
+        ("seed_works", "Representative works"),
+        ("context_keywords", "Background interests"),
+    ):
+        value = form.get(key, "")
+        entries = _parse_advanced_interest_list(value)
+        if len(entries) > 20 or any(len(entry) > 300 for entry in entries) or "\0" in value:
+            errors.append(f"{label}: use at most 20 lines of 300 characters each, without null characters.")
     if backend in {"api", "anthropic"}:
         if not (form.get("llm_base_url") or "").strip():
             errors.append("API backend requires a base URL.")
         entered_key = (form.get("llm_api_key") or "").strip()
         removing_key = form.get("remove_llm_api_key") == "true"
         has_submitted_key = bool(entered_key and entered_key != "***")
-        has_saved_key = bool(SETTINGS.llm_api_key and not removing_key)
+        has_saved_key = bool(SETTINGS.llm_api_key and not removing_key
+                             and _saved_api_key_matches(backend, form.get('llm_base_url', '')))
         if not has_submitted_key and not has_saved_key:
             errors.append("API backend requires an API key.")
+            if SETTINGS.llm_api_key and not removing_key:
+                errors.append("Enter a key for this provider and URL; saved keys cannot be reused at a different API endpoint.")
         if not (form.get("llm_model") or "").strip():
             errors.append("API backend requires a model name.")
     for key, label in (
@@ -1857,6 +1893,47 @@ self.addEventListener("fetch", (event) => {
 # --- Onboarding -------------------------------------------------------------
 
 
+@app.post("/setup/check-wording")
+def setup_check_wording(request: Request, topic: str = Query(min_length=1, max_length=160)) -> Response:
+    from .interest_spelling import SpellingUnavailable, suggest_topic_spelling
+
+    _require_csrf(request)
+    topic = topic.strip()
+    if not topic:
+        raise HTTPException(status_code=400, detail="Enter an interest first.")
+    try:
+        suggestion = suggest_topic_spelling(topic)
+    except SpellingUnavailable:
+        return JSONResponse(
+            {"detail": "Couldn't check wording right now. Your interest is unchanged. Try again later."},
+            status_code=503, headers={"Cache-Control": "no-store"},
+        )
+    return JSONResponse({"topic": topic, "suggestion": suggestion}, headers={"Cache-Control": "no-store"})
+
+
+@app.post("/setup/test-connection")
+async def setup_test_connection(request: Request) -> Response:
+    from starlette.concurrency import run_in_threadpool
+
+    from .provider_check import check_api_connection
+
+    raw = await _read_urlencoded_form(request)
+    _require_csrf(request, raw)
+    backend = raw.get("llm_backend", "")
+    base_url = raw.get("llm_base_url", "").strip()
+    api_key = raw.get("llm_api_key", "").strip()
+    if api_key == "***":
+        # A masked saved secret may only be reused at its configured provider.
+        api_key = (SETTINGS.llm_api_key or "") if (
+            _saved_api_key_matches(backend, base_url)
+        ) else ""
+    result = await run_in_threadpool(
+        check_api_connection, backend=backend, base_url=base_url,
+        api_key=api_key, model=raw.get("llm_model", "").strip(),
+    )
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
 @app.get("/setup", response_class=HTMLResponse)
 def setup_get(request: Request) -> Response:
     form = _load_existing_form_defaults()
@@ -1938,7 +2015,17 @@ async def setup_post(request: Request) -> Response:
         "minimum_lead_days": str(raw.get("minimum_lead_days", "7")),
     }
 
-    errors = _validate_setup(form)
+    # Missing controls from older clients preserve existing private values;
+    # an explicitly submitted empty field clears that list.
+    existing_form = _load_existing_form_defaults()
+    for key in ("authors_of_interest", "seed_works", "context_keywords"):
+        form[key] = str(raw.get(key, existing_form[key]))
+
+    validation_form = dict(form)
+    for key in ("authors_of_interest", "seed_works", "context_keywords"):
+        if form[key] == existing_form[key]:
+            validation_form[key] = ""
+    errors = _validate_setup(validation_form)
     if errors:
         # Never reflect a newly submitted secret into the response body. A
         # previously saved key can remain masked/reusable; a new key must be
@@ -1947,7 +2034,8 @@ async def setup_post(request: Request) -> Response:
         display_errors = list(errors)
         submitted_key = render_form.get("llm_api_key", "").strip()
         if submitted_key:
-            render_form["llm_api_key"] = "***" if SETTINGS.llm_api_key else ""
+            render_form["llm_api_key"] = "***" if (SETTINGS.llm_api_key and _saved_api_key_matches(
+                form["llm_backend"], form["llm_base_url"])) else ""
             if submitted_key != "***":
                 display_errors.append(
                     "Re-enter the API key after correcting the form; "
@@ -1980,12 +2068,17 @@ async def setup_post(request: Request) -> Response:
     )
     canonical_facets: dict[str, dict[str, Any]] = {}
     for topic, weight in topics:
-        previous = existing_by_name.get(topic.casefold())
+        detail = dict(details.get(topic, {}))
+        previous_name = detail.pop("previous_name", topic)
+        previous = existing_by_name.get(previous_name.casefold())
         spec = dict(previous) if isinstance(previous, dict) else {}
+        if previous_name != topic and isinstance(spec.get("anchors"), list):
+            spec["anchors"] = [topic if str(anchor).strip().casefold() == previous_name.casefold()
+                               else anchor for anchor in spec["anchors"]]
         if not spec.get("anchors"):
             spec["anchors"] = [topic]
         if topic in details:
-            spec.update(details[topic])
+            spec.update(detail)
         spec["priority"] = weight
         canonical_facets[topic] = spec
     # The weighted-topic editor supersedes these older parallel weighting maps.
@@ -1999,6 +2092,9 @@ async def setup_post(request: Request) -> Response:
             "keywords": _keywords_after_topic_edit(profile, topics),
             "canonical_facets": canonical_facets,
             "downweight": _parse_csv(form["downweight"]),
+            **{key: _parse_advanced_interest_list(form[key])
+               for key in ("authors_of_interest", "seed_works", "context_keywords")
+               if key in raw and form[key] != existing_form[key]},
         }
     )
     opportunity_payload = None

@@ -1014,6 +1014,13 @@
                 {{ item.ranking.selection_reason | capitalize }}.
                 {% endif %}
               </div>
+              {% if item.ranking.topic_alignment is defined %}
+              <div class="signal-line">Local topic check: {{ item.ranking.topic_alignment.topic }}.
+                {% if item.ranking.topic_alignment.uncertain | default(false) %}The topic models disagree; fit needs a closer look.{% endif %}
+                {% if not item.ranking.topic_alignment.complete %}Text coverage is partial; relevance is uncertain.{% endif %}
+                This checks topic fit, not research quality.
+              </div>
+              {% endif %}
               {% if item.ranking.tags %}<div class="signal-line">{{ item.ranking.tags | join(' · ') }}</div>{% endif %}
               {% if item.ranking.contribution_claims is defined %}
               <div class="summary-field">

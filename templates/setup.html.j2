@@ -16,7 +16,11 @@
   }
   textarea { min-height: 110px; resize: vertical; line-height: 1.5; }
   .hint { font-size: 11px; color: var(--muted); margin-top: 4px; }
-  .interest-row { border: 1px solid var(--border); padding: 12px; border-radius: 8px; margin: 10px 0; }
+  .settings-actions { position: sticky; bottom: 0; z-index: 2; padding: 10px 0; background: var(--card); border-top: 1px solid var(--border); }
+  .settings-actions .hint { margin: 4px 0; }
+  .interest-row details { margin-top: 6px; }
+  .interest-row summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+  .interest-row { border: 1px solid var(--border); padding: 8px 10px; border-radius: 8px; margin: 6px 0; }
   .interest-heading { display: grid; grid-template-columns: minmax(0, 1fr) 90px auto; gap: 8px; align-items: end; }
   .interest-heading label { min-width: 0; }
   .interest-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
@@ -156,13 +160,35 @@
       <div id="interest-editor" hidden>
         <div id="interest-rows"></div>
         <div class="interest-actions"><button type="button" class="btn" id="add-interest">Add interest</button><button type="button" class="btn" id="even-interests">Distribute evenly</button><button type="button" class="btn" id="normalize-interests">Normalize to 100%</button><output id="interest-total" aria-live="polite"></output></div>
-        <p class="hint">Percentages guide relative priority, not guaranteed digest slots. Use specific alternative terms to help searches find your vocabulary. Your description explains what makes a paper useful. Old relative weights are shown as percentages; their exact values are kept until you edit a percentage or use Normalize or Distribute evenly.</p>
+        <p class="hint">Percentages guide relative priority, not guaranteed digest slots. Searches try precise phrases first and broaden word order only when results are sparse; broader matches may be less specific. Open an interest’s search details to add aliases, describe useful papers, or check spelling. Exact old weights stay unchanged until you edit a percentage, normalize, or distribute evenly.</p>
+        <p class="hint">Check wording sends only the chosen interest to PubMed for spelling suggestions. Nothing is checked automatically. Accept a suggestion to use it for searches and ranking after saving. Suggestions may miss specialist terms.</p>
       </div>
       <textarea id="topic-details" name="topic_details" hidden disabled>{{ form.topic_details | default('') }}</textarea>
       <textarea id="topics" name="topics" required aria-describedby="topics-hint example-profile-note" placeholder="DNA nanotechnology&#10;RNA nanotechnology&#10;nucleic acid delivery&#10;mRNA therapeutics&#10;gene therapy&#10;protein engineering&#10;protein structure prediction&#10;colloidal self-assembly&#10;superlattice materials&#10;machine learning for biomolecular design">{{ form.topics }}</textarea>
-      <p class="example-note" id="example-profile-note">The gray text is a research profile example. Add your own interests, or use the example and edit it before saving.</p>
-      {% if not form.topics %}<button class="btn" id="use-example-profile" type="button">Use example interests</button>{% endif %}
+      <p class="example-note" id="example-profile-note">Examples are optional starting points. Choose one, then edit before saving. Loading is available only while your interests are empty.</p>
+      {% if not form.topics %}
+      <label for="example-discipline">Example discipline</label>
+      <select id="example-discipline">
+        <option value="biomolecular">Biomolecular research</option>
+        <option value="engineering">Materials &amp; engineering</option>
+        <option value="ecology">Ecology &amp; environment</option>
+      </select>
+      <button class="btn" id="use-example-profile" type="button">Load selected example</button>
+      {% endif %}
       <div class="hint" id="topics-hint">Add 1–10 specific interests. Without JavaScript, use one topic per line with an optional relative weight, such as <code>RNA delivery | 3</code>. All positive weights work; percentages express the same relative priorities.</div>
+
+      <details class="settings-disclosure" id="advanced-interests"{% if errors %} open{% endif %}>
+        <summary>Advanced interests<span class="disclosure-note">Authors, representative works, and background topics (optional).</span></summary>
+        <p class="hint">One entry per line, up to 20 entries of 300 characters in each field. These refine matching; they do not guarantee a pick.</p>
+        <label for="authors_of_interest">Authors, labs &amp; institutions to follow</label>
+        <textarea id="authors_of_interest" name="authors_of_interest" rows="3">{{ form.authors_of_interest }}</textarea>
+        <label for="seed_works">Representative works</label>
+        <textarea id="seed_works" name="seed_works" rows="3" aria-describedby="seed-works-hint">{{ form.seed_works }}</textarea>
+        <p class="hint" id="seed-works-hint">Short paper titles or descriptions anchor relevance. Paste text, not links that need to be fetched.</p>
+        <label for="context_keywords">Background interests</label>
+        <textarea id="context_keywords" name="context_keywords" rows="3" aria-describedby="context-keywords-hint">{{ form.context_keywords }}</textarea>
+        <p class="hint" id="context-keywords-hint">Topics to stay informed about with less influence on research relevance than your core interests.</p>
+      </details>
 
       <details class="settings-disclosure" id="profile-options"{% if errors %} open{% endif %}>
         <summary>Personal details &amp; topics to see less often
@@ -295,7 +321,7 @@
               </span>
               <label class="section-name" for="include_opportunities">Funding &amp; Opportunities</label>
             </div>
-            <p class="section-desc">Grants, fellowships, awards, scholarships, and research support.</p>
+            <p class="section-desc">Grants.gov covers US federal opportunities. Coverage is not exhaustive; international funding may be absent. Eligibility needs official-source verification.</p>
           </div>
           <div class="count-field">
             <label for="top_opportunities">Maximum items</label>
@@ -315,7 +341,7 @@
               </span>
               <label class="section-name" for="include_events">Events &amp; Calls</label>
             </div>
-            <p class="section-desc">Conferences, workshops, courses, and calls for papers or abstracts.</p>
+            <p class="section-desc">EMBL events provide limited life-science coverage, mainly in Europe and online. Coverage is not exhaustive across disciplines or regions; verify dates and eligibility at the official source.</p>
           </div>
           <div class="count-field">
             <label for="top_events">Maximum items</label>
@@ -390,6 +416,7 @@
       <summary>How to summarize
         <span class="disclosure-note">Current choice: <span id="summary-current">{{ summary_labels.get(form.llm_backend, "Local extractive") }}</span></span>
       </summary>
+      <p class="hint">Native mode can use local commands and configured providers directly. Browser mode can reach APIs directly or through the browser companion; signed-in CLI commands need a connected companion. Extractive summaries stay on this device in either mode.</p>
       <div class="backends">
         <label class="backend-opt" data-value="extractive">
           <input type="radio" name="llm_backend" value="extractive"
@@ -449,10 +476,18 @@
         <input type="text" id="llm_model" name="llm_model"
                placeholder="gpt-4o-mini" value="{{ form.llm_model }}">
         <div class="hint" id="provider-hint"></div>
+        <div id="connection-check-controls">
+          <button class="btn" type="button" id="test-api-connection">Test API connection</button>
+          <p class="hint" id="connection-check-note">Only when clicked: sends a small test to this API, which may be billed. Testing does not save settings.</p>
+          <p class="hint" id="connection-check-status" role="status" aria-live="polite"></p>
+        </div>
       </div>
     </details>
 
-    <button class="brew" type="submit">Save settings and choose today’s digest</button>
+    <div class="settings-actions">
+      <p class="hint" id="settings-save-status" role="status" aria-live="polite">{% if errors %}Changes have not been saved. Correct the highlighted fields.{% else %}Changes take effect after saving.{% endif %}</p>
+      <button class="brew" type="submit">Save settings and choose today’s digest</button>
+    </div>
   </form>
 </div>
 {% endblock %}
@@ -463,6 +498,7 @@
   const details = document.getElementById("topic-details");
   const rows = document.getElementById("interest-rows");
   const editor = document.getElementById("interest-editor");
+  let checkingWording = false;
   let metadata = {};
   try { metadata = JSON.parse(details.value || "{}"); } catch (_) {}
   function percentages(weights) {
@@ -494,6 +530,7 @@
       if (name) {
         result.push(`${name} | ${weight}`);
         data[name] = {aliases: row.querySelector('[data-interest-aliases]').value.split(';').map(term => term.trim()).filter(Boolean), description: row.querySelector('[data-interest-description]').value.trim()};
+        if (row.dataset.correctedFrom) data[name].previous_name = row.dataset.correctedFrom;
       }
     }
     topics.value = result.join('\n'); details.value = JSON.stringify(data);
@@ -503,19 +540,66 @@
   }
   function addRow(name = '', weight = 1, detail = {}, originalWeight = weight) {
     const row = document.createElement('div'); row.className = 'interest-row'; row.dataset.originalWeight = String(originalWeight);
+    const originalFacetName = detail.previous_name || name;
+    if (detail.previous_name) row.dataset.correctedFrom = detail.previous_name;
     // This markup is constant; reader text is assigned through .value only.
-    row.innerHTML = '<div class="interest-heading"><label>Interest<input data-interest-name type="text" required maxlength="160" placeholder="e.g. targeted protein degradation"></label><label>Priority %<input data-interest-weight type="number" min="1" max="100" step="1" required></label><button class="btn" type="button">Remove</button></div><details><summary>Alternative terms &amp; description (optional)</summary><label>Alternative search terms, separated by semicolons<input data-interest-aliases type="text" placeholder="targeted protein degradation; PROTAC; molecular glue"></label><label>What would make a paper useful?<textarea data-interest-description maxlength="600" placeholder="e.g. New degrader designs and transferable methods; basic signaling is lower priority."></textarea></label></details>';
+    row.innerHTML = '<div class="interest-heading"><label>Interest<input data-interest-name type="text" required maxlength="160" placeholder="e.g. targeted protein degradation"></label><label>Priority %<input data-interest-weight type="number" min="1" max="100" step="1" required></label><button class="btn" type="button">Remove</button></div><details><summary>Search details (optional)</summary><label>Alternative search terms, separated by semicolons<input data-interest-aliases type="text" placeholder="targeted protein degradation; PROTAC; molecular glue"></label><label>What would make a paper useful?<textarea data-interest-description maxlength="600" placeholder="e.g. New degrader designs and transferable methods; basic signaling is lower priority."></textarea></label></details>';
     row.querySelector('[data-interest-name]').value = name;
     row.querySelector('[data-interest-weight]').value = weight;
     row.querySelector('[data-interest-weight]').addEventListener('input', useDisplayedWeights);
     row.querySelector('[data-interest-aliases]').value = (detail.aliases || []).join('; ');
     row.querySelector('[data-interest-description]').value = detail.description || '';
     row.querySelector('button').addEventListener('click', () => { row.remove(); serialize(); });
-    const wordingHint = document.createElement('p'); wordingHint.className = 'hint';
-    wordingHint.textContent = 'Searching all words helps with word order. Add alternative spellings or field terms for better coverage, e.g. induced proximity; molecular glue.';
-    row.append(wordingHint);
-    const updateWordingHint = () => { wordingHint.hidden = row.querySelector('[data-interest-name]').value.trim().split(/\s+/).length < 2 || Boolean(row.querySelector('[data-interest-aliases]').value.trim()); };
-    row.addEventListener('input', () => { updateWordingHint(); serialize(); }); updateWordingHint(); rows.append(row);
+    const nameInput = row.querySelector('[data-interest-name]');
+    const spelling = document.createElement('div'); spelling.className = 'interest-spelling';
+    const spellingActions = document.createElement('div'); spellingActions.className = 'interest-actions';
+    const spellingStatus = document.createElement('p'); spellingStatus.className = 'hint'; spellingStatus.setAttribute('aria-live', 'polite');
+    const check = document.createElement('button'); check.type = 'button'; check.className = 'btn'; check.dataset.checkWording = ''; check.textContent = 'Check wording'; check.disabled = checkingWording;
+    const accept = document.createElement('button'); accept.type = 'button'; accept.className = 'btn'; accept.textContent = 'Use suggestion'; accept.hidden = true;
+    const dismiss = document.createElement('button'); dismiss.type = 'button'; dismiss.className = 'btn'; dismiss.textContent = 'Keep wording'; dismiss.hidden = true;
+    spellingActions.append(check, accept, dismiss); spelling.append(spellingActions, spellingStatus); row.querySelector('details').append(spelling);
+    let wordingVersion = 0, suggestion = null;
+    const clearSuggestion = () => { suggestion = null; accept.hidden = dismiss.hidden = true; spellingStatus.textContent = ''; };
+    nameInput.addEventListener('input', () => { wordingVersion++; delete row.dataset.correctedFrom; clearSuggestion(); });
+    check.addEventListener('click', async () => {
+      if (checkingWording) return;
+      const original = nameInput.value.trim(), version = wordingVersion;
+      clearSuggestion();
+      if (!original) { spellingStatus.textContent = 'Enter an interest first.'; nameInput.focus(); return; }
+      checkingWording = true;
+      rows.querySelectorAll('[data-check-wording]').forEach(button => { button.disabled = true; });
+      spellingStatus.textContent = 'Checking this interest’s spelling…';
+      try {
+        const response = await fetch('/setup/check-wording?' + new URLSearchParams({topic: original}), {
+          method: 'POST', headers: {'X-CSRF-Token': topics.form.querySelector('[name="_csrf_token"]').value},
+        });
+        const result = await response.json();
+        if (!row.isConnected || version !== wordingVersion) return;
+        if (!response.ok) throw new Error('Spelling unavailable');
+        if (!result.suggestion) { spellingStatus.textContent = 'No spelling suggestion found. Keep your wording, or add alternative terms if needed.'; return; }
+        suggestion = result.suggestion;
+        spellingStatus.textContent = `Did you mean “${suggestion}”? Your interest is unchanged until you choose Use suggestion.`;
+        accept.hidden = dismiss.hidden = false;
+      } catch (_) {
+        if (row.isConnected && version === wordingVersion) spellingStatus.textContent = 'Couldn’t check wording right now. Your interest is unchanged. Try again later.';
+      } finally {
+        checkingWording = false;
+        rows.querySelectorAll('[data-check-wording]').forEach(button => { button.disabled = false; });
+      }
+    });
+    accept.addEventListener('click', () => {
+      if (!suggestion) return;
+      const duplicate = [...rows.children].some(other => other !== row && other.querySelector('[data-interest-name]').value.trim().toLowerCase() === suggestion.toLowerCase());
+      if (duplicate) { clearSuggestion(); spellingStatus.textContent = 'Another interest already uses that wording. Combine or remove duplicate interests before changing this one.'; return; }
+      nameInput.value = suggestion;
+      nameInput.dispatchEvent(new Event('input', {bubbles: true}));
+      if (originalFacetName) row.dataset.correctedFrom = originalFacetName;
+      serialize();
+      spellingStatus.textContent = 'Suggestion applied. Save your settings to use it for searches and ranking.';
+      nameInput.focus();
+    });
+    dismiss.addEventListener('click', () => { clearSuggestion(); spellingStatus.textContent = 'Your wording was kept.'; nameInput.focus(); });
+    row.addEventListener('input', serialize); rows.append(row);
   }
   function loadRows() {
     try { metadata = JSON.parse(details.value || '{}'); } catch (_) { metadata = {}; }
@@ -553,8 +637,13 @@
   const exampleButton = document.getElementById('use-example-profile');
   if (exampleButton) exampleButton.addEventListener('click', () => {
     if ([...rows.querySelectorAll('[data-interest-name]')].some(input => input.value.trim())) return;
-    topics.value = topics.getAttribute('placeholder'); loadRows();
-    const bio = document.getElementById('bio'); if (!bio.value.trim()) bio.value = bio.getAttribute('placeholder');
+    const examples = {
+      biomolecular: topics.getAttribute('placeholder'),
+      engineering: 'Battery materials\nPolymer recycling\nAdditive manufacturing\nThermal energy storage',
+      ecology: 'Biodiversity monitoring\nEcosystem restoration\nClimate adaptation\nEnvironmental DNA',
+    };
+    topics.value = examples[document.getElementById('example-discipline').value]; loadRows();
+    topics.form.dispatchEvent(new Event('input', {bubbles: true}));
     exampleButton.disabled = true;
     document.getElementById('example-profile-note').textContent = 'Example loaded. Make it your own, then save when you’re ready.';
     rows.querySelector('input').focus();
@@ -615,6 +704,13 @@
 
   // Reveal invalid fields before native validation focuses them.
   const settingsForm = document.querySelector('form[action="/setup"]');
+  const saveStatus = document.getElementById('settings-save-status');
+  const markUnsaved = () => { saveStatus.textContent = 'Unsaved changes. Save to apply your settings.'; };
+  settingsForm.addEventListener('input', markUnsaved);
+  settingsForm.addEventListener('change', markUnsaved);
+  settingsForm.addEventListener('click', (event) => {
+    if (event.target.closest('#add-interest, #even-interests, #normalize-interests, .interest-heading button, .chip')) markUnsaved();
+  });
   settingsForm.addEventListener("invalid", (event) => {
     for (let node = event.target.parentElement; node && node !== settingsForm; node = node.parentElement) {
       if (node.tagName === "DETAILS") node.open = true;
@@ -647,6 +743,7 @@
     summaryCurrent.textContent = v === "extractive" ? "Local extractive" : sel.closest("label").querySelector("strong").textContent;
     apiFields.hidden = !(isApi || isCli);
     apiAuthFields.hidden = !isApi;
+    document.getElementById('connection-check-controls').hidden = !isApi;
     if (v === "anthropic") {
       baseUrlInput.placeholder = "https://api.anthropic.com/v1";
       modelInput.placeholder = "claude-haiku-4-5-20251001";
@@ -679,6 +776,45 @@
     refresh();
   }));
   refresh();
+
+  const connectionButton = document.getElementById('test-api-connection');
+  const connectionStatus = document.getElementById('connection-check-status');
+  const connectionFields = ['llm_base_url', 'llm_api_key', 'llm_model'];
+  let connectionVersion = 0;
+  function invalidateConnection() { connectionVersion++; connectionStatus.textContent = ''; }
+  for (const id of connectionFields) document.getElementById(id).addEventListener('input', invalidateConnection);
+  radios.forEach(radio => radio.addEventListener('change', invalidateConnection));
+  connectionButton.addEventListener('click', async () => {
+    const version = connectionVersion;
+    const body = new URLSearchParams();
+    body.set('llm_backend', document.querySelector('input[name="llm_backend"]:checked').value);
+    for (const id of connectionFields) body.set(id, document.getElementById(id).value);
+    connectionButton.disabled = true;
+    connectionStatus.textContent = 'Testing this API connection…';
+    try {
+      const response = await fetch('/setup/test-connection', {
+        method: 'POST', headers: {'X-CSRF-Token': settingsForm.querySelector('[name="_csrf_token"]').value}, body,
+      });
+      const result = await response.json();
+      if (version !== connectionVersion) return;
+      connectionStatus.textContent = response.ok ? result.message : 'Connection test unavailable. Check your settings and try again.';
+    } catch (_) {
+      if (version === connectionVersion) connectionStatus.textContent = 'Connection test unavailable. Check your settings and try again.';
+    } finally { connectionButton.disabled = false; }
+  });
+  window.addEventListener('dd-companion-capabilities', (event) => {
+    const backends = event.detail.backends || [];
+    document.getElementById('connection-check-note').textContent = 'Only when clicked: tests the API directly from this browser with a small request that may be billed. Testing does not save settings.';
+    for (const backend of ['claude_cli', 'codex_cli']) {
+      const radio = document.querySelector(`input[name="llm_backend"][value="${backend}"]`);
+      const available = backends.includes(backend);
+      radio.disabled = !available && !radio.checked;
+      const label = radio.closest('label');
+      let note = label.querySelector('[data-companion-note]');
+      if (!note) { note = document.createElement('div'); note.className = 'desc'; note.dataset.companionNote = ''; label.append(note); }
+      note.textContent = available ? 'Connected companion supports this command.' : 'Unavailable: connect a browser companion with this command installed and signed in, or choose Extractive.';
+    }
+  });
 
   // An off section keeps its previous cap but removes the inactive control
   // from keyboard navigation and form submission.

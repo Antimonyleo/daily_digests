@@ -133,7 +133,7 @@ def test_browser_validation_reveals_nested_closed_details():
         const form = {addEventListener: (name, fn, capture) => {
             if (name === 'invalid') { invalid = fn; assert.equal(capture, true); }
         }};
-        const document = {querySelector: () => form};
+        const document = {querySelector: () => form, getElementById: () => ({})};
     ''' + script + '''
         const outer = {tagName: 'DETAILS', open: false, parentElement: form};
         const inner = {tagName: 'DETAILS', open: false, parentElement: outer};
@@ -144,3 +144,112 @@ def test_browser_validation_reveals_nested_closed_details():
         assert.equal(hidden.hidden, false);
     '''], capture_output=True, text=True, timeout=10)
     assert result.returncode == 0, json.dumps(result.stderr)
+
+
+@pytest.mark.parametrize("field", ["authors_of_interest", "seed_works", "context_keywords"])
+def test_advanced_interest_lists_round_trip_and_preserve_when_omitted(monkeypatch, tmp_path, field):
+    from dailydigest import web
+
+    profile = tmp_path / "profile.yaml"
+    profile.write_text(yaml.safe_dump({"bio": "", "keywords": ["RNA"], field: ["Existing value"]}))
+    monkeypatch.setattr(web, "_get_profile_path", lambda: profile)
+    monkeypatch.setattr(web, "_ENV_PATH", tmp_path / ".env")
+    assert web._load_existing_form_defaults()[field] == "Existing value"
+    base = {"_csrf_token": web._CSRF_TOKEN, "topics": "RNA | 17.5", "llm_backend": "extractive"}
+    assert asyncio.run(web.setup_post(_request("POST", "/setup", form=base))).status_code == 303
+    assert yaml.safe_load(profile.read_text())[field] == ["Existing value"]
+    submitted = {**base, field: "First value\n Second value \nFirst value"}
+    assert asyncio.run(web.setup_post(_request("POST", "/setup", form=submitted))).status_code == 303
+    saved = yaml.safe_load(profile.read_text())
+    assert saved[field] == ["First value", "Second value"]
+    assert saved["canonical_facets"]["RNA"]["priority"] == 17.5
+    assert asyncio.run(web.setup_post(_request("POST", "/setup", form={**base, field: ""}))).status_code == 303
+    assert yaml.safe_load(profile.read_text())[field] == []
+
+
+@pytest.mark.parametrize("value", ["x" * 301, "\n".join(f"Value {n}" for n in range(21)), "bad\x00value"])
+def test_advanced_interest_validation_preserves_form_and_saved_profile(monkeypatch, tmp_path, value):
+    from dailydigest import web
+
+    profile = tmp_path / "profile.yaml"
+    original = yaml.safe_dump({"bio": "", "keywords": ["RNA"], "seed_works": ["Kept"]})
+    profile.write_text(original)
+    monkeypatch.setattr(web, "_get_profile_path", lambda: profile)
+    monkeypatch.setattr(web, "_ENV_PATH", tmp_path / ".env")
+    response = asyncio.run(web.setup_post(_request("POST", "/setup", form={
+        "_csrf_token": web._CSRF_TOKEN, "topics": "RNA", "llm_backend": "extractive",
+        "authors_of_interest": value, "seed_works": "Unsaved title", "context_keywords": "Unsaved context",
+    })))
+    assert response.status_code == 400
+    assert profile.read_text() == original
+    assert "Unsaved title" in response.body.decode()
+    assert "Unsaved context" in response.body.decode()
+
+
+def test_advanced_interests_and_coverage_limits_are_discoverable(monkeypatch, tmp_path):
+    html = _render_settings(monkeypatch, tmp_path)
+    fields = FormElements(html).elements
+    for field in ("authors_of_interest", "seed_works", "context_keywords"):
+        assert fields[field][1] == ("advanced-interests",)
+    assert "open" not in fields["advanced-interests"][0]
+    assert "Grants.gov" in html and "EMBL" in html
+    assert "not exhaustive" in html
+    assert "browser companion" in html.lower()
+    assert 'id="settings-save-status"' in html
+
+
+def test_api_connection_check_requires_explicit_csrf_post_and_does_not_save(monkeypatch, tmp_path):
+    from fastapi.testclient import TestClient
+    from dailydigest import provider_check, web
+
+    calls = []
+    monkeypatch.setattr(provider_check, "check_api_connection", lambda **kwargs: calls.append(kwargs) or {"ok": True, "message": "Connected."})
+    monkeypatch.setattr(web, "_ENV_PATH", tmp_path / ".env")
+    monkeypatch.setattr(web, "_get_profile_path", lambda: tmp_path / "profile.yaml")
+    values = {"llm_backend": "api", "llm_base_url": "https://example.test/v1", "llm_model": "example", "llm_api_key": "test-secret"}
+    with TestClient(web.app) as client:
+        assert client.request("GET", "/setup/test-connection").status_code == 405
+        assert client.request("POST", "/setup/test-connection", data=values).status_code == 403
+        assert calls == []
+        response = client.request("POST", "/setup/test-connection", data=values, headers={"X-CSRF-Token": web._CSRF_TOKEN})
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert calls == [{"backend": "api", "base_url": "https://example.test/v1", "model": "example", "api_key": "test-secret"}]
+    assert "test-secret" not in response.text
+    assert not (tmp_path / ".env").exists()
+    assert not (tmp_path / "profile.yaml").exists()
+
+
+def test_unchanged_advanced_values_keep_legacy_entries(monkeypatch, tmp_path):
+    from dailydigest import web
+
+    profile = tmp_path / "profile.yaml"
+    entries = ["Legacy abstract " * 40, "Repeated", "Repeated"]
+    profile.write_text(yaml.safe_dump({"bio": "", "keywords": ["RNA"], "seed_works": entries}))
+    monkeypatch.setattr(web, "_get_profile_path", lambda: profile)
+    monkeypatch.setattr(web, "_ENV_PATH", tmp_path / ".env")
+    defaults = web._load_existing_form_defaults()
+    response = asyncio.run(web.setup_post(_request("POST", "/setup", form={
+        "_csrf_token": web._CSRF_TOKEN, "topics": "RNA", "llm_backend": "extractive",
+        "seed_works": defaults["seed_works"],
+    })))
+    assert response.status_code == 303
+    assert yaml.safe_load(profile.read_text())["seed_works"] == entries
+
+
+@pytest.mark.parametrize("base_url,expected", [("https://saved.example/v1", "saved-secret"), ("https://other.example/v1", "")])
+def test_api_connection_check_keeps_masked_saved_key_at_its_provider(monkeypatch, base_url, expected):
+    from fastapi.testclient import TestClient
+    from types import SimpleNamespace
+    from dailydigest import provider_check, web
+
+    calls = []
+    monkeypatch.setattr(web, "SETTINGS", SimpleNamespace(llm_backend="api", llm_base_url="https://saved.example/v1", llm_api_key="saved-secret"))
+    monkeypatch.setattr(provider_check, "check_api_connection", lambda **kwargs: calls.append(kwargs) or {"ok": False, "message": "Test result."})
+    with TestClient(web.app) as client:
+        response = client.request("POST", "/setup/test-connection", data={
+            "llm_backend": "api", "llm_base_url": base_url, "llm_api_key": "***", "llm_model": "example",
+        }, headers={"X-CSRF-Token": web._CSRF_TOKEN})
+    assert response.status_code == 200
+    assert calls[0]["api_key"] == expected
+    assert "saved-secret" not in response.text
