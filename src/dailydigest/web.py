@@ -46,7 +46,7 @@ from urllib.parse import parse_qs, urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import yaml
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import (
     HTMLResponse,
     JSONResponse,
@@ -190,7 +190,7 @@ def _breakdown_payload(row: ItemRow, persisted: dict | None = None) -> dict:
         score = persisted.get("score", row.score or 0.0)
         rank_score = persisted.get("rank_score", score)
         confidence_score = persisted.get("confidence_score", score)
-        return {
+        payload = {
             "score": f"{float(score):.2f}" if isinstance(score, (int, float)) else str(score),
             "rank_score": float(rank_score) if isinstance(rank_score, (int, float)) else 0.0,
             "confidence_score": (
@@ -210,6 +210,9 @@ def _breakdown_payload(row: ItemRow, persisted: dict | None = None) -> dict:
                 "penalty": _bar_pct(float(persisted.get("penalty") or 0.0)),
             },
         }
+        if isinstance(persisted.get("topic_alignment"), dict):
+            payload["topic_alignment"] = dict(persisted["topic_alignment"])
+        return payload
     breakdown = display_breakdown(row)
     return {
         "score": f"{breakdown.final:.2f}",
@@ -269,7 +272,7 @@ def _digest_overview(sections: list[dict]) -> dict:
         "source_mix": source_mix,
         "topic_mix": [
             {"title": topic, "count": count}
-            for topic, count in topic_counts.most_common(4)
+            for topic, count in topic_counts.most_common()
         ],
         "reading_minutes": reading_minutes,
         "top_journals_shown": sum(
@@ -671,13 +674,24 @@ def _profile_exists() -> bool:
     return _get_profile_path().exists()
 
 
-def _profile_data() -> dict[str, Any]:
-    if not _get_profile_path().exists():
+def _profile_data(*, strict: bool = False, path: Path | None = None) -> dict[str, Any]:
+    path = path or _get_profile_path()
+    if not path.exists():
         return {}
     try:
-        return yaml.safe_load(_get_profile_path().read_text()) or {}
+        data = yaml.safe_load(path.read_text())
+        if data is None:
+            data = {}
+        if not isinstance(data, dict):
+            raise ValueError("profile must be a YAML mapping")
+        return data
     except Exception as e:  # noqa: BLE001
-        logger.warning("could not parse profile.yaml: %s", e)
+        logger.warning("could not parse %s: %s", path.name, e)
+        if strict:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Existing {path.name} cannot be read; repair it before saving settings.",
+            ) from e
         return {}
 
 
@@ -704,7 +718,7 @@ def _parse_csv(value: str | None) -> list[str]:
 
 
 def _parse_ranked_topics(value: str | None) -> tuple[list[tuple[str, float]], list[str]]:
-    """Parse one ``topic | relative weight`` entry per non-empty line."""
+    """Parse one topic per line, with an optional ``| relative weight``."""
     topics: list[tuple[str, float]] = []
     errors: list[str] = []
     seen: set[str] = set()
@@ -714,7 +728,9 @@ def _parse_ranked_topics(value: str | None) -> tuple[list[tuple[str, float]], li
             continue
         topic, sep, raw_weight = line.partition("|")
         topic = topic.strip()
-        if not sep or not topic or not raw_weight.strip():
+        if not sep:
+            raw_weight = "1"
+        if not topic or not raw_weight.strip():
             errors.append(f"Topic line {line_number} must use: topic | relative weight.")
             continue
         try:
@@ -732,10 +748,59 @@ def _parse_ranked_topics(value: str | None) -> tuple[list[tuple[str, float]], li
         seen.add(key)
         topics.append((topic, weight))
     if not errors and not topics:
-        errors.append("Add at least one weighted research interest.")
+        errors.append("Add at least one research interest.")
     if len(topics) > 10:
-        errors.append("Add at most 10 weighted research interests.")
+        errors.append("Add at most 10 research interests.")
     return topics, errors
+
+
+def _parse_topic_details(value: str | None, topics: list[tuple[str, float]]) -> tuple[dict, list[str]]:
+    """Validate optional enhanced-editor details; legacy forms omit this field."""
+    if not value:
+        return {}, []
+    try:
+        details = json.loads(value)
+    except (TypeError, ValueError):
+        return {}, ["Interest details must be valid JSON."]
+    if not isinstance(details, dict):
+        return {}, ["Interest details must be an object."]
+    names = {name for name, _ in topics}
+    clean = {}
+    for name, detail in details.items():
+        if name not in names or not isinstance(detail, dict):
+            return {}, ["Interest details must match the listed interests."]
+        aliases, description = detail.get("aliases", []), detail.get("description", "")
+        if (not isinstance(aliases, list) or len(aliases) > 3
+                or any(not isinstance(alias, str) or not alias.strip() or len(alias) > 160 or "|" in alias or "\n" in alias for alias in aliases)
+                or not isinstance(description, str) or len(description) > 600):
+            return {}, ["Use up to 3 alternative terms (160 characters each) and a description of up to 600 characters."]
+        clean[name] = {"aliases": list(dict.fromkeys(alias.strip() for alias in aliases)),
+                       "description": description.strip()}
+        previous_name = detail.get("previous_name")
+        if previous_name is not None:
+            if (not isinstance(previous_name, str) or not previous_name.strip()
+                    or len(previous_name) > 160 or "\n" in previous_name or "|" in previous_name
+                    or (previous_name != name and previous_name in names)):
+                return {}, ["A corrected interest must refer to one original interest."]
+            clean[name]["previous_name"] = previous_name.strip()
+    return clean, []
+
+
+def _interest_coverage(sections: list[dict], audits: list[dict]) -> list[dict]:
+    profile = _profile_data()
+    names = list(profile.get("canonical_facets") or {}) or list(profile.get("keywords") or [])
+    recorded = {str(row.get("title", "")).casefold(): row for row in audits}
+    selected = Counter(str(entry.get("ranking", {}).get("primary_facet") or "").casefold()
+                       for section in sections for entry in section.get("entries", []))
+    rows = []
+    for name in names:
+        row = dict(recorded.get(str(name).casefold(), {}))
+        row.update(title=name, selected=selected[str(name).casefold()])
+        row.setdefault("candidates", None)
+        row.setdefault("eligible", None)
+        row.setdefault("explanation", "Candidate attribution was not recorded for this saved digest; zero selected does not mean no papers were found.")
+        rows.append(row)
+    return rows
 
 
 def _keywords_after_topic_edit(
@@ -770,7 +835,11 @@ def _load_existing_form_defaults() -> dict[str, str]:
         "name": "",
         "bio": "",
         "topics": "",
+        "topic_details": "",
         "downweight": "",
+        "authors_of_interest": "",
+        "seed_works": "",
+        "context_keywords": "",
         "llm_backend": backend,
         "llm_base_url": SETTINGS.llm_base_url,
         "llm_api_key": "***" if SETTINGS.llm_api_key else "",
@@ -809,13 +878,33 @@ def _load_existing_form_defaults() -> dict[str, str]:
             out["bio"] = (data.get("bio") or "").strip()
             canonical = data.get("canonical_facets") or {}
             if isinstance(canonical, dict) and canonical:
-                lines = []
+                resolved_priorities = []
+                legacy_priorities = {str(name).casefold(): value
+                                     for name, value in (data.get("topic_priorities") or {}).items()}
                 for topic, spec in canonical.items():
-                    priority = spec.get("priority", 1) if isinstance(spec, dict) else 1
+                    priority = spec.get("priority") if isinstance(spec, dict) else None
                     if priority is None:
-                        priority = 1
-                    lines.append(f"{topic} | {priority}")
+                        names = [topic, *(spec.get("aliases") or [])] if isinstance(spec, dict) else [topic]
+                        matched = []
+                        for name in names:
+                            try:
+                                value = float(legacy_priorities.get(str(name).casefold(), 0))
+                            except (TypeError, ValueError):
+                                continue
+                            if 0 < value <= 100:
+                                matched.append(value)
+                        priority = max(matched) if matched else None
+                    resolved_priorities.append((topic, priority))
+                positive_priorities = [float(priority) for _topic, priority in resolved_priorities
+                                       if isinstance(priority, (int, float)) and 0 < priority <= 100]
+                # Attribution supplies 0.5 for an unlisted facet once another
+                # explicit priority exists. Preserve that effective ratio on a
+                # name/provider-only Save instead of silently replacing it by 1.
+                unlisted_priority = max(positive_priorities) / 2 if positive_priorities else 1
+                lines = [f"{topic} | {priority if priority is not None else unlisted_priority}"
+                         for topic, priority in resolved_priorities]
                 out["topics"] = "\n".join(lines)
+                out["topic_details"] = json.dumps({str(name): {"aliases": spec.get("aliases", []), "description": spec.get("description", "")} for name, spec in canonical.items() if isinstance(spec, dict)})
             else:
                 priorities = data.get("topic_priorities") or {}
                 out["topics"] = "\n".join(
@@ -823,6 +912,8 @@ def _load_existing_form_defaults() -> dict[str, str]:
                     for topic in (data.get("keywords") or [])
                 )
             out["downweight"] = ", ".join(data.get("downweight") or [])
+            for key in ("authors_of_interest", "seed_works", "context_keywords"):
+                out[key] = "\n".join(str(value) for value in data.get(key) or [])
         except Exception as e:  # noqa: BLE001
             logger.warning("could not parse existing profile.yaml: %s", e)
     if _get_opportunity_profile_path().exists():
@@ -957,6 +1048,19 @@ def _env_value_has_control_chars(value: str | None) -> bool:
     return any(ch in str(value or "") for ch in ("\r", "\n", "\0"))
 
 
+def _parse_advanced_interest_list(value: str) -> list[str]:
+    return list(dict.fromkeys(line.strip() for line in value.splitlines() if line.strip()))
+
+
+
+def _saved_api_key_matches(backend: str, base_url: str) -> bool:
+    from .provider_check import api_provider_binding
+
+    selected = api_provider_binding(backend, base_url)
+    saved = api_provider_binding(SETTINGS.llm_backend, SETTINGS.llm_base_url)
+    return selected is not None and selected == saved
+
+
 def _validate_setup(form: dict[str, str]) -> list[str]:
     errors: list[str] = []
     backend = form.get("llm_backend", "extractive")
@@ -970,15 +1074,29 @@ def _validate_setup(form: dict[str, str]) -> list[str]:
         errors.append(f"Unknown backend: {backend}")
     _topics, topic_errors = _parse_ranked_topics(form.get("topics"))
     errors.extend(topic_errors)
+    _details, detail_errors = _parse_topic_details(form.get("topic_details"), _topics)
+    errors.extend(detail_errors)
+    for key, label in (
+        ("authors_of_interest", "Authors, labs and institutions"),
+        ("seed_works", "Representative works"),
+        ("context_keywords", "Background interests"),
+    ):
+        value = form.get(key, "")
+        entries = _parse_advanced_interest_list(value)
+        if len(entries) > 20 or any(len(entry) > 300 for entry in entries) or "\0" in value:
+            errors.append(f"{label}: use at most 20 lines of 300 characters each, without null characters.")
     if backend in {"api", "anthropic"}:
         if not (form.get("llm_base_url") or "").strip():
             errors.append("API backend requires a base URL.")
         entered_key = (form.get("llm_api_key") or "").strip()
         removing_key = form.get("remove_llm_api_key") == "true"
         has_submitted_key = bool(entered_key and entered_key != "***")
-        has_saved_key = bool(SETTINGS.llm_api_key and not removing_key)
+        has_saved_key = bool(SETTINGS.llm_api_key and not removing_key
+                             and _saved_api_key_matches(backend, form.get('llm_base_url', '')))
         if not has_submitted_key and not has_saved_key:
             errors.append("API backend requires an API key.")
+            if SETTINGS.llm_api_key and not removing_key:
+                errors.append("Enter a key for this provider and URL; saved keys cannot be reused at a different API endpoint.")
         if not (form.get("llm_model") or "").strip():
             errors.append("API backend requires a model name.")
     for key, label in (
@@ -1205,6 +1323,8 @@ def index(request: Request, digest_id: str = "") -> Response:
             "sections": sections,
             "empty_enabled_sections": empty_enabled_sections,
             "overview": overview,
+            "source_coverage": health.coverage_summary(),
+            "interest_coverage": _interest_coverage(sections, load_digest_audit(digest_id, "interest_coverage") if brewed else []),
             "top_journal_audit": top_journal_audit,
             "overflow_audit": overflow_audit,
             "overflow_saved": overflow_saved,
@@ -1659,6 +1779,48 @@ self.addEventListener("fetch", (event) => {
 # --- Onboarding -------------------------------------------------------------
 
 
+@app.post("/setup/check-wording")
+def setup_check_wording(request: Request, topic: str = Query(min_length=1, max_length=160)) -> Response:
+    from .interest_spelling import SpellingUnavailable, suggest_topic_spelling
+
+    _require_csrf(request)
+    topic = topic.strip()
+    if not topic:
+        raise HTTPException(status_code=400, detail="Enter an interest first.")
+    try:
+        suggestion = suggest_topic_spelling(topic)
+    except SpellingUnavailable:
+        return JSONResponse(
+            {"detail": "Couldn't check wording right now. Your interest is unchanged. Try again later."},
+            status_code=503, headers={"Cache-Control": "no-store"},
+        )
+    return JSONResponse({"topic": topic, "suggestion": suggestion}, headers={"Cache-Control": "no-store"})
+
+
+@app.post("/setup/test-connection")
+async def setup_test_connection(request: Request) -> Response:
+    from starlette.concurrency import run_in_threadpool
+
+    from .provider_check import check_api_connection
+
+    raw = await _read_urlencoded_form(request)
+    _require_csrf(request, raw)
+    backend = raw.get("llm_backend", "")
+    base_url = raw.get("llm_base_url", "").strip()
+    api_key = raw.get("llm_api_key", "").strip()
+    if api_key == "***":
+        # A masked saved secret may only be reused at its configured provider.
+        api_key = (SETTINGS.llm_api_key or "") if (
+            _saved_api_key_matches(backend, base_url)
+        ) else ""
+    result = await run_in_threadpool(
+        check_api_connection, backend=backend, base_url=base_url,
+        api_key=api_key, model=raw.get("llm_model", "").strip(),
+    )
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+
 @app.get("/setup", response_class=HTMLResponse)
 def setup_get(request: Request) -> Response:
     form = _load_existing_form_defaults()
@@ -1683,6 +1845,7 @@ async def setup_post(request: Request) -> Response:
         "name": str(raw.get("name", "")),
         "bio": str(raw.get("bio", "")),
         "topics": str(raw.get("topics", "")),
+        "topic_details": str(raw.get("topic_details", "")),
         "downweight": str(raw.get("downweight", "")),
         "llm_backend": str(raw.get("llm_backend", "extractive")),
         "llm_base_url": str(raw.get("llm_base_url", "")),
@@ -1738,7 +1901,17 @@ async def setup_post(request: Request) -> Response:
         "minimum_lead_days": str(raw.get("minimum_lead_days", "7")),
     }
 
-    errors = _validate_setup(form)
+    # Missing controls from older clients preserve existing private values;
+    # an explicitly submitted empty field clears that list.
+    existing_form = _load_existing_form_defaults()
+    for key in ("authors_of_interest", "seed_works", "context_keywords"):
+        form[key] = str(raw.get(key, existing_form[key]))
+
+    validation_form = dict(form)
+    for key in ("authors_of_interest", "seed_works", "context_keywords"):
+        if form[key] == existing_form[key]:
+            validation_form[key] = ""
+    errors = _validate_setup(validation_form)
     if errors:
         # Never reflect a newly submitted secret into the response body. A
         # previously saved key can remain masked/reusable; a new key must be
@@ -1747,7 +1920,8 @@ async def setup_post(request: Request) -> Response:
         display_errors = list(errors)
         submitted_key = render_form.get("llm_api_key", "").strip()
         if submitted_key:
-            render_form["llm_api_key"] = "***" if SETTINGS.llm_api_key else ""
+            render_form["llm_api_key"] = "***" if (SETTINGS.llm_api_key and _saved_api_key_matches(
+                form["llm_backend"], form["llm_base_url"])) else ""
             if submitted_key != "***":
                 display_errors.append(
                     "Re-enter the API key after correcting the form; "
@@ -1767,10 +1941,11 @@ async def setup_post(request: Request) -> Response:
         return response
 
     topics, _topic_errors = _parse_ranked_topics(form["topics"])
+    details, _detail_errors = _parse_topic_details(form.get("topic_details"), topics)
     # Write the private user profile. Keywords drive retrieval; unchanged facet
     # edits preserve any more-specific retrieval phrases already stored, while
     # facets carry relative priority for attribution and selection.
-    profile = _profile_data()
+    profile = _profile_data(strict=True)
     existing_canonical = profile.get("canonical_facets") or {}
     existing_by_name = (
         {str(name).casefold(): spec for name, spec in existing_canonical.items()}
@@ -1779,10 +1954,17 @@ async def setup_post(request: Request) -> Response:
     )
     canonical_facets: dict[str, dict[str, Any]] = {}
     for topic, weight in topics:
-        previous = existing_by_name.get(topic.casefold())
+        detail = dict(details.get(topic, {}))
+        previous_name = detail.pop("previous_name", topic)
+        previous = existing_by_name.get(previous_name.casefold())
         spec = dict(previous) if isinstance(previous, dict) else {}
+        if previous_name != topic and isinstance(spec.get("anchors"), list):
+            spec["anchors"] = [topic if str(anchor).strip().casefold() == previous_name.casefold()
+                               else anchor for anchor in spec["anchors"]]
         if not spec.get("anchors"):
             spec["anchors"] = [topic]
+        if topic in details:
+            spec.update(detail)
         spec["priority"] = weight
         canonical_facets[topic] = spec
     # The weighted-topic editor supersedes these older parallel weighting maps.
@@ -1796,17 +1978,19 @@ async def setup_post(request: Request) -> Response:
             "keywords": _keywords_after_topic_edit(profile, topics),
             "canonical_facets": canonical_facets,
             "downweight": _parse_csv(form["downweight"]),
+            **{key: _parse_advanced_interest_list(form[key])
+               for key in ("authors_of_interest", "seed_works", "context_keywords")
+               if key in raw and form[key] != existing_form[key]},
         }
     )
-    _write_private_yaml(_get_profile_path(), profile)
-
+    opportunity_payload = None
     if (
         form["include_opportunities"] == "true"
         or form["include_events"] == "true"
     ):
         opportunity_profile = _opportunity_profile_from_form(form)
         opportunity_path = _get_opportunity_profile_path()
-        payload = opportunity_profile.model_dump(
+        opportunity_payload = opportunity_profile.model_dump(
             exclude={
                 "description",
                 "citizenship_or_residency",
@@ -1816,20 +2000,19 @@ async def setup_post(request: Request) -> Response:
         # The simplified form no longer asks for these legacy values, but an
         # ordinary Settings save must not silently erase private profile data a
         # prior version already stored.
-        if opportunity_path.exists():
-            try:
-                existing = yaml.safe_load(opportunity_path.read_text()) or {}
-            except (OSError, yaml.YAMLError):
-                existing = {}
-            if isinstance(existing, dict):
-                for key in (
-                    "description",
-                    "citizenship_or_residency",
-                    "requires_travel_support",
-                ):
-                    if key in existing:
-                        payload[key] = existing[key]
-        _write_private_yaml(opportunity_path, payload)
+        existing = _profile_data(path=opportunity_path, strict=True)
+        for key in (
+            "description",
+            "citizenship_or_residency",
+            "requires_travel_support",
+        ):
+            if key in existing:
+                opportunity_payload[key] = existing[key]
+
+    # Read both existing profiles successfully before changing either one.
+    _write_private_yaml(_get_profile_path(), profile)
+    if opportunity_payload is not None:
+        _write_private_yaml(opportunity_path, opportunity_payload)
 
     # Write/update .env.
     default_base_url = (

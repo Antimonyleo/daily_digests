@@ -266,7 +266,7 @@ def test_setup_defaults_load_canonical_weights_and_handle_missing_priority(
 
     form = web._load_existing_form_defaults()
 
-    assert form["topics"] == "protein design | 18\nRNA delivery | 1"
+    assert form["topics"] == "protein design | 18\nRNA delivery | 9.0"
 
 
 def test_setup_defaults_replace_removed_backend_with_extractive(monkeypatch):
@@ -339,7 +339,7 @@ def test_setup_page_renders_accessible_optional_section_switches(monkeypatch):
     assert 'id="user-timezone"' in html
     assert "Intl.DateTimeFormat().resolvedOptions().timeZone" in html
     assert "Optional matching preferences" in html
-    assert "weighted research interests above are reused" in html
+    assert "research interests above are reused" in html
     assert "About you for opportunity matching" in html
     assert 'id="top_ai"' in html
     assert "AI tools &amp; methods" in html
@@ -692,7 +692,7 @@ def test_setup_validation_error_preserves_optional_section_switches(
                 form={
                     "_csrf_token": web._CSRF_TOKEN,
                     "bio": "Researcher.",
-                    "topics": "missing a weight",
+                    "topics": "missing | a weight",
                     "llm_backend": "extractive",
                     "include_industry": "true",
                     "include_ai": "false",
@@ -732,7 +732,7 @@ def test_setup_validation_error_does_not_echo_submitted_api_key(
                 form={
                     "_csrf_token": web._CSRF_TOKEN,
                     "bio": "Researcher.",
-                    "topics": "missing a weight",
+                    "topics": "missing | a weight",
                     "llm_backend": "api",
                     "llm_base_url": "https://api.example.test/v1",
                     "llm_api_key": "super-secret-test-key",
@@ -780,7 +780,7 @@ def test_setup_post_requires_at_least_one_research_item(tmp_path, monkeypatch):
     ("raw", "message"),
     [
         ("", "at least one"),
-        ("topic without weight", "must use"),
+        ("topic | ", "must use"),
         ("topic | 0", "greater than 0"),
         ("\n".join(f"topic {i} | 1" for i in range(11)), "at most 10"),
     ],

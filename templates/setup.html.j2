@@ -16,6 +16,34 @@
   }
   textarea { min-height: 110px; resize: vertical; line-height: 1.5; }
   .hint { font-size: 11px; color: var(--muted); margin-top: 4px; }
+  .settings-actions { position: sticky; bottom: 0; z-index: 2; padding: 10px 0; background: var(--card); border-top: 1px solid var(--border); }
+  .settings-actions .hint { margin: 4px 0; }
+  .interest-row details { margin-top: 6px; }
+  .interest-row summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+  .interest-row { border: 1px solid var(--border); padding: 8px 10px; border-radius: 8px; margin: 6px 0; }
+  .interest-heading { display: grid; grid-template-columns: minmax(0, 1fr) 90px auto; gap: 8px; align-items: end; }
+  .interest-heading label { min-width: 0; }
+  .interest-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .interest-row textarea { min-height: 70px; }
+  @media(max-width: 480px) { .interest-heading { grid-template-columns: minmax(0, 1fr) 80px; } .interest-heading button { grid-column: 1 / -1; justify-self: start; } }
+  #topics { min-height: 245px; font-size: 15px; }
+  textarea::placeholder, input::placeholder { color: var(--muted); opacity: 1; }
+  .example-note { color: var(--muted); font-size: 12px; line-height: 1.5; margin: 8px 0; }
+  .settings-disclosure {
+    border-top: 1px solid var(--border); margin-top: 20px; padding-top: 16px;
+  }
+  .settings-disclosure > summary {
+    cursor: pointer; color: var(--text); font-size: 14px; font-weight: 600;
+    line-height: 1.6;
+  }
+  .settings-disclosure > summary::marker { color: var(--accent); }
+  .settings-disclosure > summary:focus-visible {
+    outline: 3px solid var(--accent); outline-offset: 4px; border-radius: 3px;
+  }
+  .disclosure-note { display: block; color: var(--muted); font-size: 12px; font-weight: 400; }
+  .settings-disclosure[open] > summary { margin-bottom: 14px; }
+  .section-required .section-desc { margin-left: 0; }
+  .always-included { font-size: 11px; color: var(--muted); }
   .chip-input {
     border: 1px solid var(--border); border-radius: 6px; padding: 6px;
     background: var(--card); display: flex; flex-wrap: wrap; gap: 4px; align-items: center;
@@ -44,7 +72,7 @@
                               background: var(--panel); border-radius: 6px;
                               border: 1px dashed var(--border); }
   .api-fields[hidden] { display: none; }
-  .field-grid, .size-grid {
+  .field-grid {
     display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px;
   }
   .section-options { display: grid; gap: 10px; margin-top: 12px; }
@@ -106,7 +134,7 @@
   html[data-theme="dark"] .chip:hover,
   html[data-theme="dark"] .chip:focus { background: var(--surface-muted); }
   @media (max-width: 720px) {
-    .field-grid, .size-grid, .section-option { grid-template-columns: 1fr; }
+    .field-grid, .section-option { grid-template-columns: 1fr; }
   }
 {% endblock %}
 {% block body %}
@@ -115,7 +143,7 @@
     <a class="btn" href="/">← Back to today’s digest</a>
   </nav>
   <h1>DailyDigest settings</h1>
-  <p class="lede">Tune the profile, summarizer, and section sizes used when brewing a new digest.</p>
+  <p class="lede">Start with what you want to read. Adjust your sections and summary preferences when you need to.</p>
 
   {% if errors %}
 	  <div class="errors" role="alert" aria-live="assertive" tabindex="-1">
@@ -127,103 +155,80 @@
 	    <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
       <input type="hidden" id="user-timezone" name="user_tz" value="{{ form.user_tz }}">
     <div class="step">
-      <h2>1 &middot; About you</h2>
-      <div class="field-grid">
-        <div>
-          <label for="name">First name</label>
-	          <input id="name" name="name" type="text" autocomplete="given-name" placeholder="Ada" value="{{ form.name }}">
+      <h2>Your research interests</h2>
+      <label for="topics">What would you like to read about?</label>
+      <div id="interest-editor" hidden>
+        <div id="interest-rows"></div>
+        <div class="interest-actions"><button type="button" class="btn" id="add-interest">Add interest</button><button type="button" class="btn" id="even-interests">Distribute evenly</button><button type="button" class="btn" id="normalize-interests">Normalize to 100%</button><output id="interest-total" aria-live="polite"></output></div>
+        <p class="hint">Percentages guide relative priority, not guaranteed digest slots. Searches try precise phrases first and broaden word order only when results are sparse; broader matches may be less specific. Open an interest’s search details to add aliases, describe useful papers, or check spelling. Exact old weights stay unchanged until you edit a percentage, normalize, or distribute evenly.</p>
+        <p class="hint">Check wording sends only the chosen interest to PubMed for spelling suggestions. Nothing is checked automatically. Accept a suggestion to use it for searches and ranking after saving. Suggestions may miss specialist terms.</p>
+      </div>
+      <textarea id="topic-details" name="topic_details" hidden disabled>{{ form.topic_details | default('') }}</textarea>
+      <textarea id="topics" name="topics" required aria-describedby="topics-hint example-profile-note" placeholder="DNA nanotechnology&#10;RNA nanotechnology&#10;nucleic acid delivery&#10;mRNA therapeutics&#10;gene therapy&#10;protein engineering&#10;protein structure prediction&#10;colloidal self-assembly&#10;superlattice materials&#10;machine learning for biomolecular design">{{ form.topics }}</textarea>
+      <p class="example-note" id="example-profile-note">Examples are optional starting points. Choose one, then edit before saving. Loading is available only while your interests are empty.</p>
+      {% if not form.topics %}
+      <label for="example-discipline">Example discipline</label>
+      <select id="example-discipline">
+        <option value="biomolecular">Biomolecular research</option>
+        <option value="engineering">Materials &amp; engineering</option>
+        <option value="ecology">Ecology &amp; environment</option>
+      </select>
+      <button class="btn" id="use-example-profile" type="button">Load selected example</button>
+      {% endif %}
+      <div class="hint" id="topics-hint">Add 1–10 specific interests. Without JavaScript, use one topic per line with an optional relative weight, such as <code>RNA delivery | 3</code>. All positive weights work; percentages express the same relative priorities.</div>
+
+      <details class="settings-disclosure" id="advanced-interests"{% if errors %} open{% endif %}>
+        <summary>Advanced interests<span class="disclosure-note">Authors, representative works, and background topics (optional).</span></summary>
+        <p class="hint">One entry per line, up to 20 entries of 300 characters in each field. These refine matching; they do not guarantee a pick.</p>
+        <label for="authors_of_interest">Authors, labs &amp; institutions to follow</label>
+        <textarea id="authors_of_interest" name="authors_of_interest" rows="3">{{ form.authors_of_interest }}</textarea>
+        <label for="seed_works">Representative works</label>
+        <textarea id="seed_works" name="seed_works" rows="3" aria-describedby="seed-works-hint">{{ form.seed_works }}</textarea>
+        <p class="hint" id="seed-works-hint">Short paper titles or descriptions anchor relevance. Paste text, not links that need to be fetched.</p>
+        <label for="context_keywords">Background interests</label>
+        <textarea id="context_keywords" name="context_keywords" rows="3" aria-describedby="context-keywords-hint">{{ form.context_keywords }}</textarea>
+        <p class="hint" id="context-keywords-hint">Topics to stay informed about with less influence on research relevance than your core interests.</p>
+      </details>
+
+      <details class="settings-disclosure" id="profile-options"{% if errors %} open{% endif %}>
+        <summary>Personal details &amp; topics to see less often
+          <span class="disclosure-note">Optional context to help refine your picks.</span>
+        </summary>
+        <div class="field-grid">
+          <div>
+            <label for="name">First name</label>
+            <input id="name" name="name" type="text" autocomplete="given-name" placeholder="Ada" value="{{ form.name }}">
+          </div>
         </div>
-      </div>
-      <label for="bio">Your bio (3–6 sentences)</label>
-      <textarea id="bio" name="bio" placeholder="What do you research? What topics matter most to you?">{{ form.bio }}</textarea>
-      <div class="hint">Used to build a vector that ranks items against your interests.</div>
+        <label for="bio">A short bio (optional)</label>
+        <textarea id="bio" name="bio" aria-describedby="bio-hint" placeholder="I research DNA and RNA nanotechnology, biomolecular delivery, protein engineering and self-assembling materials. Prioritize new engineering methods, transferable design rules and prediction tools. Keep clinical trials and biotech developments as background context.">{{ form.bio }}</textarea>
+        <div class="hint" id="bio-hint">Describe your priorities in your own words: new methods, engineered systems, mechanisms, applications, or reviews and synthesis. This context helps match papers and news to your interests.</div>
 
-      <label for="topics">Research interests and relative weights</label>
-      <textarea id="topics" name="topics" required placeholder="RNA nanotechnology | 17&#10;DNA nanotechnology | 15&#10;Gene therapy | 10">{{ form.topics }}</textarea>
-      <div class="hint">Add 1–10 specific interests, one per line. Weights are relative (for example 18, 15, 10), not daily quotas.</div>
-
-      <label for="dw-text">Downweight terms (push these down)</label>
-      <div class="chip-input" id="dw-input">
-        <input type="text" id="dw-text" placeholder="Type and press comma or Enter…">
-      </div>
-      <input type="hidden" name="downweight" id="dw-hidden" value="{{ form.downweight }}">
-      <div class="hint">Soft penalty applied at ranking time.</div>
-    </div>
-
-    <div class="step">
-      <h2>2 &middot; Summarizer backend</h2>
-      <div class="backends">
-        <label class="backend-opt" data-value="extractive">
-          <input type="radio" name="llm_backend" value="extractive"
-                 {% if form.llm_backend == "extractive" %}checked{% endif %}>
-          <strong>Extractive</strong> — recommended for the first run.
-          <div class="desc">Free. No account, API key, or paid AI subscription.</div>
-        </label>
-
-        <label class="backend-opt" data-value="api">
-          <input type="radio" name="llm_backend" value="api"
-                 {% if form.llm_backend == "api" %}checked{% endif %}>
-          <strong>OpenAI-compatible API</strong> — optional richer summaries.
-          <div class="desc">OpenAI, OpenRouter, Ollama, vLLM, or another compatible endpoint. Online providers use separate API billing.</div>
-        </label>
-
-        <label class="backend-opt" data-value="anthropic">
-          <input type="radio" name="llm_backend" value="anthropic"
-                 {% if form.llm_backend == "anthropic" %}checked{% endif %}>
-          <strong>Anthropic Claude API</strong> — native Messages API.
-          <div class="desc">Uses an Anthropic Console API key and API billing; a Claude chat subscription is not an API key.</div>
-        </label>
-
-        <label class="backend-opt" data-value="claude_cli">
-          <input type="radio" name="llm_backend" value="claude_cli"
-                 {% if form.llm_backend == "claude_cli" %}checked{% endif %}>
-          <strong>Signed-in Claude Code</strong> — use your local Claude login.
-          <div class="desc">Requires the <code>claude</code> command to be installed and signed in. Tools and session persistence are disabled for summaries.</div>
-        </label>
-
-        <label class="backend-opt" data-value="codex_cli">
-          <input type="radio" name="llm_backend" value="codex_cli"
-                 {% if form.llm_backend == "codex_cli" %}checked{% endif %}>
-          <strong>Signed-in Codex</strong> — use your local ChatGPT/Codex login.
-          <div class="desc">Requires the <code>codex</code> command to be installed and signed in. Runs ephemerally, read-only, with agent tools disabled.</div>
-        </label>
-      </div>
-
-      <p class="hint">AI-backed summaries send selected article metadata and your short reader profile to the provider you choose. Extractive stays local.</p>
-
-      <div class="api-fields" id="api-fields" hidden>
-        <div id="api-auth-fields">
-          <label for="llm_base_url">Base URL</label>
-          <input type="url" id="llm_base_url" name="llm_base_url"
-                 placeholder="https://api.openai.com/v1" value="{{ form.llm_base_url }}">
-          <label for="llm_api_key">API key</label>
-          <input type="password" id="llm_api_key" name="llm_api_key"
-                 placeholder="Provider API key" value="{{ form.llm_api_key }}">
-          {% if form.llm_api_key %}
-          <label class="hint" for="remove_llm_api_key">
-            <input type="checkbox" id="remove_llm_api_key" name="remove_llm_api_key"
-                   value="true" {% if form.remove_llm_api_key == "true" %}checked{% endif %}>
-            Remove the saved API key
-          </label>
-          {% endif %}
+        <label for="dw-text">Topics to see less often</label>
+        <div class="chip-input" id="dw-input">
+          <input type="text" id="dw-text" placeholder="e.g. cryptocurrency, stock market predictions" aria-describedby="downweight-hint">
         </div>
-        <label for="llm_model">Model</label>
-        <input type="text" id="llm_model" name="llm_model"
-               placeholder="gpt-4o-mini" value="{{ form.llm_model }}">
-        <div class="hint" id="provider-hint"></div>
-      </div>
+        <input type="hidden" name="downweight" id="dw-hidden" value="{{ form.downweight }}">
+        <div class="hint" id="downweight-hint">Type a topic and press comma or Enter. Picks mentioning these topics appear less often. Examples are not saved automatically.</div>
+      </details>
     </div>
-
     <div class="step">
-      <h2>3 &middot; Digest sections</h2>
+      <h2>What’s in your digest</h2>
       <p class="hint">Research is always included. Choose which additional sections you want to read.</p>
-      <div class="size-grid">
-        <div>
-          <label for="top_research">Research</label>
-          <input id="top_research" name="top_research" type="number" min="1" max="30" required value="{{ form.top_research }}">
-        </div>
-      </div>
       <div class="section-options">
+        <div class="section-option section-required">
+          <div>
+            <div class="section-heading">
+              <strong class="section-name">Research</strong>
+              <span class="always-included">Always included</span>
+            </div>
+            <p class="section-desc">Papers and findings matched to your research interests.</p>
+          </div>
+          <div class="count-field">
+            <label for="top_research">Maximum items</label>
+            <input id="top_research" name="top_research" type="number" min="1" max="30" required value="{{ form.top_research }}">
+          </div>
+        </div>
         <div class="section-option">
           <div>
             <div class="section-heading">
@@ -316,7 +321,7 @@
               </span>
               <label class="section-name" for="include_opportunities">Funding &amp; Opportunities</label>
             </div>
-            <p class="section-desc">Grants, fellowships, awards, scholarships, and research support.</p>
+            <p class="section-desc">Grants.gov covers US federal opportunities. Coverage is not exhaustive; international funding may be absent. Eligibility needs official-source verification.</p>
           </div>
           <div class="count-field">
             <label for="top_opportunities">Maximum items</label>
@@ -336,7 +341,7 @@
               </span>
               <label class="section-name" for="include_events">Events &amp; Calls</label>
             </div>
-            <p class="section-desc">Conferences, workshops, courses, and calls for papers or abstracts.</p>
+            <p class="section-desc">EMBL events provide limited life-science coverage, mainly in Europe and online. Coverage is not exhaustive across disciplines or regions; verify dates and eligibility at the official source.</p>
           </div>
           <div class="count-field">
             <label for="top_events">Maximum items</label>
@@ -348,7 +353,7 @@
       <div class="opportunity-profile" id="opportunity-profile"
            {% if form.include_opportunities != "true" and form.include_events != "true" %}hidden{% endif %}>
         <h3>About you for opportunity matching</h3>
-        <p class="hint">These details are stored only in your local <code>data/</code> folder. Your weighted research interests above are reused for topical matching, so you do not need to describe your research again.</p>
+        <p class="hint">These details stay on this device. Your research interests above are reused for matching, so you do not need to describe your research again.</p>
         <div class="field-grid">
           <div>
             <label for="opportunity-career-stage">Career stage</label>
@@ -371,7 +376,7 @@
                    data-opportunity-required placeholder="Fellow or co-investigator" value="{{ form.opportunity_applicant_role }}">
           </div>
         </div>
-        <details class="opportunity-advanced">
+        <details class="opportunity-advanced"{% if errors %} open{% endif %}>
           <summary>Optional matching preferences</summary>
           <p class="hint">Add only constraints or preferences that apply to you.</p>
           <div class="field-grid">
@@ -406,13 +411,243 @@
       <div class="hint">Item counts are caps; DailyDigest will show fewer when there are not enough strong candidates.</div>
     </div>
 
-    <button class="brew" type="submit">Save settings and choose today’s digest</button>
+    <details class="step settings-disclosure" id="summary-options"{% if errors %} open{% endif %}>
+      {% set summary_labels = {"extractive": "Local extractive", "api": "OpenAI-compatible API", "anthropic": "Anthropic Claude API", "claude_cli": "Signed-in Claude Code", "codex_cli": "Signed-in Codex"} %}
+      <summary>How to summarize
+        <span class="disclosure-note">Current choice: <span id="summary-current">{{ summary_labels.get(form.llm_backend, "Local extractive") }}</span></span>
+      </summary>
+      <p class="hint">Native mode can use local commands and configured providers directly. Browser mode can reach APIs directly or through the browser companion; signed-in CLI commands need a connected companion. Extractive summaries stay on this device in either mode.</p>
+      <div class="backends">
+        <label class="backend-opt" data-value="extractive">
+          <input type="radio" name="llm_backend" value="extractive"
+                 {% if form.llm_backend == "extractive" %}checked{% endif %}>
+          <strong>Extractive</strong> — recommended for the first run.
+          <div class="desc">Free. No account, API key, or paid AI subscription.</div>
+        </label>
+
+        <label class="backend-opt" data-value="api">
+          <input type="radio" name="llm_backend" value="api"
+                 {% if form.llm_backend == "api" %}checked{% endif %}>
+          <strong>OpenAI-compatible API</strong> — optional richer summaries.
+          <div class="desc">OpenAI, OpenRouter, Ollama, vLLM, or another compatible endpoint. Online providers use separate API billing.</div>
+        </label>
+
+        <label class="backend-opt" data-value="anthropic">
+          <input type="radio" name="llm_backend" value="anthropic"
+                 {% if form.llm_backend == "anthropic" %}checked{% endif %}>
+          <strong>Anthropic Claude API</strong> — native Messages API.
+          <div class="desc">Uses an Anthropic Console API key and API billing; a Claude chat subscription is not an API key.</div>
+        </label>
+
+        <label class="backend-opt" data-value="claude_cli">
+          <input type="radio" name="llm_backend" value="claude_cli"
+                 {% if form.llm_backend == "claude_cli" %}checked{% endif %}>
+          <strong>Signed-in Claude Code</strong> — use your local Claude login.
+          <div class="desc">Requires the <code>claude</code> command to be installed and signed in. Tools and session persistence are disabled for summaries.</div>
+        </label>
+
+        <label class="backend-opt" data-value="codex_cli">
+          <input type="radio" name="llm_backend" value="codex_cli"
+                 {% if form.llm_backend == "codex_cli" %}checked{% endif %}>
+          <strong>Signed-in Codex</strong> — use your local ChatGPT/Codex login.
+          <div class="desc">Requires the <code>codex</code> command to be installed and signed in. Runs ephemerally, read-only, with agent tools disabled.</div>
+        </label>
+      </div>
+
+      <p class="hint">AI-backed summaries send selected article metadata and your short reader profile to the provider you choose. Extractive stays local.</p>
+
+      <div class="api-fields" id="api-fields"{% if form.llm_backend == "extractive" %} hidden{% endif %}>
+        <div id="api-auth-fields"{% if form.llm_backend not in ["api", "anthropic"] %} hidden{% endif %}>
+          <label for="llm_base_url">Base URL</label>
+          <input type="url" id="llm_base_url" name="llm_base_url"
+                 placeholder="https://api.openai.com/v1" value="{{ form.llm_base_url }}">
+          <label for="llm_api_key">API key</label>
+          <input type="password" id="llm_api_key" name="llm_api_key"
+                 placeholder="Provider API key" value="{{ form.llm_api_key }}">
+          {% if form.llm_api_key %}
+          <label class="hint" for="remove_llm_api_key">
+            <input type="checkbox" id="remove_llm_api_key" name="remove_llm_api_key"
+                   value="true" {% if form.remove_llm_api_key == "true" %}checked{% endif %}>
+            Remove the saved API key
+          </label>
+          {% endif %}
+        </div>
+        <label for="llm_model">Model</label>
+        <input type="text" id="llm_model" name="llm_model"
+               placeholder="gpt-4o-mini" value="{{ form.llm_model }}">
+        <div class="hint" id="provider-hint"></div>
+        <div id="connection-check-controls">
+          <button class="btn" type="button" id="test-api-connection">Test API connection</button>
+          <p class="hint" id="connection-check-note">Only when clicked: sends a small test to this API, which may be billed. Testing does not save settings.</p>
+          <p class="hint" id="connection-check-status" role="status" aria-live="polite"></p>
+        </div>
+      </div>
+    </details>
+
+    <div class="settings-actions">
+      <p class="hint" id="settings-save-status" role="status" aria-live="polite">{% if errors %}Changes have not been saved. Correct the highlighted fields.{% else %}Changes take effect after saving.{% endif %}</p>
+      <button class="brew" type="submit">Save settings and choose today’s digest</button>
+    </div>
   </form>
 </div>
 {% endblock %}
 {% block scripts %}
 <script>
 (function () {
+  const topics = document.getElementById("topics");
+  const details = document.getElementById("topic-details");
+  const rows = document.getElementById("interest-rows");
+  const editor = document.getElementById("interest-editor");
+  let checkingWording = false;
+  let metadata = {};
+  try { metadata = JSON.parse(details.value || "{}"); } catch (_) {}
+  function percentages(weights) {
+    const count = weights.length;
+    if (!count) return [];
+    const sum = weights.reduce((a, b) => a + b, 0);
+    if (!(sum > 0)) return percentages(weights.map(() => 1));
+    const raw = weights.map(weight => 100 * weight / sum);
+    const allocated = raw.map(weight => Math.max(1, Math.floor(weight)));
+    let difference = 100 - allocated.reduce((a, b) => a + b, 0);
+    const order = raw.map((weight, index) => ({index, fraction: weight % 1})).sort((a, b) => b.fraction - a.fraction || a.index - b.index);
+    for (let i = 0; difference > 0; i++, difference--) allocated[order[i % count].index]++;
+    // Very small legacy weights can require the 1% floor. Remove those
+    // extra points from the most overallocated remaining interests.
+    while (difference < 0) {
+      const index = allocated.map((weight, index) => ({index, excess: weight - raw[index]})).filter(row => allocated[row.index] > 1).sort((a, b) => b.excess - a.excess || a.index - b.index)[0].index;
+      allocated[index]--; difference++;
+    }
+    return allocated;
+  }
+  function useDisplayedWeights() {
+    for (const row of rows.children) row.dataset.originalWeight = '';
+  }
+  function serialize() {
+    const result = [], data = {};
+    for (const row of rows.children) {
+      const name = row.querySelector('[data-interest-name]').value.trim();
+      const weight = row.dataset.originalWeight || row.querySelector('[data-interest-weight]').value;
+      if (name) {
+        result.push(`${name} | ${weight}`);
+        data[name] = {aliases: row.querySelector('[data-interest-aliases]').value.split(';').map(term => term.trim()).filter(Boolean), description: row.querySelector('[data-interest-description]').value.trim()};
+        if (row.dataset.correctedFrom) data[name].previous_name = row.dataset.correctedFrom;
+      }
+    }
+    topics.value = result.join('\n'); details.value = JSON.stringify(data);
+    const sum = [...rows.querySelectorAll('[data-interest-weight]')].reduce((total, input) => total + Number(input.value || 0), 0);
+    document.getElementById('interest-total').textContent = `Total: ${sum}%${sum === 100 ? '' : ' · normalize when ready'}`;
+    document.getElementById('add-interest').disabled = rows.children.length >= 10;
+  }
+  function addRow(name = '', weight = 1, detail = {}, originalWeight = weight) {
+    const row = document.createElement('div'); row.className = 'interest-row'; row.dataset.originalWeight = String(originalWeight);
+    const originalFacetName = detail.previous_name || name;
+    if (detail.previous_name) row.dataset.correctedFrom = detail.previous_name;
+    // This markup is constant; reader text is assigned through .value only.
+    row.innerHTML = '<div class="interest-heading"><label>Interest<input data-interest-name type="text" required maxlength="160" placeholder="e.g. targeted protein degradation"></label><label>Priority %<input data-interest-weight type="number" min="1" max="100" step="1" required></label><button class="btn" type="button">Remove</button></div><details><summary>Search details (optional)</summary><label>Alternative search terms, separated by semicolons<input data-interest-aliases type="text" placeholder="targeted protein degradation; PROTAC; molecular glue"></label><label>What would make a paper useful?<textarea data-interest-description maxlength="600" placeholder="e.g. New degrader designs and transferable methods; basic signaling is lower priority."></textarea></label></details>';
+    row.querySelector('[data-interest-name]').value = name;
+    row.querySelector('[data-interest-weight]').value = weight;
+    row.querySelector('[data-interest-weight]').addEventListener('input', useDisplayedWeights);
+    row.querySelector('[data-interest-aliases]').value = (detail.aliases || []).join('; ');
+    row.querySelector('[data-interest-description]').value = detail.description || '';
+    row.querySelector('button').addEventListener('click', () => { row.remove(); serialize(); });
+    const nameInput = row.querySelector('[data-interest-name]');
+    const spelling = document.createElement('div'); spelling.className = 'interest-spelling';
+    const spellingActions = document.createElement('div'); spellingActions.className = 'interest-actions';
+    const spellingStatus = document.createElement('p'); spellingStatus.className = 'hint'; spellingStatus.setAttribute('aria-live', 'polite');
+    const check = document.createElement('button'); check.type = 'button'; check.className = 'btn'; check.dataset.checkWording = ''; check.textContent = 'Check wording'; check.disabled = checkingWording;
+    const accept = document.createElement('button'); accept.type = 'button'; accept.className = 'btn'; accept.textContent = 'Use suggestion'; accept.hidden = true;
+    const dismiss = document.createElement('button'); dismiss.type = 'button'; dismiss.className = 'btn'; dismiss.textContent = 'Keep wording'; dismiss.hidden = true;
+    spellingActions.append(check, accept, dismiss); spelling.append(spellingActions, spellingStatus); row.querySelector('details').append(spelling);
+    let wordingVersion = 0, suggestion = null;
+    const clearSuggestion = () => { suggestion = null; accept.hidden = dismiss.hidden = true; spellingStatus.textContent = ''; };
+    nameInput.addEventListener('input', () => { wordingVersion++; delete row.dataset.correctedFrom; clearSuggestion(); });
+    check.addEventListener('click', async () => {
+      if (checkingWording) return;
+      const original = nameInput.value.trim(), version = wordingVersion;
+      clearSuggestion();
+      if (!original) { spellingStatus.textContent = 'Enter an interest first.'; nameInput.focus(); return; }
+      checkingWording = true;
+      rows.querySelectorAll('[data-check-wording]').forEach(button => { button.disabled = true; });
+      spellingStatus.textContent = 'Checking this interest’s spelling…';
+      try {
+        const response = await fetch('/setup/check-wording?' + new URLSearchParams({topic: original}), {
+          method: 'POST', headers: {'X-CSRF-Token': topics.form.querySelector('[name="_csrf_token"]').value},
+        });
+        const result = await response.json();
+        if (!row.isConnected || version !== wordingVersion) return;
+        if (!response.ok) throw new Error('Spelling unavailable');
+        if (!result.suggestion) { spellingStatus.textContent = 'No spelling suggestion found. Keep your wording, or add alternative terms if needed.'; return; }
+        suggestion = result.suggestion;
+        spellingStatus.textContent = `Did you mean “${suggestion}”? Your interest is unchanged until you choose Use suggestion.`;
+        accept.hidden = dismiss.hidden = false;
+      } catch (_) {
+        if (row.isConnected && version === wordingVersion) spellingStatus.textContent = 'Couldn’t check wording right now. Your interest is unchanged. Try again later.';
+      } finally {
+        checkingWording = false;
+        rows.querySelectorAll('[data-check-wording]').forEach(button => { button.disabled = false; });
+      }
+    });
+    accept.addEventListener('click', () => {
+      if (!suggestion) return;
+      const duplicate = [...rows.children].some(other => other !== row && other.querySelector('[data-interest-name]').value.trim().toLowerCase() === suggestion.toLowerCase());
+      if (duplicate) { clearSuggestion(); spellingStatus.textContent = 'Another interest already uses that wording. Combine or remove duplicate interests before changing this one.'; return; }
+      nameInput.value = suggestion;
+      nameInput.dispatchEvent(new Event('input', {bubbles: true}));
+      if (originalFacetName) row.dataset.correctedFrom = originalFacetName;
+      serialize();
+      spellingStatus.textContent = 'Suggestion applied. Save your settings to use it for searches and ranking.';
+      nameInput.focus();
+    });
+    dismiss.addEventListener('click', () => { clearSuggestion(); spellingStatus.textContent = 'Your wording was kept.'; nameInput.focus(); });
+    row.addEventListener('input', serialize); rows.append(row);
+  }
+  function loadRows() {
+    try { metadata = JSON.parse(details.value || '{}'); } catch (_) { metadata = {}; }
+    const configured = topics.value.split('\n').filter(line => line.trim()).map(line => {
+      const [name, weight = '1'] = line.split('|'); return {name: name.trim(), weight: Number(weight.trim()) || 1};
+    });
+    const weights = configured.map(row => row.weight);
+    const converted = weights.reduce((a, b) => a + b, 0) === 100 && weights.every(weight => Number.isInteger(weight) && weight >= 1) ? weights : percentages(weights);
+    rows.replaceChildren();
+    configured.forEach((row, index) => addRow(row.name, converted[index], metadata[row.name] || {}, row.weight));
+    if (!configured.length) addRow();
+    serialize();
+  }
+  loadRows(); editor.hidden = false; topics.hidden = true; topics.required = false; details.disabled = false;
+  document.getElementById('topics-hint').hidden = true;
+  topics.addEventListener('input', loadRows); topics.addEventListener('change', loadRows);
+  document.getElementById('add-interest').addEventListener('click', () => {
+    if (rows.children.length >= 10) return;
+    const previous = [...rows.children];
+    const shown = previous.reduce((sum, row) => sum + Number(row.querySelector('[data-interest-weight]').value || 0), 0);
+    const raw = previous.reduce((sum, row) => sum + Number(row.dataset.originalWeight || row.querySelector('[data-interest-weight]').value || 0), 0);
+    addRow('', 1, {}, shown > 0 ? raw / shown : 1);
+    serialize(); rows.lastElementChild.querySelector('input').focus();
+  });
+  function distribute(even) {
+    const inputs = [...rows.querySelectorAll('[data-interest-weight]')];
+    const weights = percentages(inputs.map(input => even ? 1 : Math.max(0, Number(input.value) || 0)));
+    inputs.forEach((input, index) => { input.value = weights[index]; });
+    useDisplayedWeights();
+    serialize();
+  }
+  document.getElementById('normalize-interests').addEventListener('click', () => distribute(false));
+  document.getElementById('even-interests').addEventListener('click', () => distribute(true));
+  topics.form.addEventListener('submit', serialize);
+  const exampleButton = document.getElementById('use-example-profile');
+  if (exampleButton) exampleButton.addEventListener('click', () => {
+    if ([...rows.querySelectorAll('[data-interest-name]')].some(input => input.value.trim())) return;
+    const examples = {
+      biomolecular: topics.getAttribute('placeholder'),
+      engineering: 'Battery materials\nPolymer recycling\nAdditive manufacturing\nThermal energy storage',
+      ecology: 'Biodiversity monitoring\nEcosystem restoration\nClimate adaptation\nEnvironmental DNA',
+    };
+    topics.value = examples[document.getElementById('example-discipline').value]; loadRows();
+    topics.form.dispatchEvent(new Event('input', {bubbles: true}));
+    exampleButton.disabled = true;
+    document.getElementById('example-profile-note').textContent = 'Example loaded. Make it your own, then save when you’re ready.';
+    rows.querySelector('input').focus();
+  });
   const timezoneInput = document.getElementById("user-timezone");
   try {
     const browserTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -467,12 +702,29 @@
 	  const errors = document.querySelector(".errors");
 	  if (errors) errors.focus();
 
+  // Reveal invalid fields before native validation focuses them.
+  const settingsForm = document.querySelector('form[action="/setup"]');
+  const saveStatus = document.getElementById('settings-save-status');
+  const markUnsaved = () => { saveStatus.textContent = 'Unsaved changes. Save to apply your settings.'; };
+  settingsForm.addEventListener('input', markUnsaved);
+  settingsForm.addEventListener('change', markUnsaved);
+  settingsForm.addEventListener('click', (event) => {
+    if (event.target.closest('#add-interest, #even-interests, #normalize-interests, .interest-heading button, .chip')) markUnsaved();
+  });
+  settingsForm.addEventListener("invalid", (event) => {
+    for (let node = event.target.parentElement; node && node !== settingsForm; node = node.parentElement) {
+      if (node.tagName === "DETAILS") node.open = true;
+      if (node.hidden) node.hidden = false;
+    }
+  }, true);
+
   // Backend reveal logic.
   const apiFields = document.getElementById("api-fields");
   const apiAuthFields = document.getElementById("api-auth-fields");
   const baseUrlInput = document.getElementById("llm_base_url");
   const modelInput = document.getElementById("llm_model");
   const providerHint = document.getElementById("provider-hint");
+  const summaryCurrent = document.getElementById("summary-current");
   const radios = document.querySelectorAll('input[name="llm_backend"]');
   const providerDefaults = {
     extractive: { base: "https://api.openai.com/v1", model: "gpt-4o-mini" },
@@ -488,8 +740,10 @@
     const v = sel ? sel.value : "extractive";
     const isApi = v === "api" || v === "anthropic";
     const isCli = v === "claude_cli" || v === "codex_cli";
+    summaryCurrent.textContent = v === "extractive" ? "Local extractive" : sel.closest("label").querySelector("strong").textContent;
     apiFields.hidden = !(isApi || isCli);
     apiAuthFields.hidden = !isApi;
+    document.getElementById('connection-check-controls').hidden = !isApi;
     if (v === "anthropic") {
       baseUrlInput.placeholder = "https://api.anthropic.com/v1";
       modelInput.placeholder = "claude-haiku-4-5-20251001";
@@ -522,6 +776,45 @@
     refresh();
   }));
   refresh();
+
+  const connectionButton = document.getElementById('test-api-connection');
+  const connectionStatus = document.getElementById('connection-check-status');
+  const connectionFields = ['llm_base_url', 'llm_api_key', 'llm_model'];
+  let connectionVersion = 0;
+  function invalidateConnection() { connectionVersion++; connectionStatus.textContent = ''; }
+  for (const id of connectionFields) document.getElementById(id).addEventListener('input', invalidateConnection);
+  radios.forEach(radio => radio.addEventListener('change', invalidateConnection));
+  connectionButton.addEventListener('click', async () => {
+    const version = connectionVersion;
+    const body = new URLSearchParams();
+    body.set('llm_backend', document.querySelector('input[name="llm_backend"]:checked').value);
+    for (const id of connectionFields) body.set(id, document.getElementById(id).value);
+    connectionButton.disabled = true;
+    connectionStatus.textContent = 'Testing this API connection…';
+    try {
+      const response = await fetch('/setup/test-connection', {
+        method: 'POST', headers: {'X-CSRF-Token': settingsForm.querySelector('[name="_csrf_token"]').value}, body,
+      });
+      const result = await response.json();
+      if (version !== connectionVersion) return;
+      connectionStatus.textContent = response.ok ? result.message : 'Connection test unavailable. Check your settings and try again.';
+    } catch (_) {
+      if (version === connectionVersion) connectionStatus.textContent = 'Connection test unavailable. Check your settings and try again.';
+    } finally { connectionButton.disabled = false; }
+  });
+  window.addEventListener('dd-companion-capabilities', (event) => {
+    const backends = event.detail.backends || [];
+    document.getElementById('connection-check-note').textContent = 'Only when clicked: tests the API directly from this browser with a small request that may be billed. Testing does not save settings.';
+    for (const backend of ['claude_cli', 'codex_cli']) {
+      const radio = document.querySelector(`input[name="llm_backend"][value="${backend}"]`);
+      const available = backends.includes(backend);
+      radio.disabled = !available && !radio.checked;
+      const label = radio.closest('label');
+      let note = label.querySelector('[data-companion-note]');
+      if (!note) { note = document.createElement('div'); note.className = 'desc'; note.dataset.companionNote = ''; label.append(note); }
+      note.textContent = available ? 'Connected companion supports this command.' : 'Unavailable: connect a browser companion with this command installed and signed in, or choose Extractive.';
+    }
+  });
 
   // An off section keeps its previous cap but removes the inactive control
   // from keyboard navigation and form submission.

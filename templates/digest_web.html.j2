@@ -1,6 +1,13 @@
 {% extends "_base.html.j2" %}
 {% block title %}DailyDigest {{ digest_id }}{% endblock %}
 {% block extra_styles %}
+  .source-coverage { margin: 16px 0; padding: 16px 20px; border: 1px solid var(--border); border-radius: 12px; background: var(--card); font-size: 13px; line-height: 1.6; }
+  .source-coverage p { margin: 5px 0; overflow-wrap: anywhere; }
+  .source-check-time { color: var(--muted); font-size: 12px; }
+  .source-coverage summary { cursor: pointer; color: var(--accent-strong); }
+  .source-coverage ul { margin: 10px 0; padding: 0; list-style: none; max-height: 260px; overflow-y: auto; }
+  .source-coverage li { padding: 8px 0; border-top: 1px solid var(--border-soft); overflow-wrap: anywhere; }
+  .source-coverage li span { display: block; color: var(--muted); }
   .wrap { max-width: 1040px; padding: 22px 14px 78px; }
   .reading-progress {
     position: fixed; inset: 0 0 auto; z-index: 70; height: 4px;
@@ -757,7 +764,7 @@
     <div class="cup-details">
       {% if overview.topic_mix %}
       <div class="cup-row">
-        <span class="cup-row-label">Themes</span>
+        <span class="cup-row-label">Selected topics</span>
         {% for topic in overview.topic_mix %}<span class="cup-chip">{{ topic.title }} · {{ topic.count }}</span>{% endfor %}
       </div>
       {% endif %}
@@ -768,6 +775,20 @@
       </details>
       {% endif %}
     </div>
+  </section>
+  {% endif %}
+
+  {% if interest_coverage %}
+  <section class="source-coverage" aria-label="Your configured interests">
+    <details><summary>Your interests · {{ interest_coverage|length }} configured</summary>
+      <p>These are your configured interests. Counts describe the saved digest, which may predate your latest settings. Percentages guide relative priority; they do not reserve digest slots. A topic without a selected paper may still have matching papers.</p>
+      <ul>{% for interest in interest_coverage %}
+        <li><strong>{{ interest.title }} · {{ interest.selected }} selected</strong>
+          {% if interest.candidates is not none %}<span>{{ interest.candidates }} scored matches · {{ interest.eligible }} passed eligibility{% if interest.queries %} · Searches: {{ interest.queries|join(', ') }}{% endif %}</span>{% endif %}
+          <span>{{ interest.explanation }}</span>
+          {% if interest.rejections %}<span>Not selected: {% for stage, count in interest.rejections.items() %}{{ stage|replace('_', ' ') }} {{ count }}{% if not loop.last %}; {% endif %}{% endfor %}.</span>{% endif %}
+        </li>{% endfor %}</ul>
+    </details>
   </section>
   {% endif %}
 
@@ -790,6 +811,23 @@
       <span class="pip-drag-copy" aria-hidden="true">Easy—my tea is still hot!</span>
     </div>
   </section>
+
+  {% if source_coverage is defined %}
+  <section class="source-coverage" aria-label="Source coverage and freshness">
+    <strong>Latest source check</strong>
+    {% if source_coverage.total %}
+      <p>{{ source_coverage.responded }} of {{ source_coverage.total }} sources responded{% if source_coverage.unavailable %} · {{ source_coverage.unavailable }} unavailable{% endif %}{% if source_coverage.limited %} · {{ source_coverage.limited }} returned limited results{% endif %}{% if source_coverage.unknown %} · {{ source_coverage.unknown }} unknown{% endif %}.</p>
+      <p class="source-check-time">Checked <time datetime="{{ source_coverage.checked_at }}">{{ source_coverage.checked_label }}</time>{% if source_coverage.public_oldest_label %} · Oldest public feed update: {{ source_coverage.public_oldest_label }}{% endif %}</p>
+      {% if source_coverage.checked_stale or source_coverage.public_stale %}<p>The check or public feed data is over 24 hours old. Brew again to check for updates.</p>{% endif %}
+      <details><summary>See source details</summary><ul>
+        {% for row in source_coverage.rows %}<li><strong>{{ row.name }}</strong><span>{{ row.status }} · {{ row.freshness }}</span></li>{% endfor %}
+      </ul></details>
+      <p class="source-check-time">This is the latest check, including failed attempts. Feed update times are separate from paper publication dates.</p>
+    {% else %}
+      <p>No source check recorded yet. Brew a digest to check your selected sources.</p>
+    {% endif %}
+  </section>
+  {% endif %}
 
   <main class="digest-card">
     <div class="digest-toolbar">
