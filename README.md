@@ -79,16 +79,13 @@ embedding model are downloaded once. Later starts reuse them.
 
 The app opens <http://127.0.0.1:8765>. On the setup page:
 
-1. Add 1–10 specific interests, one per line, with relative weights:
-
-   ```text
-   colloidal self-assembly | 18
-   DNA nanotechnology | 15
-   gene and RNA therapeutics | 10
-   ```
-
-   Weights are priorities, not quotas. A weight of 10 does not mean exactly 10%
-   of the digest.
+1. Add 1–10 specific interests using individual topic and percentage fields.
+   Shares must total 100% before saving; use **Normalize to 100%** or
+   **Distribute evenly** to adjust them. Older relative weights convert to the
+   displayed whole percentages when you save. Percentages guide priority
+   rather than guarantee digest slots. The no-JavaScript fallback still accepts
+   one topic per line with an optional relative weight, such as
+   `DNA nanotechnology | 3`.
 2. Keep **Extractive** selected for the easiest free setup.
 3. Choose whether to include Funding & Opportunities, Events & Calls, Industry,
    AI tools & methods, Clinical & Regulatory, and World news. Research is always
