@@ -294,6 +294,23 @@ votes, database, and settings as the browser app.
 For a new reader on the same computer, stop DailyDigest and move or back up the
 whole `data/` directory so profiles, votes, and history are not mixed.
 
+## Local topic verification
+
+Normal brewing requires research papers to clear the reader's topic floor
+independently of journal prestige. Quality evidence still orders eligible work.
+Longer abstracts are retained and profile-driven OpenAlex searches include
+preprints. Add aliases and describe useful papers in each interest's search
+details to clarify ambiguous terms; no model guarantees literature coverage or
+verifies scientific validity.
+
+An experimental local joint topic check is available with `SEMANTIC_MATCHING=true`
+but disabled by default: it has not demonstrated an additional selection gain.
+It checks up to 48 papers, records partial text coverage, preserves existing
+quality/preference scores, and never vetoes an otherwise-related paper. First use
+caches about 92 MB of public weights; reader text stays local. `SEMANTIC_MODEL_DIR`
+can provision the exact pinned files offline. Normal brewing avoids this download
+and computation. The improved relevance gate remains active in either mode.
+
 ## Development and license
 
 Run the automated tests with:
@@ -305,3 +322,17 @@ uv run ruff check src tests
 ```
 
 DailyDigest is released under the [MIT License](LICENSE).
+
+
+Settings also offer optional example profiles, per-interest search details and
+spelling suggestions, followed authors, representative works and background
+interests. Test API connection performs an explicit small request without saving
+settings or sending research context. Browser users need the companion for local
+CLI providers; native users run those installed commands locally.
+
+Unknown venue evidence is distinguished from observed low impact. Both retain
+bounded selection and strong raw-topic requirements; a positive allowance permits
+one candidate in small digests while explicit zero allowances remain exclusions.
+Exact journal aliases avoid accidental downgrades of known venues. CS preprints
+use the same publication-status policy as other fields. Source freshness and
+limited searches remain visible; funding/event coverage is regionally limited.
