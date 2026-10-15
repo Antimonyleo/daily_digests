@@ -34,29 +34,26 @@ _RETRY = retry(
 
 
 def _profile_query(term: str, aliases: list[str]) -> str:
-    """Keep a phrase match while allowing the original words out of order.
+    """Give exact interest phrases and explicit aliases first access to slots."""
+    phrases = [term, *aliases[:3]]
+    return "(" + " OR ".join(dict.fromkeys(
+        f'"{phrase.replace(chr(34), "")}"[tiab]' for phrase in phrases if phrase.strip()
+    )) + ")"
 
-    The two bounded inflection pairs correct common verb/adjective wording;
-    they add Boolean alternatives inside one request, not extra searches or
-    scoring inputs. Reader-supplied aliases remain literal phrases.
+
+def _profile_fallback_query(term: str, precise_query: str) -> str | None:
+    """Broaden original words only; aliases remain in the exact first pass.
+
+    PubMed supports prefix wildcards. Use at least five characters and never
+    truncate short terms such as gene, drug, DNA or RNA. This is prefix matching,
+    not a synonym/stemming model. Exclude precise matches so a second query
+    cannot spend the remaining reserved budget retrieving them again.
     """
-    phrase = f'"{term.replace(chr(34), "")}"[tiab]'
-    words = re.findall(r"[^\W_]+(?:[-'][^\W_]+)*", term.casefold())
-    inflections = {
-        "target": ("target", "targeted"), "targeted": ("target", "targeted"),
-        "induce": ("induce", "induced"), "induced": ("induce", "induced"),
-    }
-    clauses = [phrase]
-    if len(words) > 1:
-        required = []
-        for word in dict.fromkeys(words):
-            alternatives = inflections.get(word, (word,))
-            clause = " OR ".join(f"{value}[tiab]" for value in alternatives)
-            required.append(f"({clause})" if len(alternatives) > 1 else clause)
-        clauses.append("(" + " AND ".join(required) + ")")
-    clauses.extend(f'"{alias.replace(chr(34), "")}"[tiab]'
-                   for alias in dict.fromkeys(aliases[:3]) if alias.strip())
-    return "(" + " OR ".join(dict.fromkeys(clauses)) + ")"
+    words = list(dict.fromkeys(re.findall(r"[^\W_]+(?:[-'][^\W_]+)*", term.casefold())))
+    if not words or len(words) == 1 and len(words[0]) < 5:
+        return None
+    clauses = [f'{word + "*" if len(word) >= 5 else word}[tiab]' for word in words]
+    return "(" + " AND ".join(clauses) + ") NOT " + precise_query
 
 
 class PubMedSource:
@@ -71,6 +68,7 @@ class PubMedSource:
     SLEEP = 0.34
     RETMAX = 200
     MAX_ITEMS = 100
+    MIN_PRECISE_RESULTS = 3
 
     def __init__(self) -> None:
         self.last_fetch_diagnostics: dict[str, Any] = {"queries": []}
@@ -120,16 +118,38 @@ class PubMedSource:
                         core_attempted += 1
                     child = type(self)()
                     child.RETMAX = child.MAX_ITEMS = cap
+                    primary_failed = False
                     try:
                         fetched = child.fetch(spec.model_copy(update={"profile_driven": False, "query": query}), days)
                     except RuntimeError:
+                        primary_failed = True
                         failures += 1
                         if index < len(core):
                             core_failures += 1
                         fetched = []
-                    for diagnostic in child.last_fetch_diagnostics.get("queries", []):
-                        diagnostic["interest"] = term
+                    diagnostics = child.last_fetch_diagnostics.get("queries", [])
+                    for diagnostic in diagnostics:
+                        diagnostic.update(interest=term, search_stage="phrase")
                         self.last_fetch_diagnostics["queries"].append(diagnostic)
+                    raw_used = max(len(fetched), sum(d.get("fetched_count", 0) for d in diagnostics))
+                    room = cap - raw_used
+                    fallback_query = _profile_fallback_query(term, query)
+                    if (not primary_failed and len(fetched) < min(self.MIN_PRECISE_RESULTS, cap)
+                            and room > 0 and fallback_query):
+                        time.sleep(self.SLEEP)
+                        fallback = type(self)()
+                        fallback.RETMAX = fallback.MAX_ITEMS = room
+                        try:
+                            fetched.extend(fallback.fetch(spec.model_copy(update={
+                                "profile_driven": False, "query": fallback_query,
+                            }), days))
+                        except RuntimeError:
+                            # Keep precise results; expose optional expansion failure
+                            # in its own query diagnostic rather than hiding it.
+                            pass
+                        for diagnostic in fallback.last_fetch_diagnostics.get("queries", []):
+                            diagnostic.update(interest=term, search_stage="word_fallback")
+                            self.last_fetch_diagnostics["queries"].append(diagnostic)
                     # Reserve the raw result budget, not only unique parsed rows.
                     remaining -= cap
                     for item in fetched:

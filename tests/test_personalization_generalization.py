@@ -55,9 +55,11 @@ def test_pubmed_reserves_query_and_item_budget_for_every_core_interest(monkeypat
     monkeypatch.setattr('dailydigest.ingest.pubmed.time.sleep', lambda *_: None)
     source = PubMedSource()
     assert source.fetch(SourceSpec(name='PubMed', kind='pubmed', profile_driven=True)) == []
-    assert len(calls) == 9 and sum(cap for _, cap in calls) == source.MAX_ITEMS
-    assert all(sum(name in query for query, _ in calls) == 1 for name, _ in TOPICS)
-    assert [d['interest'] for d in source.last_fetch_diagnostics['queries']] == sorted(profile.keywords, key=str.casefold)
+    primary = [(query, cap) for query, cap in calls if ' NOT ' not in query]
+    assert len(primary) == 9 and len(calls) <= 18
+    assert sum(cap for _, cap in primary) == source.MAX_ITEMS
+    assert all(sum(name in query for query, _ in primary) == 1 for name, _ in TOPICS)
+    assert [d['interest'] for d in source.last_fetch_diagnostics['queries'] if d['search_stage'] == 'phrase'] == sorted(profile.keywords, key=str.casefold)
 
 
 def test_topic_details_reject_unknown_interest_and_excessive_aliases():
@@ -155,8 +157,9 @@ def test_optional_context_keeps_a_bounded_share_after_core_searches(monkeypatch)
     monkeypatch.setattr(PubMedSource, '_esearch', lambda self, client, query: calls.append((query, self.RETMAX)) or [])
     monkeypatch.setattr('dailydigest.ingest.pubmed.time.sleep', lambda *_: None)
     PubMedSource().fetch(SourceSpec(name='PubMed', kind='pubmed', profile_driven=True))
-    assert len(calls) == 3 and sum(cap for _, cap in calls) == 100
-    assert 'industry context' in calls[-1][0] and calls[-1][1] == 5
+    primary = [(query, cap) for query, cap in calls if ' NOT ' not in query]
+    assert len(primary) == 3 and len(calls) <= 6 and sum(cap for _, cap in primary) == 100
+    assert 'industry context' in primary[-1][0] and primary[-1][1] == 5
 
 
 def test_plain_profiles_retain_identical_semantic_inputs():
