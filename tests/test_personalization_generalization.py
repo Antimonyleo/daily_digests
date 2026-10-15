@@ -265,7 +265,7 @@ def test_openalex_alias_rich_interest_cannot_take_another_interests_budget(monke
     assert len(source.last_fetch_diagnostics['queries']) == 9
 
 
-def test_percentage_preview_does_not_overwrite_untouched_legacy_priorities():
+def test_percentage_editor_submits_displayed_weights_and_blocks_invalid_totals():
     import shutil
     import subprocess
     from pathlib import Path
@@ -275,11 +275,11 @@ def test_percentage_preview_does_not_overwrite_untouched_legacy_priorities():
     if not node:
         pytest.skip('Node is required to verify enhanced editor serialization')
     source = (Path(__file__).parents[1] / 'templates/setup.html.j2').read_text()
-    functions = 'function useDisplayedWeights() {' + source.split('  function useDisplayedWeights() {', 1)[1].split('  function addRow(', 1)[0]
+    functions = 'function serialize() {' + source.split('  function serialize() {', 1)[1].split('  function addRow(', 1)[0]
     script = '''
 const assert = require('node:assert/strict');
 function row(name, raw, displayed) {
-  const fields = {'[data-interest-name]': {value:name}, '[data-interest-weight]':{value:displayed}, '[data-interest-aliases]':{value:''}, '[data-interest-description]':{value:''}};
+  const fields = {'[data-interest-name]': {value:name}, '[data-interest-weight]':{value:displayed, setCustomValidity(message) { this.error = message; }}, '[data-interest-aliases]':{value:''}, '[data-interest-description]':{value:''}};
   return {dataset:{originalWeight:raw}, querySelector: key => fields[key]};
 }
 const children = [row('A','0.1','1'), row('B','100','99')];
@@ -287,12 +287,16 @@ const rows = {children, querySelectorAll: key => children.map(row => row.querySe
 const topics = {value:''}, details = {value:''};
 const document = {getElementById: () => ({})};
 ''' + functions + '''
-serialize(); assert.equal(topics.value, 'A | 0.1\\nB | 100');
+serialize(); assert.equal(topics.value, 'A | 1\\nB | 99');
 children[0].querySelector('[data-interest-description]').value = 'New reader detail';
-serialize(); assert.equal(topics.value, 'A | 0.1\\nB | 100');
+serialize(); assert.equal(topics.value, 'A | 1\\nB | 99');
+assert.equal(JSON.parse(details.value).A.description, 'New reader detail');
 children[0].querySelector('[data-interest-name]').value = 'Renamed';
-serialize(); assert.equal(topics.value, 'Renamed | 0.1\\nB | 100');
-useDisplayedWeights(); serialize(); assert.equal(topics.value, 'Renamed | 1\\nB | 99');
+serialize(); assert.equal(topics.value, 'Renamed | 1\\nB | 99');
+const weight = children[0].querySelector('[data-interest-weight]');
+assert.equal(weight.error, '');
+weight.value = '10'; serialize(); assert.match(weight.error, /totaling 100%/);
+weight.value = '1'; serialize(); assert.equal(weight.error, '');
 console.log('ok');
 '''
     result = subprocess.run([node, '-e', script], capture_output=True, text=True, check=True)

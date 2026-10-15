@@ -79,7 +79,7 @@ embedding model are downloaded once. Later starts reuse them.
 
 The app opens <http://127.0.0.1:8765>. On the setup page:
 
-1. Add 1–10 specific interests, one per line:
+1. Add 1–10 specific interests, for example:
 
    ```text
    colloidal self-assembly
@@ -87,10 +87,11 @@ The app opens <http://127.0.0.1:8765>. On the setup page:
    gene and RNA therapeutics
    ```
 
-   Interests have equal priority by default. Optionally append a relative weight,
-   such as `DNA nanotechnology | 3`, to emphasize a topic. Existing saved weights
-   are preserved. Weights are priorities, not quotas: a weight of 10 does not mean
-   exactly 10% of the digest. **Personal details & topics to see less often**
+   Each interest has its own topic and percentage field. Shares must total 100%
+   before saving; use **Normalize to 100%** or **Distribute evenly** to adjust them.
+   Older relative weights are converted to the displayed whole percentages when
+   you save. The no-JavaScript fallback still accepts `DNA nanotechnology | 3`.
+   Percentages guide priority rather than guarantee digest slots. **Personal details & topics to see less often**
    holds optional bio and downweight preferences.
 2. Keep **Extractive** selected for the easiest free setup. Expand the summary
    settings only when you want to change how summaries are made.
