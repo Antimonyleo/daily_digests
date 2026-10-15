@@ -1,12 +1,13 @@
 """HTTPX transport for synchronous requests inside a browser Web Worker.
 
-XHR enforces the browser's CORS policy. It follows redirects itself and exposes
-only CORS-visible response headers; neither restriction can be bypassed here.
+The asynchronous fetch bridge suspends Python through JSPI so Stop remains
+responsive. Both fetch and the legacy XHR fixture fallback enforce CORS.
 Install only in the Pyodide worker, before importing the application.
 """
 
 from functools import wraps
 from datetime import datetime, timedelta, timezone
+import base64
 import json
 import math
 import time
@@ -44,13 +45,65 @@ def _request_body(content):
     return array
 
 
+def _bridge_request(payload):
+    try:
+        from js import browserHttpRequest
+    except (ImportError, ModuleNotFoundError):
+        return None
+    from pyodide.ffi import run_sync
+
+    return json.loads(run_sync(browserHttpRequest(json.dumps(payload))))
+
+
+def _cooperative_sleep(seconds):
+    from js import browserHttpWait
+    from pyodide.ffi import run_sync
+
+    run_sync(browserHttpWait(max(0, seconds * 1000)))
+
+
+class BrowserRequestUnavailable(RuntimeError):
+    """Opaque CORS/network denial; HTTP retry cannot make it readable."""
+
+
 class BrowserTransport(httpx.BaseTransport):
-    def __init__(self, xhr_factory=None, response_bytes=None, request_body=None):
+    def __init__(self, xhr_factory=None, response_bytes=None, request_body=None, bridge_request=None):
         self._factory = xhr_factory or _xhr_factory
         self._bytes = response_bytes or _response_bytes
         self._body = request_body or _request_body
+        self._bridge = bridge_request if bridge_request is not None else (None if xhr_factory else _bridge_request)
 
     def handle_request(self, request):
+        if self._bridge is not None:
+            headers = []
+            for name, value in request.headers.multi_items():
+                lower = name.lower()
+                if lower in _FORBIDDEN or lower.startswith(("sec-", "proxy-")):
+                    continue
+                if lower in {"x-http-method", "x-http-method-override", "x-method-override"}:
+                    if any(v.strip().upper() in {"CONNECT", "TRACE", "TRACK"} for v in value.split(",")):
+                        continue
+                headers.append((name, value))
+            timeout = request.extensions.get("timeout", {}).get("read")
+            try:
+                result = self._bridge({"method": request.method, "url": str(request.url),
+                    "headers": headers, "body": base64.b64encode(request.read()).decode(),
+                    "timeoutMs": None if timeout is None else max(1, int(timeout * 1000)),
+                    "followRedirects": request.extensions.get("browser_follow_redirects", True)})
+            except Exception as exc:
+                if "cancelled" in str(exc).lower():
+                    from dailydigest.pipeline import BrewCancelled
+                    raise BrewCancelled("Brew cancelled during source request; saved digest unchanged.") from exc
+                if "TimeoutError" in str(exc):
+                    raise httpx.ReadTimeout("Browser request timed out", request=request) from exc
+                # Opaque fetch failures (including CORS) are not retriable HTTP
+                # statuses. Avoid three attempts at every blocked publisher.
+                raise BrowserRequestUnavailable(f"Browser CORS or network request unavailable: {exc}") from exc
+            if result is not None:
+                return httpx.Response(result["status"], content=base64.b64decode(result["body"]),
+                    headers=[(name, value) for name, value in result["headers"]
+                             if name.lower() not in {"content-encoding", "content-length", "transfer-encoding"}],
+                    extensions={"browser_final_url": result["url"]})
         xhr = self._factory()
         timeout = request.extensions.get("timeout", {}).get("read")
         started = time.monotonic()
@@ -103,12 +156,20 @@ class BrowserTransport(httpx.BaseTransport):
 
 
 def install_httpx_transport():
-    """Use XHR for ordinary HTTPX clients; retain explicit test transports.
+    """Use abortable browser fetch for HTTPX; retain explicit test transports.
 
-    Idempotent. HTTPX timeout/read semantics remain usable, but XHR cannot expose
-    intermediate redirects, prevent redirects, or provide separate connect and
-    write timeout phases. No proxy or opaque-response fallback is installed.
+    Idempotent. Fetch cannot expose intermediate redirects or provide separate
+    connect/write timeout phases. Legacy fixture-only XHR remains supported.
+    No proxy or opaque-response fallback is installed.
     """
+    # Native retry/polite waits must yield while Python is suspended through
+    # JSPI. Install only when the browser provides the asynchronous bridge.
+    try:
+        from js import browserHttpWait  # noqa: F401
+    except (ImportError, ModuleNotFoundError):
+        pass
+    else:
+        time.sleep = _cooperative_sleep
     original = httpx.Client._init_transport
     if getattr(original, "_browser_transport", False):
         return
@@ -134,7 +195,7 @@ def install_httpx_transport():
 
 
 def install_public_source_fallback(snapshot_url, *, loader=None, now=None):
-    """Use fresh public metadata for RSS/arXiv, then try direct fetching.
+    """Use public metadata up to 48 hours old, then try direct fetching.
 
     The worker supplies a same-origin asset URL; no reader information is sent.
     Missing, failed, mismatched, insufficient-capacity, or stale snapshots fail the
@@ -193,7 +254,7 @@ def install_public_source_fallback(snapshot_url, *, loader=None, now=None):
         if fetched.tzinfo is None:
             raise RuntimeError("Public source snapshot timestamp has no timezone")
         age = instant - fetched
-        if age > timedelta(hours=24) or age < -timedelta(minutes=5):
+        if age > timedelta(hours=48) or age < -timedelta(minutes=5):
             raise RuntimeError(f"Public source snapshot stale or future-dated for {spec.name}")
         requested_cap = None
         if spec.kind == "arxiv":
@@ -225,7 +286,13 @@ def install_public_source_fallback(snapshot_url, *, loader=None, now=None):
                     "snapshot_fetched_at": record["fetched_at"],
                     "snapshot_generated_at": cached.get("generated_at"),
                     "snapshot_window_days": record["days"],
+                    "snapshot_age_hours": max(0, (clock() - datetime.fromisoformat(record["fetched_at"])).total_seconds() / 3600),
+                    "snapshot_stale_warning": clock() - datetime.fromisoformat(record["fetched_at"]) > timedelta(hours=24),
+                    "snapshot_carried_forward": bool(record.get("carried_forward")),
                 }
+                if record.get("latest_attempt"):
+                    self.last_fetch_diagnostics["snapshot_latest_attempt"] = record["latest_attempt"].get("attempted_at") or record["latest_attempt"].get("fetched_at")
+                    self.last_fetch_diagnostics["snapshot_latest_attempt_failed"] = record["latest_attempt"].get("status") != "ok"
                 if refresh_error:
                     self.last_fetch_diagnostics["snapshot_refresh_error"] = refresh_error
                 return items

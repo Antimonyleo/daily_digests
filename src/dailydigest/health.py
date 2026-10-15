@@ -156,11 +156,16 @@ def coverage_summary() -> dict:
         diagnostics = row.get("diagnostics") if isinstance(row.get("diagnostics"), dict) else {}
         queries = diagnostics.get("queries") if isinstance(diagnostics.get("queries"), list) else []
         limited = bool(diagnostics.get("truncated") or diagnostics.get("snapshot_refresh_error")
+                       or diagnostics.get("snapshot_carried_forward")
+                       or diagnostics.get("snapshot_latest_attempt_failed")
+                       or diagnostics.get("snapshot_stale_warning")
                        or diagnostics.get("author_resolution_complete") is False
                        or any(q.get("failure") or q.get("truncated") for q in queries if isinstance(q, dict)))
         if row.get("ok") is True:
             summary["responded"] += 1
             status = "Limited results" if limited else "No items returned" if not row.get("items") else "Responded"
+            if diagnostics.get("snapshot_carried_forward"):
+                status = "Earlier snapshot"
             summary["limited"] += int(limited)
         elif row.get("ok") is False:
             status = "Unavailable"
@@ -174,6 +179,10 @@ def coverage_summary() -> dict:
             if fetched:
                 public_times.append(fetched)
             freshness = f"Public feed: {fetched.strftime('%b %d, %Y %H:%M UTC')}" if fetched else "Public feed time not recorded"
+            if diagnostics.get("snapshot_latest_attempt_failed"):
+                freshness += " · Latest collection failed; showing earlier public data"
+            elif diagnostics.get("snapshot_carried_forward"):
+                freshness += " · Earlier validated snapshot retained for code update"
         else:
             freshness = f"Checked: {summary['checked_label']}"
         summary["rows"].append({"name": row.get("source") or "Unnamed source",

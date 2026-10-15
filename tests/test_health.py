@@ -245,3 +245,23 @@ def test_coverage_missing_or_damaged_optional_metadata_does_not_block_reading(tm
     assert coverage_summary()['total'] == 0
     (tmp_path/'health.json').write_text(json.dumps({'latest': [None]}))
     assert coverage_summary()['unknown'] == 1
+
+
+def test_coverage_shows_carried_source_failure_and_old_snapshot(tmp_path, monkeypatch):
+    from dailydigest.health import coverage_summary
+
+    monkeypatch.setattr('dailydigest.health.get_settings', lambda: type('S', (), {'db_path': str(tmp_path/'digest.db')})())
+    _write_health_payload(tmp_path/'health.json', [
+        {'source': 'Carried', 'ok': True, 'items': 4, 'diagnostics': {
+            'transport': 'public_snapshot', 'snapshot_fetched_at': _recent_ts(),
+            'snapshot_carried_forward': True, 'snapshot_latest_attempt_failed': True}},
+        {'source': 'Older', 'ok': True, 'items': 2, 'diagnostics': {
+            'transport': 'public_snapshot', 'snapshot_fetched_at': _recent_ts(1.5),
+            'snapshot_stale_warning': True}},
+    ])
+    result = coverage_summary()
+    assert result['limited'] == 2
+    assert 'Latest collection failed' in result['rows'][0]['freshness']
+    assert result['rows'][0]['status'] == 'Earlier snapshot'
+    assert result['rows'][1]['status'] == 'Limited results'
+    assert result['public_stale'] is True

@@ -4,7 +4,6 @@ import importlib.util
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-import json
 import os
 import subprocess
 import sys
@@ -231,7 +230,7 @@ def test_failed_refresh_retains_only_fresh_cache_and_records_error(refreshable_s
 def test_daily_refresh_cannot_bless_a_stale_snapshot(refreshable_snapshot, refresh):
     source, spec, response, clock, calls = refreshable_snapshot
     source.fetch(spec)
-    clock["now"] += timedelta(hours=25)
+    clock["now"] += timedelta(hours=49)
     if refresh == "failed":
         response["value"] = RuntimeError("Snapshot refresh unavailable")
     with pytest.raises(RuntimeError, match="stale or future-dated"):
@@ -347,7 +346,7 @@ def test_unusable_public_snapshot_is_a_real_source_failure(snapshot, failure):
     elif failure == "failed":
         row["status"] = "error"
     elif failure == "stale":
-        row["fetched_at"] = (instant - timedelta(hours=25)).isoformat()
+        row["fetched_at"] = (instant - timedelta(hours=49)).isoformat()
     elif failure == "future":
         row["fetched_at"] = (instant + timedelta(hours=1)).isoformat()
     elif failure == "naive":
@@ -404,13 +403,73 @@ def test_collector_cli_ignores_private_cwd_dotenv_and_environment(tmp_path):
                    "LLM_API_KEY": "private-environment-sentinel"}
     completed = subprocess.run(
         [sys.executable, str(collector), "--sources", "sources.yaml", "--output", "public.json"],
-        cwd=tmp_path, env=environment, capture_output=True, text=True, check=True,
+        cwd=tmp_path, env=environment, capture_output=True, text=True, check=False,
     )
-    text = (tmp_path / "public.json").read_text()
-    assert json.loads(text)["sources"] == {}
-    assert json.loads(text)["days"] == 21
-    assert "private-" not in text + completed.stdout + completed.stderr
+    assert completed.returncode == 1
+    assert not (tmp_path / "public.json").exists()
+    assert "coverage" in completed.stdout
+    assert "private-" not in completed.stdout + completed.stderr
     assert not (tmp_path / "data").exists()
     scratch = next(tmp_path.glob("dailydigest-public-sources-*"))
     assert not (scratch / "unused.db").exists()
     assert not (scratch / "unused-profile.yaml").exists()
+
+
+def test_browser_async_bridge_preserves_headers_binary_and_read_timeout():
+    calls = []
+    def request(payload):
+        calls.append(payload)
+        return {"status": 200, "url": payload["url"], "body": "/wA=",
+                "headers": [["Content-Encoding", "gzip"], ["X-Public", "yes"]]}
+    with httpx.Client(transport=network.BrowserTransport(bridge_request=request)) as http:
+        result = http.request("POST", "https://example.test/feed", content=b"\xff\x00", timeout=2,
+                           headers={"Cookie": "private", "X-Fixture": "value"})
+    assert result.content == b"\xff\x00"
+    assert result.headers["x-public"] == "yes"
+    assert "content-encoding" not in result.headers
+    assert calls[0]["timeoutMs"] == 2000
+    assert calls[0]["body"] == "/wA="
+    assert "cookie" not in dict(calls[0]["headers"])
+
+
+def test_opaque_browser_network_failure_does_not_enter_native_http_retries(monkeypatch):
+    from dailydigest.ingest import rss
+    calls = []
+    def request(payload):
+        calls.append(payload)
+        raise RuntimeError("TypeError: Failed to fetch")
+    transport = network.BrowserTransport(bridge_request=request)
+    real_client = httpx.Client(transport=transport)
+    class FeedClient:
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            real_client.close()
+        def stream(self, method, url, **kwargs):
+            return real_client.request(method, url, **kwargs)
+    monkeypatch.setattr(rss.httpx, "Client", lambda **kwargs: FeedClient())
+    with pytest.raises(network.BrowserRequestUnavailable):
+        rss._http_get_bytes("https://example.test/feed")
+    assert len(calls) == 1
+
+
+
+def test_snapshot_between_24_and_48_hours_is_usable_but_marked_stale(refreshable_snapshot):
+    source, spec, response, clock, calls = refreshable_snapshot
+    source.fetch(spec)
+    clock["now"] += timedelta(hours=36)
+    assert source.fetch(spec)[0].title == "Public article"
+    assert source.last_fetch_diagnostics["snapshot_age_hours"] == 36
+    assert source.last_fetch_diagnostics["snapshot_stale_warning"] is True
+
+
+@pytest.mark.parametrize('status,failed', [('ok', False), ('error', True)])
+def test_carried_snapshot_reports_actual_latest_attempt_status(snapshot, status, failed):
+    source, spec, report, instant, loads = snapshot
+    row = report['sources'][spec.name]
+    row['carried_forward'] = True
+    row['latest_attempt'] = {'status': status, 'fetched_at': instant.isoformat()}
+    source.fetch(spec)
+    assert source.last_fetch_diagnostics['snapshot_carried_forward'] is True
+    assert source.last_fetch_diagnostics['snapshot_latest_attempt_failed'] is failed
+    assert source.last_fetch_diagnostics['snapshot_latest_attempt'] == instant.isoformat()

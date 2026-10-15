@@ -321,6 +321,7 @@ def ingest_all(
     days: int = 2,
     section_settings: Settings | None = None,
     stats_out: list[IngestStats] | None = None,
+    should_cancel: Callable[[], bool] | None = None,
 ) -> int:
     """Fetch all sources, dedupe + langdetect filter, upsert. Returns rows inserted.
 
@@ -363,6 +364,8 @@ def ingest_all(
         # Calls to the same upstream are deliberately sequential so bounded
         # concurrency does not become an accidental API rate-limit burst.
         for index, spec in group:
+            if should_cancel is not None and should_cancel():
+                raise BrewCancelled("Brew cancelled during source collection.")
             t0 = time.monotonic()
             source = None
             try:
@@ -401,6 +404,11 @@ def ingest_all(
         for future in as_completed(futures):
             for index, spec, fetched, stat in future.result():
                 fetched_by_index[index] = (spec, fetched, stat)
+
+    # A request cancelled inside the final adapter can be wrapped as an ordinary
+    # fetch error. Preserve cancellation before interpreting empty/failed supply.
+    if should_cancel is not None and should_cancel():
+        raise BrewCancelled("Brew cancelled during source collection.")
 
     # Restore configured order before dedupe. That keeps source precedence and
     # outputs deterministic even though independent providers fetched in parallel.
@@ -1235,6 +1243,7 @@ def run_all(
         days=pool_days,
         section_settings=section_settings,
         stats_out=ingest_stats,
+        **({"should_cancel": should_cancel} if should_cancel is not None else {}),
     )
     logger.info("upserted %d new items", inserted)
     stage_done("ingestion")
