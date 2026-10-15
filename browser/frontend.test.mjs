@@ -60,6 +60,14 @@ test('live compute progress reaches the brew panel independently of stream polli
   assert.equal(frame.events[0].detail.completed, 4);
 });
 
+test('companion capabilities reach settings through the authenticated frame bridge', () => {
+  const frame = bridgedFrame();
+  frame.deliver({ type: 'companion-capabilities', backends: ['api', 'codex_cli'] });
+  assert.equal(frame.events.length, 1);
+  assert.equal(frame.events[0].type, 'dd-companion-capabilities');
+  assert.deepEqual(Array.from(frame.events[0].detail.backends), ['api', 'codex_cli']);
+});
+
 test('frame fetch uses worker responses and blocks arbitrary external requests', async () => {
   const frame = bridgedFrame();
   const request = frame.window.fetch('/vote/7/2', { method: 'POST', headers: { 'X-CSRF-Token': 'csrf' }, body: '{}' });

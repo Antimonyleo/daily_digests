@@ -32,21 +32,32 @@ export function createSnapshotWriter({ generation, capture, save, ready = () => 
 }
 
 /** Validate the envelope without Python, including paths, conflicts and base64. */
-export function validateRecoverySnapshot(payload) {
+const MAX_IMPORT_FILES = 10000, MAX_IMPORT_CHARACTERS = 128 * 1024 * 1024;
+const exceedsImportLimit = (payload, names) => names.length > MAX_IMPORT_FILES || payload.length > MAX_IMPORT_CHARACTERS;
+
+export function validateRecoverySnapshot(payload, { enforceLimits = true } = {}) {
   const snapshot = JSON.parse(payload);
   if (snapshot?.format !== 'dailydigest-browser-v1' || !snapshot.files ||
       Array.isArray(snapshot.files) || typeof snapshot.files !== 'object') {
     throw new Error('Unsupported DailyDigest backup format.');
   }
   const names = Object.keys(snapshot.files);
-  if (names.length > 10000 || payload.length > 128 * 1024 * 1024) throw new Error('Backup exceeds the recovery limit.');
+  if (enforceLimits && exceedsImportLimit(payload, names)) throw new Error('Backup exceeds the recovery limit.');
+  const paths = new Set(names);
   for (const name of names) {
     const parts = name.split('/');
     if (name !== '.env' && (parts.length < 2 || parts[0] !== 'data') ||
         parts.some(part => !part || part === '.' || part === '..' || part === '.compute.lock') ||
         name.includes('\\') || typeof snapshot.files[name] !== 'string') throw new Error('Backup contains an invalid private path.');
     if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(snapshot.files[name])) throw new Error('Backup contains invalid encoded data.');
-    if (names.some(other => other !== name && other.startsWith(name + '/'))) throw new Error('Backup contains conflicting paths.');
+    if (parts.some((_, index) => index > 0 && paths.has(parts.slice(0, index).join('/')))) throw new Error('Backup contains conflicting paths.');
   }
   return snapshot;
+}
+
+/** Existing checkpoints may grow beyond external import limits; preserve them. */
+export function validateStoredSnapshot(payload) {
+  const snapshot = validateRecoverySnapshot(payload, { enforceLimits: false });
+  return { snapshot, warning: exceedsImportLimit(payload, Object.keys(snapshot.files))
+    ? 'Your saved reading state exceeds the portable import limit. It was preserved; importing a backup of this size is currently unsupported.' : null };
 }

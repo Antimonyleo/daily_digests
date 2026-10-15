@@ -25,8 +25,11 @@ export function announcementKey(info) {
 }
 
 export function browserSupportError(environment = globalThis) {
-  if (!environment.WebAssembly?.Suspending || !environment.WebAssembly?.promising || !environment.navigator?.locks) {
-    return 'This browser is missing features DailyDigest needs. Try a current desktop Chrome browser.';
+  const missing = [];
+  if (!environment.WebAssembly?.Suspending || !environment.WebAssembly?.promising) missing.push('WebAssembly Promise Integration');
+  if (!environment.navigator?.locks) missing.push('Web Locks');
+  if (missing.length) {
+    return `Local brewing is unavailable because this browser lacks ${missing.join(' and ')}. Try a current desktop Chrome browser. Installing the shortcut does not add these capabilities.`;
   }
   return null;
 }
@@ -110,6 +113,12 @@ function frameBridge(token, path, origin, publicBase) {
     if (data.type === 'compute-config') {
       const notice = document.getElementById('browser-compute-notice');
       if (notice) { notice.hidden = false; notice.textContent = data.message; }
+      return;
+    }
+    if (data.type === 'companion-capabilities') {
+      window.dispatchEvent(new CustomEvent('dd-companion-capabilities', {
+        detail: { backends: Array.isArray(data.backends) ? data.backends : [] },
+      }));
       return;
     }
     const request = pending.get(data.id);
@@ -234,11 +243,25 @@ async function boot() {
   const supportError = browserSupportError();
   if (supportError) throw new Error(supportError);
   const frame = document.getElementById('app');
+  try {
+    document.documentElement.dataset.theme = localStorage.getItem('dailydigest-theme')
+      || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+  } catch { document.documentElement.dataset.theme = 'light'; }
   const startup = document.getElementById('startup');
   const status = document.getElementById('status');
   const startupStatus = document.getElementById('startup-status');
   const announcement = document.getElementById('announcements');
   const importNoticeKey = `dailydigest:import-notice:${location.pathname}`;
+  const backupKey = `dailydigest:last-backup:${location.pathname}`;
+  const showLastBackup = value => {
+    const timestamp = new Date(value);
+    if (Number.isFinite(timestamp.getTime())) document.getElementById('backup-status').textContent = `Last backup export started: ${timestamp.toLocaleString()}. Keep the downloaded file private.`;
+  };
+  try { const value = localStorage.getItem(backupKey); if (value) showLastBackup(value); } catch { /* optional history */ }
+  navigator.storage?.estimate?.().then(({ usage, quota }) => {
+    if (Number.isFinite(usage) && Number.isFinite(quota)) document.getElementById('storage-usage').textContent =
+      `Site storage: about ${(usage / 1048576).toFixed(1)} MB used of ${(quota / 1048576).toFixed(0)} MB available to this origin.`;
+  }).catch(() => {});
   const rememberImportNotice = result => {
     if (!result.credentialsOmitted) return;
     try { sessionStorage.setItem(importNoticeKey, 'This portable backup excluded credentials. Check Settings and configure your chosen provider if credentials are missing.'); } catch { /* browser storage may be disabled */ }
@@ -287,13 +310,23 @@ async function boot() {
   const worker = new Worker(new URL('./worker.mjs?compute=v1', import.meta.url), { type: 'module' });
   const client = new WorkerClient(worker);
   const streams = new Map();
-  let ready = false;
+  let ready = false, companionBackends = [], themeObserver;
+  const sendCompanionCapabilities = () => frame.contentWindow.postMessage({ type: 'companion-capabilities', token, backends: companionBackends }, '*');
   let navigation = 0;
   let activePath = '/';
   let computeTimer, latestCompute, computeReceivedAt, lastAnnouncement;
   const computeNotice = 'Brewing uses this device’s processor and memory, and can increase heat, fan noise and battery use. Thousands of new articles may take 20 minutes or more on one CPU core. Choose optional acceleration in Compute. Keep this tab open until the brew finishes to save its calculations.';
   frame.addEventListener('load', () => {
     frame.contentWindow.postMessage({ type: 'compute-config', token, message: computeNotice }, '*');
+    sendCompanionCapabilities();
+    themeObserver?.disconnect();
+    const root = frame.contentDocument?.documentElement;
+    if (root) {
+      const syncTheme = () => { document.documentElement.dataset.theme = root.dataset.theme || 'light'; };
+      syncTheme();
+      themeObserver = new MutationObserver(syncTheme);
+      themeObserver.observe(root, { attributes: true, attributeFilter: ['data-theme'] });
+    }
     const heading = frame.contentDocument?.querySelector('h1, main, [role="main"]');
     if (heading) { heading.setAttribute('tabindex', '-1'); heading.focus({ preventScroll: true }); }
     frame.contentDocument?.addEventListener('click', () => {
@@ -363,6 +396,8 @@ async function boot() {
   async function refreshCompanion() {
     try {
       const result = await companionCall({ type: 'companion-status' });
+      companionBackends = result.capabilities?.summarize || [];
+      sendCompanionCapabilities();
       const configured = Boolean(result.configured);
       const capabilities = result.capabilities || {};
       companionEndpoint.value = result.endpoint || '';
@@ -567,6 +602,9 @@ async function boot() {
       const response = await client.call({ type: 'export', includeCredentials });
       if (response.status >= 400) throw new Error(response.body);
       download(response.body, 'application/json', 'dailydigest-browser-backup.json');
+      const exported = new Date().toISOString();
+      try { localStorage.setItem(backupKey, exported); } catch { /* export remains usable */ }
+      showLastBackup(exported);
       setStatus('Browser backup exported.');
     } catch (error) { report(error); }
   };

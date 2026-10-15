@@ -26,7 +26,7 @@ RANK_FUNCTIONS = {
     "_apply_final_score_cutoff", "_available",
 }
 SETTINGS = (
-    "research_quality_weight", "venue_relevance_credit", "max_preprint_research_frac",
+    "semantic_matching", "research_quality_weight", "venue_relevance_credit", "max_preprint_research_frac",
     "max_low_impact_research_frac", "low_impact_relevance_floor", "research_final_score_floor_frac",
     "research_final_score_min_keep", "adaptive_section_sizes", "min_topic_relevance",
     "min_news_quality", "min_opportunity_relevance", "adaptive_relevance_floor",
@@ -123,7 +123,7 @@ logger = logging.getLogger(__name__)
     return {"schema_version": 1, "settings": settings, "sources": sources,
             "quality_source": quality, "dedupe_source": dedupe,
             "ranker_source": rank_header + _extract(rank_path, RANK_FUNCTIONS),
-            "gates_source": gate_header + blocklist + "\n" + _extract(pipeline_path, {"_audit_item", "_quality_gate", "_filter_off_topic"}),
+            "gates_source": gate_header + blocklist + "\n" + _extract(pipeline_path, {"_audit_item", "_quality_gate", "_research_relevant", "_filter_off_topic"}),
             "production_source_sha256": {path: hashlib.sha256(_source(path).encode()).hexdigest()
                                          for path in (quality_path, dedupe_path, rank_path, pipeline_path)}}
 

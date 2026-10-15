@@ -39,7 +39,9 @@ jobs:
           TRANSFORMERS_OFFLINE: "1"
           LLM_API_KEY: ""
       - name: Browser bridge checks
-        run: node --test --test-isolation=none browser/*.test.mjs
+        run: |
+          node --test --test-isolation=none browser/*.test.mjs
+          node --test --test-isolation=none prototypes/browser-compute/browser.test.mjs
       - name: Install browser dependencies
         working-directory: prototypes/browser-compute
         run: npm ci --ignore-scripts
@@ -64,6 +66,7 @@ jobs:
           task_preview_pid=$!
           trap 'kill "$task_preview_pid" 2>/dev/null || true' EXIT
           node browser/verify-browser.mjs
+          node browser/verify-semantic.mjs
       - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3
         with:
           path: browser/dist
@@ -81,3 +84,16 @@ jobs:
       - name: Publish website
         id: deployment
         uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4
+  notify-failure:
+    needs: [build, deploy]
+    if: ${{ always() && (needs.build.result == 'failure' || needs.deploy.result == 'failure') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+      - name: Report failed publication or source refresh
+        continue-on-error: true
+        env:
+          DAILYDIGEST_ALERT_WEBHOOK: ${{ secrets.DAILYDIGEST_ALERT_WEBHOOK }}
+        run: python browser/report_failure.py

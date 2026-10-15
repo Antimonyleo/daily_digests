@@ -718,7 +718,7 @@ def test_portable_snapshot_redacts_credentials_and_preserves_nonsecret_settings(
 def test_portable_import_preserves_only_existing_destination_credentials(runtime, tmp_path):
     source = tmp_path / 'source'
     source.mkdir()
-    (source / '.env').write_text('LLM_BACKEND=api\nLLM_API_KEY=source-secret\nDIGEST_HOUR=9\n')
+    (source / '.env').write_text('LLM_BACKEND=extractive\nLLM_API_KEY=source-secret\nDIGEST_HOUR=9\n')
     portable = runtime.export_portable_snapshot(root=source)
     destination = tmp_path / 'destination'
     destination.mkdir()
@@ -727,7 +727,7 @@ def test_portable_import_preserves_only_existing_destination_credentials(runtime
     values = runtime._environment(base64.b64decode(json.loads(result)['files']['.env']).decode())
     assert values['LLM_API_KEY'] == 'destination-secret'
     assert values['DIGEST_HOUR'] == '9'
-    assert values['LLM_BACKEND'] == 'api'
+    assert values['LLM_BACKEND'] == 'extractive'
     assert 'source-secret' not in result
 
 

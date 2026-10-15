@@ -92,8 +92,11 @@
     <details id="browser-data-menu">
       <summary>Browser data</summary>
       <div class="data-tools">
-        <p>Your reading data stays in this browser. Other project sites on this same hostname share its security origin. Export a backup before clearing browser storage. Imports replace this reading desk.</p>
+        <p>Your reading data stays in this browser profile. People sharing a browser profile share this reading desk; use separate browser profiles for separate readers. Other project sites on this same hostname share its security origin.</p>
+        <p>Move your reading desk with an exported backup. Imports replace this device’s choices; they do not merge feedback from two devices. The installed shortcut still needs network access to start and collect papers.</p>
         <p id="storage-status" role="status">Checking storage protection…</p>
+        <p id="storage-usage"></p>
+        <p id="backup-status">No backup export recorded on this device.</p>
         <button id="protect-storage" type="button">Protect browser storage</button>
         <button id="retained-recovery" type="button" hidden>Download previous recovery copy</button>
         <p id="retained-recovery-help" hidden>Recovery copies can include credentials. Keep the downloaded file private.</p>

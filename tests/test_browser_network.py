@@ -68,6 +68,28 @@ def test_method_binary_headers_status_and_timeout():
         response.raise_for_status()
 
 
+@pytest.mark.parametrize('url,expected', [
+    ('https://api.anthropic.com/v1/messages', True),
+    ('https://api.anthropic.com.attacker.test/v1/messages', False),
+    ('https://provider.example/v1/messages', False),
+])
+def test_anthropic_browser_opt_in_is_scoped_to_explicit_authenticated_messages(url, expected):
+    xhr = XHR()
+    xhr.responseURL = url
+    with client(xhr) as http:
+        http.request('POST', url, json={'model': 'fictional'},
+                     headers={'x-api-key': 'fictional', 'anthropic-version': '2023-06-01'})
+    assert (dict(xhr.headers).get('anthropic-dangerous-direct-browser-access') == 'true') is expected
+
+
+def test_anthropic_public_requests_do_not_opt_into_credential_access():
+    xhr = XHR()
+    xhr.responseURL = 'https://api.anthropic.com/v1/messages'
+    with client(xhr) as http:
+        http.request('GET', xhr.responseURL)
+    assert 'anthropic-dangerous-direct-browser-access' not in dict(xhr.headers)
+
+
 @pytest.mark.parametrize('encoding', ['gzip', 'deflate', 'br', 'identity'])
 def test_browser_decoded_response_is_not_decompressed_again(encoding):
     # XHR exposes decoded bytes but retains the server's wire headers.

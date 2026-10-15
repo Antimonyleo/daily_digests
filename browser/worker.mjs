@@ -1,13 +1,15 @@
 import { loadPyodide } from './node_modules/pyodide/pyodide.mjs';
-import { AutoTokenizer, AutoModel, Tensor, env } from './node_modules/@huggingface/transformers/dist/transformers.min.js';
+import { AutoTokenizer, AutoModel, AutoModelForSequenceClassification, Tensor, env } from './node_modules/@huggingface/transformers/dist/transformers.min.js';
 import { prepareBertBatch } from './bge-tokenizer.mjs';
 import { computeCapabilities, computeSelection, createEmbeddingEngine, formatComputeProgress, guardGPUModel } from './compute.mjs';
 
-import { createSnapshotWriter, validateRecoverySnapshot } from './storage.mjs';
+import { createSnapshotWriter, validateRecoverySnapshot, validateStoredSnapshot } from './storage.mjs';
 import { createBrowserHttpBridge } from './http.mjs';
+import { createSemanticEngine } from './semantic.mjs';
 
 let companion = null;
 let boot, state, database, storageWriter, ownership, recoveryPy, startupFailed = false, startupReady = false, jobRunning = false, stateReplacing = false, computeMode = 'cpu';
+let configurationChanging = false;
 const progress = (stage, detail) => self.postMessage({ type: 'progress', stage, detail });
 const emit = text => self.postMessage(JSON.parse(text));
 const response = (id, body, status = 200) => ({ id, type: 'response', status, headers: { 'content-type': 'application/json' }, body });
@@ -75,9 +77,19 @@ async function companionCall(path, payload = null, method = 'POST', timeout = 18
   return body;
 }
 function idleForCompanion() {
-  if (jobRunning || state.py.globals.get('has_jobs')()) throw new Error('Wait for the current brew or ranking job before using this companion action.');
+  if (stateReplacing || configurationChanging || jobRunning || state.py.globals.get('has_jobs')()) {
+    const error = new Error('Wait for the current brew or state change before using this action.');
+    error.status = 409;
+    throw error;
+  }
 }
 async function replaceState(payload) {
+  try { validateRecoverySnapshot(payload); }
+  catch (error) {
+    // Rejected input must leave even the previous IndexedDB checkpoint intact.
+    error.skipCheckpoint = true;
+    throw error;
+  }
   stateReplacing = true;
   try {
     await persist({ force: true });
@@ -161,8 +173,9 @@ async function initialize() {
     await py.runPythonAsync('import network\nnetwork.install_httpx_transport()');
     await py.runPythonAsync(source);
     recoveryPy = py;
+    let snapshotLimitWarning = null;
     if (snapshot) {
-      validateRecoverySnapshot(snapshot);
+      snapshotLimitWarning = validateStoredSnapshot(snapshot).warning;
       py.globals.set('startup_snapshot', snapshot);
       await py.runPythonAsync('validate_snapshot_sqlite(decode_snapshot(startup_snapshot))');
       py.globals.get('restore_snapshot')(snapshot);
@@ -197,9 +210,32 @@ async function initialize() {
       progress: info => self.postMessage({ type: 'progress', stage: info.phase === 'loading' ? 'Loading embedding model'
         : info.phase === 'complete' ? 'Embeddings complete' : 'Computing embeddings', message: formatComputeProgress(info), compute: info }),
     });
-    state = { py, engine, capabilities };
+    // Absolute same-origin paths bypass env.localModelPath without enabling
+    // remote models or racing embedding loads by changing their global root.
+    const semanticPath = new URL('semantic-matcher', new URL('./assets/semantic-models/', self.location.href)).pathname;
+    let semanticStarted = 0;
+    const semanticEngine = createSemanticEngine({
+      loadTokenizer: () => AutoTokenizer.from_pretrained(semanticPath, { local_files_only: true }),
+      loadModel: options => AutoModelForSequenceClassification.from_pretrained(semanticPath, {
+        ...options, local_files_only: true,
+      }),
+      makeTensor: (data, dims) => new Tensor('int64', data, dims),
+      shouldCancel: () => Boolean(state.py.globals.get('browser_cancelled')()),
+      progress: info => {
+        const compute = { ...info, phase: info.phase === 'scoring' ? 'encoding' : info.phase,
+          elapsed_ms: performance.now() - semanticStarted, backend: 'CPU · local topic matching' };
+        self.postMessage({ type: 'progress', stage: info.phase === 'loading' ? 'Loading topic matcher'
+          : info.phase === 'complete' ? 'Topic matching complete' : 'Matching research topics',
+        message: formatComputeProgress(compute), compute });
+      },
+    });
+    state = { py, engine, semanticEngine, capabilities };
     globalThis.browserYield = () => new Promise(resolve => setTimeout(resolve, 0));
     globalThis.browserEmbed = texts => engine.embed(texts);
+    globalThis.browserSemanticScore = async payload => {
+      semanticStarted = performance.now();
+      return JSON.stringify(await semanticEngine.score(JSON.parse(payload)));
+    };
     globalThis.browserEmbeddingBackend = () => engine.cacheBackend;
     companion = savedCompanion || null;
     globalThis.browserCompanionSupports = backend => Boolean(companion?.endpoint && ['api', 'anthropic', 'claude_cli', 'codex_cli'].includes(backend) && companion.capabilities?.summarize?.includes(backend));
@@ -210,9 +246,14 @@ async function initialize() {
     storageWriter = createSnapshotWriter({
       generation: () => Number(py.globals.get('state_generation')()),
       ready: () => Boolean(py.globals.get('snapshot_ready')()),
-      capture: () => py.globals.get('export_snapshot')(), save: saveSnapshot,
-      warning: message => self.postMessage({ type: 'storage-warning', message }),
+      capture: () => {
+        const checkpoint = py.globals.get('export_snapshot')();
+        snapshotLimitWarning = validateStoredSnapshot(checkpoint).warning;
+        return checkpoint;
+      }, save: saveSnapshot,
+      warning: message => self.postMessage({ type: 'storage-warning', message: message || snapshotLimitWarning }),
     });
+    if (snapshotLimitWarning) self.postMessage({ type: 'storage-warning', message: snapshotLimitWarning });
     startupReady = true;
     progress('Ready', 'Your profile, votes and reading history stay in browser storage.');
     self.postMessage({ type: 'ready' });
@@ -245,8 +286,10 @@ self.onmessage = async ({ data }) => {
     if (data.type === 'init') { await initialize(); return; }
     await initialize();
     if (data.type === 'cancel-request') { state.py.globals.get('cancel_request')(data.id); return; }
-    if (stateReplacing) {
-      self.postMessage(response(data.id, JSON.stringify({ detail: 'Backup import is replacing browser state. Wait for the page to reload.' }), 409));
+    if (stateReplacing || configurationChanging) {
+      self.postMessage(response(data.id, JSON.stringify({ detail: stateReplacing
+        ? 'Backup import is replacing browser state. Wait for the page to reload.'
+        : 'Browser settings are being saved. Retry this action after they finish.' }), 409));
       return;
     }
     if (data.type === 'storage-status') {
@@ -259,13 +302,16 @@ self.onmessage = async ({ data }) => {
       return;
     }
     if (data.type === 'configure-compute') {
-      if (jobRunning || state.py.globals.get('has_jobs')()) throw new Error('Wait for the current brew before changing compute settings.');
+      idleForCompanion();
       if (!await persist({ force: true })) {
         throw new Error('Compute settings were not changed because your reading state could not be saved. Export a backup before reloading.');
       }
       const selection = computeSelection(data.mode, computeCapabilities());
       if (selection.fallback && !(data.mode === 'multicore' && data.allowIsolationReload === true)) throw new Error(selection.fallback);
-      await saveSnapshot(data.mode, 'compute');
+      idleForCompanion();
+      configurationChanging = true;
+      try { await saveSnapshot(data.mode, 'compute'); }
+      finally { configurationChanging = false; }
       self.postMessage(response(data.id, JSON.stringify({ ok: true, reload: true })));
       return;
     }
@@ -275,18 +321,23 @@ self.onmessage = async ({ data }) => {
     }
     if (data.type === 'configure-companion') {
       idleForCompanion();
+      let next = null;
       if (!data.endpoint && !data.token) {
-        await saveSnapshot(null, 'companion'); companion = null;
+        next = null;
       } else {
         if (!data.token) throw new Error('The companion requires its explicitly configured authentication token.');
-        const next = { endpoint: companionEndpoint(data.endpoint), token: data.token };
+        next = { endpoint: companionEndpoint(data.endpoint), token: data.token };
         const health = JSON.parse(await companionCall('/health', null, 'GET', 20, next));
         if (health.ok !== true) throw new Error('Companion health check did not confirm availability.');
         next.capabilities = health.capabilities || {};
         next.provider_identities = health.provider_identities || {};
+      }
+      idleForCompanion();
+      configurationChanging = true;
+      try {
         await saveSnapshot(next, 'companion');
         companion = next;
-      }
+      } finally { configurationChanging = false; }
       self.postMessage(response(data.id, JSON.stringify({ ok: true, configured: Boolean(companion), capabilities: companion?.capabilities || {} })));
       return;
     }
@@ -353,9 +404,17 @@ self.onmessage = async ({ data }) => {
     }
     if (data.type !== 'request') throw new Error('Unknown browser request type.');
     if (data.method?.toUpperCase() === 'POST' && ['/run/start', '/refresh'].includes(data.path.split('?')[0])) {
+      idleForCompanion();
       const backend = state.py.globals.get('selected_browser_backend')();
       if (globalThis.browserCompanionSupports(backend)) {
-        const health = JSON.parse(await companionCall('/health', null, 'GET', 20));
+        const checkedCompanion = companion;
+        const health = JSON.parse(await companionCall('/health', null, 'GET', 20, checkedCompanion));
+        idleForCompanion();
+        if (companion !== checkedCompanion) {
+          const error = new Error('The companion changed during its health check. Retry the brew with the current settings.');
+          error.status = 409;
+          throw error;
+        }
         if (health.ok !== true || !health.capabilities?.summarize?.includes(backend)) {
           throw new Error(`The companion no longer advertises ${backend}. Reconnect or choose an available summary provider before brewing.`);
         }
@@ -363,7 +422,9 @@ self.onmessage = async ({ data }) => {
           throw new Error('The companion must provide summary model identity before brewing. Update and reconnect the companion.');
         }
         const next = { ...companion, capabilities: health.capabilities, provider_identities: health.provider_identities };
-        await saveSnapshot(next, 'companion'); companion = next;
+        configurationChanging = true;
+        try { await saveSnapshot(next, 'companion'); companion = next; }
+        finally { configurationChanging = false; }
       }
     }
     const result = await state.py.globals.get('handle_request').callPromising(JSON.stringify(data), emit);
@@ -378,8 +439,8 @@ self.onmessage = async ({ data }) => {
     // Start native background targets only after the start response reaches UI.
     setTimeout(() => { void pumpJobs(); }, 0);
   } catch (error) {
-    if (state && !stateReplacing) await persist({ force: true });
-    if (data.id != null) self.postMessage(response(data.id, JSON.stringify({ detail: error.message || String(error) }), 500));
+    if (state && !stateReplacing && !error.skipCheckpoint) await persist({ force: true });
+    if (data.id != null) self.postMessage(response(data.id, JSON.stringify({ detail: error.message || String(error) }), error.status || 500));
     else self.postMessage({ type: 'error', message: error.message || String(error) });
   }
 };

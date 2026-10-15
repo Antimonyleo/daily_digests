@@ -15,6 +15,10 @@ const report = { url: base, started: new Date().toISOString(), checks: [], conso
 const scopeCorpus = JSON.parse(await readFile(new URL('../tests/fixtures/research_scope_benchmark.json', import.meta.url), 'utf8')).examples;
 const fixtureLabels = new Map(scopeCorpus.map(row => [row.title, row.label]));
 const companionRequests = [];
+const spellingRequests = [];
+const apiTestRequests = [];
+let apiTestMode = 'success', releaseApiTest, apiTestStarted;
+let spellingMode = 'success', releaseSpelling, spellingStarted;
 const checkpointEvidence = [];
 let companionSnapshot = '';
 let companionBackends = ['claude_cli'];
@@ -69,6 +73,28 @@ store.write_impressions(digest_id, [('research', item_id, 0, 0.9)], model_versio
     return route.fulfill({response, body: source});
   }
   if (url.startsWith(base)) return route.continue();
+  if (url.startsWith('https://eutils.ncbi.nlm.nih.gov/entrez/eutils/espell.fcgi')) {
+    const topic = new URL(url).searchParams.get('term');
+    spellingRequests.push(topic);
+    if (spellingMode === 'slow') {
+      await new Promise(resolve => { releaseSpelling = resolve; spellingStarted?.(); });
+    }
+    if (spellingMode === 'failure') return route.fulfill({status:503, body:'Fixture unavailable', headers:{'access-control-allow-origin':'*'}});
+    const corrected = {'induced provimity':'induced proximity', 'assymetric catalysis':'asymmetric catalysis', 'KRAS G12D inhibtor':'KRAS G12C inhibitor'}[topic] || '';
+    return route.fulfill({contentType:'application/xml', headers:{'access-control-allow-origin':'*'},
+      body:`<eSpellResult><CorrectedQuery>${corrected}</CorrectedQuery><ERROR/></eSpellResult>`});
+  }
+  if (url.startsWith('https://api-fixture.invalid/') || url.startsWith('https://api.anthropic.com/v1/messages')) {
+    const request = route.request();
+    const cors = {'access-control-allow-origin': '*', 'access-control-allow-headers': '*', 'access-control-allow-methods': 'POST,OPTIONS'};
+    if (request.method() === 'OPTIONS') return route.fulfill({status:204, headers:cors});
+    apiTestRequests.push({url, method:request.method(), headers:request.headers(), body:JSON.parse(request.postData())});
+    if (apiTestMode === 'slow') await new Promise(resolve => { releaseApiTest = resolve; apiTestStarted?.(); });
+    if (apiTestMode === 'failure') return route.fulfill({status:401, headers:cors, body:'Fictional authentication failure: fixture key must not be reflected'});
+    const anthropic = new URL(url).pathname.endsWith('/messages');
+    return route.fulfill({status:200, contentType:'application/json', headers:cors,
+      body:JSON.stringify(anthropic ? {content:[{type:'text', text:'OK'}]} : {choices:[{message:{content:'OK'}}]})});
+  }
   if (url.startsWith('http://127.0.0.1:8768/')) {
     const request = route.request();
     const path = new URL(url).pathname;
@@ -280,17 +306,110 @@ try {
     assert.match(await topics.getAttribute('placeholder'), /RNA nanotechnology/);
     assert.equal(await frame().locator('#bio').inputValue(), '');
     await page.screenshot({ path: `${output}/research-placeholders.png`, fullPage: true });
-    await frame().locator('#use-example-profile').click();
-    assert.equal((await topics.inputValue()).split('\n').length, 10);
-    assert.match(await frame().locator('#bio').inputValue(), /transferable design rules/);
+    const disciplines = [];
+    for (const [discipline, count, topic] of [['biomolecular',10,'RNA nanotechnology'], ['engineering',4,'Battery materials'], ['ecology',4,'Biodiversity monitoring']]) {
+      if (disciplines.length) await route('/setup', '#interest-editor');
+      await frame().locator('#example-discipline').selectOption(discipline);
+      assert.equal(await topics.inputValue(), '', 'Choosing a discipline must not load or save it.');
+      await frame().locator('#use-example-profile').click();
+      assert.equal((await topics.inputValue()).split('\n').length, count);
+      assert.match(await topics.inputValue(), new RegExp(topic));
+      assert.equal(await frame().locator('#bio').inputValue(), '', 'Examples must not write an implicit bio.');
+      assert.equal(await frame().locator('#use-example-profile').isDisabled(), true);
+      await frame().locator('#example-discipline').selectOption(discipline === 'ecology' ? 'engineering' : 'ecology');
+      assert.match(await topics.inputValue(), new RegExp(topic), 'Changing an example choice must preserve current edits.');
+      disciplines.push(discipline);
+    }
     const beforeSave = await snapshot();
     assert.equal(Object.hasOwn(beforeSave.files, 'data/profile.yaml'), false);
     await page.screenshot({ path: `${output}/research-example.png`, fullPage: true });
-    await setTopics('');
-    await frame().locator('#profile-options > summary').click();
-    await frame().locator('#bio').fill('');
-    await frame().locator('#profile-options > summary').click();
-    return { examplesOnlyUntilChosen: true, tenResearchTopics: true, noProfileWrittenUntilSave: true };
+    await route('/setup', '#interest-editor');
+    return { examplesOnlyUntilChosen:true, disciplines, noImplicitBio:true, noProfileWrittenUntilSave:true };
+  });
+  await check('interest-spelling-is-explicit-and-preserves-reader-control', async () => {
+    await setTopics('induced provimity | 75\nassymetric catalysis | 25');
+    const first = frame().locator('.interest-row').nth(0), second = frame().locator('.interest-row').nth(1);
+    const firstStatus = first.locator('.interest-spelling .hint');
+    assert.equal(spellingRequests.length, 0, 'Typing must not send an interest to the spelling provider.');
+    assert.equal(await first.getByRole('button', {name:'Check wording', exact:true}).isHidden(), true);
+    await first.locator('summary').click();
+    await second.locator('summary').click();
+    await frame().locator('#advanced-interests > summary').click();
+    await frame().locator('#authors_of_interest').fill('Fictional author');
+    await frame().locator('#seed_works').fill('Fictional representative paper');
+    await frame().locator('#context_keywords').fill('Fictional background topic');
+    const before = await snapshot();
+    await first.getByRole('button', {name:'Check wording', exact:true}).click();
+    await first.getByRole('button', {name:'Use suggestion', exact:true}).waitFor();
+    assert.equal(await first.locator('[data-interest-name]').inputValue(), 'induced provimity');
+    assert.deepEqual((await snapshot()).files, before.files, 'Checking wording must not save private state.');
+    await first.getByRole('button', {name:'Use suggestion', exact:true}).click();
+    assert.equal(await first.locator('[data-interest-name]').inputValue(), 'induced proximity');
+    assert.equal(await first.locator('[data-interest-weight]').inputValue(), '75');
+    await second.getByRole('button', {name:'Check wording', exact:true}).click();
+    await second.getByRole('button', {name:'Keep wording', exact:true}).waitFor();
+    await second.getByRole('button', {name:'Keep wording', exact:true}).click();
+    assert.equal(await second.locator('[data-interest-name]').inputValue(), 'assymetric catalysis');
+    await first.locator('[data-interest-name]').fill('RNA delivery');
+    await first.getByRole('button', {name:'Check wording', exact:true}).click();
+    await firstStatus.filter({hasText:'No spelling suggestion found'}).waitFor();
+    assert.equal(await first.getByRole('button', {name:'Use suggestion', exact:true}).isHidden(), true);
+    spellingMode = 'failure';
+    await first.getByRole('button', {name:'Check wording', exact:true}).click();
+    await firstStatus.filter({hasText:'Couldn’t check wording'}).waitFor();
+    assert.equal(await first.locator('[data-interest-name]').inputValue(), 'RNA delivery');
+    spellingMode = 'slow';
+    await first.locator('[data-interest-name]').fill('induced provimity');
+    const started = new Promise(resolve => { spellingStarted = resolve; });
+    await first.getByRole('button', {name:'Check wording', exact:true}).click(); await started;
+    assert.equal(await second.getByRole('button', {name:'Check wording', exact:true}).isDisabled(), true);
+    await first.locator('[data-interest-name]').fill('New specialist topic');
+    releaseSpelling(); spellingStarted = null;
+    await first.getByRole('button', {name:'Check wording', exact:true}).waitFor({state:'visible'});
+    await page.waitForFunction(() => !document.querySelector('#app').contentDocument.querySelector('[data-check-wording]').disabled);
+    assert.equal(await first.getByRole('button', {name:'Use suggestion', exact:true}).isHidden(), true);
+    assert.equal(await first.locator('[data-interest-name]').inputValue(), 'New specialist topic');
+    spellingMode = 'success';
+    await first.locator('[data-interest-name]').fill('KRAS G12D inhibtor');
+    await first.getByRole('button', {name:'Check wording', exact:true}).click();
+    await firstStatus.filter({hasText:'No spelling suggestion found'}).waitFor();
+    assert.equal(await first.locator('[data-interest-name]').inputValue(), 'KRAS G12D inhibtor');
+    await first.locator('[data-interest-name]').fill('induced provimity');
+    await second.locator('[data-interest-name]').fill('induced proximity');
+    await first.getByRole('button', {name:'Check wording', exact:true}).click();
+    await first.getByRole('button', {name:'Use suggestion', exact:true}).click();
+    await firstStatus.filter({hasText:'Another interest already uses'}).waitFor();
+    assert.equal(await first.locator('[data-interest-name]').inputValue(), 'induced provimity');
+    await setTopics('induced provimity | 75\nassymetric catalysis | 25');
+    for (const row of [first, second]) {
+      await row.locator('summary').click();
+      await row.getByRole('button', {name:'Check wording', exact:true}).click();
+      await row.getByRole('button', {name:'Use suggestion', exact:true}).click();
+    }
+    await first.locator('[data-interest-aliases]').fill('molecular glue');
+    await first.locator('[data-interest-description]').fill('Validated proximity-inducing design methods.');
+    await frame().locator('form[action="/setup"] button[type="submit"]').click();
+    await page.waitForFunction(() => location.hash.startsWith('#/run'));
+    const saved = await snapshot();
+    const parsed = spawnSync(new URL('../.venv/bin/python', import.meta.url).pathname,
+      ['-c', 'import yaml,json,sys; print(json.dumps(yaml.safe_load(sys.stdin.read())))'],
+      {input:Buffer.from(saved.files['data/profile.yaml'],'base64').toString(),encoding:'utf8'});
+    assert.equal(parsed.status,0,parsed.stderr);
+    const profile = JSON.parse(parsed.stdout);
+    assert.deepEqual(profile.keywords, ['induced proximity','asymmetric catalysis']);
+    assert.deepEqual(profile.authors_of_interest, ['Fictional author']);
+    assert.deepEqual(profile.seed_works, ['Fictional representative paper']);
+    assert.deepEqual(profile.context_keywords, ['Fictional background topic']);
+    assert.equal(profile.canonical_facets['induced proximity'].priority,75);
+    assert.deepEqual(profile.canonical_facets['induced proximity'].aliases,['molecular glue']);
+    assert.equal(profile.canonical_facets['induced proximity'].description,'Validated proximity-inducing design methods.');
+    assert.equal(Object.hasOwn(profile.canonical_facets['induced proximity'],'previous_name'),false);
+    await route('/setup','#interest-editor');
+    assert.equal(await frame().locator('#authors_of_interest').inputValue(), 'Fictional author');
+    assert.equal(await frame().locator('#seed_works').inputValue(), 'Fictional representative paper');
+    assert.equal(await frame().locator('#context_keywords').inputValue(), 'Fictional background topic');
+    return {advancedInterestsPreserved:true, explicitOnly:true,acceptAndDismiss:true,unavailable:true,staleReplyIgnored:true,identifiersPreserved:true,
+      duplicatePrevented:true,correctedNamesSaved:true,weightsAndDetailsPreserved:true,providerRequests:spellingRequests.length};
   });
   await check('setup-native-form', async () => {
     await setTopics('DNA nanotechnology | 5\nRNA nanotechnology | 5\nnucleic acid delivery | 15\nmRNA therapeutics | 10\ngene therapy | 10\nnucleic acid therapeutics | 15\nTarget protein degradation | 15\nInduce proximity | 15\nDrug development | 10');
@@ -323,6 +442,57 @@ try {
     assert.deepEqual(profile.canonical_facets['Induce proximity'].aliases, ['induced proximity', 'molecular glue']);
     assert.equal(exported.credentialsIncluded, false);
     return { privateConfigPersisted: true, allNineInterests: true, relativeWeightsPreserved: true, aliasesPersisted: true, credentialsExcluded: true, route: await page.evaluate(() => location.hash) };
+  });
+  await check('api-connection-tests-are-explicit-private-and-unsaved', async () => {
+    await route('/setup', '#interest-editor');
+    await frame().locator('#summary-options > summary').click();
+    const before = await snapshot();
+    assert.equal(apiTestRequests.length, 0, 'Rendering settings must not contact an API.');
+    for (const backend of ['api', 'anthropic']) {
+      const initialCount = apiTestRequests.length;
+      await frame().locator(`input[name="llm_backend"][value="${backend}"]`).check();
+      await frame().locator('#llm_base_url').fill(backend === 'anthropic' ? 'https://api.anthropic.com/v1' : 'https://api-fixture.invalid/v1');
+      await frame().locator('#llm_api_key').fill('fictional-api-test-key');
+      await frame().locator('#llm_model').fill('fictional-test-model');
+      assert.equal(apiTestRequests.length, initialCount, 'Selecting and typing provider settings must not test them.');
+      const inputState = await Promise.all(['llm_base_url','llm_api_key','llm_model'].map(id => frame().locator(`#${id}`).inputValue()));
+      await frame().locator('#test-api-connection').click();
+      await frame().locator('#connection-check-status').filter({hasText:'API connection verified'}).waitFor({timeout:60000});
+      assert.equal(apiTestRequests.length, initialCount + 1);
+      const request = apiTestRequests.at(-1);
+      assert.equal(request.method, 'POST');
+      assert.equal(new URL(request.url).pathname, backend === 'api' ? '/v1/chat/completions' : '/v1/messages');
+      assert.deepEqual(request.body, {model:'fictional-test-model',max_tokens:8,messages:[{role:'user',content:'Reply OK.'}]});
+      assert.doesNotMatch(JSON.stringify(request.body), /Browser Acceptance|RNA delivery|Fictional author|profile|keywords|digest\.db/);
+      if (backend === 'anthropic') {
+        assert.equal(request.headers['anthropic-dangerous-direct-browser-access'], 'true');
+        assert.equal(request.headers['x-api-key'], 'fictional-api-test-key');
+      } else {
+        assert.equal(request.headers.authorization, 'Bearer fictional-api-test-key');
+        assert.equal(request.headers['anthropic-dangerous-direct-browser-access'], undefined);
+      }
+      assert.deepEqual((await snapshot()).files, before.files, 'A connection test must not save profile, key or model settings.');
+      apiTestMode = 'failure';
+      await frame().locator('#test-api-connection').click();
+      await frame().locator('#connection-check-status').filter({hasText:'Authentication was rejected'}).waitFor({timeout:60000});
+      assert.deepEqual(await Promise.all(['llm_base_url','llm_api_key','llm_model'].map(id => frame().locator(`#${id}`).inputValue())), inputState);
+      assert.doesNotMatch(await frame().locator('#connection-check-status').textContent(), /fictional-api-test-key|fixture key must not/);
+      assert.deepEqual((await snapshot()).files, before.files);
+      apiTestMode = 'success';
+    }
+    apiTestMode = 'slow';
+    const started = new Promise(resolve => { apiTestStarted = resolve; });
+    await frame().locator('#test-api-connection').click(); await started;
+    assert.equal(await frame().locator('#test-api-connection').isDisabled(), true);
+    await frame().locator('#llm_model').fill('new-unsaved-model');
+    releaseApiTest(); apiTestStarted = null;
+    await frame().locator('#test-api-connection:not([disabled])').waitFor();
+    assert.equal(await frame().locator('#connection-check-status').textContent(), '');
+    assert.equal(await frame().locator('#llm_model').inputValue(), 'new-unsaved-model');
+    assert.deepEqual((await snapshot()).files, before.files);
+    apiTestMode = 'success';
+    await route('/setup', '#interest-editor');
+    return {apiAndAnthropic:true, genericPromptOnly:true, explicitClickOnly:true, browserAnthropicHeaderScoped:true, noStateSaved:true, failurePreservesFields:true, staleReplyIgnored:true};
   });
   await check('unrelated-settings-edits-preserve-legacy-priorities', async () => {
     const backup = await snapshot();
@@ -359,11 +529,13 @@ try {
     await frame().locator('#theme-toggle').click();
     const root = frame().locator('html');
     assert.equal(await root.getAttribute('data-theme'), 'dark');
+    await page.waitForFunction(() => document.documentElement.dataset.theme === 'dark');
     await frame().locator('#display-toggle').click();
     assert.equal(await root.getAttribute('data-display'), 'compact');
     const pip = frame().locator('#pip-toggle');
     if (await pip.isVisible()) { await pip.click(); assert.equal(await root.getAttribute('data-pip'), 'hidden'); }
     await route('/', '.item[data-item-id]');
+    assert.equal(await page.locator('html').getAttribute('data-theme'), 'dark');
     await openSection('events');
     const calendar = frame().locator('a[href*="#/calendar/"]').first();
     await calendar.waitFor();
@@ -481,6 +653,30 @@ try {
     await frame().locator('[data-interest-name]').first().focus(); await page.keyboard.press('Tab');
     assert.equal(await frame().locator('[data-interest-weight]').first().evaluate(node => node === document.activeElement), true);
     await page.screenshot({ path: `${output}/mobile-setup.png`, fullPage: true });
+    await page.setViewportSize({ width: 320, height: 720 });
+    const narrow = await page.evaluate(() => {
+      const doc = document.querySelector('#app').contentDocument;
+      return {inner:doc.documentElement.scrollWidth <= doc.documentElement.clientWidth + 1, outer:document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1};
+    });
+    assert.deepEqual(narrow, {inner:true, outer:true});
+    await frame().locator('#advanced-interests > summary').focus();
+    await page.keyboard.press('Enter');
+    assert.notEqual(await frame().locator('#advanced-interests').getAttribute('open'), null);
+    await frame().locator('#authors_of_interest').focus();
+    await page.keyboard.press('Tab');
+    assert.equal(await frame().locator('#seed_works').evaluate(node => node === document.activeElement), true);
+    await frame().locator('.settings-actions button[type="submit"]').focus();
+    assert.equal(await frame().locator('.settings-actions button[type="submit"]').evaluate(node => node === document.activeElement), true);
+    await page.screenshot({path:`${output}/mobile-320-settings.png`,fullPage:true});
+    await page.setViewportSize({ width: 1280, height: 900 });
+    const zoomed = await page.evaluate(() => {
+      const doc = document.querySelector('#app').contentDocument;
+      document.documentElement.style.zoom = '2';
+      return {inner:doc.documentElement.scrollWidth <= doc.documentElement.clientWidth + 1, outer:document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1};
+    });
+    assert.deepEqual(zoomed, {inner:true, outer:true});
+    await page.screenshot({path:`${output}/settings-200-percent.png`,fullPage:true});
+    await page.evaluate(() => { document.documentElement.style.zoom = ''; document.querySelector('#app').contentDocument.documentElement.style.zoom = ''; });
     await page.setViewportSize({ width: 800, height: 900 });
     await page.locator('#compute-menu > summary').click();
     const computeBox = await page.locator('#compute-menu .data-tools').boundingBox();
@@ -631,12 +827,21 @@ try {
   });
   await check('optional-companion-explicit-actions', async () => {
     assert.equal(companionRequests.length, 0, 'No companion contact should occur before explicit setup.');
+    await route('/setup', '#interest-editor');
+    await frame().locator('#summary-options > summary').click();
+    assert.equal(await frame().locator('input[name="llm_backend"][value="claude_cli"]').isDisabled(), true);
+    assert.equal(await frame().locator('input[name="llm_backend"][value="codex_cli"]').isDisabled(), true);
+    assert.match(await frame().locator('[data-companion-note]').first().textContent(), /connect a browser companion/);
     await openCompanionMenu();
     await page.locator('#companion-endpoint').fill('http://127.0.0.1:8768');
     await page.locator('#companion-token').fill('fictional-acceptance-token');
     await page.locator('#companion-connect').click();
     await page.waitForFunction(() => document.getElementById('companion-status').textContent.includes('Connected'));
     assert.deepEqual(companionRequests.map(row => row.path), ['/health']);
+    await frame().locator('input[name="llm_backend"][value="claude_cli"]:not([disabled])').waitFor({state:'attached'});
+    assert.equal(await frame().locator('input[name="llm_backend"][value="codex_cli"]').isDisabled(), true);
+    assert.match(await frame().locator('[data-companion-note]').first().textContent(), /Connected companion supports/);
+    await route('/', '.item[data-section="research"]');
     assert.equal(await page.locator('#companion-token').inputValue(), '');
     const status = await page.evaluate(() => window.__rpc({ type: 'companion-status' }));
     assert.doesNotMatch(status.body, /fictional-acceptance-token/);
@@ -663,6 +868,9 @@ try {
     await page.locator('#companion-disconnect').click();
     await page.waitForFunction(() => document.getElementById('companion-status').textContent.includes('No companion'));
     assert.equal(await page.locator('#companion-email').isDisabled(), true);
+    await route('/setup', '#interest-editor');
+    assert.equal(await frame().locator('input[name="llm_backend"][value="claude_cli"]').isDisabled(), true);
+    await route('/', '.item[data-section="research"]');
     return { mockedCompanion: true, requests: companionRequests.map(({ path, method }) => ({ path, method })), nativeEmailFeedbackApplied: true, nativeEmailFeedbackGrade: 70, mailboxAcknowledged: true, stateRestored: true, disconnected: true };
   });
   await check('pwa-project-subpath-and-install-control', async () => {

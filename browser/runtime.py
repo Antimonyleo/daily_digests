@@ -23,6 +23,8 @@ from types import SimpleNamespace
 from urllib.parse import urlsplit
 
 ROOT = Path('/app')
+MAX_IMPORT_FILES = 10_000
+MAX_IMPORT_CHARACTERS = 128 * 1024 * 1024
 _JOBS = deque()
 _REQUESTS = {}
 _WEB = None
@@ -230,6 +232,37 @@ def export_portable_snapshot(include_credentials=False, *, root=ROOT):
     return export_snapshot(root, include_credentials=bool(include_credentials))
 
 
+def _imap_credential_binding(values):
+    host = str(values.get('IMAP_HOST') or '').strip().casefold()
+    user = values.get('IMAP_USER') or ''
+    try:
+        port = int(values.get('IMAP_PORT', 993))
+    except (TypeError, ValueError):
+        return None
+    return (host, port, user) if host and user and 1 <= port <= 65535 else None
+
+
+def _validate_credential_reuse(imported, previous):
+    """Reject secret rebinding before closing the app or replacing any state."""
+    from dailydigest.config import Settings
+    from dailydigest.provider_check import api_provider_binding
+
+    if previous.get('LLM_API_KEY') and 'LLM_API_KEY' not in imported:
+        backend = (imported.get('LLM_BACKEND') or Settings.model_fields['llm_backend'].default).lower()
+        if backend in {'api', 'anthropic'}:
+            saved_backend = (previous.get('LLM_BACKEND') or Settings.model_fields['llm_backend'].default).lower()
+            default_url = Settings.model_fields['llm_base_url'].default
+            incoming = api_provider_binding(backend, imported.get('LLM_BASE_URL', default_url))
+            saved = api_provider_binding(saved_backend, previous.get('LLM_BASE_URL', default_url))
+            if incoming is None or incoming != saved:
+                raise ValueError('Backup changes the API provider or endpoint while omitting its key; import matching settings or include the intended credential.')
+    if (previous.get('IMAP_PASSWORD') and 'IMAP_PASSWORD' not in imported
+            and imported.get('IMAP_HOST') and imported.get('IMAP_USER')):
+        incoming = _imap_credential_binding(imported)
+        if incoming is None or incoming != _imap_credential_binding(previous):
+            raise ValueError('Backup changes the IMAP server, port or account while omitting its password; import matching settings or include the intended credential.')
+
+
 def preserve_omitted_credentials(payload, *, root=ROOT):
     """A portable import must not erase credentials already on this device."""
     snapshot = json.loads(payload)
@@ -237,21 +270,32 @@ def preserve_omitted_credentials(payload, *, root=ROOT):
         return payload
     decoded = decode_snapshot(payload)
     imported = _environment(decoded.get(Path('.env'), b'').decode())
-    previous = _environment((root / '.env').read_text())
+    # Settings resolves dotenv field names case-insensitively; binding and
+    # omission checks must use the same effective values, including duplicates.
+    previous = {key.upper(): value for key, value in _environment((root / '.env').read_text()).items()}
+    imported_effective = {key.upper(): value for key, value in imported.items()}
+    _validate_credential_reuse(imported_effective, previous)
     for key, value in previous.items():
-        if _credential_key(key) and key not in imported:
+        if _credential_key(key) and key not in imported_effective:
             imported[key] = value
     snapshot['files']['.env'] = base64.b64encode(_environment_text(imported).encode()).decode('ascii')
     return json.dumps(snapshot)
 
 
-def decode_snapshot(payload):
+def decode_snapshot(payload, *, enforce_import_limits=False):
+    if enforce_import_limits:
+        # Match JavaScript string.length, including supplementary Unicode.
+        characters = len(payload) if payload.isascii() else sum(1 + (ord(char) > 0xFFFF) for char in payload)
+        if characters > MAX_IMPORT_CHARACTERS:
+            raise ValueError('Backup exceeds the portable import limit')
     snapshot = json.loads(payload)
     if not isinstance(snapshot, dict) or snapshot.get('format') != 'dailydigest-browser-v1':
         raise ValueError('Unsupported DailyDigest backup format')
     files = snapshot.get('files')
     if not isinstance(files, dict):
         raise ValueError('Backup files must be an object')
+    if enforce_import_limits and len(files) > MAX_IMPORT_FILES:
+        raise ValueError('Backup exceeds the portable import limit')
     decoded = {}
     for name, encoded in files.items():
         path = Path(name)
@@ -318,6 +362,7 @@ def validate_snapshot_sqlite(decoded, *, scratch_root=None):
 
 async def transactional_import(payload, commit, *, root=ROOT, scratch_root=None):
     """Apply an explicit import only when browser storage commits successfully."""
+    decode_snapshot(payload, enforce_import_limits=True)
     payload = preserve_omitted_credentials(payload, root=root)
     validate_snapshot_sqlite(decode_snapshot(payload), scratch_root=scratch_root)
     close_app()
@@ -576,6 +621,37 @@ def install_companion_providers(summarize, supports, call, identity=lambda _back
         pipeline.effective_summary_backend = selected_backend
 
 
+def install_semantic_backend(alignment, browser_score, run_sync):
+    """Replace native model loading with the worker's lazy local JS scorer."""
+    class BrowserSemanticBackend:
+        def score_records(self, records, *, check_cancel=None):
+            from dailydigest.pipeline import BrewCancelled
+
+            def check():
+                if check_cancel is not None:
+                    check_cancel()
+                if browser_cancelled():
+                    raise BrewCancelled('Brew stopped before publication.')
+
+            check()
+            try:
+                result = run_sync(browser_score(json.dumps(records)))
+            except Exception:
+                check()
+                raise
+            check()
+            return json.loads(result)
+
+    backend = BrowserSemanticBackend()
+
+    def build_backend(model_dir=None):
+        # All browser calls use the pinned shipped model. Preserve identity so
+        # the native pair cache remains useful across repeated brews.
+        return backend
+
+    alignment._build_backend = build_backend
+
+
 def install_browser():
     global _WEB
     install_state_tracking()
@@ -587,7 +663,7 @@ def install_browser():
     import starlette.responses
     from filelock import SoftFileLock
     from pyodide.ffi import run_sync, to_js
-    from js import (browserEmbed, browserYield, browserCompanion, browserCompanionSupports,
+    from js import (browserEmbed, browserSemanticScore, browserYield, browserCompanion, browserCompanionSupports,
                     browserCompanionIdentity)
     try:
         from js import browserEmbeddingBackend
@@ -596,7 +672,9 @@ def install_browser():
         browserEmbeddingBackend = lambda: 'browser-onnx'
     import numpy as np
     from dailydigest import job_lock
-    from dailydigest.rank import embed
+    from dailydigest.rank import embed, semantic_alignment
+
+    install_semantic_backend(semantic_alignment, browserSemanticScore, run_sync)
 
     # Neither native file locks nor Python threads exist in the WASM process.
     # navigator.locks excludes other browser tabs before this app is installed.

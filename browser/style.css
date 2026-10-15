@@ -14,7 +14,8 @@ h1 { font-size: clamp(28px, 5vw, 44px); line-height: 1.15; }
 @keyframes tea-steam { 0%, 100% { opacity: 0; transform: translateY(0) scaleY(.6); } 40% { opacity: .45; } 85% { opacity: 0; transform: translateY(-20px) scaleY(1); } }
 #startup[data-state="error"] .steam { animation: none; opacity: 0; }
 @media (prefers-reduced-motion: reduce) { .tea-cup .steam { animation: none; opacity: .3; } }
-@media (prefers-color-scheme: dark) { .tea-cup { color: #92d2ac; } .cup-bowl { background: linear-gradient(0deg, #1b3426 70%, transparent 70%); } }
+:root[data-theme="dark"] .tea-cup { color: #92d2ac; }
+:root[data-theme="dark"] .cup-bowl { background: linear-gradient(0deg, #1b3426 70%, transparent 70%); }
 #app { display: block; width: 100%; height: calc(100dvh - 48px); flex: 1; min-height: 0; border: 0; background: #f6f7f4; }
 [hidden] { display: none !important; }
 .browser-bar { min-height: 48px; flex-shrink: 0; display: flex; gap: 8px; align-items: center; padding: 6px 16px; background: #fff; border-top: 1px solid #dde3dc; font-size: 12px; }
@@ -42,7 +43,10 @@ button:disabled, .file-button:has(input:disabled) { opacity: .5; cursor: default
 .companion-actions { display: flex; flex-direction: column; align-items: stretch; }
 .data-tools { max-height: calc(100dvh - var(--browser-bar-height, 48px) - 36px); overflow-y: auto; }
 :is(button, summary, .file-button):focus-visible, .file-button:focus-within { outline: 2px solid #256f52; outline-offset: 3px; }
-@media (prefers-color-scheme: dark) { :root { color: #edf4ef; background: #0e1511; color-scheme: dark; } .browser-bar, .data-tools, .app-error { background: #151f19; border-color: #314038; } button, .file-button { background: #1b3426; border-color: #314038; color: #92d2ac; } .eyebrow { color: #92d2ac; } }
+:root[data-theme="dark"] { color: #edf4ef; background: #0e1511; color-scheme: dark; }
+:root[data-theme="dark"] :is(.browser-bar, .data-tools, .app-error) { background: #151f19; border-color: #314038; }
+:root[data-theme="dark"] :is(button, .file-button) { background: #1b3426; border-color: #314038; color: #92d2ac; }
+:root[data-theme="dark"] .eyebrow { color: #92d2ac; }
 @media (pointer: coarse) { summary, button, .file-button { min-height: 44px; } .browser-bar { min-height: 60px; } }
 @media (max-width: 600px) {
   .browser-bar { flex-wrap: wrap; justify-content: flex-end; }

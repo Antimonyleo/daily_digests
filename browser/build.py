@@ -13,6 +13,10 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
+from dailydigest.rank.semantic_assets import (
+    MODEL_NOTICE, SEMANTIC_FILES, SEMANTIC_REPOSITORY, SEMANTIC_REVISION,
+)
+
 ROOT = Path(__file__).resolve().parents[1]
 HERE = ROOT / "browser"
 PROTO = ROOT / "prototypes/browser-compute"
@@ -117,13 +121,40 @@ def stamp_urls(text: str, build_id: str) -> str:
     """Version application URLs; metadata revalidates independently of releases."""
     def replace(match):
         path, query = match.group(1), match.group(2) or ""
-        if path.startswith(("./assets/models/", "./assets/model-bundles/")):
+        if path.startswith(("./assets/models/", "./assets/model-bundles/", "./assets/semantic-models/")):
             return match.group(0)
         parts = [part for part in query.lstrip("?").split("&")
                  if part and not part.startswith(("compute=", "build="))]
         parts.append("build=" + build_id)
         return path + "?" + "&".join(parts)
     return re.sub(r"(\./[^\s'\"`<>?]+\.(?:mjs|json|js|css|webmanifest|svg|zip|py))(?![a-zA-Z0-9_.])(\?[^\s'\"`<>]*)?", replace, text)
+
+
+def semantic_model_files(output: Path, cache: Path) -> dict:
+    """Publish only pinned public assets, independently of embedding caches."""
+    files = {}
+    for name, expected in SEMANTIC_FILES.items():
+        files[name] = download(
+            f"https://huggingface.co/{SEMANTIC_REPOSITORY}/resolve/{SEMANTIC_REVISION}/{name}",
+            cache / "semantic-model" / name, expected)
+    digest = hashlib.sha256()
+    for name in sorted(files):
+        digest.update(name.encode() + b"\0" + bytes.fromhex(SEMANTIC_FILES[name]))
+    digest.update(MODEL_NOTICE.encode())
+    model_id = digest.hexdigest()[:16]
+    relative = f"assets/semantic-models/{model_id}/"
+    target = output / relative / "semantic-matcher"
+    for name, source in files.items():
+        destination = target / name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, destination)
+    (target / "MODEL-NOTICE.txt").write_text(MODEL_NOTICE)
+    worker = output / "worker.mjs"
+    worker.write_text(worker.read_text().replace("./assets/semantic-models/", "./" + relative))
+    return {"repository": SEMANTIC_REPOSITORY, "revision": SEMANTIC_REVISION,
+            "sha256": dict(SEMANTIC_FILES), "path": relative, "model_id": model_id,
+            "bytes": sum(path.stat().st_size for path in target.rglob("*") if path.is_file()),
+            "dtype": "fp32", "lazy": True, "notice": relative + "semantic-matcher/MODEL-NOTICE.txt"}
 
 
 def validate_public_snapshot(path: Path) -> dict:
@@ -177,7 +208,8 @@ def stamp_release(output: Path, build_id: str) -> None:
     index = output / "index.html"
     html = index.read_text().replace("<head>", '<head>\n  <meta name="dailydigest-build" content="' + build_id + '">', 1)
     initial_bytes = sum(path.stat().st_size for path in output.rglob("*")
-                        if path.is_file() and "bge-small-webgpu" not in path.parts)
+                        if path.is_file() and "bge-small-webgpu" not in path.parts
+                        and "semantic-models" not in path.parts)
     html = re.sub(r'(<span id="download-size">)[^<]*(</span>)',
                   lambda match: match[1] + f"up to {math.ceil(initial_bytes / 1_000_000)} MB including the CPU model; cached files are reused" + match[2], html)
     index.write_text(html)
@@ -234,7 +266,7 @@ def build(output: Path) -> dict:
     cache = HERE / ".build-cache"
     wheels = list(pure_package_files(cache / "wheels"))
     manifest = source_archive(assets / "app.zip", wheels)
-    for name in ("index.html", "app.mjs", "compute.mjs", "http.mjs", "storage.mjs", "style.css", "worker.mjs", "manifest.webmanifest",
+    for name in ("index.html", "app.mjs", "compute.mjs", "semantic.mjs", "http.mjs", "storage.mjs", "style.css", "worker.mjs", "manifest.webmanifest",
                  "app-icon.svg", "sw.js"):
         shutil.copyfile(HERE / name, output / name)
     shutil.copyfile(HERE / "runtime.py", assets / "runtime.py")
@@ -266,6 +298,7 @@ def build(output: Path) -> dict:
     shutil.copytree(model_root, assets / "models/bge-small")
     gpu_model_files(model_root, assets / "models/bge-small-webgpu", cache)
     model_path, model_id = relocate_models(output)
+    semantic_model = semantic_model_files(output, cache)
     public_snapshot = cache / "public-sources.json"
     if public_snapshot.is_file():
         validate_public_snapshot(public_snapshot)
@@ -280,12 +313,14 @@ def build(output: Path) -> dict:
         path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in output.iterdir()
         if path.is_file()}, "runtime": hashlib.sha256((assets / "runtime.py").read_bytes()).hexdigest(),
         "dependencies": hashlib.sha256((assets / "dependencies.json").read_bytes()).hexdigest(),
+        "semantic_model": semantic_model,
         "browser_lock": hashlib.sha256((PROTO / "package-lock.json").read_bytes()).hexdigest()}
     build_id = hashlib.sha256(json.dumps(release_inputs, sort_keys=True).encode()).hexdigest()[:16]
     stamp_release(output, build_id)
     total = sum(p.stat().st_size for p in output.rglob("*") if p.is_file())
     report = {"schema_version": 1, "build_id": build_id, "runtime_path": runtime_path,
               "dependency_id": dependency_id, "model_path": model_path, "model_id": model_id,
+              "semantic_model": semantic_model,
               "private_data_included": False,
               "source_hashes": manifest, "pyodide": "0.28.3", "bytes": total,
               "gpu_model": {"publisher": "Xenova/bge-small-en-v1.5", "revision": GPU_MODEL_REVISION,

@@ -44,13 +44,17 @@ def test_browser_bundle_reuses_quality_and_selection_with_native_parity(prototyp
     assert by_id[7]["status"] == "topic"
 
 
-def test_small_pool_does_not_promote_low_impact_or_editorial_items(prototype):
+def test_small_pool_allows_one_strong_unknown_match_and_rejects_editorial_items(prototype):
     fixture, vectors = policy_fixture()
     fixture["papers"] = fixture["papers"][4:]
     vectors["documents"] = vectors["documents"][4:]
     kernel = prototype._kernel()
     result = kernel.rank_fixture(fixture, vectors, kernel.install_bundle(prototype.build_bundle()))
-    assert result["selected_ids"] == []
+    assert result["selected_ids"] == [5]
+    by_id = {row['id']: row for row in result['candidates']}
+    assert by_id[5]['source_bucket'] == 'unknown_journal'
+    assert by_id[6]['status'] == 'quality'
+    assert by_id[7]['status'] == 'topic'
 
 
 def test_portable_version_identity_unicode_and_context_cases_match_native(prototype):
@@ -64,7 +68,7 @@ def test_portable_version_identity_unicode_and_context_cases_match_native(protot
         assert portable == native
         results.append(portable)
     assert results[0]["selected_ids"] == [1, 2, 3, 4]
-    assert results[1]["selected_ids"] == []
+    assert results[1]["selected_ids"] == [5]
     assert len({1, 2}.intersection(results[2]["selected_ids"])) == 1
     assert set(results[3]["selected_ids"]) == {1, 2}
     assert results[4]["selected_ids"] == [1]

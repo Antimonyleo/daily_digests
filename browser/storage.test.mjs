@@ -69,3 +69,16 @@ test('a suspended SQL writer defers capture until its transaction commits', asyn
   assert.equal(await writer.flush({force: true}), true);
   assert.equal(saved, 'committed snapshot');
 });
+
+test('trusted stored state above import limits restores with a warning and stays exportable', async () => {
+  const { validateStoredSnapshot } = await import('./storage.mjs');
+  const files = Object.fromEntries(Array.from({ length: 10001 }, (_, i) => [`data/f${i}`, '']));
+  const payload = JSON.stringify({ format: 'dailydigest-browser-v1', files });
+  assert.throws(() => validateRecoverySnapshot(payload), /recovery limit/);
+  const trusted = validateStoredSnapshot(payload);
+  assert.equal(Object.keys(trusted.snapshot.files).length, 10001);
+  assert.match(trusted.warning, /preserved.*import/i);
+  assert.equal(JSON.stringify(trusted.snapshot), payload);
+  assert.equal(validateStoredSnapshot(JSON.stringify({ format: 'dailydigest-browser-v1', files: {} })).warning, null);
+  assert.throws(() => validateStoredSnapshot(JSON.stringify({ format: 'dailydigest-browser-v1', files: { 'data/../escape': '' } })), /invalid/);
+});

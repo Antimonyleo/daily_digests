@@ -74,6 +74,14 @@ class BrowserTransport(httpx.BaseTransport):
         self._bridge = bridge_request if bridge_request is not None else (None if xhr_factory else _bridge_request)
 
     def handle_request(self, request):
+        # Match Anthropic's explicit browser opt-in only for authenticated
+        # Messages calls. Native HTTP clients never acquire this header.
+        if (request.method == 'POST' and request.url.scheme == 'https'
+                and request.url.host == 'api.anthropic.com'
+                and request.url.path == '/v1/messages'
+                and request.headers.get('x-api-key')
+                and request.headers.get('anthropic-version')):
+            request.headers['anthropic-dangerous-direct-browser-access'] = 'true'
         if self._bridge is not None:
             headers = []
             for name, value in request.headers.multi_items():
