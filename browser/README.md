@@ -70,6 +70,11 @@ The public snapshot addresses CORS restrictions without moving personalization
 to GitHub. The source audit observed 68 of 84 configured sources blocked in direct
 browser access. Re-run the audit when sources or browser policies change.
 
+Personalized OpenAlex searches use titles, abstracts and indexed keywords. The
+original interest keeps stemming; explicit alternative terms remain quoted.
+This reduces incidental full-text matches, but papers using different terminology
+may be missed. Topic fit and venue quality are still checked separately.
+
 ## Build and preview
 
 ```bash
@@ -124,8 +129,9 @@ and usable CORS; provider secrets are never built into the public application.
 API, Anthropic and local CLI summaries, email delivery, inbound feedback and private state transfer
 are implemented through `browser/companion.py`, enabled only when explicitly
 configured. The browser applies email reply votes to its own dated digest before
-acknowledging the mailbox. Tests mock providers, email and inboxes; live credential
-and provider behavior remains unverified. Optional local Ollama uses its HTTP
+acknowledging the mailbox. Tests mock providers, email and inboxes. Bounded live
+Companion checks verified Claude and Codex CLI summaries using a public abstract;
+API, email and inbox behavior still needs live credential checks. Optional local Ollama uses its HTTP
 provider configuration and needs a usable browser/companion network path.
 An explicitly connected companion advertises its configured summary providers;
 their credentials stay on that server. The browser retains the native summary
