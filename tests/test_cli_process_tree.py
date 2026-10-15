@@ -46,11 +46,21 @@ def _running(pid: int) -> bool:
     if sys.platform.startswith('linux'):
         try:
             return Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()[0] != 'Z'
-        except FileNotFoundError:
+        except (FileNotFoundError, ProcessLookupError):
             return False
     status = subprocess.run(['ps', '-p', str(pid), '-o', 'stat='], capture_output=True,
                             text=True, timeout=2, check=False)
     return bool(status.stdout.strip()) and not status.stdout.lstrip().startswith('Z')
+
+
+@pytest.mark.skipif(not sys.platform.startswith('linux'), reason='Linux procfs exit race')
+def test_liveness_probe_handles_process_exiting_during_stat_read(monkeypatch):
+    def vanished(*args, **kwargs):
+        raise ProcessLookupError('Process exited after opening procfs stat')
+
+    monkeypatch.setattr(Path, 'read_text', vanished)
+    monkeypatch.setattr(os, 'kill', lambda *args: None)
+    assert not _running(123456789)
 
 
 @pytest.mark.parametrize('redirect_child', [False, True])
