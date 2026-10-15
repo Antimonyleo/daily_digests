@@ -12,12 +12,13 @@ import feedparser
 import httpx
 from tenacity import (
     retry,
-    retry_if_exception_type,
+    retry_if_exception,
     stop_after_attempt,
     wait_exponential,
 )
 
 from ..models import Item, SourceSpec
+from ._retry import transient_http_error
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +39,7 @@ def _arxiv_polite_wait() -> None:
 @retry(
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=1, min=2, max=10),
-    retry=retry_if_exception_type((httpx.HTTPError, httpx.TimeoutException)),
+    retry=retry_if_exception(transient_http_error),
     reraise=False,
 )
 def _http_get_text(url: str, params: dict[str, str]) -> str:

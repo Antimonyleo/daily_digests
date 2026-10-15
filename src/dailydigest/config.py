@@ -29,6 +29,8 @@ class Settings(BaseSettings):
     llm_model: str = "gpt-4o-mini"
     # Summarizer: extractive | api | anthropic | claude_cli | codex_cli
     llm_backend: str = "extractive"
+    llm_summary_budget_seconds: float = Field(default=180.0, gt=0, le=3600)
+    llm_summary_max_failures: int = Field(default=2, ge=1, le=10)
 
     resend_api_key: str = ""
     digest_from: str = "onboarding@resend.dev"
@@ -66,6 +68,9 @@ class Settings(BaseSettings):
     # (prestige is a mild tie-breaker). Higher values reward high-quality AND
     # relevant work more and suppress low-impact venues harder.
     research_quality_weight: float = Field(default=1.4, ge=0.0, le=5.0)
+    # Optional experimental matching has no demonstrated extra selection benefit.
+    semantic_matching: bool = False
+    semantic_model_dir: str = ""
     # Scale of the topic-priority selection nudge. Multiplied by a normalized
     # per-interest priority (0..1) after the relevance and quality gates. It
     # never changes stored final scores or eligibility. Max nudge = scale*1.0.

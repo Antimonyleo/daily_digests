@@ -89,11 +89,27 @@ def _profile_parts_with_weights(profile: Profile) -> tuple[list[str], list[float
                 weights.append(1.5)  # bio sentences carry more context than individual keywords
 
     seen = {p.lower() for p in parts}
-    for keyword in profile.keywords:
+    canonical = getattr(profile, "canonical_facets", None) or {}
+    configured = {name.casefold(): spec for name, spec in canonical.items()}
+    keywords = list(profile.keywords)
+    keyword_names = {keyword.casefold() for keyword in keywords}
+    for name, spec in canonical.items():
+        if name.casefold() not in keyword_names and (spec.aliases or spec.description):
+            # Older profiles can retain more specific retrieval keywords while
+            # editing a distinct visible facet. Explicit reader detail must
+            # still affect relevance in that case, as one additional interest.
+            keywords.append(name)
+    for keyword in keywords:
         text = keyword.strip() if keyword else ""
         if not text:
             continue
-        parts.append(text)
+        spec = configured.get(text.casefold())
+        detail = _clean_facet_texts(
+            [getattr(spec, "description", ""), *getattr(spec, "aliases", [])[:3]]
+        ) if spec is not None else []
+        # One semantic row per interest: adding synonyms must not add extra
+        # top-k votes or silently strengthen an interest's relative priority.
+        parts.append("; ".join([text, *detail]) if detail else text)
         weights.append(interest_lc.get(text.lower(), 1.0))
         seen.add(text.lower())
 
@@ -310,7 +326,7 @@ def _facet_definitions(profile: Profile) -> list[tuple[str, list[str]]]:
             # name: a name such as "RNA nanotechnology" is often too broad to
             # be an attribution vector by itself. Fall back to the name only
             # for a minimally configured facet.
-            texts = _clean_facet_texts([*anchors, *aliases]) or [label]
+            texts = _clean_facet_texts([getattr(spec, "description", ""), *anchors, *aliases]) or [label]
             if texts:
                 definitions.append((label, texts))
         return definitions

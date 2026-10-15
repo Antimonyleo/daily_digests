@@ -172,7 +172,7 @@ def test_low_venue_impact_flags_item_for_cap():
     assert source_bucket(strong) == "published_journal"
 
 
-def test_mid_impact_venue_keeps_low_impact_policy_when_enriched():
+def test_mid_impact_venue_keeps_uncertain_policy_when_enriched():
     now = datetime(2026, 6, 1, tzinfo=timezone.utc)
     pub = now - timedelta(days=30)
     hidden = _item("HIDDEN", "https://doi.org/10.1000/hidden", published_at=pub)
@@ -201,8 +201,8 @@ def test_mid_impact_venue_keeps_low_impact_policy_when_enriched():
     for row in (hidden, direct):
         assert getattr(row, "venue_low_impact", False) is False
         assert getattr(row, "venue_high_impact", False) is False
-        assert source_bucket(row) == "low_impact_journal"
-        assert is_low_impact_research(row) is True
+        assert source_bucket(row) == "unknown_journal"
+        assert is_low_impact_research(row) is False
 
 
 def test_cached_enrichment_exposes_real_venue_and_keeps_scores_bounded():

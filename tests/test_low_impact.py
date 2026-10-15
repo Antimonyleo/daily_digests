@@ -29,10 +29,10 @@ def _row(title: str, source: str, section: str = "research") -> MagicMock:
 # --- classification ----------------------------------------------------------
 
 
-def test_unknown_venue_is_low_impact_bucket():
+def test_unknown_venue_has_separate_uncertainty_bucket():
     row = _row("A targeted therapeutics study", "Journal of Minor Results")
-    assert source_bucket(row) == "low_impact_journal"
-    assert is_low_impact_research(row) is True
+    assert source_bucket(row) == "unknown_journal"
+    assert is_low_impact_research(row) is False
 
 
 def test_top_journal_is_not_low_impact():
@@ -45,7 +45,7 @@ def test_venue_low_impact_flag_overrides_aggregator_bucket():
     # An OpenAlex item would normally bucket as "aggregator"; the enrichment flag
     # reroutes it to low_impact_journal so the frequency cap applies.
     row = _row("A targeted therapeutics study", "OpenAlex (biotech)")
-    assert source_bucket(row) == "aggregator"
+    assert source_bucket(row) == "unknown_journal"
     row.venue_low_impact = True
     assert source_bucket(row) == "low_impact_journal"
     assert is_low_impact_research(row) is True
@@ -53,7 +53,7 @@ def test_venue_low_impact_flag_overrides_aggregator_bucket():
 
 def test_venue_high_impact_flag_promotes_an_unlisted_journal():
     row = _row("A targeted therapeutics study", "Journal of Minor Results")
-    assert source_bucket(row) == "low_impact_journal"
+    assert source_bucket(row) == "unknown_journal"
     row.venue_high_impact = True
     assert source_bucket(row) == "published_journal"
     assert is_low_impact_research(row) is False
@@ -83,12 +83,12 @@ def test_venue_low_impact_flag_never_relabels_a_preprint_server():
     # Missing venue evidence is conservative, and the explicit enrichment flag
     # reaches the same low-impact result.
     hidden = _row("A targeted therapeutics study", "PubMed (your topics)")
-    assert source_bucket(hidden) == "low_impact_journal"
+    assert source_bucket(hidden) == "unknown_journal"
     hidden.venue_low_impact = True
     assert source_bucket(hidden) == "low_impact_journal"
 
 
-def test_hidden_unknown_pubmed_venue_is_low_impact_without_live_enrichment():
+def test_hidden_unknown_pubmed_venue_remains_unknown_without_live_enrichment():
     row = SimpleNamespace(
         title="A niche RNA paper",
         abstract="Primary research with methods and results.",
@@ -98,8 +98,8 @@ def test_hidden_unknown_pubmed_venue_is_low_impact_without_live_enrichment():
         id=1,
     )
 
-    assert source_bucket(row) == "low_impact_journal"
-    assert is_low_impact_research(row) is True
+    assert source_bucket(row) == "unknown_journal"
+    assert is_low_impact_research(row) is False
 
 
 def test_pubmed_without_venue_evidence_is_not_promoted_as_a_journal():
@@ -112,8 +112,8 @@ def test_pubmed_without_venue_evidence_is_not_promoted_as_a_journal():
         id=1,
     )
 
-    assert source_bucket(row) == "low_impact_journal"
-    assert is_low_impact_research(row) is True
+    assert source_bucket(row) == "unknown_journal"
+    assert is_low_impact_research(row) is False
 
 
 def test_hidden_top_pubmed_venue_keeps_published_journal_quality():
@@ -198,6 +198,12 @@ def test_quality_adjusted_score_stays_in_unit_interval():
 # --- frequency cap + relevance floor in selection ----------------------------
 
 
+def _low_row(title: str, source: str) -> MagicMock:
+    row = _row(title, source)
+    row.venue_low_impact = True
+    return row
+
+
 def _hq_pool(n: int):
     sources = [
         "Nature Methods",
@@ -217,7 +223,7 @@ def test_low_impact_journals_are_frequency_capped():
     # Low-impact items score *higher* but must still be capped to one of ten.
     scored = _hq_pool(12)
     scored += [
-        (_row(f"Minor paper {i}", f"Journal of Minor Results {i}"), 0.90 - i * 0.005)
+        (_low_row(f"Minor paper {i}", f"Journal of Minor Results {i}"), 0.90 - i * 0.005)
         for i in range(8)
     ]
     result = pick_top_per_section(scored, {"research": 10})
@@ -246,7 +252,7 @@ def test_low_impact_below_floor_is_excluded():
     # enough high-quality items exist to fill the section.
     scored = _hq_pool(12)
     scored += [
-        (_row(f"Minor paper {i}", f"Journal of Minor Results {i}"), 0.40 - i * 0.005)
+        (_low_row(f"Minor paper {i}", f"Journal of Minor Results {i}"), 0.40 - i * 0.005)
         for i in range(8)
     ]
     result = pick_top_per_section(scored, {"research": 10})
@@ -257,7 +263,7 @@ def test_low_impact_below_floor_is_excluded():
 def test_low_impact_below_floor_never_bypasses_quality_gate_as_last_resort():
     # A hard-minimum fill must not bypass the explicit low-impact relevance floor.
     scored = [
-        (_row(f"Minor paper {i}", f"Journal of Minor Results {i}"), 0.45 - i * 0.01)
+        (_low_row(f"Minor paper {i}", f"Journal of Minor Results {i}"), 0.45 - i * 0.01)
         for i in range(6)
     ]
     result = pick_top_per_section(scored, {"research": 5})
@@ -268,8 +274,8 @@ def test_low_impact_floor_uses_topic_score_not_fused_rank(monkeypatch):
     """A strong preference rank cannot rescue a weak topical match."""
     from dailydigest import config as config_mod
 
-    below = _row("Weak topic, high fused rank", "Journal of Minor Results")
-    above = _row("Strong topic, low fused rank", "Journal of Minor Findings")
+    below = _low_row("Weak topic, high fused rank", "Journal of Minor Results")
+    above = _low_row("Strong topic, low fused rank", "Journal of Minor Findings")
     settings = SimpleNamespace(
         max_preprint_research_frac=0.55,
         max_low_impact_research_frac=1.0,

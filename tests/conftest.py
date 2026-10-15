@@ -45,6 +45,8 @@ def _isolate_env(tmp_path, monkeypatch):
     monkeypatch.setenv("DB_PATH", str(db_file))
     monkeypatch.setenv("PROFILE_PATH", "config/profile.example.yaml")
     monkeypatch.setenv("LLM_API_KEY", "")
+    # Legacy tests never provision or download the optional matcher.
+    monkeypatch.setenv("SEMANTIC_MATCHING", "false")
     monkeypatch.setenv("USER_TZ", "UTC")
     # A developer's private opportunity settings must not change validation of
     # ordinary setup-form tests. Tests that exercise these sections opt in.

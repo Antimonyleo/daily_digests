@@ -278,9 +278,8 @@ def test_opportunity_profile_fit_cannot_rescue_off_topic_call(monkeypatch):
     assert _dynamic_section_caps(scored, feats)["opportunities"] == 1
 
 
-def test_venue_credit_rescues_borderline_top_journal(monkeypatch):
-    """A high-tier journal item just under the floor is rescued by venue credit;
-    the same cosine from an unknown venue is not."""
+def test_venue_reputation_does_not_establish_research_topic_fit(monkeypatch):
+    """Known and unknown venues obey the same personal-topic floor."""
     from dailydigest.pipeline import _filter_off_topic
 
     _cfg(monkeypatch, min_topic_relevance=0.68, venue_relevance_credit=0.10)
@@ -301,8 +300,8 @@ def test_venue_credit_rescues_borderline_top_journal(monkeypatch):
         _row_feature_key(unknown): {"topic_score": 0.66},
     }
     kept = {row.id for row, _ in _filter_off_topic(scored, feats)}
-    assert nature.id in kept          # 0.66 + 0.04 >= 0.68
-    assert unknown.id not in kept     # 0.66 < 0.68, no credit
+    assert nature.id not in kept
+    assert unknown.id not in kept
 
 
 def test_venue_credit_does_not_rescue_off_topic_prestige(monkeypatch):

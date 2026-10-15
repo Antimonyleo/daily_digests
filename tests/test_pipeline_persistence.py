@@ -627,7 +627,7 @@ def test_run_all_persists_summaries_for_web_view(monkeypatch, tmp_path):
             external_id="summary-1",
             url="https://example.com/summary-1",
             title="Summary persistence",
-            abstract="Original abstract.",
+            abstract="Original abstract describes a tested design method and its experimental results.",
             published_at=datetime.now(timezone.utc),
         )
         s.add(row)
@@ -665,6 +665,7 @@ def test_run_all_enriches_only_candidates_that_clear_free_gates(
     from dailydigest import store as store_mod
     from dailydigest.rank import enrich as enrich_mod
 
+    monkeypatch.setenv("MIN_TOPIC_RELEVANCE", "0.65")
     _reset_store(tmp_path, monkeypatch)
     with store_mod.session_scope() as session:
         rows = [
@@ -1259,7 +1260,8 @@ def test_dry_run_after_sent_digest_refreshes_preview_and_preserves_sent_at(monke
             section="research",
             external_id="new",
             url="https://example.com/new",
-            title="New item",
+            title="New research design study",
+            abstract="A validated research design method with quantitative measurements and results.",
         )
         s.add_all([old, new])
         s.flush()
@@ -1312,7 +1314,8 @@ def test_run_all_does_not_mark_sent_when_send_digest_returns_false(monkeypatch, 
             section="research",
             external_id="unsent",
             url="https://example.com/unsent",
-            title="Unsent item",
+            title="An unsent research design study",
+            abstract="A validated research design method with quantitative measurements and results.",
         )
         s.add(item)
         s.flush()

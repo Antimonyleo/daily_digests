@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import re
 import time
+from collections import Counter
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timezone
@@ -47,7 +48,7 @@ from .rank.source_quality import (
     is_high_quality_journal_source,
     should_skip_item,
     source_bucket,
-    venue_relevance_credit,
+    venue_relevance_credit as venue_relevance_credit,
 )
 from .store import (
     DigestRow,
@@ -105,7 +106,7 @@ DEADLINE_SECTIONS = {"opportunities", "events"}
 DEADLINE_KEEP = {"full": None, "usual": 6, "minimal": 3}
 
 _TITLE_BLOCKLIST = re.compile(
-    r"^(?:volume\s+\d|issue\s+\d|editorial\b|correspondence\b|correction\b|"
+    r"^(?:volume\s+\d|issue\s+\d|editorial\b|correspondence\b|"
     r"erratum\b|in\s+this\s+issue|table\s+of\s+contents|show\s+hn:|ask\s+hn:|"
     r"sponsored:?|webinar:|save\s+the\s+date)",
     re.IGNORECASE,
@@ -130,10 +131,8 @@ def _quality_gate(rows: list[ItemRow]) -> tuple[list[ItemRow], list[dict[str, An
 
     Drops items that are clearly not useful: very short titles, editorial
     metadata, content-farm patterns, and research items with no abstract.
-    Skipped when the pool is < 10 items to preserve test/backfill behaviour.
+    The same content rules apply to sparse and busy days.
     """
-    if len(rows) < 10:
-        return rows, []
     out: list[ItemRow] = []
     drops: list[dict[str, Any]] = []
     for r in rows:
@@ -308,10 +307,37 @@ def apply_reading_mode(
     )
 
 
+def _interest_coverage_audit(snapshot: dict) -> list[dict]:
+    """Report best-match attribution without inventing missing supply counts."""
+    profile = snapshot.get("profile") or {}
+    names = list(profile.get("canonical_facets") or {}) or list(profile.get("keywords") or [])
+    rows = []
+    for name in names:
+        attributed = [candidate for candidate in snapshot.get("candidates", [])
+                      if str(candidate.get("features", {}).get("primary_facet", "")).casefold() == name.casefold()]
+        rejected = Counter(str(candidate.get("first_rejected_stage") or "selection budget")
+                           for candidate in attributed if not candidate.get("selected"))
+        queries = []
+        for source in snapshot.get("source_health", []):
+            for diagnostic in (source.get("diagnostics") or {}).get("queries", []):
+                # An OR query can be acknowledged as shared work, but its total
+                # must never become an individual interest's result count.
+                if str(diagnostic.get("interest", diagnostic.get("query", ""))).casefold() == name.casefold():
+                    queries.append("failed" if diagnostic.get("failure") else
+                                   "limited" if diagnostic.get("truncated") else "completed")
+        rows.append({"title": name, "candidates": len(attributed),
+                     "eligible": sum(bool(candidate.get("eligible")) for candidate in attributed),
+                     "queries": queries, "rejections": dict(rejected),
+                     "explanation": "Counts show scored papers attributed to this interest, not all retrieved papers. Unscored rejections and shared searches cannot establish an individual supply count."})
+    return rows
+
+
 def ingest_all(
     progress_callback: ProgressCallback | None = None,
     days: int = 2,
     section_settings: Settings | None = None,
+    stats_out: list[IngestStats] | None = None,
+    should_cancel: Callable[[], bool] | None = None,
 ) -> int:
     """Fetch all sources, dedupe + langdetect filter, upsert. Returns rows inserted.
 
@@ -335,6 +361,12 @@ def ingest_all(
         if (getattr(spec, "section", "research") or "research") == "research"
         if (family := _research_source_family(spec))
     }
+    personalized_sources = {
+        str(spec.name) for spec in specs
+        if bool(getattr(spec, "profile_driven", False))
+        and (getattr(spec, "section", "research") or "research") == "research"
+    }
+    personalized_responded: set[str] = set()
     successful_research_families: set[str] = set()
     configured_deadline_sections = {
         str(getattr(spec, "section", "") or "")
@@ -354,6 +386,9 @@ def ingest_all(
         # Calls to the same upstream are deliberately sequential so bounded
         # concurrency does not become an accidental API rate-limit burst.
         for index, spec in group:
+            if should_cancel is not None and should_cancel():
+                raise BrewCancelled("Brew cancelled during source collection.")
+            source = None
             t0 = time.monotonic()
             try:
                 source = dispatch_source(spec)
@@ -379,6 +414,9 @@ def ingest_all(
                     error=f"{type(exc).__name__}: {exc}"[:200],
                     duration_ms=duration_ms,
                 )
+            diagnostics = getattr(source, "last_fetch_diagnostics", {})
+            if isinstance(diagnostics, dict):
+                stat.diagnostics = diagnostics
             results.append((index, spec, fetched, stat))
         return results
 
@@ -389,11 +427,18 @@ def ingest_all(
             for index, spec, fetched, stat in future.result():
                 fetched_by_index[index] = (spec, fetched, stat)
 
+    # A request cancelled inside the final adapter can be wrapped as an ordinary
+    # fetch error. Preserve cancellation before interpreting empty/failed supply.
+    if should_cancel is not None and should_cancel():
+        raise BrewCancelled("Brew cancelled during source collection.")
+
     # Restore configured order before dedupe. That keeps source precedence and
     # outputs deterministic even though independent providers fetched in parallel.
     for index in range(len(specs)):
         spec, fetched, stat = fetched_by_index[index]
         stats.append(stat)
+        if stat.ok and str(spec.name) in personalized_sources:
+            personalized_responded.add(str(spec.name))
         all_items.extend(fetched)
         section = str(getattr(spec, "section", "") or "")
         if stat.ok and section in configured_deadline_sections:
@@ -410,6 +455,8 @@ def ingest_all(
         if family and fetched_research:
             successful_research_families.add(family)
 
+    if stats_out is not None:
+        stats_out.extend(stats)
     try:
         health.record(stats)
     except Exception as e:  # noqa: BLE001
@@ -442,6 +489,13 @@ def ingest_all(
         raise RuntimeError(
             f"{label} source coverage is degraded: every configured provider failed. "
             "Brew stopped so a partial slate does not replace the current digest. "
+            "Check source health and retry."
+        )
+    if personalized_sources and not personalized_responded:
+        raise RuntimeError(
+            "Personalized research source coverage is degraded: every configured "
+            "profile-driven research provider failed. Brew stopped so generic "
+            "feeds do not replace the current personalized digest. "
             "Check source health and retry."
         )
     # A handful of results from one surviving aggregator is not a healthy
@@ -633,12 +687,9 @@ def _dynamic_section_caps(
         section = row.section or ""
         feat = features.get(_row_feature_key(row), {})
         if section == "research":
-            v = feat.get("topic_score", feat.get("confidence_score", fused))
-            neg = float(feat.get("negative_interest_penalty", 0.0) or 0.0)
-            if (
-                v is not None
-                and float(v) + venue_relevance_credit(row) - neg >= topic_floor
-            ):
+            effective = dict(feat)
+            effective.setdefault("topic_score", feat.get("confidence_score", fused))
+            if _research_relevant(row, effective, topic_floor):
                 counts[section] += 1
         elif section in ("industry", "world"):
             v = feat.get("confidence_score", fused)
@@ -665,6 +716,42 @@ def _dynamic_section_caps(
     return caps
 
 
+def _apply_topic_alignment(scored, features, profile, settings, *, check_cancel=None):
+    """Run the bounded local matcher before eligibility, preserving raw scores.
+
+    An explicitly configured experimental reranker takes precedence. Failure
+    propagates so an interrupted model pass cannot publish a partial digest.
+    """
+    if not getattr(settings, "semantic_matching", False) or getattr(settings, "contribution_reranker_path", ""):
+        return scored
+    from .rank.semantic_alignment import apply_topic_alignment
+
+    return apply_topic_alignment(
+        scored, features, profile, model_dir=getattr(settings, "semantic_model_dir", "") or None,
+        check_cancel=check_cancel,
+    )
+
+
+def _research_relevant(row, feature, topic_floor, *, adaptive=True):
+    """One eligibility rule shared by filtering and adaptive section counts."""
+    match = feature.get("topic_alignment") or {}
+    logit = match.get("logit")
+    if not adaptive:
+        return True
+    topic = feature.get("topic_score")
+    if topic is None:
+        return True
+    negative = float(feature.get("negative_interest_penalty", 0.0) or 0.0)
+    # Quality selection still uses the original topic cosine. A strong joint
+    # match may rescue only a borderline embedding miss, never a negative vote
+    # preference or a low-quality-source floor.
+    rescue = logit is not None and float(logit) >= 4.0 and negative == 0.0 and float(topic) >= topic_floor - .08
+    # Publication reputation orders already relevant work. It cannot prove
+    # personal topic fit, including when the optional model is disabled.
+    return rescue or float(topic) - negative >= topic_floor
+
+
+
 def _filter_off_topic(
     scored: list[tuple[ItemRow, float]],
     features: ScoreFeatureMap,
@@ -685,8 +772,7 @@ def _filter_off_topic(
     snapshot is missing (so a scoring fallback never silently empties a section).
     """
     s = get_settings()
-    if not getattr(s, "adaptive_section_sizes", False):
-        return scored
+    adaptive = bool(getattr(s, "adaptive_section_sizes", False))
     topic_floor = float(getattr(s, "min_topic_relevance", 0.65))
     news_floor = float(getattr(s, "min_news_quality", 0.45))
     opportunity_floor = float(getattr(s, "min_opportunity_relevance", 0.58))
@@ -695,16 +781,11 @@ def _filter_off_topic(
         section = row.section or ""
         feat = features.get(_row_feature_key(row), {})
         if section == "research":
-            t = feat.get("topic_score")
-            neg = float(feat.get("negative_interest_penalty", 0.0) or 0.0)
-            # Effective relevance = topic cosine + venue credit − negative-interest
-            # penalty. The venue credit rescues borderline top-venue work; the
-            # negative penalty excludes off-field items whose cosine clears the floor.
-            if (
-                t is not None
-                and float(t) + venue_relevance_credit(row) - neg < topic_floor
-            ):
+            if not _research_relevant(row, feat, topic_floor, adaptive=adaptive):
                 continue
+        elif not adaptive:
+            out.append((row, score))
+            continue
         elif section in ("industry", "world"):
             c = feat.get("confidence_score")
             if c is not None and float(c) < news_floor:
@@ -880,6 +961,17 @@ def _apply_topic_selection_preferences(
             if coverage_bonus:
                 ordering_bonus[idx] = ordering_bonus.get(idx, 0.0) + coverage_bonus
                 feat["topic_coverage_bonus"] = round(coverage_bonus, 4)
+
+    # A generic retrieval model can miss specialized terminology. Disagreement
+    # lowers priority modestly; it never proves an otherwise-related paper is
+    # out of scope. Incomplete text cannot support even this negative nudge.
+    for idx, (row, _score) in enumerate(scored):
+        if (row.section or "") != "research":
+            continue
+        feat = features.get(_row_feature_key(row), {})
+        match = feat.get("topic_alignment") or {}
+        if match.get("complete") is True and float(match.get("logit", 0.0)) < -9.5:
+            ordering_bonus[idx] = ordering_bonus.get(idx, 0.0) - .06
 
     for idx, bonus in ordering_bonus.items():
         feat = features.get(_row_feature_key(scored[idx][0]), {})
@@ -1059,11 +1151,16 @@ def _should_write_digest(digest_id: str) -> bool:
         return row.sent_at is None
 
 
+class BrewCancelled(RuntimeError):
+    """Cooperative cancellation before digest publication."""
+
+
 def run_all(
     dry_run: bool = False,
     backfill_days: int | None = None,
     progress_callback: ProgressCallback | None = None,
     reading_mode: str = "full",
+    should_cancel: Callable[[], bool] | None = None,
 ) -> str:
     """Run ingest + rank + summarize + render + send. Returns the digest id.
 
@@ -1078,6 +1175,11 @@ def run_all(
     and ``minimal`` keeps up to 5 research picks plus the best pick from every
     other non-empty section.
     """
+    def check_cancel() -> None:
+        if should_cancel is not None and should_cancel():
+            raise BrewCancelled("Brew cancelled before publication; the saved digest is unchanged.")
+
+    check_cancel()
     reading_mode = normalize_reading_mode(reading_mode)
     init_db()
 
@@ -1132,7 +1234,9 @@ def run_all(
         progress_callback=progress_callback,
         days=pool_days,
         section_settings=section_settings,
+        **({"should_cancel": should_cancel} if should_cancel is not None else {}),
     )
+    check_cancel()
     logger.info("upserted %d new items", inserted)
 
     # NOTE: there is no model to retrain. The ranker reads the vote table
@@ -1407,6 +1511,9 @@ def run_all(
     # within-day dedupe. Neither gate depends on citation data, so enriching
     # rejected candidates only makes a brew slower without changing its slate.
     pickable = _filter_actionable_opportunities(scored, opportunity_profile)
+    pickable = _apply_topic_alignment(
+        pickable, score_features, profile, section_settings, check_cancel=check_cancel,
+    )
     pickable = _filter_off_topic(pickable, score_features)
 
     # Optional live citation-velocity boost via OpenAlex (no-op unless enabled).
@@ -1501,6 +1608,7 @@ def run_all(
         ),
         catch_up=window_days > 2,
         score_features=score_features,
+        settings=section_settings,
     )
 
     # Active-learning exploration: swap a few low-scored picks for high-quality
@@ -1664,6 +1772,7 @@ def run_all(
                     selection_order_bonus=float(
                         _feature(row).get("selection_order_bonus", 0.0)
                     ),
+                    topic_alignment=_feature(row).get("topic_alignment"),
                 ),
             )
             for row, score, label in labeled
@@ -1742,6 +1851,15 @@ def run_all(
             "missed_top_journals": top_journal_audit,
             "reading_mode_overflow": reading_mode_overflow,
             "candidate_funnel": [funnel_audit],
+            "interest_coverage": _interest_coverage_audit({
+                "profile": profile.model_dump() if hasattr(profile, "model_dump") else vars(profile),
+                "source_health": health.latest_snapshot(),
+                "candidates": [{"features": score_features.get(_row_feature_key(row), {}),
+                                "eligible": any(int(row.id) == int(other.id) for other, _ in pickable),
+                                "selected": int(row.id) in _selected_ids,
+                                "first_rejected_stage": None if any(int(row.id) == int(other.id) for other, _ in pickable) else "eligibility"}
+                               for row, _ in scored],
+            }),
             # An ordinary same-day rebrew must clear a catch-up briefing that
             # was created by an earlier explicit backfill.
             "catch_up_synthesis": [],
@@ -1756,6 +1874,7 @@ def run_all(
                     ]
             except Exception as _e:  # noqa: BLE001
                 logger.warning("catch-up synthesis write failed: %s", _e)
+        check_cancel()
         publish_digest(
             digest_id,
             _labeled_rows,

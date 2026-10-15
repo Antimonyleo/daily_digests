@@ -824,7 +824,7 @@ class TestPickTopPerSection:
         assert pick_top_per_section([], {"research": 5}) == []
 
     def test_zero_cap_excludes_section(self):
-        scored = [(_make_row("R1", "research"), 0.8)]
+        scored = [(_make_selectable_row("R1", "research"), 0.8)]
         caps = {"research": 0}
         result = pick_top_per_section(scored, caps)
         assert result == []
@@ -849,17 +849,17 @@ class TestPickTopPerSection:
     def test_research_selection_caps_arxiv_cs_when_journals_are_available(self):
         # arXiv CS items score higher but journals must still appear due to mandatory
         # quality fill. Per-source cap (Fix 7) means a single journal source is also
-        # capped, so we check the arXiv ceiling and that journals are present.
+        # capped, so we check the common source ceiling and that journals are present.
         arxiv_items = []
         for idx in range(12):
-            row = _make_row(f"arXiv CS method {idx}", "research")
+            row = _make_selectable_row(f"arXiv CS method {idx}", "research")
             row.source = "arXiv cs.LG"
             arxiv_items.append((row, 0.95 - idx * 0.01))
         journal_items = []
         journal_sources = ["Nature Biotechnology", "Nature Methods", "Nature Medicine",
                            "Nature Chemistry", "Nature Materials"]
         for idx in range(10):
-            row = _make_row(f"Nature family paper {idx}", "research")
+            row = _make_selectable_row(f"Nature family paper {idx}", "research")
             row.source = journal_sources[idx % len(journal_sources)]
             journal_items.append((row, 0.70 - idx * 0.01))
 
@@ -870,17 +870,17 @@ class TestPickTopPerSection:
             1 for row, _score in result
             if row.source in journal_sources
         )
-        assert arxiv_count <= 1
+        assert arxiv_count <= 2
         assert journal_count >= 6
 
     def test_research_selection_protects_top_journal_papers_below_preprints(self):
         scored = []
         for idx in range(8):
-            row = _make_row(f"preprint {idx}", "research")
+            row = _make_selectable_row(f"preprint {idx}", "research")
             row.source = "bioRxiv (recent)"
             scored.append((row, 0.92 - idx * 0.01))
         for idx in range(4):
-            row = _make_row(f"Cell paper {idx}", "research")
+            row = _make_selectable_row(f"Cell paper {idx}", "research")
             row.source = "Cell"
             scored.append((row, 0.66 - idx * 0.01))
 
@@ -892,15 +892,15 @@ class TestPickTopPerSection:
     def test_research_selection_caps_single_source_dominance(self):
         scored = []
         for idx in range(18):
-            row = _make_row(f"Advanced Materials paper {idx}", "research")
+            row = _make_selectable_row(f"Advanced Materials paper {idx}", "research")
             row.source = "Advanced Materials"
             scored.append((row, 1.00 - idx * 0.005))
         for idx in range(8):
-            row = _make_row(f"Science paper {idx}", "research")
+            row = _make_selectable_row(f"Science paper {idx}", "research")
             row.source = "Science"
             scored.append((row, 0.82 - idx * 0.005))
         for idx in range(8):
-            row = _make_row(f"Nature paper {idx}", "research")
+            row = _make_selectable_row(f"Nature paper {idx}", "research")
             row.source = "Nature"
             scored.append((row, 0.78 - idx * 0.005))
 
@@ -916,10 +916,10 @@ class TestPickTopPerSection:
     def test_exceptional_preprint_can_displace_marginal_journal_item(self):
         scored = []
         for idx in range(12):
-            row = _make_row(f"Published journal paper {idx}", "research")
+            row = _make_selectable_row(f"Published journal paper {idx}", "research")
             row.source = "Advanced Materials" if idx < 6 else "Science"
             scored.append((row, 1.00 - idx * 0.01))
-        strong_preprint = _make_row(
+        strong_preprint = _make_selectable_row(
             "BioRxiv breakthrough RNA delivery preprint",
             "research",
             "Highly relevant method and mechanism.",
@@ -1058,12 +1058,12 @@ class TestSlateHasNoDuplicateRows:
         rows = []
         # A strong preprint: clears the exceptional threshold AND leads the main
         # pass, so both passes try to take it.
-        top = _make_row("Top preprint", "research", "DNA nanostructure design.")
+        top = _make_selectable_row("Top preprint", "research", "DNA nanostructure design.")
         top.id = 54864
         top.source = "arXiv q-bio.BM"
         rows.append((top, 0.95))
         for i in range(6):
-            j = _make_row(f"Journal paper {i}", "research", "A study.")
+            j = _make_selectable_row(f"Journal paper {i}", "research", "A study.")
             j.id = 700 + i
             j.source = "Nature Nanotechnology"
             rows.append((j, 0.70 - i * 0.01))
@@ -1092,16 +1092,16 @@ class TestSlateHasNoDuplicateRows:
 
         rows = []
         for i in range(8):
-            r = _make_row(f"bioRxiv paper {i}", "research", "DNA nanostructure work.")
+            r = _make_selectable_row(f"bioRxiv paper {i}", "research", "DNA nanostructure work.")
             r.id = 800 + i
             r.source = "bioRxiv (recent)"
             rows.append((r, 0.90 - i * 0.01))
-        chem = _make_row("ChemRxiv paper", "research", "DNA nanostructure work.")
+        chem = _make_selectable_row("ChemRxiv paper", "research", "DNA nanostructure work.")
         chem.id = 900
         chem.source = "ChemRxiv"
         rows.append((chem, 0.80))
         for i in range(8):
-            j = _make_row(f"Journal paper {i}", "research", "A study.")
+            j = _make_selectable_row(f"Journal paper {i}", "research", "A study.")
             j.id = 950 + i
             j.source = "Nature Nanotechnology"
             rows.append((j, 0.70 - i * 0.01))
@@ -1122,10 +1122,10 @@ class TestNewsPickerDeduplicates:
     """
 
     def _pair_for_same_item(self):
-        a = _make_row("Same story", "industry", "One item, two row objects.")
+        a = _make_selectable_row("Same story", "industry", "One item, two row objects.")
         a.id = 4242
         a.source = "STAT"
-        b = _make_row("Same story", "industry", "One item, two row objects.")
+        b = _make_selectable_row("Same story", "industry", "One item, two row objects.")
         b.id = 4242
         b.source = "STAT"
         assert a is not b
@@ -1145,7 +1145,7 @@ class TestNewsPickerDeduplicates:
 
         rows = []
         for i in range(6):
-            r = _make_row(f"STAT story {i}", "industry", "News.")
+            r = _make_selectable_row(f"STAT story {i}", "industry", "News.")
             r.id = 5000 + i
             r.source = "STAT"
             rows.append((r, 0.9 - i * 0.01))
