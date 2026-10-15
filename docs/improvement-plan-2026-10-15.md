@@ -158,6 +158,42 @@ finds no private files. Measure both build cost and browser compute saved.
 New evidence: `.full-review/improvement-plan-2026-10-15/`.
 Prior release evidence: `.full-review/compute-preferences-2026-10-15/report.json`
 and `.full-review/alignment-fixes-2026-10-15/reporter-profile/`.
+
+### Authorized publication and bounded live evaluation
+
+The owner authorized the next release and evaluation. Browser implementation
+commits `9a91871`/`b690cac` and native shared-fix commit `5f8bfe8` were pushed;
+Linux CI and native launcher checks on macOS/Windows passed. A subsequent narrow
+correction recognizes Advanced Science's exact NLM titles/abbreviation (Catalog
+101664569, ISSN2198-3844), preserving its existing canonical tier and explicit
+impact evidence. Similar-name lookalikes stay unknown; ranking cache identity
+advances to v16. It does not change topic embeddings, thresholds or source weights.
+
+The release acceptance probe now selects actually covered public texts. Partial
+or empty optional precomputes verify local fallback instead of requiring a fully
+populated accelerator. The earlier deployment run was superseded before publishing
+so the latest release includes both corrections. Results and remaining limits
+are recorded under `.full-review/release-2026-10-15/`.
+
+Live public metadata capture returned184 URL records across catalysis, quantum
+computing and solar-energy profiles. Actual offline scoring and selection were
+replayed in isolated state with socket access blocked. Metadata inspection found
+a publisher-confirmed News & Views item supplied as an article by OpenAlex; its
+official RSS also omits genre. Providing the publisher genre makes the existing
+exclusion gate reject it, but no automatic publisher-genre lookup is implemented.
+A generic-repository preprint lacks independent scientific-quality evidence;
+some quantum/photodetector selections are related context rather than direct task
+contributions. The exact venue correction also exposes a broad biomedical quantum
+opinion through the existing unknown-source quota. These are remaining evaluation
+findings, not evidence that universal semantic alignment is solved. No title/DOI
+blacklist or speculative scoring adjustment was added to conceal them.
+
+A real Linux Chromium benchmark on24 public texts measured one-core encoding at
+18–22s versus9–10s with four threads (two runs each, median2.11x speedup, identical
+float32 vectors). This is not a Mac/Windows/mobile or full-brew benchmark. No GPU
+device is exposed in this session. A separate Transformers4.3.1 install reports
+zero npm findings but fails fresh offline loading of the existing tokenizer;
+production retains3.8.1 pending a verified asset-loading migration.
 Implementation and review results:
 
 - Lifecycle: bounded exclusive lock handoff, interrupted-brew notice, committed
