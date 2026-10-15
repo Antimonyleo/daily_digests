@@ -318,16 +318,35 @@ def _interest_coverage_audit(snapshot: dict) -> list[dict]:
         rejected = Counter(str(candidate.get("first_rejected_stage") or "selection budget")
                            for candidate in attributed if not candidate.get("selected"))
         queries = []
+        searches = []
         for source in snapshot.get("source_health", []):
             for diagnostic in (source.get("diagnostics") or {}).get("queries", []):
                 # An OR query can be acknowledged as shared work, but its total
                 # must never become an individual interest's result count.
                 if str(diagnostic.get("interest", diagnostic.get("query", ""))).casefold() == name.casefold():
-                    queries.append("failed" if diagnostic.get("failure") else
-                                   "limited" if diagnostic.get("truncated") else "completed")
+                    status = ("not run" if diagnostic.get("attempted") is False else
+                              "failed" if diagnostic.get("failure") else
+                              "limited" if diagnostic.get("truncated") else "completed")
+                    queries.append(status)
+                    count = diagnostic.get("returned_count")
+                    search = {"source": source.get("source") or "Source",
+                              "query": str(diagnostic.get("query") or ""), "status": status,
+                              "returned_count": count if status in {"completed", "limited"}
+                              and type(count) is int and count >= 0 else None}
+                    provider_warnings = diagnostic.get("warnings")
+                    if isinstance(provider_warnings, dict):
+                        labels = {"quotedphrasesnotfound": "Quoted phrase not found",
+                                  "phrasesignored": "Ignored phrase"}
+                        messages = [f"{labels[key]}: {message}" if key in labels else message
+                                    for key, group in provider_warnings.items()
+                                    if isinstance(group, list) for message in group
+                                    if isinstance(message, str) and message.strip()]
+                        if messages:
+                            search["warnings"] = list(dict.fromkeys(messages))
+                    searches.append(search)
         rows.append({"title": name, "candidates": len(attributed),
                      "eligible": sum(bool(candidate.get("eligible")) for candidate in attributed),
-                     "queries": queries, "rejections": dict(rejected),
+                     "queries": queries, "searches": searches, "rejections": dict(rejected),
                      "explanation": "Counts show scored papers attributed to this interest, not all retrieved papers. Unscored rejections and shared searches cannot establish an individual supply count."})
     return rows
 
