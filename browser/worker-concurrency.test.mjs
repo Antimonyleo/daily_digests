@@ -30,6 +30,20 @@ function harness(overrides = {}) {
     configure: { id: 1, type: 'configure-companion', endpoint: 'http://127.0.0.1:9999', token: 'fixture' } };
 }
 
+test('compute status distinguishes the requested GPU, actual CPU fallback and active brew', async () => {
+  const h = harness({ computeMode: 'gpu', jobRunning: true, state: {
+    capabilities: { gpu: false }, engine: { device: 'wasm', threads: 1,
+      stats: { calls: 2, completedInputs: 12, cpuFallbacks: 1 } },
+    py: { globals: { get: () => () => true } },
+  } });
+  await h.send({ id: 10, type: 'compute-status' });
+  const status = JSON.parse(h.replies[0].body);
+  assert.equal(status.mode, 'gpu');
+  assert.equal(status.device, 'wasm');
+  assert.equal(status.busy, true);
+  assert.equal(status.stats.completedInputs, 12);
+});
+
 test('a brew starting during companion health prevents later configuration mutation', async () => {
   const health = deferred();
   const h = harness({ companionCall: () => health.promise });

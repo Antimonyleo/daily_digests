@@ -21,6 +21,8 @@ h1 { font-size: clamp(28px, 5vw, 44px); line-height: 1.15; }
 .browser-bar { min-height: 48px; flex-shrink: 0; display: flex; gap: 8px; align-items: center; padding: 6px 16px; background: #fff; border-top: 1px solid #dde3dc; font-size: 12px; }
 #status { flex: 1; min-width: 0; overflow-wrap: anywhere; line-height: 1.4; }
 #compute-mode { width: 100%; font: inherit; padding: 8px; }
+.storage-consent { flex-shrink: 0; padding: 8px 16px; border-top: 1px solid #dde3dc; font-size: 13px; line-height: 1.4; max-height: 30dvh; overflow-y: auto; }
+.storage-consent p { margin: 0; }
 @media (max-width: 720px) {
   .browser-bar { gap: 4px; padding-inline: 8px; }
   .browser-bar summary { padding-inline: 5px; }

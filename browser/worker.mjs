@@ -267,6 +267,7 @@ async function persist(options = {}) {
 async function pumpJobs() {
   if (jobRunning || !state.py.globals.get('has_jobs')()) return;
   jobRunning = true;
+  self.postMessage({ type: 'compute-state', busy: true });
   try {
     while (state.py.globals.get('has_jobs')()) {
       try { await state.py.globals.get('run_job').callPromising(); }
@@ -274,7 +275,11 @@ async function pumpJobs() {
     }
   } catch (error) {
     self.postMessage({ type: 'error', message: error.message || String(error) });
-  } finally { jobRunning = false; await persist({ force: true }); }
+  } finally {
+    jobRunning = false;
+    await persist({ force: true });
+    self.postMessage({ type: 'compute-state', busy: false });
+  }
 }
 self.onmessage = async ({ data }) => {
   try {
@@ -298,7 +303,8 @@ self.onmessage = async ({ data }) => {
     }
     if (data.type === 'compute-status') {
       self.postMessage(response(data.id, JSON.stringify({ mode: computeMode, capabilities: state.capabilities,
-        device: state.engine.device, threads: state.engine.threads })));
+        device: state.engine.device, threads: state.engine.threads, stats: state.engine.stats,
+        busy: jobRunning || Boolean(state.py.globals.get('has_jobs')()) })));
       return;
     }
     if (data.type === 'configure-compute') {

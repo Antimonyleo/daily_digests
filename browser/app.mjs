@@ -1,6 +1,24 @@
 const LOCAL_ORIGIN = 'http://127.0.0.1:8765';
 import { formatComputeProgress } from './compute.mjs';
 
+export function computeStatusText(result) {
+  const completed = result.stats?.completedInputs || 0;
+  const backend = result.device === 'webgpu' ? 'GPU' : result.threads > 1 ? `CPU · up to ${result.threads} cores` : 'CPU · one core';
+  const actual = result.mode === 'gpu' && result.device !== 'webgpu'
+    ? 'GPU requested; using CPU fallback.'
+    : completed ? `Used ${backend} for ${completed} new text comparisons this session.`
+      : `${backend} selected; no new text comparisons completed this session.`;
+  return actual + (result.busy ? ' A brew is running. Stop it or wait for it to finish before changing Compute.' : ' Changes apply to the next brew.');
+}
+
+export async function requestStorageProtection(storage) {
+  if (!storage?.persist) return { granted: false, message: 'This browser cannot request storage protection. Export backups regularly.' };
+  const granted = await storage.persist();
+  return { granted, message: granted
+    ? 'Persistent storage granted. Keep backups for device changes or manual clearing.'
+    : 'Persistent storage was not granted. Export backups regularly; this browser may clear site data.' };
+}
+
 // Only app-local routes can enter the Python request bridge.
 export function localPath(value, base = '/') {
   const url = new URL(value, LOCAL_ORIGIN + base);
@@ -413,24 +431,30 @@ async function boot() {
       companionStatus.textContent = configured ? `Connected to ${result.endpoint}. Available: ${names.join(', ') || 'no optional services'}.` : 'No companion configured.';
     } catch (error) { companionStatus.textContent = error.message; }
   }
-  async function refreshCompute() {
+  let computeApplying = false;
+  async function refreshCompute({ keepSelection = false } = {}) {
     try {
       const result = await companionCall({ type: 'compute-status' });
       const select = document.getElementById('compute-mode');
-      select.value = result.mode;
+      if (!keepSelection) select.value = result.mode;
       select.querySelector('[value="gpu"]').disabled = !result.capabilities.gpu;
       const canEnableIsolation = 'serviceWorker' in navigator && isSecureContext && navigator.hardwareConcurrency > 1;
       select.querySelector('[value="multicore"]').disabled = !result.capabilities.multicore && !canEnableIsolation;
       document.getElementById('compute-support').textContent =
         `${result.capabilities.gpu ? 'WebGPU is exposed by this browser; hardware availability is checked when used.' : 'GPU acceleration is unavailable in this browser.'} ${result.capabilities.multicore ? `Up to ${result.capabilities.threads} CPU cores are available.` : canEnableIsolation ? 'Selecting multiple cores will try enabling browser isolation and reload once. If unavailable, computation stays on one core.' : 'Multiple CPU cores are unavailable on this site or browser.'}`;
-      document.getElementById('compute-status').textContent = result.mode === 'gpu'
-        ? result.device === 'webgpu' ? 'GPU acceleration selected (experimental). If it cannot run, this device will use CPU.' : 'GPU hardware is unavailable here; using CPU.'
-        : result.threads > 1 ? `CPU · up to ${result.threads} cores.` : 'CPU · one core. GPU acceleration is opt-in.';
-      document.getElementById('compute-apply').disabled = false;
+      document.getElementById('compute-status').textContent = computeStatusText(result);
+      document.getElementById('compute-apply').disabled = result.busy || computeApplying;
     } catch (error) { document.getElementById('compute-status').textContent = error.message; }
   }
+  document.getElementById('compute-menu').addEventListener('toggle', event => {
+    if (event.target.open && ready) refreshCompute({ keepSelection: true });
+  });
   document.getElementById('compute-form').onsubmit = async event => {
     event.preventDefault();
+    if (computeApplying) return;
+    computeApplying = true;
+    document.getElementById('compute-apply').disabled = true;
+    document.getElementById('compute-status').textContent = 'Saving your compute choice before reloading…';
     try {
       const mode = document.getElementById('compute-mode').value;
       const needsIsolation = mode === 'multicore' && !crossOriginIsolated;
@@ -451,7 +475,11 @@ async function boot() {
         });
       }
       location.reload();
-    } catch (error) { document.getElementById('compute-status').textContent = error.message; }
+    } catch (error) {
+      computeApplying = false;
+      await refreshCompute({ keepSelection: true });
+      document.getElementById('compute-status').textContent = error.message;
+    }
   };
   const download = (body, type, filename) => {
     const url = URL.createObjectURL(new Blob([body], { type }));
@@ -502,6 +530,7 @@ async function boot() {
       document.getElementById('companion-connect').disabled = false;
       refreshCompanion();
       refreshCompute();
+      refreshStorageProtection();
       companionCall({ type: 'recovery-status' }).then(result => {
         const key = result.quarantined?.at(-1);
         const button = document.getElementById('retained-recovery');
@@ -510,12 +539,15 @@ async function boot() {
         if (key) button.dataset.key = key;
       }).catch(() => {});
       navigate(routeFromHash(location.hash));
+    } else if (data.type === 'compute-state') {
+      if (data.busy) document.getElementById('compute-apply').disabled = true;
+      refreshCompute({ keepSelection: true });
     } else if (data.type === 'progress') {
       if (data.compute) {
         clearInterval(computeTimer); latestCompute = data.compute; computeReceivedAt = performance.now();
         displayCompute();
         if (data.compute.phase === 'encoding') computeTimer = setInterval(displayCompute, 1000);
-        if (data.compute.phase === 'fallback') document.getElementById('compute-status').textContent = data.compute.message;
+        if (['encoding', 'complete', 'fallback'].includes(data.compute.phase) && (!data.compute.completed || data.compute.phase !== 'encoding')) refreshCompute({ keepSelection: true });
       } else setStatus(data.message || friendlyLoadingStatus(data.stage, data.detail) || 'Putting the kettle on…');
     }
     else if (data.type === 'storage-warning') {
@@ -584,17 +616,39 @@ async function boot() {
     try { await companionCall({ type: 'recovery-reset', overwrite: true }); location.reload(); }
     catch (error) { report(error); }
   };
-  document.getElementById('protect-storage').onclick = async () => {
+  const storagePromptKey = `dailydigest:storage-prompt:${location.pathname}`;
+  const storageNotice = document.getElementById('storage-consent');
+  function dismissStoragePrompt() {
+    storageNotice.hidden = true;
+    try { localStorage.setItem(storagePromptKey, 'dismissed'); } catch { /* optional reminder */ }
+  }
+  async function refreshStorageProtection() {
     try {
-      const granted = await navigator.storage?.persist?.();
-      document.getElementById('storage-status').textContent = granted
-        ? 'Persistent storage granted. Keep backups for device changes or manual clearing.'
-        : 'Persistent storage was not granted. Export backups regularly; this browser may clear site data.';
-    } catch (error) { document.getElementById('storage-status').textContent = `Storage protection unavailable: ${error.message}`; }
-  };
-  if (navigator.storage?.persisted) navigator.storage.persisted().then(granted => {
-    document.getElementById('storage-status').textContent = granted ? 'Persistent storage is enabled.' : 'Stored on this device. Export a backup before clearing browser data.';
-  }).catch(() => {});
+      const granted = Boolean(await navigator.storage?.persisted?.());
+      document.getElementById('storage-status').textContent = granted ? 'Persistent storage is enabled.' : 'Stored on this device. Export a backup before clearing browser data.';
+      document.getElementById('protect-storage').disabled = granted || !navigator.storage?.persist;
+      let dismissed = false;
+      try { dismissed = localStorage.getItem(storagePromptKey) === 'dismissed'; } catch { /* optional reminder */ }
+      storageNotice.hidden = granted || dismissed || !navigator.storage?.persist;
+    } catch { storageNotice.hidden = true; }
+  }
+  async function protectStorage() {
+    document.getElementById('protect-storage').disabled = true;
+    document.getElementById('consent-protect-storage').disabled = true;
+    try {
+      const result = await requestStorageProtection(navigator.storage);
+      document.getElementById('storage-status').textContent = result.message;
+      setStatus(result.message);
+      document.getElementById('protect-storage').disabled = result.granted || !navigator.storage?.persist;
+      dismissStoragePrompt();
+    } catch (error) {
+      document.getElementById('storage-status').textContent = `Storage protection unavailable: ${error.message}`;
+      document.getElementById('protect-storage').disabled = false;
+    } finally { document.getElementById('consent-protect-storage').disabled = false; }
+  }
+  document.getElementById('protect-storage').onclick = protectStorage;
+  document.getElementById('consent-protect-storage').onclick = protectStorage;
+  document.getElementById('dismiss-storage-consent').onclick = dismissStoragePrompt;
   document.getElementById('export').onclick = async () => {
     try {
       const includeCredentials = document.getElementById('include-credentials').checked;

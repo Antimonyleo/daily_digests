@@ -1,7 +1,25 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { runInNewContext } from 'node:vm';
-import { localPath, routeFromHash, renderedDocument, WorkerClient, browserSupportError, friendlyLoadingStatus, publicRoute, announcementKey } from './app.mjs';
+import { localPath, routeFromHash, renderedDocument, WorkerClient, browserSupportError, friendlyLoadingStatus, publicRoute, announcementKey, computeStatusText, requestStorageProtection } from './app.mjs';
+
+test('compute feedback distinguishes selected, exercised, fallback and busy states', () => {
+  const selected = { mode: 'gpu', device: 'webgpu', stats: { completedInputs: 0 } };
+  assert.match(computeStatusText(selected), /GPU selected; no new text comparisons completed/);
+  assert.match(computeStatusText({ ...selected, stats: { completedInputs: 16 } }), /Used GPU for 16/);
+  assert.match(computeStatusText({ ...selected, device: 'wasm' }), /GPU requested; using CPU fallback/);
+  assert.match(computeStatusText({ ...selected, busy: true }), /Stop it or wait/);
+  assert.match(computeStatusText({ mode: 'multicore', device: 'wasm', threads: 4 }), /up to 4 cores/);
+});
+
+test('storage permission reports grants, denial, unsupported browsers and errors honestly', async () => {
+  let calls = 0;
+  assert.equal((await requestStorageProtection({ persist: async () => { calls++; return true; } })).granted, true);
+  assert.equal(calls, 1);
+  assert.match((await requestStorageProtection({ persist: async () => false })).message, /not granted/);
+  assert.match((await requestStorageProtection(undefined)).message, /cannot request/);
+  await assert.rejects(requestStorageProtection({ persist: async () => { throw new Error('denied'); } }), /denied/);
+});
 
 test('modified internal links retain the public project path and deep route', () => {
   assert.equal(publicRoute('/saved?section=research', 'https://example.test/daily_digests/#/setup'),

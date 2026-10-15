@@ -37,6 +37,10 @@
     <p id="transfer-message"></p>
     <button id="dismiss-transfer" type="button">Dismiss</button>
   </aside>
+  <aside id="storage-consent" class="storage-consent" aria-label="Keep your reading desk" hidden>
+    <p>Your reading desk is saved in this browser. Protect it from automatic clearing? Your browser chooses the storage location. Keep backups for device changes, loss or manual clearing.</p>
+    <div><button id="consent-protect-storage" type="button">Protect local data</button><button id="dismiss-storage-consent" type="button">Not now</button></div>
+  </aside>
   <footer class="browser-bar">
     <span id="storage-warning" class="storage-warning" role="alert" hidden></span>
     <span id="status">Opening your reading desk…</span>
@@ -57,6 +61,7 @@
           <button id="compute-apply" disabled type="submit">Apply and reload</button>
         </form>
         <p id="compute-status" role="status">CPU · one core. GPU acceleration is optional and may vary by device.</p>
+        <p>Choose a mode, then Apply and reload. Finish or stop an active brew first. Acceleration speeds new text comparisons; fetching and other work still use the CPU. Cached comparisons need no acceleration, and the existing digest does not change when you switch.</p>
         <p>Switching between CPU and GPU can require recalculating saved text comparisons.</p>
         <p>First-time GPU setup downloads a separate model export, about 133 MB.</p>
         <p>GPU support is experimental while hardware performance is being verified across devices. CPU fallback keeps the same ranking rules.</p>
@@ -95,6 +100,7 @@
         <p>Your reading data stays in this browser profile. People sharing a browser profile share this reading desk; use separate browser profiles for separate readers. Other project sites on this same hostname share its security origin.</p>
         <p>Move your reading desk with an exported backup. Imports replace this device’s choices; they do not merge feedback from two devices. The installed shortcut still needs network access to start and collect papers.</p>
         <p id="storage-status" role="status">Checking storage protection…</p>
+        <p>Your browser manages the local storage directory on macOS, Windows and Linux. Protect storage to reduce automatic clearing; export a backup to keep a copy in a folder you choose. No account is required.</p>
         <p id="storage-usage"></p>
         <p id="backup-status">No backup export recorded on this device.</p>
         <button id="protect-storage" type="button">Protect browser storage</button>

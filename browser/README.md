@@ -21,6 +21,10 @@ interest unchanged.
 
 The **Compute** menu defaults to one CPU core. GPU acceleration is an explicit,
 per-device opt-in and falls back to CPU if initialization or inference fails.
+Apply and reload saves the choice for the next brew. Finish or stop an active
+brew before switching. Compute shows selected versus completed work and CPU
+fallback; acceleration affects new text comparisons, not fetching or an existing
+digest. Cached comparisons need no acceleration.
 Device-loss signals are watched directly because a lost GPU can leave the
 runtime's inference promise pending without rejecting it.
 It uses a checksum-pinned, unfused float32 export of the same BGE model because
@@ -244,7 +248,10 @@ or mailbox password to a different endpoint or account are rejected before repla
 Writes are serialized only after private state changes, including reading
 impressions and votes during a brew. Quota failures show a persistent warning;
 read-only pages remain usable. Protect browser storage requests persistence,
-but browser permission and backup practices still matter. Other project sites
+but browser permission and backup practices still matter. The one-time reminder
+requests browser persistence only on an explicit click. The browser manages the
+storage directory; portable backups can be saved in a folder the reader chooses.
+Other project sites
 on the same hostname share a security origin; a dedicated hostname provides
 actual isolation.
 
@@ -264,7 +271,9 @@ Settings now keep each interest compact, with spelling, alternative terms and
 intent behind Search details. Optional biology, chemistry and computing examples
 load only into an empty editor. Advanced interests expose followed authors,
 representative works and background topics. Save remains visible while scrolling;
-unrelated edits preserve existing exact weights and private profile details.
+private profile details are preserved. Displayed percentage shares must total
+100% before saving, with frontend and server validation. Adding or removing a row
+normalizes the shares; legacy relative weights convert only when settings are saved.
 
 The browser reports which CLI providers its connected companion advertises.
 Direct API settings have an explicit Test API connection action: one small,

@@ -280,6 +280,21 @@ try {
     await opened.close(); await target.evaluate(node => node.remove());
     return { dynamicRoutePreserved: true, newTabTargetPublicSubpath: true };
   });
+  await check('storage-protection-is-optional-and-local', async () => {
+    await page.evaluate(() => {
+      window.__storagePermissionCalls = 0;
+      Object.defineProperty(navigator.storage, 'persist', { configurable: true, value: async () => { window.__storagePermissionCalls++; return false; } });
+    });
+    assert.equal(await page.evaluate(() => window.__storagePermissionCalls), 0);
+    await page.locator('#browser-data-menu > summary').click();
+    assert.match(await page.locator('#browser-data-menu').textContent(), /browser manages the local storage directory/);
+    await page.locator('#protect-storage').click();
+    await page.waitForFunction(() => document.querySelector('#storage-status').textContent.includes('not granted'));
+    assert.equal(await page.evaluate(() => window.__storagePermissionCalls), 1);
+    assert.equal(await page.locator('#storage-consent').isHidden(), true);
+    await page.locator('#browser-data-menu > summary').click();
+    return { explicitOnly: true, denialReported: true, noFolderMigration: true };
+  });
   await check('explicit-compute-controls-and-device-warning', async () => {
     const current = await page.evaluate(async () => JSON.parse((await window.__rpc({ type: 'compute-status' })).body));
     await page.locator('#compute-menu > summary').click();
@@ -325,6 +340,32 @@ try {
     await page.screenshot({ path: `${output}/research-example.png`, fullPage: true });
     await route('/setup', '#interest-editor');
     return { examplesOnlyUntilChosen:true, disciplines, noImplicitBio:true, noProfileWrittenUntilSave:true };
+  });
+  await check('individual-interest-percentages-must-total-100', async () => {
+    await setTopics('RNA delivery | 3\nProtein engineering | 1');
+    const weights = frame().locator('[data-interest-weight]');
+    assert.deepEqual(await weights.evaluateAll(inputs => inputs.map(input => input.value)), ['75', '25']);
+    assert.equal(await frame().locator('#topics').inputValue(), 'RNA delivery | 75\nProtein engineering | 25');
+    await weights.first().fill('60');
+    assert.match(await frame().locator('#interest-total').textContent(), /85%.*15% left/);
+    assert.equal(await weights.first().evaluate(input => input.checkValidity()), false);
+    await frame().locator('form[action="/setup"] button[type="submit"]').click();
+    assert.equal(await page.evaluate(() => location.hash), '#/setup');
+    await frame().locator('#normalize-interests').click();
+    assert.match(await frame().locator('#interest-total').textContent(), /100%.*ready/);
+    await frame().locator('#add-interest').click();
+    assert.equal(await weights.count(), 3);
+    assert.match(await frame().locator('#interest-total').textContent(), /100%.*ready/);
+    await frame().locator('.interest-row').last().getByRole('button', { name: 'Remove', exact: true }).click();
+    assert.match(await frame().locator('#interest-total').textContent(), /100%.*ready/);
+    await weights.first().fill('90');
+    await weights.nth(1).fill('25');
+    assert.match(await frame().locator('#interest-total').textContent(), /115%.*15% over/);
+    assert.equal(await weights.first().evaluate(input => input.checkValidity()), false);
+    await frame().locator('#even-interests').click();
+    assert.deepEqual(await weights.evaluateAll(inputs => inputs.map(input => input.value)), ['50', '50']);
+    await route('/setup', '#interest-editor');
+    return { separateFields: true, shownEqualsSubmitted: true, underAndOverBlocked: true, addRemoveNormalizes: true };
   });
   await check('interest-spelling-is-explicit-and-preserves-reader-control', async () => {
     await setTopics('induced provimity | 75\nassymetric catalysis | 25');
@@ -494,22 +535,25 @@ try {
     await route('/setup', '#interest-editor');
     return {apiAndAnthropic:true, genericPromptOnly:true, explicitClickOnly:true, browserAnthropicHeaderScoped:true, noStateSaved:true, failurePreservesFields:true, staleReplyIgnored:true};
   });
-  await check('unrelated-settings-edits-preserve-legacy-priorities', async () => {
+  await check('legacy-priorities-convert-to-displayed-percentages-on-save', async () => {
     const backup = await snapshot();
     backup.files['data/profile.yaml'] = Buffer.from('bio: General reader.\nkeywords: [Astrophysics, History]\ncanonical_facets:\n  Astrophysics: {priority: 0.1}\n  History: {priority: 100}\n').toString('base64');
     const imported = await page.evaluate(body => window.__rpc({ type: 'import', body, overwrite: true }), JSON.stringify(backup));
     assert.equal(imported.status, 200, imported.body);
     await page.reload(); await startup();
     await route('/setup', '#interest-editor');
+    assert.deepEqual(await frame().locator('[data-interest-weight]').evaluateAll(inputs => inputs.map(input => input.value)), ['1', '99']);
+    const beforeSave = Buffer.from((await snapshot()).files['data/profile.yaml'], 'base64').toString();
+    assert.match(beforeSave, /priority: 0\.1\b/);
     await frame().locator('details:has(#name) > summary').click();
     await frame().locator('#name').fill('Renamed reader');
     await frame().locator('form[action="/setup"] button[type="submit"]').click();
     await page.waitForFunction(() => location.hash.startsWith('#/run'));
     const stored = await snapshot();
     const yaml = Buffer.from(stored.files['data/profile.yaml'], 'base64').toString();
-    assert.match(yaml, /priority: 0\.1\b/);
-    assert.match(yaml, /priority: 100(?:\.0)?\b/);
-    return { fractionalLegacyPriorityPreserved: true, unrelatedNameEdit: true };
+    assert.match(yaml, /priority: 1\.0\b/);
+    assert.match(yaml, /priority: 99\.0\b/);
+    return { noChangeUntilSave: true, shownEqualsSaved: true, totalExactly100: true };
   });
   const backupText = await readFile(fixture, 'utf8');
   await check('import-fixture-backup', async () => {
@@ -719,6 +763,11 @@ try {
       await route('/run?reading_mode=usual', '#brew-button');
       await frame().locator('#brew-button').click();
       await started; clearTimeout(timeout);
+      await page.locator('#compute-menu > summary').click();
+      await page.waitForFunction(() => document.querySelector('#compute-apply').disabled && document.querySelector('#compute-status').textContent.includes('brew is running'));
+      const refused = await page.evaluate(() => window.__rpc({ type: 'configure-compute', mode: 'gpu' }));
+      assert.equal(refused.status, 409);
+      await page.locator('#compute-menu > summary').click();
       const vote = await page.evaluate(({ id, csrf }) => window.__rpc({ type: 'request',
         method: 'POST', path: `/vote/${id}/70`, headers: { 'x-csrf-token': csrf } }), { id: itemId, csrf });
       assert.equal(vote.status, 200, vote.body);
@@ -728,6 +777,7 @@ try {
       await frame().locator('#err').waitFor({ state: 'visible', timeout: 5000 });
       const elapsedMs = performance.now() - beginning;
       assert.match(await frame().locator('#err').textContent(), /stop|cancel/i);
+      await page.waitForFunction(() => !document.querySelector('#compute-apply').disabled);
       assert.equal(await digestIdentity(), before);
       await page.reload(); await startup();
       await route('/saved', '.saved-card');
@@ -735,7 +785,7 @@ try {
       await card.locator('.vote-btn[data-grade="70"][aria-pressed="true"]').waitFor();
       await card.locator('.clear-rating').click();
       await card.locator('.clear-rating').waitFor({ state: 'hidden' });
-      return { cancelledDuringFetch: true, elapsedMs: Math.round(elapsedMs), savedDigestPreserved: true, midBrewVoteDurableAfterReload: true };
+      return { cancelledDuringFetch: true, elapsedMs: Math.round(elapsedMs), savedDigestPreserved: true, midBrewVoteDurableAfterReload: true, computeSwitchBlockedDuringBrew: true, computeSwitchEnabledAfterStop: true };
     } finally { sourceMode = 'success'; pendingSlowSource = null; clearTimeout(timeout); }
   });
   await check('brew-status-reconnect-without-starting-a-new-brew', async () => {
@@ -785,6 +835,9 @@ try {
     const active = await page.evaluate(async () => JSON.parse((await window.__rpc({ type: 'compute-status' })).body));
     const fallback = await page.evaluate(() => window.__workerEvents.some(event => event.type === 'progress' && event.stage === 'Computing embeddings' && /CPU/.test(event.message || '')));
     assert.ok(active.device === 'webgpu' || (active.device === 'wasm' && fallback));
+    await page.locator('#compute-menu > summary').click();
+    await page.waitForFunction(device => document.querySelector('#compute-status').textContent.includes(device === 'webgpu' ? 'Used GPU for' : 'GPU requested; using CPU fallback'), active.device);
+    await page.locator('#compute-menu > summary').click();
     const restored = await page.evaluate(() => window.__rpc({ type: 'configure-compute', mode: 'cpu' }));
     assert.equal(restored.status, 200, restored.body);
     await page.reload(); await startup();
