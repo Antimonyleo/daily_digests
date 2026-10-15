@@ -32,7 +32,7 @@ def test_configured_topic_search_retrieves_journal_and_preprint_work(monkeypatch
     def get_json(url, params, headers):
         assert url == openalex.OpenAlexSource.BASE
         calls.append(dict(params))
-        assert params["search"] == "quantum error correction"
+        assert params["search.title_abstract_keywords"] == "quantum error correction"
         allowed_types = params["filter"].split("type:", 1)[1].split(",", 1)[0].split("|")
         works = [{"id": "https://openalex.org/W1", "type": work_type,
                   "title": "Quantum error correction with a validated decoder",

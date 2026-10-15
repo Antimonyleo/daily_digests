@@ -27,14 +27,14 @@ def test_openalex_saturated_queries_cover_every_core_before_context(monkeypatch)
 
     def get_json(url, params, headers):
         requests.append(dict(params))
-        return {"results": [_work(f"{params['search']}-{i}")
+        return {"results": [_work(f"{params['search.title_abstract_keywords']}-{i}")
                             for i in range(int(params["per-page"]))],
                 "meta": {"count": 999, "next_cursor": "more"}}
 
     monkeypatch.setattr(openalex, "_get_json", get_json)
     source = openalex.OpenAlexSource()
     items = source.fetch(_spec(profile_driven=True))
-    assert [r["search"] for r in requests] == core
+    assert [r["search.title_abstract_keywords"] for r in requests] == core
     assert len(items) == 180
     assert len(requests) == 10
     assert sum(int(r["per-page"]) for r in requests) == 180
@@ -48,8 +48,8 @@ def test_openalex_query_budget_and_results_are_profile_order_invariant(monkeypat
     requests = []
 
     def get_json(url, params, headers):
-        requests.append((params["search"], int(params["per-page"])))
-        return {"results": [_work(f"{params['search']}-{i}")
+        requests.append((params["search.title_abstract_keywords"], int(params["per-page"])))
+        return {"results": [_work(f"{params['search.title_abstract_keywords']}-{i}")
                             for i in range(int(params["per-page"]))],
                 "meta": {"count": 999, "next_cursor": "more"}}
 
@@ -89,7 +89,7 @@ def test_openalex_empty_core_queries_release_budget_to_context(monkeypatch):
     requests = []
 
     def get_json(url, params, headers):
-        term = params["search"]
+        term = params["search.title_abstract_keywords"]
         requests.append(term)
         return {"results": [] if term.endswith("core") else [_work("context-hit")],
                 "meta": {"next_cursor": None}}
@@ -108,7 +108,7 @@ def test_openalex_more_than_soft_limit_of_core_terms_keeps_all_cores(monkeypatch
 
     def get_json(url, params, headers):
         requests.append(dict(params))
-        return {"results": [_work(f"{params['search']}-{i}")
+        return {"results": [_work(f"{params['search.title_abstract_keywords']}-{i}")
                             for i in range(int(params["per-page"]))],
                 "meta": {"next_cursor": "more"}}
 
@@ -117,7 +117,7 @@ def test_openalex_more_than_soft_limit_of_core_terms_keeps_all_cores(monkeypatch
     assert len(source.fetch(_spec(profile_driven=True))) == 180
     assert len(requests) == 13
     assert source.last_fetch_diagnostics["request_budget"] == 13
-    assert all(r["search"] != "context" for r in requests)
+    assert all(r["search.title_abstract_keywords"] != "context" for r in requests)
 
 
 def test_openalex_impossible_core_budget_fails_before_fetch(monkeypatch):

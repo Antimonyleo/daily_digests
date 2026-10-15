@@ -205,7 +205,7 @@ def test_openalex_alias_query_preserves_original_nonadjacent_recall(monkeypatch)
         })
         monkeypatch.setattr(config, 'load_profile', lambda profile=profile: profile)
         def fetch(_url, params, _headers):
-            query = params['search']
+            query = params['search.title_abstract_keywords']
             queries.append(query)
             # Fixture has both words, but not the phrase or the alias.
             matches = fixture_matches(query, 'Protein regulation through selective degradation', openalex=True)

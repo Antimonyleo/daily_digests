@@ -278,7 +278,13 @@ class OpenAlexSource:
             "sort": "publication_date:desc",
         }
         if query:
-            base_params["search"] = query
+            # Fulltext includes incidental citations and background mentions.
+            # Scoped search retains stemming/keyword synonyms while reserving
+            # a reader's small result budget for article-level topic evidence.
+            search_scope = "title_abstract_keywords" if spec.profile_driven else "fulltext"
+            parameter = "search.title_abstract_keywords" if spec.profile_driven else "search"
+            base_params[parameter] = query
+            diagnostic["search_scope"] = search_scope
 
         out: list[Item] = []
         params = dict(base_params)

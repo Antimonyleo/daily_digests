@@ -254,7 +254,7 @@ def test_openalex_alias_rich_interest_cannot_take_another_interests_budget(monke
     })
     monkeypatch.setattr(config, 'load_profile', lambda: profile)
     def fetch(_url, params, _headers):
-        return {'results': [{'id': f"https://openalex.org/{params['search']}-{i}", 'title': f"{params['search']}-{i}"} for i in range(int(params['per-page']))], 'meta': {'count': 999, 'next_cursor': 'more'}}
+        return {'results': [{'id': f"https://openalex.org/{params['search.title_abstract_keywords']}-{i}", 'title': f"{params['search.title_abstract_keywords']}-{i}"} for i in range(int(params['per-page']))], 'meta': {'count': 999, 'next_cursor': 'more'}}
     monkeypatch.setattr(openalex, '_get_json', fetch)
     source = openalex.OpenAlexSource()
     assert len(source.fetch(SourceSpec(name='OpenAlex', kind='openalex', profile_driven=True))) == 180
@@ -316,7 +316,7 @@ def test_openalex_overlapping_aliases_do_not_shrink_unique_supply(monkeypatch):
     source = openalex.OpenAlexSource()
     assert len(source.fetch(SourceSpec(name='OpenAlex', kind='openalex', profile_driven=True))) == 20
     assert len(requests) == 1
-    assert requests[0]['search'] == '((protein degradation) OR "targeted protein degradation" OR "PROTAC" OR "degraders")'
+    assert requests[0]['search.title_abstract_keywords'] == '((protein degradation) OR "targeted protein degradation" OR "PROTAC" OR "degraders")'
     assert source.last_fetch_diagnostics['queries'][0]['interest'] == 'protein degradation'
 
 

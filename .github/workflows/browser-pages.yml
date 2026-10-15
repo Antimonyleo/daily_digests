@@ -57,6 +57,11 @@ jobs:
         run: uv run python browser/collect_sources.py --output browser/.build-cache/public-sources.json --previous browser/.build-cache/previous-public-sources.json --event "${{ github.event_name }}" --days 21
       - name: Build static application
         run: uv run python browser/build.py
+      - name: Large-checkpoint startup and recovery regression
+        env:
+          DAILYDIGEST_STORAGE_SITE: browser/dist
+          DAILYDIGEST_STORAGE_REPORT: .full-review/storage-startup-ci
+        run: node browser/verify-storage-startup.mjs
       - name: Prepare isolated browser acceptance fixtures
         run: uv run python browser/make_test_fixture.py --output .full-review/browser-launch-2026-10-13
       - name: Full browser acceptance at the project subpath
