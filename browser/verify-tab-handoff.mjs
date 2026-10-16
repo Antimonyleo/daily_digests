@@ -78,7 +78,20 @@ try{
   await config(first,{hold:true});await card.locator('.vote-btn[data-grade="70"]').click();await first.waitForFunction(()=>window.__held);
   await second.locator('#use-this-tab').click();await first.waitForTimeout(300);
   assert.notEqual(await first.locator('#startup').getAttribute('data-state'),'moved');await oneOwner(first);
-  await config(first,{hold:false,release:true});await ready(second);
+  await config(first,{hold:false,release:true});
+  // A cold model on a real network can legitimately outlast the bounded drain.
+  // Refusal must retain the owner and vote; retry only after the vote finishes.
+  const switched=await Promise.race([
+    first.locator('#startup[data-state="moved"]').waitFor().then(()=>true),
+    second.locator('#startup-status').filter({hasText:'still finishing an action'}).waitFor().then(()=>false),
+  ]);
+  if(!switched){
+    await oneOwner(first);
+    await first.frameLocator('#app').locator('.vote-btn[data-grade="70"][aria-pressed="true"]').first().waitFor();
+    await second.locator('#use-this-tab').click();
+    report.slowActionRefusedSafely=true;
+  }
+  await ready(second);
   await first.locator('#startup[data-state="moved"]').waitFor();await route(second,'/','.item[data-section="research"]');
   await second.frameLocator('#app').locator('.vote-btn[data-grade="70"][aria-pressed="true"]').first().waitFor();
   await second.frameLocator('#app').locator('.bookmark-btn:not(.known-btn)[aria-pressed="true"]').first().waitFor();await oneOwner(second);
