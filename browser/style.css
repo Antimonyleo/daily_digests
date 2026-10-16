@@ -19,7 +19,9 @@ h1 { font-size: clamp(28px, 5vw, 44px); line-height: 1.15; }
 #app { display: block; width: 100%; height: calc(100dvh - 48px); flex: 1; min-height: 0; border: 0; background: #f6f7f4; }
 [hidden] { display: none !important; }
 .browser-bar { min-height: 48px; flex-shrink: 0; display: flex; gap: 8px; align-items: center; padding: 6px 16px; background: #fff; border-top: 1px solid #dde3dc; font-size: 12px; }
-#status { flex: 1; min-width: 0; overflow-wrap: anywhere; line-height: 1.4; }
+.browser-status { flex: 1; min-width: 0; overflow-wrap: anywhere; line-height: 1.4; }
+#status { display: block; }
+.storage-location { display: block; margin-top: 2px; color: #657169; font-size: 11px; }
 #compute-mode { width: 100%; font: inherit; padding: 8px; }
 .storage-consent { flex-shrink: 0; padding: 8px 16px; border-top: 1px solid #dde3dc; font-size: 13px; line-height: 1.4; max-height: 30dvh; overflow-y: auto; }
 .storage-consent p { margin: 0; }
@@ -49,10 +51,11 @@ button:disabled, .file-button:has(input:disabled) { opacity: .5; cursor: default
 :root[data-theme="dark"] :is(.browser-bar, .data-tools, .app-error) { background: #151f19; border-color: #314038; }
 :root[data-theme="dark"] :is(button, .file-button) { background: #1b3426; border-color: #314038; color: #92d2ac; }
 :root[data-theme="dark"] .eyebrow { color: #92d2ac; }
+:root[data-theme="dark"] .storage-location { color: #afc1b3; }
 @media (pointer: coarse) { summary, button, .file-button { min-height: 44px; } .browser-bar { min-height: 60px; } }
 @media (max-width: 600px) {
   .browser-bar { flex-wrap: wrap; justify-content: flex-end; }
-  #status { flex-basis: 100%; }
+  .browser-status { flex-basis: 100%; }
 }
 
 #startup-stages { display: flex; gap: 18px; padding: 0; list-style: none; font-size: 13px; flex-wrap: wrap; }

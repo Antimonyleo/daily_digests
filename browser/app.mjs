@@ -204,6 +204,8 @@ function frameBridge(token, path, origin, publicBase) {
   }
   window.EventSource = LocalEventSource;
   document.addEventListener('DOMContentLoaded', () => {
+    const storageNote = document.getElementById('browser-storage-note');
+    if (storageNote) storageNote.hidden = false;
     const field = document.getElementById('llm_api_key');
     if (field) {
       const notice = document.createElement('p');
@@ -268,7 +270,10 @@ export function renderedDocument(html, token, path, publicURL) {
       (_match, before, href, quote) => before + publicRoute(href, publicBase) + quote);
   }
   const args = [token, path, LOCAL_ORIGIN, publicBase].map(value => JSON.stringify(value).replace(/</g, '\\u003c')).join(',');
-  const bridge = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; connect-src 'none'; form-action 'none'; base-uri 'none'"><script>(${frameBridge.toString()})(${args});</script>`;
+  // Route focus announces the new page without outlining its non-interactive
+  // heading/container. Interactive controls retain their keyboard focus rings.
+  const routeFocusStyle = '<style>:is(h1, main, [role="main"])[tabindex="-1"]:focus { outline: none; }</style>';
+  const bridge = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; connect-src 'none'; form-action 'none'; base-uri 'none'">${routeFocusStyle}<script>(${frameBridge.toString()})(${args});</script>`;
   return html.replace(/<head[^>]*>/i, match => match + bridge);
 }
 

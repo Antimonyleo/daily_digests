@@ -6,6 +6,8 @@
   .settings-nav { display: flex; justify-content: flex-start; margin-bottom: 18px; }
   h1 { font-size: 30px; line-height: 1.1; margin: 0 0 8px 0; letter-spacing: 0; }
   .lede { color: var(--muted); margin: 0 0 24px 0; font-size: 14px; line-height: 1.5; }
+  .browser-storage-note { margin: 0 0 24px; padding: 14px 16px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); font-size: 13px; line-height: 1.5; }
+  .browser-storage-note p { margin: 6px 0 0; }
   .step { margin-bottom: 30px; padding-top: 4px; }
   .step h2 { font-size: 14px; letter-spacing: 0.06em; text-transform: uppercase;
              color: var(--muted); margin: 0 0 8px 0; }
@@ -144,6 +146,11 @@
   </nav>
   <h1>DailyDigest settings</h1>
   <p class="lede">Start with what you want to read. Adjust your sections and summary preferences when you need to.</p>
+  <aside id="browser-storage-note" class="browser-storage-note" aria-label="Your data on this device" hidden>
+    <strong>Your reading desk is saved in this browser</strong>
+    <p>Your interests, ratings and saved papers are saved automatically. No DailyDigest account is needed, and there is no automatic sync between devices.</p>
+    <p>Clearing browser data can remove your reading desk. Use <strong>Backup</strong> in the bottom bar to export or restore it. People sharing this browser profile share the same reading desk.</p>
+  </aside>
 
   {% if errors %}
 	  <div class="errors" role="alert" aria-live="assertive" tabindex="-1">

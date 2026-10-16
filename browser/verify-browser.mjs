@@ -303,6 +303,8 @@ try {
     await page.emulateMedia({ reducedMotion: 'no-preference' });
     const evidence = await startup();
     await frame().locator('#interest-editor').waitFor();
+    await frame().locator('#browser-storage-note').waitFor({ state: 'visible' });
+    assert.equal(await page.locator('.storage-location').isVisible(), true);
     return evidence;
   }));
   if (!initialReady) throw new Error('Startup failed; dependent acceptance checks cannot run.');
@@ -660,6 +662,27 @@ try {
     await page.reload(); await startup();
     await route('/', '.item[data-item-id]');
     return { digest: await digestIdentity(), items: await frame().locator('.item[data-item-id]').count() };
+  });
+  // Saved reading requires a configured profile; run after fixture import.
+  await check('navigation-focus-has-no-black-box-and-keyboard-controls-stay-visible', async () => {
+    const evidence = [];
+    for (const path of ['/saved', '/setup']) {
+      await route(path, 'h1');
+      await page.waitForFunction(() => {
+        const doc = document.querySelector('#app').contentDocument;
+        return doc.activeElement === doc.querySelector('h1, main, [role="main"]');
+      });
+      assert.equal(await frame().locator('h1').evaluate(node => getComputedStyle(node).outlineStyle), 'none');
+      await page.keyboard.press('Tab');
+      const control = await page.evaluate(() => {
+        const doc = document.querySelector('#app').contentDocument, node = doc.activeElement;
+        return { tag: node.tagName, visible: node.matches(':focus-visible'), outline: doc.defaultView.getComputedStyle(node).outlineStyle };
+      });
+      assert.equal(control.visible, true);
+      assert.notEqual(control.outline, 'none');
+      evidence.push({ path, headingFocused: true, headingOutline: 'none', keyboardControl: control });
+    }
+    return evidence;
   });
   await check('history-calendar-display-and-pip', async () => {
     await route('/', '.item[data-item-id]');
