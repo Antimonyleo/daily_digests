@@ -2661,7 +2661,7 @@ def test_main_page_exposes_one_click_reading_modes_and_settings_can_return(
     assert 'value="usual"' in main
     assert 'value="minimal"' in main
     assert 'action="/run"' in main
-    assert 'name="autostart" value="1"' in main
+    assert 'name="autostart" value="1"' not in main
     assert "window.location.href = `/run?reading_mode=" not in main
     assert "Pip’s tea break" in main
     assert 'id="tea-note-text"' in main

@@ -180,6 +180,7 @@
         </div>
       </fieldset>
       <p class="serving-note">Serving size changes only the final slate—not source coverage, quality checks, or your recommendation profile.</p>
+      <p class="serving-note" id="browser-compute-notice">Brewing uses processor and memory and may increase heat, fan noise and battery use. Keep this tab open. A large first browser brew can take 20 minutes or more; cached comparisons reduce later work.</p>
       <button class="btn primary brew-button" id="brew-button" type="submit">Brew today’s digest</button>
     </form>
   </section>
@@ -192,6 +193,12 @@
     <h1>Brewing today’s digest</h1>
     <p class="lede">Fetching fresh sources, ranking them against your profile, and preparing your chosen serving.</p>
 
+    <section id="brew-preview" hidden aria-label="Provisional selected papers">
+      <h2>Qualified papers taking shape</h2>
+      <p class="serving-note">Provisional picks after topic and quality checks. Summaries and saving are still in progress; your previous digest remains unchanged until publication succeeds.</p>
+      <ol id="brew-preview-items"></ol>
+    </section>
+    <p class="serving-note">Progress shows stages, not elapsed-time percentages. A remaining-time estimate appears for text comparisons after a few batches; source and summary time can vary.</p>
     <div class="progress-shell" id="progress-shell" role="progressbar" aria-label="Brewing progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="6">
       <div class="progress-bar" id="progress-bar"></div>
     </div>
@@ -287,8 +294,20 @@
       try { data = JSON.parse(event.data); } catch (_) { return; }
       const stage = data.stage;
       const payload = data.payload || {};
+      if (stage === "rank_done" && Array.isArray(payload.preview)) {
+        const list = document.getElementById('brew-preview-items'); list.replaceChildren();
+        for (const row of payload.preview.slice(0, 8)) {
+          const item = document.createElement('li'), link = document.createElement('a');
+          try { const url = new URL(row.url); if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) continue; link.href = url.href; }
+          catch { continue; }
+          link.textContent = String(row.title || 'Untitled'); link.target = '_blank'; link.rel = 'noopener noreferrer';
+          item.append(link, document.createTextNode(row.topic ? ` · ${row.topic}` : '')); list.append(item);
+        }
+        document.getElementById('brew-preview').hidden = !list.children.length;
+      }
       if (stage === "error") {
         es.close();
+        document.getElementById("brew-preview").hidden = true;
         showError("Pipeline failed: " + (payload.message || "unknown error"));
         return;
       }

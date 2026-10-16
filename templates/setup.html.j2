@@ -2,27 +2,32 @@
 {% block title %}Set up DailyDigest{% endblock %}
 {% block extra_styles %}
   .wrap { max-width: 860px; }
-  .card { padding: 28px; }
+  .card { padding: 28px; overflow: visible; }
   .settings-nav { display: flex; justify-content: flex-start; margin-bottom: 18px; }
   h1 { font-size: 30px; line-height: 1.1; margin: 0 0 8px 0; letter-spacing: 0; }
   .lede { color: var(--muted); margin: 0 0 24px 0; font-size: 14px; line-height: 1.5; }
+  .browser-storage-note { margin: 0 0 24px; padding: 14px 16px; border: 1px solid var(--control-border); border-radius: 8px; background: var(--panel); font-size: 13px; line-height: 1.5; }
+  .browser-storage-note p { margin: 6px 0 0; }
   .step { margin-bottom: 30px; padding-top: 4px; }
   .step h2 { font-size: 14px; letter-spacing: 0.06em; text-transform: uppercase;
              color: var(--muted); margin: 0 0 8px 0; }
   label { display: block; font-size: 13px; font-weight: 600; margin: 12px 0 4px; }
   textarea, input[type="text"], input[type="url"], input[type="password"], input[type="number"], select {
-    width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px;
+    width: 100%; padding: 8px 10px; border: 1px solid var(--control-border); border-radius: 6px;
     font-size: 13px; font-family: inherit; background: var(--card); color: var(--text);
   }
   textarea { min-height: 110px; resize: vertical; line-height: 1.5; }
-  .hint { font-size: 11px; color: var(--muted); margin-top: 4px; }
+  .hint { font-size: 12px; color: var(--muted); margin-top: 4px; }
   .settings-actions { position: sticky; bottom: 0; z-index: 2; padding: 10px 0; background: var(--card); border-top: 1px solid var(--border); }
   .settings-actions .hint { margin: 4px 0; }
   .interest-row details { margin-top: 6px; }
   .interest-row summary { cursor: pointer; color: var(--muted); font-size: 12px; }
-  .interest-row { border: 1px solid var(--border); padding: 8px 10px; border-radius: 8px; margin: 6px 0; }
+  .interest-row { border: 1px solid var(--control-border); padding: 8px 10px; border-radius: 8px; margin: 6px 0; }
   .interest-heading { display: grid; grid-template-columns: minmax(0, 1fr) 90px auto; gap: 8px; align-items: end; }
   .interest-heading label { min-width: 0; }
+  #interest-editor:not(.show-priorities) .priority-control { display: none; }
+  #interest-editor:not(.show-priorities) .interest-heading label:nth-child(2) { display: none; }
+  #interest-editor:not(.show-priorities) .interest-heading { grid-template-columns: minmax(0, 1fr) auto; }
   .interest-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
   .interest-row textarea { min-height: 70px; }
   @media(max-width: 480px) { .interest-heading { grid-template-columns: minmax(0, 1fr) 80px; } .interest-heading button { grid-column: 1 / -1; justify-self: start; } }
@@ -43,9 +48,9 @@
   .disclosure-note { display: block; color: var(--muted); font-size: 12px; font-weight: 400; }
   .settings-disclosure[open] > summary { margin-bottom: 14px; }
   .section-required .section-desc { margin-left: 0; }
-  .always-included { font-size: 11px; color: var(--muted); }
+  .always-included { font-size: 12px; color: var(--muted); }
   .chip-input {
-    border: 1px solid var(--border); border-radius: 6px; padding: 6px;
+    border: 1px solid var(--control-border); border-radius: 6px; padding: 6px;
     background: var(--card); display: flex; flex-wrap: wrap; gap: 4px; align-items: center;
     min-height: 38px;
   }
@@ -54,19 +59,19 @@
 	    padding: 3px 8px; font-size: 12px; cursor: pointer; user-select: none;
 	    max-width: 100%; overflow-wrap: anywhere; text-align: left;
 	  }
-	  .chip:hover, .chip:focus { background: #d8e7f5; outline: 2px solid #b9d2c3; outline-offset: 1px; }
+	  .chip:hover, .chip:focus { background: var(--accent-soft); outline: 2px solid var(--accent); outline-offset: 1px; }
   .chip-input input {
     border: none; outline: none; flex: 1; min-width: 100px; font-size: 13px;
     padding: 4px 6px; background: transparent;
   }
   .backends { display: grid; gap: 8px; }
   .backend-opt {
-    border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px;
+    border: 1px solid var(--control-border); border-radius: 6px; padding: 10px 12px;
     cursor: pointer; background: var(--card);
   }
   .backend-opt.selected { border-color: var(--accent); background: var(--accent-soft); }
   .backend-opt input[type="radio"] { margin-right: 8px; }
-  .backend-opt .desc { font-size: 11px; color: var(--muted); margin-top: 2px;
+  .backend-opt .desc { font-size: 12px; color: var(--muted); margin-top: 2px;
                        margin-left: 22px; }
   .api-fields { margin-top: 8px; padding: 10px;
                               background: var(--panel); border-radius: 6px;
@@ -78,12 +83,12 @@
   .section-options { display: grid; gap: 10px; margin-top: 12px; }
   .section-option {
     display: grid; grid-template-columns: minmax(0, 1fr) 110px; gap: 16px;
-    align-items: center; padding: 12px; border: 1px solid var(--border);
+    align-items: center; padding: 12px; border: 1px solid var(--control-border);
     border-radius: 8px; background: var(--card);
   }
   .section-heading { display: flex; align-items: center; gap: 10px; }
   .section-heading label, .section-heading .section-name { margin: 0; }
-  .section-desc { margin: 3px 0 0 48px; color: var(--muted); font-size: 11px; }
+  .section-desc { margin: 3px 0 0 48px; color: var(--muted); font-size: 12px; }
   .count-field label { margin-top: 0; }
   .opportunity-profile {
     margin-top: 14px; padding: 16px; border: 1px dashed var(--border);
@@ -139,11 +144,11 @@
 {% endblock %}
 {% block body %}
 <div class="card">
-  <nav class="settings-nav" aria-label="Settings navigation">
+  {% if not (first_run | default(not form.topics)) %}<nav class="settings-nav" aria-label="Settings navigation">
     <a class="btn" href="/">← Back to today’s digest</a>
-  </nav>
+  </nav>{% endif %}
   <h1>{{ 'DailyDigest settings' if form.topics else 'Welcome to DailyDigest' }}</h1>
-  <p class="lede">Start with a few research interests and their priorities. You can refine your digest later. No account is needed.</p>
+  <p class="lede">Start with a few research interests or choose an editable example. Priorities are optional. No account is needed.</p>
 
   {% if errors %}
 	  <div class="errors" role="alert" aria-live="assertive" tabindex="-1">
@@ -172,9 +177,10 @@
       <p class="example-note" id="example-profile-note">Examples are optional, editable starting points. Nothing is saved until you save your settings. Loading an example is available only while your interests are empty.</p>
       <label for="topics">What would you like to read about?</label>
       <div id="interest-editor" hidden>
+        <details id="priority-options" class="settings-disclosure"{% if form.topics %} open{% endif %}><summary>Set topic priorities (optional)</summary><p class="hint">Topics start with equal shares. Adjust individual percentages below when useful; the total must be 100%.</p></details>
         <div id="interest-rows"></div>
-        <div class="interest-actions"><button type="button" class="btn" id="add-interest">Add interest</button><button type="button" class="btn" id="even-interests">Distribute evenly</button><button type="button" class="btn" id="normalize-interests">Normalize to 100%</button><output id="interest-total" aria-live="polite"></output></div>
-        <p class="hint">Give each topic a percentage. The total must be 100%. Use Distribute evenly or Normalize to 100% to adjust the shares.</p>
+        <div class="interest-actions"><button type="button" class="btn" id="add-interest">Add interest</button><button type="button" class="btn priority-control" id="even-interests">Distribute evenly</button><button type="button" class="btn priority-control" id="normalize-interests">Normalize to 100%</button><output class="priority-control" id="interest-total" aria-live="polite"></output></div>
+        <p class="hint priority-control">Give each topic a percentage. The total must be 100%. Use Distribute evenly or Normalize to 100% to adjust the shares.</p>
       </div>
       <textarea id="topic-details" name="topic_details" hidden disabled>{{ form.topic_details | default('') }}</textarea>
       <input id="topic-weight-mode" name="topic_weight_mode" type="hidden" value="percentage" disabled>
@@ -186,14 +192,15 @@
         <p class="hint">Suggest wording variants works locally from your supplied acronym or hyphenated wording. Check wording sends only the chosen interest to PubMed for spelling suggestions. Both are optional, and nothing is checked automatically. Accepting a suggestion changes searches and ranking only after saving. Specialist terms may have no suggestion.</p>
       </details>
 
+      <p class="hint">Prefer examples of papers you like? Add their titles or short descriptions under Advanced interests below to refine matching. Topic names above still guide source searches.</p>
       <details class="settings-disclosure" id="advanced-interests"{% if errors %} open{% endif %}>
         <summary>Advanced interests<span class="disclosure-note">Authors, representative works, and background topics (optional).</span></summary>
         <p class="hint">One entry per line, up to 20 entries of 300 characters in each field. These refine matching; they do not guarantee a pick.</p>
         <label for="authors_of_interest">Authors, labs &amp; institutions to follow</label>
         <textarea id="authors_of_interest" name="authors_of_interest" rows="3">{{ form.authors_of_interest }}</textarea>
-        <label for="seed_works">Representative works</label>
+        <label for="seed_works">Example paper titles or short descriptions</label>
         <textarea id="seed_works" name="seed_works" rows="3" aria-describedby="seed-works-hint">{{ form.seed_works }}</textarea>
-        <p class="hint" id="seed-works-hint">Short paper titles or descriptions anchor relevance. Paste text, not links that need to be fetched.</p>
+        <p class="hint" id="seed-works-hint">Paper titles and short descriptions anchor relevance. Include the title when pasting a DOI; identifiers and linked papers are not fetched automatically. Keep specific topic names above for source searches.</p>
         <label for="context_keywords">Background interests</label>
         <textarea id="context_keywords" name="context_keywords" rows="3" aria-describedby="context-keywords-hint">{{ form.context_keywords }}</textarea>
         <p class="hint" id="context-keywords-hint">Topics to stay informed about with less influence on research relevance than your core interests.</p>
@@ -234,7 +241,7 @@
             <p class="section-desc">Papers and findings matched to your research interests.</p>
           </div>
           <div class="count-field">
-            <label for="top_research">Maximum items</label>
+            <label for="top_research">Maximum research items</label>
             <input id="top_research" name="top_research" type="number" min="1" max="30" required value="{{ form.top_research }}">
           </div>
         </div>
@@ -253,7 +260,7 @@
             <p class="section-desc">Biotechnology companies, deals, products, and sector developments.</p>
           </div>
           <div class="count-field">
-            <label for="top_industry">Maximum items</label>
+            <label for="top_industry">Maximum industry items</label>
             <input id="top_industry" name="top_industry" type="number" min="0" max="30"
                    value="{{ form.top_industry }}">
           </div>
@@ -273,7 +280,7 @@
             <p class="section-desc">Useful models, software, benchmarks, and scientific workflows.</p>
           </div>
           <div class="count-field">
-            <label for="top_ai">Maximum items</label>
+            <label for="top_ai">Maximum ai items</label>
             <input id="top_ai" name="top_ai" type="number" min="0" max="30"
                    value="{{ form.top_ai }}">
           </div>
@@ -293,7 +300,7 @@
             <p class="section-desc">Clinical trials, approvals, safety updates, and policy changes.</p>
           </div>
           <div class="count-field">
-            <label for="top_regulatory">Maximum items</label>
+            <label for="top_regulatory">Maximum regulatory items</label>
             <input id="top_regulatory" name="top_regulatory" type="number" min="0" max="30"
                    value="{{ form.top_regulatory }}">
           </div>
@@ -313,7 +320,7 @@
             <p class="section-desc">Major events outside the scientific and biotechnology sections.</p>
           </div>
           <div class="count-field">
-            <label for="top_world">Maximum items</label>
+            <label for="top_world">Maximum world items</label>
             <input id="top_world" name="top_world" type="number" min="0" max="30"
                    value="{{ form.top_world }}">
           </div>
@@ -333,7 +340,7 @@
             <p class="section-desc">Grants.gov covers US federal opportunities. Coverage is not exhaustive; international funding may be absent. Eligibility needs official-source verification.</p>
           </div>
           <div class="count-field">
-            <label for="top_opportunities">Maximum items</label>
+            <label for="top_opportunities">Maximum opportunities items</label>
             <input id="top_opportunities" name="top_opportunities" type="number" min="0" max="30"
                    value="{{ form.top_opportunities }}">
           </div>
@@ -353,7 +360,7 @@
             <p class="section-desc">EMBL events provide limited life-science coverage, mainly in Europe and online. Coverage is not exhaustive across disciplines or regions; verify dates and eligibility at the official source.</p>
           </div>
           <div class="count-field">
-            <label for="top_events">Maximum items</label>
+            <label for="top_events">Maximum events items</label>
             <input id="top_events" name="top_events" type="number" min="0" max="30"
                    value="{{ form.top_events }}">
           </div>
@@ -570,12 +577,19 @@
     if (inputs.length) inputs[0].setCustomValidity(valid ? '' : 'Use whole-number percentages totaling 100%. Choose Normalize to 100% to adjust them.');
     document.getElementById('add-interest').disabled = rows.children.length >= 10;
   }
+  let rowSequence = 0, weightsEdited = false;
   function addRow(name = '', weight = 100, detail = {}) {
     const row = document.createElement('div'); row.className = 'interest-row';
     const originalFacetName = detail.previous_name || name;
     if (detail.previous_name) row.dataset.correctedFrom = detail.previous_name;
     // This markup is constant; reader text is assigned through .value only.
     row.innerHTML = '<div class="interest-heading"><label>Interest<input data-interest-name type="text" required maxlength="160" placeholder="e.g. targeted protein degradation"></label><label>Priority %<input data-interest-weight type="number" min="1" max="100" step="1" required></label><button class="btn" type="button">Remove</button></div><details><summary>Search details (optional)</summary><label>Alternative search terms, separated by semicolons<input data-interest-aliases type="text" placeholder="targeted protein degradation; PROTAC; molecular glue"></label><label>What would make a paper useful?<textarea data-interest-description maxlength="600" placeholder="e.g. New degrader designs and transferable methods; basic signaling is lower priority."></textarea></label></details>';
+    const number = ++rowSequence;
+    for (const [selector, label] of [['[data-interest-name]', 'Research topic'], ['[data-interest-weight]', 'Priority percentage'], ['[data-interest-aliases]', 'Alternative terms'], ['[data-interest-description]', 'Useful paper description']]) {
+      row.querySelector(selector).setAttribute('aria-label', `${label} ${number}`);
+    }
+    row.querySelector('button').setAttribute('aria-label', `Remove research topic ${number}`);
+    row.querySelector('[data-interest-weight]').addEventListener('input', () => { weightsEdited = true; });
     row.querySelector('[data-interest-name]').value = name;
     row.querySelector('[data-interest-weight]').value = weight;
     row.querySelector('[data-interest-aliases]').value = (detail.aliases || []).join('; ');
@@ -671,6 +685,9 @@
     if (!configured.length) addRow();
     serialize();
   }
+  const priorities = document.getElementById('priority-options');
+  const showPriorities = () => { editor.classList.toggle('show-priorities', priorities.open); };
+  priorities.addEventListener('toggle', showPriorities); showPriorities();
   loadRows(); editor.hidden = false; topics.hidden = true; topics.required = false; details.disabled = false;
   document.getElementById('topic-weight-mode').disabled = false;
   document.getElementById('topics-hint').hidden = true;
@@ -678,7 +695,7 @@
   document.getElementById('add-interest').addEventListener('click', () => {
     if (rows.children.length >= 10) return;
     addRow('', 1);
-    distribute(false); rows.lastElementChild.querySelector('input').focus();
+    distribute(!weightsEdited); rows.lastElementChild.querySelector('input').focus();
   });
   function distribute(even) {
     const inputs = [...rows.querySelectorAll('[data-interest-weight]')];
