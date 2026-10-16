@@ -1,6 +1,7 @@
 const LOCAL_ORIGIN = 'http://127.0.0.1:8765';
 import { formatComputeProgress } from './compute.mjs';
 import { DeferredWorker, extractReadingView, readReadingView, readingViewDocument } from './reading-view.mjs';
+import { createTabHandoff } from './tab-handoff.mjs';
 
 export function computeStatusText(result) {
   const completed = result.stats?.completedInputs || 0;
@@ -83,8 +84,13 @@ export class WorkerClient {
   constructor(worker) {
     this.worker = worker;
     this.pending = new Map();
+    this.inFlight = new Map();
+    this.paused = false;
     this.sequence = 0;
     worker.addEventListener('message', ({ data }) => {
+      if (data.type === 'response' || data.type === 'error') {
+        this.inFlight.get(data.id)?.finish(); this.inFlight.delete(data.id);
+      }
       const pending = this.pending.get(data.id);
       if (!pending) return;
       if (data.type === 'stream' || data.type === 'response-chunk') {
@@ -100,13 +106,22 @@ export class WorkerClient {
     worker.addEventListener('error', () => this.fail(new Error('Python worker stopped. Reload to reconnect.')));
   }
   call(payload, chunk) {
+    if (this.failure || this.paused && !['prepare-reload', 'cancel-reload', 'configure-compute'].includes(payload.type)) {
+      const rejected = Promise.reject(this.failure || new Error('DailyDigest is switching tabs. Try again after the switch.'));
+      rejected.cancel = () => {};
+      return rejected;
+    }
     const id = ++this.sequence;
+    let finish;
+    const settled = new Promise(resolve => {finish = resolve;});
+    this.inFlight.set(id, {promise:settled, finish});
     const promise = new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject, chunk });
-      this.worker.postMessage({ ...payload, id });
+      try { this.worker.postMessage({ ...payload, id }); }
+      catch (error) { this.pending.delete(id); this.inFlight.delete(id); finish(); reject(error); }
     });
     promise.cancel = () => {
-      this.worker.postMessage({ id, type: 'cancel-request' });
+      if (!this.failure && this.inFlight.has(id)) this.worker.postMessage({ id, type: 'cancel-request' });
       const pending = this.pending.get(id);
       this.pending.delete(id);
       pending?.reject(new Error('Request disconnected'));
@@ -114,9 +129,24 @@ export class WorkerClient {
     return promise;
   }
   fail(error) {
+    this.failure = error;
     for (const pending of this.pending.values()) pending.reject(error);
     this.pending.clear();
+    for (const request of this.inFlight.values()) request.finish();
+    this.inFlight.clear();
   }
+  async quiesce({timeoutMs = 5000} = {}) {
+    this.paused = true;
+    let timer;
+    try {
+      await Promise.race([
+        Promise.all([...this.inFlight.values()].map(request => request.promise)),
+        new Promise((_resolve, reject) => {timer = setTimeout(() => reject(new Error('The other tab is still finishing an action. Try switching again in a moment.')), timeoutMs);}),
+      ]);
+    } catch (error) { this.paused = false; throw error; }
+    finally { clearTimeout(timer); }
+  }
+  resume() { this.paused = false; }
 }
 
 // This function is serialized into each trusted, Python-rendered document.
@@ -293,7 +323,7 @@ async function boot() {
     const dataStage = ['Restoring your data', 'Preparing reading desk', 'Ready'].includes(stage);
     for (const node of document.querySelectorAll('[data-startup-stage]')) {
       const name = node.dataset.startupStage;
-      node.dataset.state = stage === 'Waiting for previous tab' ? 'waiting' : stage === 'Ready' ? 'done' : name === 'python' ? dataStage ? 'done' : 'active' : name === 'data' ? dataStage ? 'active' : 'waiting' : 'waiting';
+      node.dataset.state = ['Waiting for previous tab', 'Waiting for another tab'].includes(stage) ? 'waiting' : stage === 'Ready' ? 'done' : name === 'python' ? dataStage ? 'done' : 'active' : name === 'data' ? dataStage ? 'active' : 'waiting' : 'waiting';
     }
   };
   const announcement = document.getElementById('announcements');
@@ -358,6 +388,12 @@ async function boot() {
   const streams = new Map();
   let ready = false, companionBackends = [], themeObserver;
   let runtimeStarted = false, frameGeneration = null, cacheTimer;
+  let tabMoved = false, dirtySetup = false, handoff;
+  const tabActions = document.getElementById('tab-wait-actions');
+  const useThisTab = document.getElementById('use-this-tab');
+  const fullDeskKey = `dailydigest:full-desk:${new URL('.', import.meta.url).pathname}`;
+  let forceFullDesk = false;
+  try { forceFullDesk = sessionStorage.getItem(fullDeskKey) === 'true'; sessionStorage.removeItem(fullDeskKey); } catch { /* optional intent */ }
   const previewNotice = document.getElementById('reading-view-notice');
   const interactiveSandbox = frame.getAttribute('sandbox');
   const startRuntime = (path) => {
@@ -407,8 +443,8 @@ async function boot() {
   releaseReload.onclick = async () => {
     releaseReload.disabled = true;
     if (!runtimeStarted) { location.reload(); return; }
-    try { await companionCall({ type: 'prepare-reload' }); location.reload(); }
-    catch (error) { setReleaseState(); document.getElementById('release-message').textContent = error.message; }
+    try { await client.quiesce(); await companionCall({ type: 'prepare-reload' }); location.reload(); }
+    catch (error) { client.resume(); setReleaseState(); document.getElementById('release-message').textContent = error.message; }
   };
   document.addEventListener('visibilitychange', () => { if (!document.hidden) checkRelease(); });
   setInterval(checkRelease, 300000);
@@ -435,6 +471,14 @@ async function boot() {
     frame.contentDocument?.addEventListener('click', () => {
       for (const menu of document.querySelectorAll('.browser-bar > details[open]')) menu.open = false;
     });
+    const markDraft = event => {
+      if (activePath.split('?')[0] === '/setup' && event.target.closest?.('form')) dirtySetup = true;
+    };
+    frame.contentDocument?.addEventListener('input', markDraft);
+    frame.contentDocument?.addEventListener('change', markDraft);
+    frame.contentDocument?.addEventListener('click', event => {
+      if (event.target.closest?.('button[type="button"]')) markDraft(event);
+    });
     void cacheReadingView();
   });
   const displayCompute = () => {
@@ -456,7 +500,9 @@ async function boot() {
     if (event.key === 'Escape') { event.preventDefault(); dismissError(); }
   });
   const report = (error) => {
+    if (tabMoved) return;
     const message = error.message || String(error);
+    if (!ready && /open in another tab/.test(message)) { showTabWait(message); return; }
     if (!ready || frame.hidden) {
       startup.hidden = false; frame.hidden = true; previewNotice.hidden = true;
       document.getElementById('backup-runtime-notice').hidden = true;
@@ -472,6 +518,16 @@ async function boot() {
     document.getElementById('app-error-message').textContent = message;
     errorPanel.hidden = false;
     document.getElementById('dismiss-error').focus();
+  };
+  const showTabWait = message => {
+    startup.hidden = false; frame.hidden = true; previewNotice.hidden = true;
+    startup.dataset.state = tabMoved ? 'moved' : 'waiting';
+    document.getElementById('startup-title').textContent = tabMoved ? 'Reading desk moved to another tab' : 'DailyDigest is open in another tab';
+    document.getElementById('recovery-tools').hidden = true;
+    document.getElementById('retry').hidden = tabMoved;
+    tabActions.hidden = false; useThisTab.hidden = !handoff;
+    setStatus(!handoff ? 'Switch to your other DailyDigest tab, or close it and Retry startup here.'
+      : message || 'Switch to your other DailyDigest tab, or use this tab instead.');
   };
   const companionStatus = document.getElementById('companion-status');
   document.querySelector('.companion-command').textContent = `dd companion --allowed-origin ${location.origin}`;
@@ -561,6 +617,7 @@ async function boot() {
     document.getElementById('compute-status').textContent = 'Saving your compute choice before reloading…';
     let reloadPrepared = false;
     try {
+      await client.quiesce();
       const mode = document.getElementById('compute-mode').value;
       const needsIsolation = mode === 'multicore' && !crossOriginIsolated;
       await companionCall({ type: 'configure-compute', mode, allowIsolationReload: needsIsolation });
@@ -588,6 +645,7 @@ async function boot() {
         catch (failed) { recoveryError = failed; }
       }
       computeApplying = false;
+      client.resume();
       if (!recoveryError) await refreshCompute({ keepSelection: true });
       document.getElementById('compute-status').textContent = error.message
         + (recoveryError ? ' Reload preparation could not be cancelled. Reload the page to reconnect.' : '');
@@ -599,6 +657,7 @@ async function boot() {
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
   async function navigate(path, options = {}) {
+    if (tabMoved) return;
     const version = ++navigation;
     for (const stream of streams.values()) stream.cancel();
     streams.clear();
@@ -625,6 +684,7 @@ async function boot() {
       }
       if (!(headers.get('content-type') || '').includes('text/html')) throw new Error('Expected a DailyDigest page.');
       activePath = path;
+      dirtySetup = path.split('?')[0] === '/setup' && options.method?.toUpperCase() === 'POST';
       const generation = headers.get('x-dailydigest-generation');
       frameGeneration = generation === null ? null : Number(generation);
       clearInterval(computeTimer); latestCompute = null;
@@ -642,6 +702,8 @@ async function boot() {
   worker.addEventListener('message', ({ data }) => {
     if (data.type === 'ready') {
       ready = true;
+      tabActions.hidden = true;
+      document.getElementById('retry').hidden = true;
       document.getElementById('test-gpu').disabled = false;
       checkRelease();
       document.getElementById('export').disabled = false;
@@ -658,6 +720,8 @@ async function boot() {
         if (key) button.dataset.key = key;
       }).catch(() => {});
       navigate(routeFromHash(location.hash));
+    } else if (data.type === 'storage-waiting') {
+      showTabWait();
     } else if (data.type === 'brew-interrupted') {
       document.getElementById('interruption-message').textContent = data.message;
       document.getElementById('interruption-notice').hidden = false;
@@ -846,12 +910,60 @@ async function boot() {
       finally { button.disabled = false; }
     };
   }
+  let tabChannel;
+  try {
+    if (typeof BroadcastChannel !== 'undefined') tabChannel = new BroadcastChannel(`dailydigest:tabs:${new URL('.', import.meta.url).pathname}`);
+  } catch { /* Browser privacy restrictions may disable cross-tab messaging. */ }
+  if (tabChannel) {
+    const channel = tabChannel;
+    handoff = createTabHandoff({channel, id:crypto.randomUUID(), owns:() => ready && !tabMoved,
+      release:async () => {
+        if (dirtySetup) throw new Error('Save the unsaved settings in the other tab before switching, or leave its Settings page.');
+        if (computeBusy) throw new Error('Finish or stop the brew in the other tab, then try switching again.');
+        frame.inert = true; toolbar.inert = true;
+        try {
+          setStatus('Saving changes before switching tabs…');
+          await client.quiesce();
+          await companionCall({type:'prepare-reload'});
+        } catch (error) {
+          client.resume(); frame.inert = false; toolbar.inert = false;
+          setStatus('This reading desk stays open. ' + error.message);
+          throw error;
+        }
+        tabMoved = true; ready = false; clearTimeout(cacheTimer);
+        worker.terminate();
+        client.fail(new Error('Reading desk moved to another tab.'));
+        for (const menu of browserMenus) menu.open = false;
+        errorPanel.hidden = true; releaseNotice.hidden = true;
+        document.getElementById('backup-runtime-notice').hidden = true;
+        showTabWait('Your latest changes were saved before moving. Use this tab instead to switch back.');
+        useThisTab.textContent = 'Use this tab instead';
+      }});
+  }
+  useThisTab.onclick = async () => {
+    if (!handoff || ready) return;
+    useThisTab.disabled = true;
+    // A waiting worker owns no editable desk. Remove its queued lock request;
+    // the replacement page must restore the previous owner's final checkpoint.
+    if (!tabMoved) { worker.terminate(); client.fail(new Error('Switching tabs.')); }
+    setStatus('Asking the other tab to save and switch…');
+    try {
+      const result = await handoff.request();
+      const locks = await navigator.locks.query();
+      const name = `dailydigest:${new URL('.', import.meta.url).pathname}`;
+      if (result.ok || !locks.held.some(lock => lock.name === name)) {
+        try { sessionStorage.setItem(fullDeskKey, 'true'); } catch { /* deep links still start normally */ }
+        location.reload();
+      } else setStatus(result.message);
+    } catch (error) { setStatus(error.message); }
+    finally { useThisTab.disabled = false; }
+  };
   document.getElementById('reading-view-open').onclick = () => startRuntime('/');
   document.getElementById('reading-view-brew').onclick = () => startRuntime('/run');
   // Read one small derived record, never the full database or vector cache.
   // Unavailable browser storage falls back to the existing startup/recovery path.
   let preview;
-  if (routeFromHash(location.hash) === '/') {
+  if (routeFromHash(location.hash) === '/' && !forceFullDesk) {
     preview = await Promise.race([
       readReadingView(indexedDB, `dailydigest:${new URL('.', import.meta.url).pathname}`).catch(() => null),
       new Promise(resolve => setTimeout(() => resolve(null), 800)),

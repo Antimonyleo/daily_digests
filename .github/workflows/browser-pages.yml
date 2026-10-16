@@ -70,6 +70,11 @@ jobs:
           DAILYDIGEST_READING_SITE: browser/dist
           DAILYDIGEST_READING_REPORT: .full-review/reading-view-ci
         run: node browser/verify-reading-view.mjs
+      - name: Two-tab handoff without lost feedback
+        env:
+          DAILYDIGEST_TAB_SITE: browser/dist
+          DAILYDIGEST_TAB_REPORT: .full-review/tab-handoff-ci
+        run: node browser/verify-tab-handoff.mjs
       - name: Full browser acceptance at the project subpath
         env:
           DAILYDIGEST_BROWSER_URL: http://127.0.0.1:8767/daily_digests/

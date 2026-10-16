@@ -17,6 +17,23 @@ the displayed digest can regenerate it only after its state is durably saved.
 Missing, invalid or oversized reading copies use the ordinary startup path.
 Backups and recovery continue to use the authoritative private snapshot.
 
+Saved reading views can be opened in multiple tabs. Full controls have one
+editable owner: a second tab offers **Use this tab instead**, with switch/close
+instructions and Retry available immediately. A cooperative handoff waits for
+in-flight actions (including cancelled UI waits), checkpoints the current owner,
+then terminates its worker to release the browser lock. The receiving tab opens
+a fresh runtime from that final checkpoint. The previous tab shows **Reading
+desk moved to another tab** and can request it back. Unsaved Setup drafts, an
+active brew, or failed storage commits refuse a handoff; no lock is forcibly
+stolen. Older or unresponsive tabs may need to be closed manually. Broadcast
+messages contain coordination metadata only, never profiles, keys or databases.
+
+First-visit Setup keeps editable examples above the blank interest rows, with
+biomolecular, engineering, chemistry, ecology and astronomy starting points.
+Examples are never applied or saved automatically. Search and wording advice
+stays in an optional disclosure; separate topic/percentage inputs and the 100%
+total requirement remain unchanged.
+
 The Python runtime and libraries are prepared when the full desk is opened,
 instead of on every reading visit. Snapshot restoration decodes private files
 once while retaining SQLite integrity checks before any restore writes.

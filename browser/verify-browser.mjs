@@ -405,7 +405,7 @@ try {
     assert.equal(await frame().locator('#bio').inputValue(), '');
     await page.screenshot({ path: `${output}/research-placeholders.png`, fullPage: true });
     const disciplines = [];
-    for (const [discipline, count, topic] of [['biomolecular',10,'RNA nanotechnology'], ['engineering',4,'Battery materials'], ['ecology',4,'Biodiversity monitoring']]) {
+    for (const [discipline, count, topic] of [['biomolecular',10,'RNA nanotechnology'], ['engineering',4,'Battery materials'], ['chemistry',4,'Asymmetric catalysis'], ['ecology',4,'Biodiversity monitoring'], ['astronomy',4,'Exoplanet atmospheres']]) {
       if (disciplines.length) await route('/setup', '#interest-editor');
       await frame().locator('#example-discipline').selectOption(discipline);
       assert.equal(await topics.inputValue(), '', 'Choosing a discipline must not load or save it.');

@@ -12,7 +12,7 @@ h1 { font-size: clamp(28px, 5vw, 44px); line-height: 1.15; }
 .tea-cup .steam { position: absolute; top: 17px; width: 4px; height: 24px; border-radius: 8px; background: currentColor; animation: tea-steam 3s ease-in-out infinite; }
 .tea-cup .s1 { left: 25px; }.tea-cup .s2 { left: 40px; animation-delay: .7s; }.tea-cup .s3 { left: 55px; animation-delay: 1.4s; }
 @keyframes tea-steam { 0%, 100% { opacity: 0; transform: translateY(0) scaleY(.6); } 40% { opacity: .45; } 85% { opacity: 0; transform: translateY(-20px) scaleY(1); } }
-#startup[data-state="error"] .steam { animation: none; opacity: 0; }
+#startup:is([data-state="error"], [data-state="waiting"], [data-state="moved"]) .steam { animation: none; opacity: 0; }
 @media (prefers-reduced-motion: reduce) { .tea-cup .steam { animation: none; opacity: .3; } }
 :root[data-theme="dark"] .tea-cup { color: #92d2ac; }
 :root[data-theme="dark"] .cup-bowl { background: linear-gradient(0deg, #1b3426 70%, transparent 70%); }

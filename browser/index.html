@@ -19,6 +19,10 @@
     <details class="startup-details"><summary>First visit and local computing</summary><p><span id="download-size">The CPU model is about 66 MB, plus the Python runtime and libraries.</span> Downloads are cached; models load when needed. Brewing uses processor and memory, and can increase heat, fan noise and battery use. Thousands of new papers may take 20+ minutes on one core. Keep this tab open while brewing. Choose acceleration in Compute and export copies in Backup.</p></details>
     <p id="startup-status">Warming up your reading desk. A fresh cup is on its way.</p>
     <button id="retry" hidden type="button">Retry startup</button>
+    <div id="tab-wait-actions" hidden>
+      <p>Your reading desk is safe. Only one tab can edit it at a time. Switching saves the other tab first; an active brew or unsaved settings must be finished there.</p>
+      <button id="use-this-tab" type="button">Use this tab instead</button>
+    </div>
     <div id="recovery-tools" hidden>
       <p>Your saved data has not been removed. Download the original data before trying recovery. Raw recovery files may include credentials.</p>
       <button id="recovery-export" type="button">Download original data</button>

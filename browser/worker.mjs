@@ -47,7 +47,10 @@ async function ownStorage({ timeoutMs = 60000 } = {}) {
   if (ownership) return ownership;
   if (!navigator.locks) throw new Error('This browser does not provide Web Locks required to protect saved reading state.');
   const controller = new AbortController();
-  const waiting = setTimeout(() => progress('Waiting for previous tab', 'Waiting for the previous tab to stop…'), 250);
+  const waiting = setTimeout(() => {
+    progress('Waiting for another tab', 'DailyDigest is open in another tab. Switch to it, or choose Use this tab instead.');
+    self.postMessage({type:'storage-waiting'});
+  }, 250);
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   ownership = new Promise((resolve, reject) => {
     navigator.locks.request(`dailydigest:${new URL('.', self.location.href).pathname}`, { signal: controller.signal }, async () => {
@@ -57,7 +60,7 @@ async function ownStorage({ timeoutMs = 60000 } = {}) {
     }).catch(error => {
       clearTimeout(waiting); clearTimeout(timeout); ownership = null;
       reject(controller.signal.aborted
-        ? new Error('DailyDigest is still open in another tab, or the previous tab has not stopped. Close it and retry startup.') : error);
+        ? new Error('DailyDigest is open in another tab. Switch to it, choose Use this tab instead, or close it and retry.') : error);
     });
   });
   return ownership;

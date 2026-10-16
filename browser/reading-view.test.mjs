@@ -32,6 +32,16 @@ test('reading cache is bounded structured content, never HTML or a private snaps
   }
 });
 
+test('a moved desk cannot restart its obsolete worker or write stale state', () => {
+  let created = 0, stopped = 0;
+  class Native extends EventTarget { postMessage() {} terminate() { stopped++; } }
+  const worker = new DeferredWorker(() => { created++; return new Native(); });
+  worker.postMessage({type:'init'});
+  worker.terminate();
+  assert.throws(() => worker.postMessage({type:'request'}), /moved to another tab/);
+  assert.equal(created, 1); assert.equal(stopped, 1);
+});
+
 test('read-only document escapes content and permits only HTTP article links', () => {
   const data=fixture();data.items[0].title='<script>steal()</script>';
   const html=readingViewDocument(data, 'dark');

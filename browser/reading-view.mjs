@@ -2,6 +2,7 @@
 export class DeferredWorker extends EventTarget {
   constructor(create) { super(); this.create = create; this.instance = null; }
   postMessage(data) {
+    if (this.terminated) throw new Error('This reading desk moved to another tab. Reload to reconnect.');
     if (!this.instance) {
       this.instance = this.create();
       this.instance.addEventListener('message', event => this.dispatchEvent(new MessageEvent('message', {data:event.data})));
@@ -9,6 +10,7 @@ export class DeferredWorker extends EventTarget {
     }
     this.instance.postMessage(data);
   }
+  terminate() { this.terminated = true; this.instance?.terminate(); }
 }
 
 export function validateReadingView(value) {

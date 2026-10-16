@@ -174,6 +174,9 @@ test('worker failure rejects outstanding calls and disconnect cancels the matchi
   worker.dispatchEvent(new Event('error'));
   await assert.rejects(second, /worker stopped/);
   assert.equal(client.pending.size, 0);
+  const sent = worker.sent.length;
+  second.cancel();
+  assert.equal(worker.sent.length, sent, 'Closing a failed stream must not send to a terminated worker');
 });
 
 test('worker request errors are visible and release pending calls', async () => {
@@ -182,6 +185,48 @@ test('worker request errors are visible and release pending calls', async () => 
   worker.respond({ id: 1, type: 'error', message: 'Profile write failed' });
   await assert.rejects(request, /Profile write failed/);
   assert.equal(client.pending.size, 0);
+});
+
+test('tab handoff drains an in-flight vote and blocks new actions until explicitly resumed', async () => {
+  const worker = new FakeWorker(), client = new WorkerClient(worker);
+  const vote = client.call({type:'request', method:'POST', path:'/vote/7/70'});
+  let drained = false;
+  const waiting = client.quiesce({timeoutMs:1000}).then(() => {drained=true;});
+  await Promise.resolve();
+  assert.equal(drained,false);
+  await assert.rejects(client.call({type:'request', method:'POST', path:'/bookmark/7'}), /switching tabs/i);
+  assert.equal(worker.sent.length,1);
+  worker.respond({id:1,type:'response',status:200,body:'{"ok":true}'});
+  await vote;await waiting;
+  const checkpoint = client.call({type:'prepare-reload'});
+  worker.respond({id:2,type:'response',status:200,body:'{"ok":true}'});
+  await checkpoint;
+  client.resume();
+  const next = client.call({type:'request',path:'/setup'});
+  worker.respond({id:3,type:'response',status:200,body:'settings'});
+  await next;
+});
+
+test('a handoff timeout leaves the original pending action and desk usable', async () => {
+  const worker = new FakeWorker(), client = new WorkerClient(worker);
+  const vote = client.call({type:'request',path:'/vote/7/70'});
+  await assert.rejects(client.quiesce({timeoutMs:10}), /still finishing/i);
+  assert.equal(client.pending.size,1);
+  worker.respond({id:1,type:'response',status:200,body:'{"ok":true}'});
+  await vote;
+  assert.equal(client.paused,false);
+});
+
+test('cancelling a UI wait cannot hide a still-running mutation from tab handoff', async () => {
+  const worker = new FakeWorker(), client = new WorkerClient(worker);
+  const request = client.call({type:'request',method:'POST',path:'/vote/7/70'});
+  request.cancel();await assert.rejects(request,/disconnected/);
+  assert.equal(client.pending.size,0);
+  let drained=false;
+  const pending=client.quiesce({timeoutMs:1000}).then(()=>{drained=true;});
+  await Promise.resolve();assert.equal(drained,false);
+  worker.respond({id:1,type:'response',status:200,body:'{"ok":true}'});
+  await pending;assert.equal(drained,true);
 });
 
 
@@ -204,6 +249,7 @@ for(const failure of ['registration','activation-timeout','redundant']) test(`Co
   const nodes={'compute-form':{},'compute-apply':{disabled:false},'compute-status':{},'compute-mode':{value:'multicore'}};
   const calls=[];let pending=false,refreshes=0,reloads=0;
   runInNewContext(handler,{document:{getElementById:id=>nodes[id]},computeApplying:false,crossOriginIsolated:false,
+    client:{quiesce:async()=>{},resume(){}},
     navigator:{serviceWorker:{}},isolationRequested:false,isolationKey:'fixture-isolation',localStorage:{setItem(){}},
     companionCall:async data=>{calls.push(data.type);if(data.type==='configure-compute')pending=true;if(data.type==='cancel-reload')pending=false;return{ok:true};},
     registerWorker:async()=>{if(failure==='registration')throw Error('Fixture registration failed');return{installing:{state:failure==='redundant'?'redundant':'installing',addEventListener(){}}};},
