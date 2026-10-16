@@ -142,8 +142,8 @@
   <nav class="settings-nav" aria-label="Settings navigation">
     <a class="btn" href="/">← Back to today’s digest</a>
   </nav>
-  <h1>DailyDigest settings</h1>
-  <p class="lede">Start with what you want to read. Adjust your sections and summary preferences when you need to.</p>
+  <h1>{{ 'DailyDigest settings' if form.topics else 'Welcome to DailyDigest' }}</h1>
+  <p class="lede">Start with a few research interests and their priorities. You can refine your digest later. No account is needed.</p>
 
   {% if errors %}
 	  <div class="errors" role="alert" aria-live="assertive" tabindex="-1">
@@ -156,27 +156,35 @@
       <input type="hidden" id="user-timezone" name="user_tz" value="{{ form.user_tz }}">
     <div class="step">
       <h2>Your research interests</h2>
+      {% if not form.topics %}
+      <div class="example-start">
+        <label for="example-discipline">Start with an example (optional)</label>
+        <select id="example-discipline">
+          <option value="biomolecular">Biomolecular research</option>
+          <option value="engineering">Materials &amp; engineering</option>
+          <option value="chemistry">Chemistry &amp; catalysis</option>
+          <option value="ecology">Ecology &amp; environment</option>
+          <option value="astronomy">Physics &amp; astronomy</option>
+        </select>
+        <button class="btn" id="use-example-profile" type="button">Load selected example</button>
+      </div>
+      {% endif %}
+      <p class="example-note" id="example-profile-note">Examples are optional, editable starting points. Nothing is saved until you save your settings. Loading an example is available only while your interests are empty.</p>
       <label for="topics">What would you like to read about?</label>
       <div id="interest-editor" hidden>
         <div id="interest-rows"></div>
         <div class="interest-actions"><button type="button" class="btn" id="add-interest">Add interest</button><button type="button" class="btn" id="even-interests">Distribute evenly</button><button type="button" class="btn" id="normalize-interests">Normalize to 100%</button><output id="interest-total" aria-live="polite"></output></div>
-        <p class="hint">Give each interest a share of 100%. Adding or removing a row adjusts the shares; after editing a percentage, use Normalize to 100% if needed. These guide relative priority, not guaranteed digest slots. Existing relative weights are converted to whole percentages when you save. Open search details to add alternative terms or describe useful papers.</p>
-        <p class="hint">Suggest wording variants works locally from your supplied acronym or hyphenated wording; additions are optional. Check wording sends only the chosen interest to PubMed for spelling suggestions. Nothing is checked automatically. Accept a suggestion to use it for searches and ranking after saving. Suggestions may miss specialist terms.</p>
+        <p class="hint">Give each topic a percentage. The total must be 100%. Use Distribute evenly or Normalize to 100% to adjust the shares.</p>
       </div>
       <textarea id="topic-details" name="topic_details" hidden disabled>{{ form.topic_details | default('') }}</textarea>
       <input id="topic-weight-mode" name="topic_weight_mode" type="hidden" value="percentage" disabled>
       <textarea id="topics" name="topics" required aria-describedby="topics-hint example-profile-note" placeholder="DNA nanotechnology&#10;RNA nanotechnology&#10;nucleic acid delivery&#10;mRNA therapeutics&#10;gene therapy&#10;protein engineering&#10;protein structure prediction&#10;colloidal self-assembly&#10;superlattice materials&#10;machine learning for biomolecular design">{{ form.topics }}</textarea>
-      <p class="example-note" id="example-profile-note">Examples are optional starting points. Choose one, then edit before saving. Loading is available only while your interests are empty.</p>
-      {% if not form.topics %}
-      <label for="example-discipline">Example discipline</label>
-      <select id="example-discipline">
-        <option value="biomolecular">Biomolecular research</option>
-        <option value="engineering">Materials &amp; engineering</option>
-        <option value="ecology">Ecology &amp; environment</option>
-      </select>
-      <button class="btn" id="use-example-profile" type="button">Load selected example</button>
-      {% endif %}
-      <div class="hint" id="topics-hint">Add 1–10 specific interests. Without JavaScript, use one topic per line with an optional relative weight, such as <code>RNA delivery | 3</code>. All positive weights work; percentages express the same relative priorities.</div>
+      <div class="hint" id="topics-hint">Add 1–10 specific research topics. The examples above are suggestions, not your saved profile.<noscript> Use one topic per line with an optional relative weight, such as <code>RNA delivery | 3</code>. Any positive relative weights work.</noscript></div>
+      <details class="settings-disclosure" id="search-tips">
+        <summary>Search tips and wording checks (optional)</summary>
+        <p class="hint">Priorities guide relative emphasis, not guaranteed digest slots. Adding or removing a topic adjusts the shares; old relative weights are converted to percentages when saved. Search details let you add alternative terms or describe useful papers.</p>
+        <p class="hint">Suggest wording variants works locally from your supplied acronym or hyphenated wording. Check wording sends only the chosen interest to PubMed for spelling suggestions. Both are optional, and nothing is checked automatically. Accepting a suggestion changes searches and ranking only after saving. Specialist terms may have no suggestion.</p>
+      </details>
 
       <details class="settings-disclosure" id="advanced-interests"{% if errors %} open{% endif %}>
         <summary>Advanced interests<span class="disclosure-note">Authors, representative works, and background topics (optional).</span></summary>
@@ -691,6 +699,8 @@
       biomolecular: topics.getAttribute('placeholder'),
       engineering: 'Battery materials\nPolymer recycling\nAdditive manufacturing\nThermal energy storage',
       ecology: 'Biodiversity monitoring\nEcosystem restoration\nClimate adaptation\nEnvironmental DNA',
+      chemistry: 'Asymmetric catalysis\nOrganocatalysis\nPhotoredox catalysis\nReaction mechanism prediction',
+      astronomy: 'Exoplanet atmospheres\nGalaxy formation\nGravitational waves\nCosmological simulations',
     };
     topics.value = examples[document.getElementById('example-discipline').value]; loadRows();
     topics.form.dispatchEvent(new Event('input', {bubbles: true}));

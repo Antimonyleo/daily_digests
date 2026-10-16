@@ -2913,3 +2913,15 @@ def test_opportunity_calendar_export_uses_structured_dates(tmp_path, monkeypatch
     assert "DTSTART;VALUE=DATE:20260910" in text
     assert "DTEND;VALUE=DATE:20260913" in text
     assert "RNA design workshop\\, practical session" in text
+
+
+def test_first_visit_puts_optional_examples_before_blank_interests(monkeypatch, tmp_path):
+    from dailydigest import web
+
+    monkeypatch.setattr(web, '_get_profile_path', lambda: tmp_path / 'missing-profile.yaml')
+    rendered = web.setup_get(_request('GET', '/setup')).body.decode()
+    assert 'Welcome to DailyDigest' in rendered
+    assert rendered.index('id="example-discipline"') < rendered.index('id="interest-rows"')
+    assert 'value="chemistry"' in rendered and 'value="astronomy"' in rendered
+    assert '<details class="settings-disclosure" id="search-tips">' in rendered
+    assert 'Nothing is saved until' in rendered
