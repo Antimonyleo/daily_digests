@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 const source = readFileSync(new URL('./worker.mjs', import.meta.url), 'utf8');
 function production(name, globals) {
-  const match = source.match(new RegExp(`async function ${name}\\([^]*?\\n\\}`));
+  const match = source.match(new RegExp(`(?:async )?function ${name}\\([^]*?\\n\\}`));
   assert.ok(match, `production ${name} exists`);
   const context = vm.createContext({ setTimeout, clearTimeout, AbortController, URL, Error, ...globals });
   vm.runInContext(match[0], context);
@@ -86,4 +86,17 @@ test('startup retains explicitly listed wheel installation for compatible manife
   assert.ok(calls[0].includes('micropip'));
   assert.match(calls[1][1],/https:\/\/example.test\/digests\/assets\/wheels\/example.whl/);
   assert.match(calls[2][1],/await micropip.install/);
+});
+
+test('snapshot commits invalidate the disposable reading copy in the same transaction', async () => {
+  const operations=[];
+  const save = production('saveSnapshot', { database:{transaction:()=>{
+    const transaction={objectStore:()=>({put:(value,key)=>{operations.push(['put',key,value]);queueMicrotask(()=>transaction.oncomplete());},
+      delete:key=>operations.push(['delete',key])})};return transaction;
+  }}, queueMicrotask });
+  await save('canonical snapshot');
+  assert.deepEqual(operations,[['put','snapshot','canonical snapshot'],['delete','reading-view']]);
+  operations.length=0;
+  await save('small view','reading-view');
+  assert.deepEqual(operations,[['put','reading-view','small view']]);
 });

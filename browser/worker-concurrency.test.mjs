@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { validateRecoverySnapshot } from './storage.mjs';
+import { validateReadingView } from './reading-view.mjs';
 
 // Exercise the production dispatcher and idle guard without Pyodide or a DB.
 const source = readFileSync(new URL('./worker.mjs', import.meta.url), 'utf8');
@@ -15,7 +16,7 @@ function harness(overrides = {}) {
   const replies = [], writes = [], requests = [];
   const context = vm.createContext({ self: { postMessage: row => replies.push(row) },
     initialize: async () => {}, persist: async () => true, stateReplacing: false,
-    validateRecoverySnapshot, configurationChanging: false, reloadPending: false, jobRunning: false, companion: null, gpuProbe: null,
+    validateRecoverySnapshot, validateReadingView, configurationChanging: false, reloadPending: false, jobRunning: false, companion: null, gpuProbe: null,
     state: { py: { globals: { get: key => key === 'handle_request' ? { callPromising: async payload => {
       requests.push(JSON.parse(payload)); return '{}';
     } } : () => false } } },
@@ -29,6 +30,26 @@ function harness(overrides = {}) {
     send: data => context.self.onmessage({ data }),
     configure: { id: 1, type: 'configure-companion', endpoint: 'http://127.0.0.1:9999', token: 'fixture' } };
 }
+
+test('reading copies require the current committed generation and cannot be stored during brewing', async () => {
+  const view={version:1,date:'2026-10-15',savedAt:'2026-10-15T12:00:00Z',items:[{
+    section:'Research',title:'Fictional paper',url:'https://example.org/paper',meta:'Nature',summary:'Finding',reason:'Topic fit',opportunity:''}]};
+  const h=harness({storageWriter:{status:()=>({durable:true})},state:{py:{globals:{get:()=>()=>7}}}});
+  await h.send({id:1,type:'cache-reading-view',generation:6,view});
+  assert.equal(JSON.parse(h.replies.at(-1).body).cached,false);
+  await h.send({id:2,type:'cache-reading-view',generation:7,view});
+  assert.equal(JSON.parse(h.replies.at(-1).body).cached,true);
+  assert.equal(h.writes.length,1);
+  h.context.jobRunning=true;
+  await h.send({id:3,type:'cache-reading-view',generation:7,view});
+  assert.equal(JSON.parse(h.replies.at(-1).body).cached,false);
+  assert.equal(h.writes.length,1);
+  h.context.jobRunning=false;
+  h.context.storageWriter.status=()=>({durable:false});
+  await h.send({id:4,type:'cache-reading-view',generation:7,view});
+  assert.equal(JSON.parse(h.replies.at(-1).body).cached,false);
+  assert.equal(h.writes.length,1);
+});
 
 test('compute status distinguishes the requested GPU, actual CPU fallback and active brew', async () => {
   const h = harness({ computeMode: 'gpu', jobRunning: true, state: {

@@ -323,6 +323,17 @@ def decode_snapshot(payload, *, enforce_import_limits=False):
 def restore_snapshot(payload, *, overwrite=False, root=ROOT):
     """Validate the complete snapshot before touching browser state."""
     decoded = decode_snapshot(payload)
+    _restore_decoded_snapshot(decoded, overwrite=overwrite, root=root)
+
+
+def restore_startup_snapshot(payload, *, root=ROOT, scratch_root=None):
+    """Decode once, validate copied SQLite files, then restore the new runtime."""
+    decoded = decode_snapshot(payload)
+    validate_snapshot_sqlite(decoded, scratch_root=scratch_root)
+    _restore_decoded_snapshot(decoded, root=root)
+
+
+def _restore_decoded_snapshot(decoded, *, overwrite=False, root=ROOT):
     if not overwrite and any(_snapshot_paths(root)):
         raise ValueError('Existing browser state requires explicit overwrite')
     if overwrite:

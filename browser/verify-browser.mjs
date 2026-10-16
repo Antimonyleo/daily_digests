@@ -226,9 +226,17 @@ async function check(name, work) {
   }
 }
 async function startup() {
+  await page.waitForFunction(() => window.__workerReady || document.getElementById('reading-view-notice')?.hidden === false || document.getElementById('retry')?.hidden === false, undefined, { timeout: 300000 });
+  // These checks exercise editable routes. The independent reading-view check
+  // proves that refresh remains usable without starting the runtime at all.
+  if (await page.locator('#reading-view-notice').isVisible()) await page.locator('#reading-view-open').click();
   await page.waitForFunction(() => window.__workerReady || document.getElementById('retry')?.hidden === false, undefined, { timeout: 300000 });
   assert.equal(await page.evaluate(() => Boolean(window.__workerReady)), true, await page.locator('#startup-status').textContent());
   await page.locator('#app').waitFor({ state: 'visible' });
+  await page.waitForFunction(() => {
+    const document = window.document.querySelector('#app')?.contentDocument;
+    return document && typeof document.defaultView?.ddNavigate === 'function';
+  });
   return page.evaluate(() => ({ startupDurationMs: Number(document.querySelector('#startup').dataset.durationMs), timings: window.__workerEvents.find(row=>row.timings)?.timings, jspi: typeof WebAssembly.Suspending === 'function', title: document.querySelector('#app').contentDocument.title }));
 }
 async function route(path, selector) {

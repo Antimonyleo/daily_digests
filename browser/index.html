@@ -26,6 +26,10 @@
       <button id="recovery-reset" type="button">Start a fresh reading desk</button>
     </div>
   </main>
+  <aside id="reading-view-notice" class="reading-view-notice" aria-label="Saved reading view" hidden>
+    <p id="reading-view-status"></p>
+    <div><button id="reading-view-open" type="button">Open full reading desk</button><button id="reading-view-brew" type="button">Brew a new digest</button></div>
+  </aside>
   <iframe id="app" title="DailyDigest reading desk" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-downloads" hidden></iframe>
   <aside id="app-error" class="app-error" role="alert" hidden>
     <p id="app-error-message"></p>
@@ -54,7 +58,7 @@
         <p>Brewing runs on your device. Choose optional acceleration for new text comparisons.</p>
         <form id="compute-form">
           <label for="compute-mode">Local computation</label>
-          <select id="compute-mode" aria-describedby="compute-support">
+          <select id="compute-mode" aria-describedby="compute-support" disabled>
             <option value="cpu">CPU · one core (default)</option>
             <option value="gpu">Use GPU acceleration (experimental, opt-in)</option>
             <option value="multicore">CPU · up to four cores</option>
@@ -102,6 +106,7 @@
       <summary>Backup</summary>
       <div class="data-tools">
         <p>Your interests, ratings and saved papers are saved automatically in this browser. There is no automatic sync between devices. Export a backup before clearing browser data or switching computers.</p>
+        <p id="backup-runtime-notice" hidden>Open the full reading desk to export or import a backup.</p>
         <button id="export" disabled type="button">Export backup</button>
         <label class="file-button">Import backup<input id="import" type="file" accept="application/json,.json" disabled></label>
         <p>Importing replaces this reading desk. People sharing this browser profile see the same reading desk.</p>

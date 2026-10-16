@@ -65,6 +65,11 @@ jobs:
         run: node browser/verify-storage-startup.mjs
       - name: Prepare isolated browser acceptance fixtures
         run: uv run python browser/make_test_fixture.py --output .full-review/browser-launch-2026-10-13
+      - name: Instant saved reading view and on-demand controls
+        env:
+          DAILYDIGEST_READING_SITE: browser/dist
+          DAILYDIGEST_READING_REPORT: .full-review/reading-view-ci
+        run: node browser/verify-reading-view.mjs
       - name: Full browser acceptance at the project subpath
         env:
           DAILYDIGEST_BROWSER_URL: http://127.0.0.1:8767/daily_digests/

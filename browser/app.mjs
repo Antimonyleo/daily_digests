@@ -1,5 +1,6 @@
 const LOCAL_ORIGIN = 'http://127.0.0.1:8765';
 import { formatComputeProgress } from './compute.mjs';
+import { DeferredWorker, extractReadingView, readReadingView, readingViewDocument } from './reading-view.mjs';
 
 export function computeStatusText(result) {
   const completed = result.stats?.completedInputs || 0;
@@ -352,15 +353,35 @@ async function boot() {
   if ('serviceWorker' in navigator) registerWorker(isolationRequested)
     .catch(error => { setStatus(`App shortcut unavailable: ${error.message}`); });
   let token = crypto.randomUUID();
-  const worker = new Worker(new URL('./worker.mjs?compute=v1', import.meta.url), { type: 'module' });
+  const worker = new DeferredWorker(() => new Worker(new URL('./worker.mjs?compute=v1', import.meta.url), { type: 'module' }));
   const client = new WorkerClient(worker);
   const streams = new Map();
   let ready = false, companionBackends = [], themeObserver;
+  let runtimeStarted = false, frameGeneration = null, cacheTimer;
+  const previewNotice = document.getElementById('reading-view-notice');
+  const interactiveSandbox = frame.getAttribute('sandbox');
+  const startRuntime = (path) => {
+    if (path) history.replaceState(null, '', '#' + localPath(path));
+    if (runtimeStarted) return;
+    runtimeStarted = true;
+    for (const button of previewNotice.querySelectorAll('button')) button.disabled = true;
+    document.getElementById('reading-view-status').textContent = 'Opening controls… You can keep reading below.';
+    worker.postMessage({ type: 'init' });
+  };
+  const cacheReadingView = async () => {
+    if (!ready || activePath !== '/' || frameGeneration === null || frame.hidden) return;
+    try {
+      const document = frame.contentDocument;
+      if (!document || frame.contentWindow.ddLocation !== LOCAL_ORIGIN + '/') return;
+      const view = extractReadingView(document);
+      if (view) await client.call({type:'cache-reading-view', generation:frameGeneration, view});
+    } catch { /* A disposable reading copy must never block the authoritative desk. */ }
+  };
   let computeBusy = false, dismissedRelease = '';
   const releaseNotice = document.getElementById('release-notice');
   const releaseReload = document.getElementById('release-reload');
   const setReleaseState = () => {
-    releaseReload.disabled = computeBusy || !ready;
+    releaseReload.disabled = computeBusy || (runtimeStarted && !ready);
     document.getElementById('release-message').textContent = computeBusy
       ? 'A new version is available. Finish or stop this brew before reloading.' : 'A new version is available.';
   };
@@ -385,6 +406,7 @@ async function boot() {
   document.getElementById('release-dismiss').onclick = () => { dismissedRelease = releaseNotice.dataset.build; releaseNotice.hidden = true; };
   releaseReload.onclick = async () => {
     releaseReload.disabled = true;
+    if (!runtimeStarted) { location.reload(); return; }
     try { await companionCall({ type: 'prepare-reload' }); location.reload(); }
     catch (error) { setReleaseState(); document.getElementById('release-message').textContent = error.message; }
   };
@@ -413,6 +435,7 @@ async function boot() {
     frame.contentDocument?.addEventListener('click', () => {
       for (const menu of document.querySelectorAll('.browser-bar > details[open]')) menu.open = false;
     });
+    void cacheReadingView();
   });
   const displayCompute = () => {
     if (!latestCompute) return;
@@ -435,6 +458,8 @@ async function boot() {
   const report = (error) => {
     const message = error.message || String(error);
     if (!ready || frame.hidden) {
+      startup.hidden = false; frame.hidden = true; previewNotice.hidden = true;
+      document.getElementById('backup-runtime-notice').hidden = true;
       startup.dataset.state = 'error'; document.getElementById('startup-title').textContent = 'Couldn’t open your reading desk';
       setStatus(message); document.getElementById('retry').hidden = false;
       document.getElementById('recovery-tools').hidden = false;
@@ -504,6 +529,7 @@ async function boot() {
     try {
       const result = await companionCall({ type: 'compute-status' });
       const select = document.getElementById('compute-mode');
+      select.disabled = false;
       if (!keepSelection) select.value = result.mode;
       select.querySelector('[value="gpu"]').disabled = !result.capabilities.gpu;
       const canEnableIsolation = 'serviceWorker' in navigator && isSecureContext && navigator.hardwareConcurrency > 1;
@@ -599,11 +625,16 @@ async function boot() {
       }
       if (!(headers.get('content-type') || '').includes('text/html')) throw new Error('Expected a DailyDigest page.');
       activePath = path;
+      const generation = headers.get('x-dailydigest-generation');
+      frameGeneration = generation === null ? null : Number(generation);
       clearInterval(computeTimer); latestCompute = null;
       history.replaceState(null, '', '#' + path);
       token = crypto.randomUUID();
+      frame.setAttribute('sandbox', interactiveSandbox);
       frame.srcdoc = renderedDocument(response.body, token, path, location.href);
       frame.hidden = false; startup.hidden = true;
+      previewNotice.hidden = true;
+      document.getElementById('backup-runtime-notice').hidden = true;
       startup.dataset.state = 'ready';
       setStatus('Your reading desk · saved in this browser');
     } catch (error) { if (version === navigation) report(error); }
@@ -656,7 +687,10 @@ async function boot() {
     else if (data.type === 'error' && !data.id) report(new Error(data.message || data.error || 'Python startup failed'));
   });
   worker.addEventListener('error', () => report(new Error('Python worker stopped. Reload to reconnect.')));
-  window.addEventListener('hashchange', () => { if (ready) navigate(routeFromHash(location.hash)); });
+  window.addEventListener('hashchange', () => {
+    if (ready) navigate(routeFromHash(location.hash));
+    else startRuntime();
+  });
   window.addEventListener('message', async ({ source, data }) => {
     if (source !== frame.contentWindow || data?.token !== token) return;
     if (data.type === 'compute-stop') { clearInterval(computeTimer); latestCompute = null; setStatus('Brew needs attention'); return; }
@@ -673,7 +707,13 @@ async function boot() {
       else if (data.type === 'request') {
         const request = client.call({ type: 'request', path: localPath(data.path), method: data.method, headers: data.headers, body: data.body }, body => reply({ type: 'stream', body }));
         streams.set(data.id, request);
-        try { reply(await request); } finally { streams.delete(data.id); }
+        try {
+          const response = await request;
+          const generation = new Headers(response.headers).get('x-dailydigest-generation');
+          if (generation !== null) frameGeneration = Number(generation);
+          reply(response);
+          clearTimeout(cacheTimer); cacheTimer = setTimeout(() => { void cacheReadingView(); }, 100);
+        } finally { streams.delete(data.id); }
       }
     } catch (error) {
       reply({ error: error.message });
@@ -806,7 +846,31 @@ async function boot() {
       finally { button.disabled = false; }
     };
   }
-  worker.postMessage({ type: 'init' });
+  document.getElementById('reading-view-open').onclick = () => startRuntime('/');
+  document.getElementById('reading-view-brew').onclick = () => startRuntime('/run');
+  // Read one small derived record, never the full database or vector cache.
+  // Unavailable browser storage falls back to the existing startup/recovery path.
+  let preview;
+  if (routeFromHash(location.hash) === '/') {
+    preview = await Promise.race([
+      readReadingView(indexedDB, `dailydigest:${new URL('.', import.meta.url).pathname}`).catch(() => null),
+      new Promise(resolve => setTimeout(() => resolve(null), 800)),
+    ]);
+  }
+  if (preview && !runtimeStarted) {
+    frame.setAttribute('sandbox', 'allow-popups allow-popups-to-escape-sandbox');
+    frame.srcdoc = readingViewDocument(preview, document.documentElement.dataset.theme);
+    frame.hidden = false; startup.hidden = true;
+    previewNotice.hidden = false;
+    startup.dataset.state = 'reading';
+    document.getElementById('reading-view-status').textContent = `Last saved digest · ${preview.date}. Read now; open controls to rate, save or change settings.`;
+    setStatus('Saved reading view · computation starts when you open controls');
+    document.getElementById('compute-support').textContent = 'Open the full reading desk to choose acceleration.';
+    document.getElementById('compute-status').textContent = 'Computation is paused while you read the saved digest.';
+    companionStatus.textContent = 'Open the full reading desk to connect a companion.';
+    document.getElementById('backup-runtime-notice').hidden = false;
+    checkRelease();
+  } else startRuntime();
 }
 
 if (typeof document !== 'undefined') boot().catch(error => {

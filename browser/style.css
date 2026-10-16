@@ -25,6 +25,9 @@ h1 { font-size: clamp(28px, 5vw, 44px); line-height: 1.15; }
 #compute-mode { width: 100%; font: inherit; padding: 8px; }
 .storage-consent { flex-shrink: 0; padding: 8px 16px; border-top: 1px solid #dde3dc; font-size: 13px; line-height: 1.4; max-height: 30dvh; overflow-y: auto; }
 .storage-consent p { margin: 0; }
+.reading-view-notice { flex-shrink: 0; padding: 10px 20px; border-bottom: 1px solid #dde3dc; background: #e8f3ec; font-size: 13px; line-height: 1.4; }
+.reading-view-notice p { margin: 0 0 4px; }
+:root[data-theme="dark"] .reading-view-notice { background: #1b3426; border-color: #314038; }
 @media (max-width: 720px) {
   .browser-bar { gap: 4px; padding-inline: 8px; }
   .browser-bar summary { padding-inline: 5px; }

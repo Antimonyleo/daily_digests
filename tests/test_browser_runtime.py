@@ -36,6 +36,28 @@ def test_snapshot_roundtrip_keeps_private_files_only(runtime, tmp_path):
         runtime.restore_snapshot(snapshot, root=target)
 
 
+def test_startup_restore_decodes_once_and_checks_sqlite_before_writing(runtime, tmp_path, monkeypatch):
+    payload = json.dumps({'format': 'dailydigest-browser-v1', 'files': {
+        'data/profile.yaml': base64.b64encode(b'keywords: [astronomy]').decode()}})
+    calls = []
+    original = runtime.decode_snapshot
+
+    def decode(value, **kwargs):
+        calls.append(value)
+        return original(value, **kwargs)
+
+    monkeypatch.setattr(runtime, 'decode_snapshot', decode)
+    runtime.restore_startup_snapshot(payload, root=tmp_path, scratch_root=tmp_path)
+    assert calls == [payload]
+    assert (tmp_path / 'data/profile.yaml').read_bytes() == b'keywords: [astronomy]'
+    invalid = json.dumps({'format': 'dailydigest-browser-v1', 'files': {
+        'data/broken.sqlite': base64.b64encode(b'broken').decode()}})
+    other = tmp_path / 'bad'
+    with pytest.raises(ValueError, match='not a SQLite database'):
+        runtime.restore_startup_snapshot(invalid, root=other, scratch_root=tmp_path)
+    assert not (other / 'data').exists()
+
+
 def test_fast_browser_checkpoint_equals_full_export_byte_for_byte(runtime, tmp_path):
     import shutil
     import subprocess
@@ -433,7 +455,7 @@ context.apply = {callPromising: async (_payload, commit) => {
   return JSON.stringify({ok: true, mail_ids: ['stable-mail'], messages_applied: 1, errors: []});
 }};
 context.transaction = () => {
-  const transaction = {error: new Error('IndexedDB failed'), objectStore: () => ({put: () => {
+  const transaction = {error: new Error('IndexedDB failed'), objectStore: () => ({delete() {}, put: () => {
     setTimeout(() => { events.push(failCommit ? 'abort' : 'commit');
       if (failCommit) transaction.onabort(); else transaction.oncomplete(); }, 0);
   }})};
@@ -691,7 +713,7 @@ context.request = {callPromising: async message => {
   return JSON.stringify({id: JSON.parse(message).id, type: 'response', status: 200, headers: {}, body: '{}'});
 }};
 context.transaction = () => {
-  const transaction = {objectStore: () => ({put: (_value, key) => {
+  const transaction = {objectStore: () => ({delete() {}, put: (_value, key) => {
     events.push(`save-${key}`); setTimeout(() => transaction.oncomplete(), 0);
   }})};
   return transaction;
@@ -869,7 +891,7 @@ context.request = {callPromising: async raw => {
 }};
 context.generation = () => generation;
 context.transaction = () => {
-  const transaction = {error: new Error('quota exceeded'), objectStore: () => ({put() {
+  const transaction = {error: new Error('quota exceeded'), objectStore: () => ({delete() {}, put() {
     setTimeout(() => fail ? transaction.onabort() : transaction.oncomplete(), 0);
   }})}; return transaction;
 };

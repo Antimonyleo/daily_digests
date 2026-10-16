@@ -5,6 +5,22 @@ execution in a browser worker. The existing FastAPI interface renders pages in
 memory; no listening Python server or remote ranking request is involved.
 HTML forms, feedback, history and live brew progress use that same interface.
 
+After opening a digest, returning to the home page can display a small saved
+reading view without starting Python or restoring the embedding cache. Article
+links and summaries are available immediately. **Open full reading desk** enables
+ratings, saves and settings; **Brew a new digest** opens the brewing controls.
+Both start the existing runtime on demand. Other deep links start it normally.
+The reading view is explicitly dated, read-only, and stored only in this browser.
+It contains structured display text, never scripts, API keys or a second private
+database. Canonical state changes invalidate it in the same storage transaction;
+the displayed digest can regenerate it only after its state is durably saved.
+Missing, invalid or oversized reading copies use the ordinary startup path.
+Backups and recovery continue to use the authoritative private snapshot.
+
+The Python runtime and libraries are prepared when the full desk is opened,
+instead of on every reading visit. Snapshot restoration decodes private files
+once while retaining SQLite integrity checks before any restore writes.
+
 Setup shows muted research examples, which visitors can explicitly load and edit
 before saving. Startup and brewing use tea animations and messages tied to real
 processing stages; reduced-motion settings keep animations still. The digest's
@@ -104,6 +120,11 @@ DAILYDIGEST_BROWSER_FIXTURE=.full-review/clean-release/fixtures/fixture-backup.j
 DAILYDIGEST_BROWSER_FEED=.full-review/clean-release/fixtures/research-feed.xml \
 DAILYDIGEST_BROWSER_REPORT=.full-review/clean-release/acceptance \
 node browser/verify-browser.mjs
+# Independently verify refresh without Python, followed by real vote/save restore.
+DAILYDIGEST_READING_SITE=.full-review/clean-release/site \
+DAILYDIGEST_READING_FIXTURE=.full-review/clean-release/fixtures/fixture-backup.json \
+DAILYDIGEST_READING_REPORT=.full-review/clean-release/reading-view \
+node browser/verify-reading-view.mjs
 ```
 
 The browser check intercepts external requests with fictional fixtures. It also

@@ -7,6 +7,7 @@ import { createSnapshotWriter, validateRecoverySnapshot, validateStoredSnapshot,
 import { createBrowserHttpBridge } from './http.mjs';
 import { createSemanticEngine } from './semantic.mjs';
 import { createPublicEmbeddingCache } from './public-embeddings.mjs';
+import { validateReadingView } from './reading-view.mjs';
 
 let companion = null;
 let boot, state, database, storageWriter, ownership, recoveryPy, startupFailed = false, startupReady = false, jobRunning = false, stateReplacing = false, computeMode = 'cpu';
@@ -36,6 +37,7 @@ function saveSnapshot(snapshot, key = 'snapshot') {
   return new Promise((resolve, reject) => {
     const transaction = database.transaction('state', 'readwrite');
     transaction.objectStore('state').put(snapshot, key);
+    if (key === 'snapshot') transaction.objectStore('state').delete('reading-view');
     transaction.oncomplete = resolve;
     transaction.onerror = () => reject(transaction.error);
     transaction.onabort = () => reject(transaction.error || new Error('Browser storage transaction aborted'));
@@ -173,6 +175,7 @@ async function recoveryRequest(data) {
     const store = transaction.objectStore('state');
     if (previous != null) store.put(previous, key);
     if (next === null) store.delete('snapshot'); else store.put(next, 'snapshot');
+    store.delete('reading-view');
     transaction.oncomplete = resolve;
     transaction.onerror = () => reject(transaction.error);
     transaction.onabort = () => reject(transaction.error || new Error('Recovery was not saved; original state is unchanged.'));
@@ -220,8 +223,8 @@ async function initialize() {
     if (snapshot) {
       snapshotLimitWarning = validateStoredSnapshot(snapshot).warning;
       py.globals.set('startup_snapshot', snapshot);
-      await py.runPythonAsync('validate_snapshot_sqlite(decode_snapshot(startup_snapshot))');
-      py.globals.get('restore_snapshot')(snapshot);
+      await py.runPythonAsync('restore_startup_snapshot(startup_snapshot)');
+      py.runPython('del startup_snapshot');
     }
     stage('application-setup', 'Preparing reading desk', 'Connecting the local application…');
     // Native ingest imports bind config.SETTINGS: restore .env before them.
@@ -362,6 +365,15 @@ self.onmessage = async ({ data }) => {
       self.postMessage(response(data.id, JSON.stringify({ detail: reloadPending ? 'The application is about to reload. Wait for the page to reopen.' : stateReplacing
         ? 'Backup import is replacing browser state. Wait for the page to reload.'
         : 'Browser settings are being saved. Retry this action after they finish.' }), 409));
+      return;
+    }
+    if (data.type === 'cache-reading-view') {
+      const view = validateReadingView(data.view);
+      const current = Number(state.py.globals.get('state_generation')());
+      if (view && data.generation === current && storageWriter.status().durable && !jobRunning) {
+        await saveSnapshot(view, 'reading-view');
+        self.postMessage(response(data.id, JSON.stringify({cached:true})));
+      } else self.postMessage(response(data.id, JSON.stringify({cached:false})));
       return;
     }
     if (data.type === 'storage-status') {
@@ -523,7 +535,11 @@ self.onmessage = async ({ data }) => {
       const unsaved = JSON.parse(result);
       unsaved.headers = { ...unsaved.headers, 'x-dailydigest-storage': 'unsaved' };
       emit(JSON.stringify(unsaved));
-    } else emit(result);
+    } else {
+      const committed = JSON.parse(result);
+      committed.headers = { ...committed.headers, 'x-dailydigest-generation': String(state.py.globals.get('state_generation')()) };
+      emit(JSON.stringify(committed));
+    }
     // Start native background targets only after the start response reaches UI.
     setTimeout(() => { void pumpJobs(); }, 0);
   } catch (error) {
