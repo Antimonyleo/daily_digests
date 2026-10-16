@@ -123,7 +123,7 @@ def _assert_real_writer_matches(checkpoints):
     if not node:
         pytest.fail('Node is required for the real browser snapshot writer differential test')
     script = r'''
-      import { createSnapshotWriter } from './browser/storage.mjs';
+      import { createSnapshotWriter, capturePrivateSnapshot } from './browser/storage.mjs';
       const checkpoints = JSON.parse(await new Promise(resolve => {
         let text = ''; process.stdin.setEncoding('utf8');
         process.stdin.on('data', chunk => text += chunk);
@@ -133,7 +133,11 @@ def _assert_real_writer_matches(checkpoints):
       const writer = createSnapshotWriter({
         generation: () => checkpoint.generation,
         ready: () => checkpoint.ready,
-        capture: () => checkpoint.snapshot,
+        capture: () => {
+          const files = JSON.parse(checkpoint.snapshot).files;
+          return capturePrivateSnapshot(checkpoint.names,
+            name => new Uint8Array(Buffer.from(files[name], 'base64'))).payload;
+        },
         save: async snapshot => { stored = snapshot; },
       });
       for (checkpoint of checkpoints) {
@@ -159,6 +163,7 @@ def test_real_mutating_routes_match_full_private_export_after_writer_flush(track
     def checkpoint(label):
         checkpoints.append({'label': label, 'generation': app.runtime.state_generation(),
                             'ready': app.runtime.snapshot_ready(),
+                            'names': json.loads(app.runtime.snapshot_file_names(app.root)),
                             'snapshot': app.runtime.export_snapshot(app.root)})
 
     checkpoint('initial committed state')
@@ -230,6 +235,8 @@ def test_mid_brew_uncommitted_transaction_defers_snapshot_and_restores_after_com
         assert not app.runtime.snapshot_ready(), 'Checkpoint must defer an active SQLite writer'
         with pytest.raises(RuntimeError, match='transaction is still active'):
             app.runtime.export_snapshot(app.root)
+        with pytest.raises(RuntimeError, match='transaction is still active'):
+            app.runtime.snapshot_file_names(app.root)
         transaction.commit()
     assert app.runtime.snapshot_ready()
     snapshot = app.runtime.export_snapshot(app.root)
@@ -291,7 +298,9 @@ def test_actual_legacy_migration_marks_c_level_backup_write(tracked_app, monkeyp
     with sqlite3.connect(backup) as connection:
         assert connection.execute('SELECT value FROM votes ORDER BY id').fetchall() == [(1,), (-1,)]
     checkpoint = {'label': 'C-level migration backup', 'generation': app.runtime.state_generation(),
-                  'ready': app.runtime.snapshot_ready(), 'snapshot': app.runtime.export_snapshot(app.root)}
+                  'ready': app.runtime.snapshot_ready(),
+                  'names': json.loads(app.runtime.snapshot_file_names(app.root)),
+                  'snapshot': app.runtime.export_snapshot(app.root)}
     assert 'data/backups/digest-pre-v1.db' in json.loads(checkpoint['snapshot'])['files']
     app.runtime.validate_snapshot_sqlite(app.runtime.decode_snapshot(checkpoint['snapshot']),
                                          scratch_root=app.root.parent)

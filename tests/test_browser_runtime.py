@@ -36,6 +36,31 @@ def test_snapshot_roundtrip_keeps_private_files_only(runtime, tmp_path):
         runtime.restore_snapshot(snapshot, root=target)
 
 
+def test_fast_browser_checkpoint_equals_full_export_byte_for_byte(runtime, tmp_path):
+    import shutil
+    import subprocess
+
+    node = shutil.which('node')
+    if not node:
+        pytest.skip('Node is required for the actual browser checkpoint encoder')
+    (tmp_path / 'data' / 'nested').mkdir(parents=True)
+    (tmp_path / 'data' / 'nested' / 'unicode-\U0001f9ec-\u00e9.bin').write_bytes(bytes(range(256)) * 16384)
+    (tmp_path / 'data' / 'empty.bin').write_bytes(b'')
+    (tmp_path / 'data' / 'payload.bin').write_bytes(b'\x00\xff\x01')
+    (tmp_path / 'data' / '.compute.lock').write_text('excluded')
+    (tmp_path / '.env').write_text('LLM_BACKEND=extractive\n')
+    names = runtime.snapshot_file_names(tmp_path)
+    script = '''import {readFileSync} from 'node:fs';
+import {capturePrivateSnapshot} from './browser/storage.mjs';
+const names=JSON.parse(process.argv[2]);
+const result=capturePrivateSnapshot(names,name=>new Uint8Array(readFileSync(process.argv[1]+'/'+name)));
+process.stdout.write(result.payload);
+'''
+    result = subprocess.run([node, '--input-type=module', '-e', script, str(tmp_path), names],
+                            cwd=Path(__file__).parents[1], text=True, capture_output=True, check=True)
+    assert result.stdout == runtime.export_snapshot(tmp_path)
+
+
 @pytest.mark.parametrize('path', ['/data/foo', 'data/../../app.py', 'app.py', '.env/child'])
 def test_snapshot_rejects_escape_before_deleting_state(runtime, tmp_path, path):
     (tmp_path / 'data').mkdir()

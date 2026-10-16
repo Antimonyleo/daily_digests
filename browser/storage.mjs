@@ -34,6 +34,43 @@ export function createSnapshotWriter({ generation, capture, save, ready = () => 
 /** Validate the envelope without Python, including paths, conflicts and base64. */
 const MAX_IMPORT_FILES = 10000, MAX_IMPORT_CHARACTERS = 128 * 1024 * 1024;
 const exceedsImportLimit = (payload, names) => names.length > MAX_IMPORT_FILES || payload.length > MAX_IMPORT_CHARACTERS;
+const storedSizeWarning = (payload, names) => exceedsImportLimit(payload, names)
+  ? 'Your saved reading state exceeds the portable import limit. It was preserved; importing a backup of this size is currently unsupported.' : null;
+
+function validatePrivatePaths(names) {
+  const paths = new Set(names);
+  for (const name of names) {
+    if (typeof name !== 'string') throw new Error('Backup contains an invalid private path.');
+    const parts = name.split('/');
+    if (name !== '.env' && (parts.length < 2 || parts[0] !== 'data') ||
+        parts.some(part => !part || part === '.' || part === '..' || part === '.compute.lock') ||
+        name.includes('\\')) throw new Error('Backup contains an invalid private path.');
+    if (parts.some((_, index) => index > 0 && paths.has(parts.slice(0, index).join('/')))) throw new Error('Backup contains conflicting paths.');
+  }
+}
+
+/** Match export_snapshot byte-for-byte, including Python's ASCII JSON keys. */
+export function capturePrivateSnapshot(names, readFile) {
+  validatePrivatePaths(names);
+  const quote = value => JSON.stringify(value).replace(/[\u007f-\uffff]/g,
+    char => '\\u' + char.charCodeAt(0).toString(16).padStart(4, '0'));
+  const files = names.map(name => {
+    const bytes = readFile(name);
+    let encoded;
+    if (typeof bytes.toBase64 === 'function') encoded = bytes.toBase64();
+    else {
+      // Older browsers need bounded chunks: spreading a complete database
+      // into fromCharCode recreates the startup call-stack overflow.
+      let binary = '';
+      for (let offset = 0; offset < bytes.length; offset += 32768)
+        binary += String.fromCharCode(...bytes.subarray(offset, offset + 32768));
+      encoded = btoa(binary);
+    }
+    return quote(name) + ': "' + encoded + '"';
+  });
+  const payload = '{"format": "dailydigest-browser-v1", "files": {' + files.join(', ') + '}}';
+  return { payload, warning: storedSizeWarning(payload, names) };
+}
 
 function validBase64(value) {
   if (value.length % 4 !== 0) return false;
@@ -56,14 +93,10 @@ export function validateRecoverySnapshot(payload, { enforceLimits = true } = {})
   }
   const names = Object.keys(snapshot.files);
   if (enforceLimits && exceedsImportLimit(payload, names)) throw new Error('Backup exceeds the recovery limit.');
-  const paths = new Set(names);
+  validatePrivatePaths(names);
   for (const name of names) {
-    const parts = name.split('/');
-    if (name !== '.env' && (parts.length < 2 || parts[0] !== 'data') ||
-        parts.some(part => !part || part === '.' || part === '..' || part === '.compute.lock') ||
-        name.includes('\\') || typeof snapshot.files[name] !== 'string') throw new Error('Backup contains an invalid private path.');
+    if (typeof snapshot.files[name] !== 'string') throw new Error('Backup contains an invalid private path.');
     if (!validBase64(snapshot.files[name])) throw new Error('Backup contains invalid encoded data.');
-    if (parts.some((_, index) => index > 0 && paths.has(parts.slice(0, index).join('/')))) throw new Error('Backup contains conflicting paths.');
   }
   return snapshot;
 }
@@ -71,6 +104,5 @@ export function validateRecoverySnapshot(payload, { enforceLimits = true } = {})
 /** Existing checkpoints may grow beyond external import limits; preserve them. */
 export function validateStoredSnapshot(payload) {
   const snapshot = validateRecoverySnapshot(payload, { enforceLimits: false });
-  return { snapshot, warning: exceedsImportLimit(payload, Object.keys(snapshot.files))
-    ? 'Your saved reading state exceeds the portable import limit. It was preserved; importing a backup of this size is currently unsupported.' : null };
+  return { snapshot, warning: storedSizeWarning(payload, Object.keys(snapshot.files)) };
 }

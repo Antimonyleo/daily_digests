@@ -1,6 +1,28 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createSnapshotWriter, validateRecoverySnapshot, validateStoredSnapshot } from './storage.mjs';
+import { createSnapshotWriter, validateRecoverySnapshot, validateStoredSnapshot, capturePrivateSnapshot } from './storage.mjs';
+
+test('browser checkpoint validates private paths before reading any file', () => {
+  let reads = 0;
+  for (const names of [['data/good', '../escape'], ['.env/child'], ['data/a', 'data/a/child'], ['data/.compute.lock']]) {
+    assert.throws(() => capturePrivateSnapshot(names, () => { reads++; return new Uint8Array(); }));
+  }
+  assert.equal(reads, 0);
+});
+
+test('checkpoint fallback encodes large binary files without overflowing the call stack', () => {
+  const descriptor = Object.getOwnPropertyDescriptor(Uint8Array.prototype, 'toBase64');
+  Object.defineProperty(Uint8Array.prototype, 'toBase64', {value:undefined, configurable:true});
+  try {
+    const bytes = Uint8Array.from({length:4*1024*1024}, (_, index) => index % 256);
+    const result = capturePrivateSnapshot(['data/vectors.bin'], () => bytes);
+    assert.equal(result.warning, null);
+    assert.deepEqual(Buffer.from(JSON.parse(result.payload).files['data/vectors.bin'], 'base64'), Buffer.from(bytes));
+  } finally {
+    if (descriptor) Object.defineProperty(Uint8Array.prototype, 'toBase64', descriptor);
+    else delete Uint8Array.prototype.toBase64;
+  }
+});
 
 test('read-only requests do not capture state; concurrent mutations save in order', async () => {
   let generation = 0, captures = 0;

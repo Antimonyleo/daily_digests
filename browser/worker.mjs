@@ -3,7 +3,7 @@ import { AutoTokenizer, AutoModel, AutoModelForSequenceClassification, Tensor, e
 import { prepareBertBatch } from './bge-tokenizer.mjs';
 import { computeCapabilities, computeSelection, createEmbeddingEngine, formatComputeProgress, guardGPUModel } from './compute.mjs';
 
-import { createSnapshotWriter, validateRecoverySnapshot, validateStoredSnapshot } from './storage.mjs';
+import { createSnapshotWriter, validateRecoverySnapshot, validateStoredSnapshot, capturePrivateSnapshot } from './storage.mjs';
 import { createBrowserHttpBridge } from './http.mjs';
 import { createSemanticEngine } from './semantic.mjs';
 import { createPublicEmbeddingCache } from './public-embeddings.mjs';
@@ -294,9 +294,10 @@ async function initialize() {
       generation: () => Number(py.globals.get('state_generation')()),
       ready: () => Boolean(py.globals.get('snapshot_ready')()),
       capture: () => {
-        const checkpoint = py.globals.get('export_snapshot')();
-        snapshotLimitWarning = validateStoredSnapshot(checkpoint).warning;
-        return checkpoint;
+        const names = JSON.parse(py.globals.get('snapshot_file_names')());
+        const checkpoint = capturePrivateSnapshot(names, name => py.FS.readFile('/app/' + name));
+        snapshotLimitWarning = checkpoint.warning;
+        return checkpoint.payload;
       }, save: saveSnapshot,
       warning: message => self.postMessage({ type: 'storage-warning', message: message || snapshotLimitWarning }),
     });

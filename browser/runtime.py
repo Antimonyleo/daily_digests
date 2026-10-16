@@ -210,12 +210,22 @@ def _sqlite_shared_memory(path):
         return False
 
 
-def export_snapshot(root=ROOT, *, include_credentials=True):
-    """Internal recovery is complete; portable exports omit credentials by default."""
+def _checkpoint_paths(root):
     if not snapshot_ready():
         raise RuntimeError('Private SQL transaction is still active; retry after commit')
+    return [path for path in sorted(_snapshot_paths(root))
+            if path.name != '.compute.lock' and not _sqlite_shared_memory(path)]
+
+
+def snapshot_file_names(root=ROOT):
+    """Let the browser encode committed file bytes without a Python JSON pass."""
+    return json.dumps([str(path.relative_to(root)) for path in _checkpoint_paths(root)])
+
+
+def export_snapshot(root=ROOT, *, include_credentials=True):
+    """Internal recovery is complete; portable exports omit credentials by default."""
     files = {str(path.relative_to(root)): base64.b64encode(path.read_bytes()).decode('ascii')
-             for path in sorted(_snapshot_paths(root)) if path.name != '.compute.lock' and not _sqlite_shared_memory(path)}
+             for path in _checkpoint_paths(root)}
     snapshot = {'format': 'dailydigest-browser-v1', 'files': files}
     if not include_credentials:
         omitted = []

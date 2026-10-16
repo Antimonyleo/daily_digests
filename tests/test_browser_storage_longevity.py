@@ -1,5 +1,6 @@
 """Accumulated browser choices survive pruning and a validated checkpoint."""
 from datetime import datetime, timedelta, timezone
+import json
 import sqlite3
 
 from tests.test_browser_state_differential import tracked_app, _assert_real_writer_matches  # noqa: F401
@@ -37,7 +38,8 @@ def test_ninety_days_of_choices_survive_retention_and_restoration(tracked_app): 
     snapshot = app.runtime.export_snapshot(app.root)
     app.runtime.validate_snapshot_sqlite(app.runtime.decode_snapshot(snapshot), scratch_root=app.root.parent)
     _assert_real_writer_matches([{'label': 'ninety days and pruning',
-        'generation': app.runtime.state_generation(), 'ready': True, 'snapshot': snapshot}])
+        'generation': app.runtime.state_generation(), 'ready': True,
+        'names': json.loads(app.runtime.snapshot_file_names(app.root)), 'snapshot': snapshot}])
     restored = app.root.parent/'restored-longevity'
     app.runtime.restore_snapshot(snapshot, root=restored)
     with sqlite3.connect(restored/'data/digest.db') as connection:
