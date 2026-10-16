@@ -412,3 +412,29 @@ installation. Python/runtime/package initialization still has a cost on every
 opening; cached downloads do not imply instantaneous startup. Reload during a
 brew keeps committed state, explains interruption, and waits for an explicit new
 brew. A release notice never reloads a running brew automatically.
+
+## Reader experience and evaluation
+
+The footer keeps one status line and **Data & compute**, which opens a single
+keyboard-accessible view for acceleration, backups, storage protection and the
+optional Companion. First-visit Setup defaults to Research only, gives topics
+equal shares and keeps individual percentage editing optional. Existing readers
+keep their enabled sections and priorities. Example profiles remain editable.
+
+Cards show available authors, publication status and the recorded matching topic.
+Literal phrase evidence is quoted only when present in supplied text; semantic
+matches never fabricate a quote. The reading study reports current explicit
+usefulness ratings per recent research slate, with unrated papers left unknown.
+It is descriptive and does not claim that a ranking algorithm improved.
+
+Route responses return after application commits, before a coalesced background
+checkpoint. Unchanged file encodings are reused using audited write versions;
+unknown writes and path aliases invalidate reuse conservatively. Portable and
+recovery snapshot formats remain unchanged. Explicit reload, transfer, import
+and export still flush; visibility/page-hide request a flush and closing during
+unsaved edits prompts. Browser shutdown can still interrupt an asynchronous save.
+
+A provisional list appears after all topic and quality selection gates, while
+summaries are prepared. It is not published or used as a replacement for the
+last good digest when work is cancelled or fails. The UI gives stage progress
+and measured text-comparison estimates rather than an invented total ETA.

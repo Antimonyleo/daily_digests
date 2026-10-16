@@ -65,17 +65,32 @@ try{
   async function ready(p){await p.waitForFunction(()=>window.__ready && document.querySelector('#app')?.hidden===false && document.querySelector('#startup')?.dataset.state==='ready',undefined,{timeout:180000});await p.waitForFunction(()=>typeof document.querySelector('#app')?.contentDocument?.defaultView?.ddNavigate==='function');}
   async function route(p,path,selector){await p.evaluate(path=>{window.__old=document.querySelector('#app').contentDocument;document.querySelector('#app').contentWindow.ddNavigate(path);},path);
     await p.waitForFunction(()=>document.querySelector('#app')?.contentDocument!==window.__old);if(selector)await p.frameLocator('#app').locator(selector).first().waitFor();}
-  async function config(p,data){const value=await p.evaluate(data=>window.__rpc({type:'tab-test-config',...data}),data);assert.equal(value.status,200,value.body);}
+  async function config(p,data){const value=await p.evaluate(data=>{if(data.hold===true)window.__held=false;return window.__rpc({type:'tab-test-config',...data});},data);assert.equal(value.status,200,value.body);}
   async function oneOwner(p){assert.equal(await p.evaluate(async()=>{const locks=await navigator.locks.query();return locks.held.filter(lock=>lock.name==='dailydigest:/daily_digests/').length;}),1);}
   const first=await page();await first.goto(base+'__seed__');
   await first.evaluate(async payload=>{const r=indexedDB.open('dailydigest:/daily_digests/',1);r.onupgradeneeded=()=>r.result.createObjectStore('state');
     const db=await new Promise(done=>{r.onsuccess=()=>done(r.result);});await new Promise(done=>{const tx=db.transaction('state','readwrite');tx.objectStore('state').put(payload,'snapshot');tx.oncomplete=done;});db.close();},fixture);
   await first.goto(base+'#/');await ready(first);const card=first.frameLocator('#app').locator('.item[data-section="research"]').first();await card.waitFor();
   await card.locator('.bookmark-btn:not(.known-btn)').click();await card.locator('.bookmark-btn:not(.known-btn)[aria-pressed="true"]').waitFor();
+  // Navigation must wait for intents that have not reached the worker yet too.
+  await config(first,{hold:true});await card.locator('.vote-btn[data-grade="70"]').click();await first.waitForFunction(()=>window.__held);
+  await card.locator('.vote-btn[data-grade="100"]').click();
+  await first.evaluate(()=>{window.__old=document.querySelector('#app').contentDocument;document.querySelector('#app').contentWindow.ddNavigate('/setup');});
+  await first.waitForTimeout(100);assert.equal(await first.locator('#app').evaluate(node=>node.inert),true);
+  await config(first,{hold:false,release:true});
+  await first.waitForFunction(()=>!document.querySelector('#app').contentWindow.ddHasPendingRatings?.());
+  // A bounded refusal is safe; retry after the committed queue drains.
+  if(await first.locator('#app-error').isVisible()){await first.locator('#dismiss-error').click();await route(first,'/setup','[data-interest-name]');}
+  else await first.frameLocator('#app').locator('[data-interest-name]').first().waitFor();
+  await route(first,'/','.item[data-section="research"]');
+  await card.locator('.vote-btn[data-grade="100"][aria-pressed="true"]').waitFor();
+  report.checks.push('navigation drains rapid queued ratings and restores the latest intent on return');
   const second=await page();await second.goto(base+'#/setup');await second.locator('#tab-wait-actions').waitFor({state:'visible'});
   assert.equal(await second.locator('#retry').isVisible(),true);await oneOwner(first);
   report.checks.push('second editable tab has actionable switch/close/retry instructions without acquiring a second lock');
   await config(first,{hold:true});await card.locator('.vote-btn[data-grade="70"]').click();await first.waitForFunction(()=>window.__held);
+  await card.locator('.vote-btn[data-grade="100"]').click();
+  assert.equal(await card.locator('.vote-btn[data-grade="100"]').getAttribute('aria-pressed'),'true');
   await second.locator('#use-this-tab').click();await first.waitForTimeout(300);
   assert.notEqual(await first.locator('#startup').getAttribute('data-state'),'moved');await oneOwner(first);
   await config(first,{hold:false,release:true});
@@ -87,15 +102,16 @@ try{
   ]);
   if(!switched){
     await oneOwner(first);
-    await first.frameLocator('#app').locator('.vote-btn[data-grade="70"][aria-pressed="true"]').first().waitFor();
+    await first.frameLocator('#app').locator('.vote-btn[data-grade="100"][aria-pressed="true"]').first().waitFor();
+    await first.waitForFunction(()=>!document.querySelector('#app').contentWindow.ddHasPendingRatings?.());
     await second.locator('#use-this-tab').click();
     report.slowActionRefusedSafely=true;
   }
   await ready(second);
   await first.locator('#startup[data-state="moved"]').waitFor();await route(second,'/','.item[data-section="research"]');
-  await second.frameLocator('#app').locator('.vote-btn[data-grade="70"][aria-pressed="true"]').first().waitFor();
+  await second.frameLocator('#app').locator('.vote-btn[data-grade="100"][aria-pressed="true"]').first().waitFor();
   await second.frameLocator('#app').locator('.bookmark-btn:not(.known-btn)[aria-pressed="true"]').first().waitFor();await oneOwner(second);
-  report.checks.push('handoff waits for an in-flight vote, saves before releasing, restores vote/save and fences the old tab');
+  report.checks.push('handoff drains both an in-flight and a queued rapid rating, restores the latest vote/save and fences the old tab');
   await route(second,'/setup','[data-interest-name]');await second.frameLocator('#app').locator('[data-interest-name]').first().fill('Unsaved topic draft');
   await first.locator('#use-this-tab').click();await first.locator('#startup-status').filter({hasText:'unsaved settings'}).waitFor();
   assert.equal(await second.frameLocator('#app').locator('[data-interest-name]').first().inputValue(),'Unsaved topic draft');await oneOwner(second);
@@ -120,6 +136,13 @@ try{
   assert.match(await restricted.locator('#startup-status').textContent(), /close it and Retry/);
   await restricted.close();report.checks.push('restricted messaging keeps startup usable with close/retry guidance');
   assert.deepEqual(report.errors,[]);assert.deepEqual(report.blocked,[]);report.success=true;
-}catch(error){report.success=false;report.failure=error.stack;throw error;}
+}catch(error){
+  report.success=false;report.failure=error.stack;
+  report.failedPages=[];
+  for(const context of browser.contexts())for(const page of context.pages()){
+    report.failedPages.push(await page.evaluate(()=>({url:location.href,status:document.querySelector('#status')?.textContent,error:document.querySelector('#app-error')?.textContent,frame:document.querySelector('#app')?.contentDocument?.body?.innerText?.slice(0,5000)})).catch(()=>({closed:true})));
+  }
+  throw error;
+}
 finally{await writeFile(output+'/report.json',JSON.stringify(report,null,2)+'\n');await browser.close();await new Promise(done=>server.close(done));}
 console.log(JSON.stringify(report,null,2));

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { runInNewContext } from 'node:vm';
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { localPath, routeFromHash, renderedDocument, WorkerClient, browserSupportError, friendlyLoadingStatus, publicRoute, announcementKey, computeStatusText, requestStorageProtection, publicSourceFreshness } from './app.mjs';
+import { localPath, routeFromHash, renderedDocument, WorkerClient, browserSupportError, friendlyLoadingStatus, publicRoute, announcementKey, computeStatusText, requestStorageProtection, publicSourceFreshness, settleRenderedEdits, skipToReadingDesk } from './app.mjs';
 
 test('acceptance probes covered public texts when an optional cache is partial', () => {
   const source = readFileSync(new URL('./verify-browser.mjs', import.meta.url), 'utf8');
@@ -249,7 +249,7 @@ for(const failure of ['registration','activation-timeout','redundant']) test(`Co
   const nodes={'compute-form':{},'compute-apply':{disabled:false},'compute-status':{},'compute-mode':{value:'multicore'}};
   const calls=[];let pending=false,refreshes=0,reloads=0;
   runInNewContext(handler,{document:{getElementById:id=>nodes[id]},computeApplying:false,crossOriginIsolated:false,
-    client:{quiesce:async()=>{},resume(){}},
+    frame:{}, settleRenderedEdits:async()=>{}, client:{quiesce:async()=>{},resume(){}},
     navigator:{serviceWorker:{}},isolationRequested:false,isolationKey:'fixture-isolation',localStorage:{setItem(){}},
     companionCall:async data=>{calls.push(data.type);if(data.type==='configure-compute')pending=true;if(data.type==='cancel-reload')pending=false;return{ok:true};},
     registerWorker:async()=>{if(failure==='registration')throw Error('Fixture registration failed');return{installing:{state:failure==='redundant'?'redundant':'installing',addEventListener(){}}};},
@@ -261,4 +261,27 @@ for(const failure of ['registration','activation-timeout','redundant']) test(`Co
   assert.equal(pending,false);assert.equal(refreshes,1);assert.equal(reloads,0);
   assert.equal(nodes['compute-apply'].disabled,false);
   assert.match(nodes['compute-status'].textContent,/registration failed|could not start|unavailable/);
+});
+
+
+test('navigation and handoff await the frame queue before pausing its worker', async()=>{
+  let finish, settled=false;
+  const pending=new Promise(resolve=>{finish=resolve;});
+  const frame={contentDocument:{},contentWindow:{ddFlushRatings:()=>pending}};
+  const draining=settleRenderedEdits(frame).then(()=>{settled=true;});
+  await new Promise(resolve=>setImmediate(resolve));assert.equal(settled,false);
+  finish();await draining;assert.equal(settled,true);
+  await assert.rejects(settleRenderedEdits({contentDocument:{},contentWindow:{ddFlushRatings:()=>new Promise(()=>{})}},{timeoutMs:5}),/still finishing/);
+});
+
+
+test('the shell skip link focuses the reading desk without changing its route',()=>{
+  let prevented=0,focused='';
+  const event={preventDefault(){prevented++;}};
+  const main={focus(){focused='main';}},startup={focus(){focused='startup';}};
+  const frame={hidden:false,contentDocument:{querySelector:()=>main},focus(){focused='frame';}};
+  skipToReadingDesk(event,frame,startup);assert.equal(focused,'main');
+  frame.contentDocument=null;skipToReadingDesk(event,frame,startup);assert.equal(focused,'frame');
+  frame.hidden=true;skipToReadingDesk(event,frame,startup);assert.equal(focused,'startup');
+  assert.equal(startup.tabIndex,-1);assert.equal(prevented,3);
 });

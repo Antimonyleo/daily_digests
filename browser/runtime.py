@@ -89,15 +89,26 @@ def run_job():
 _STATE_GENERATION = 1
 _STATE_TRACKING_INSTALLED = False
 _STATE_WRITERS = weakref.WeakSet()
+_STATE_FILE_VERSIONS = {}
+_STATE_FULL_VERSION = 0
 
 
 def state_generation():
     return _STATE_GENERATION
 
 
-def _mark_state_changed():
-    global _STATE_GENERATION
+def _mark_state_changed(*paths):
+    global _STATE_GENERATION, _STATE_FULL_VERSION
     _STATE_GENERATION += 1
+    if not paths:
+        _STATE_FULL_VERSION = _STATE_GENERATION
+    for path in paths:
+        try:
+            relative = str(Path(path).absolute().relative_to(ROOT.absolute()))
+        except (ValueError, TypeError):
+            _STATE_FULL_VERSION = _STATE_GENERATION
+        else:
+            _STATE_FILE_VERSIONS[relative] = _STATE_GENERATION
 
 
 def snapshot_ready():
@@ -118,6 +129,7 @@ def private_write_audit(event, args, *, root=ROOT):
             paths = args[:1]
     elif event in {'os.remove', 'os.rmdir', 'os.mkdir', 'os.rename'}:
         paths = args[:2] if event == 'os.rename' else args[:1]
+    changed_paths = []
     for value in paths:
         if not isinstance(value, (str, bytes, Path)):
             continue
@@ -130,8 +142,12 @@ def private_write_audit(event, args, *, root=ROOT):
             if event == 'os.mkdir' and path.exists():
                 continue
             if relative.name != '.compute.lock':
-                _mark_state_changed()
-                return
+                changed_paths.append(path)
+    if changed_paths:
+        if any(path.is_dir() for path in changed_paths):
+            _mark_state_changed()
+        else:
+            _mark_state_changed(*changed_paths)
 
 
 def install_state_tracking():
@@ -168,7 +184,11 @@ def install_state_tracking():
         before = connection.info.pop('_browser_tx_start_changes', None)
         after = getattr(connection.connection.driver_connection, 'total_changes', None)
         if changed or before is not None and after != before:
-            _mark_state_changed()
+            database = connection.engine.url.database
+            if database:
+                _mark_state_changed(database, database + '-wal', database + '-journal')
+            else:
+                _mark_state_changed()
 
     event.listen(Engine, 'before_cursor_execute', before_cursor)
     event.listen(Engine, 'after_cursor_execute', after_cursor)
@@ -220,6 +240,17 @@ def _checkpoint_paths(root):
 def snapshot_file_names(root=ROOT):
     """Let the browser encode committed file bytes without a Python JSON pass."""
     return json.dumps([str(path.relative_to(root)) for path in _checkpoint_paths(root)])
+
+
+def snapshot_file_versions(root=ROOT):
+    """Write identities, not mtimes: unknown writes invalidate every cached encoding."""
+    paths = _checkpoint_paths(root)
+    # Aliases may share a target with a different audited pathname. Conservatively
+    # re-encode every file when such a desk changes rather than reuse stale bytes.
+    epoch = _STATE_GENERATION if any(path.resolve() != path.absolute() for path in paths) else _STATE_FULL_VERSION
+    return json.dumps({str(path.relative_to(root)):
+                       f'{epoch}:{_STATE_FILE_VERSIONS.get(str(path.relative_to(root)), 0)}'
+                       for path in paths})
 
 
 def export_snapshot(root=ROOT, *, include_credentials=True):

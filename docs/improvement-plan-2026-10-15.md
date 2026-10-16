@@ -308,3 +308,96 @@ Official references:
 - [GitHub Pages limits](https://docs.github.com/en/pages/getting-started-with-github-pages/github-pages-limits)
 - [Anthropic official SDK browser header](https://raw.githubusercontent.com/anthropics/anthropic-sdk-typescript/main/src/client.ts)
 - [GitHub issue API](https://docs.github.com/en/rest/issues/issues)
+
+## Reader-experience review — 2026-10-16
+
+This addendum supersedes the review's outdated assumptions where noted. Work is
+on `codex/browser-compute-prototype`; shared native fixes are ported separately.
+New evidence is kept in `.full-review/reader-experience-2026-10-16/`.
+
+| Finding | Verified treatment |
+|---|---|
+| Blank / slow start | Saved reading already bypasses Python. Add a visible static skeleton for a fresh desk. Do not claim Python startup itself is instant. Preserve on-demand editing and model loading. |
+| Synchronous checkpoint | Confirmed. Return committed route responses before a short coalesced checkpoint; reuse unchanged encodings using audited file-write identities. Keep portable format unchanged, full-export parity, SQL transaction deferral and forced flushes for transfers/reloads. Requests and file aliases that cannot be localized invalidate the encoding cache conservatively. Warn on actual pending edits when closing. |
+| Voting waits | Paint the intended rating immediately, serialize rapid changes per card, ignore stale completions and restore the last confirmed rating on failure. Keep practical-reason semantics. A recorded response and a durable browser copy are distinct states. |
+| Overcrowded shell | Replace three footer popovers with one accessible Data & compute view; move consent there. Keep a dot/status line in the footer and put stale-backup reminders in the body. Preserve every Backup, Compute and Companion function. |
+| Save clipped; dead Back; 99/1 | Confirmed. Unclip the setup card, test sticky Save in the viewport, hide Back only when no profile exists, start new topics equally and preserve explicitly edited priorities. Percentages remain available and must sum to 100%. |
+| Accidental heavy job | Remove home autostart fields. Run page shows heat/battery/time notice before an explicit Start. Preserve explicit recovery routes and reconnect behavior. |
+| Conflicting timing copy | Remove the one-minute promise; describe 20+ minute worst cases for large first browser brews, caching and device dependence. Use measured text-comparison estimates; no fabricated whole-brew ETA. |
+| Early picks | Show a bounded provisional preview only after every topic/quality selection gate. Keep the last good digest on cancellation, coverage failure or publication failure. Do not stream unchecked candidates as recommendations. |
+| Generic why / missing metadata | Show the recorded topic, an exact supplied-text phrase when available, authors and evidence-supported publication status. Semantic matches do not invent literal evidence, and venue is not article-quality proof. |
+| Learning threshold | Review was incomplete: early ratings can already refine the topic direction and reason penalties; 30 controls the additional preference-ranking layer. Explain this visibly without changing scoring policy. Never claim “N picks moved” without a counterfactual measurement. |
+| One evaluation instead of experiments | Add a read-only personal reading study over recent saved research slates: useful/rated/unrated counts, current explicit ratings, unrated unknown, repeated-paper and causal limits. No new ranker experiment. |
+| Scope / first run | Research only for new profiles; preserve existing opt-ins. Topic rows begin with equal shares; individual priorities and search details are optional. Editable examples remain prominent. Existing example-paper anchors are explained; bare DOIs are not silently fetched or treated as meaningful topic descriptions. |
+| Visual system | One token source for browser and native templates, stronger control borders, 12 px text floor, smaller greeting with secondary navigation, stable CSS section marks and print rules. Keep reduced motion and keyboard focus indicators. |
+| Navigation / access | Route-specific outer titles, one main landmark per rendered page, skip links, distinct field names, larger targets, inert/busy old content while navigating and restored reading position when returning. Put tab takeover immediately below its heading. |
+
+Deliberate limits: retain the isolated iframe renderer rather than undertake a
+large lifecycle/security rewrite to fix title, focus and scroll symptoms. No
+scientific synonym guessing, automatic DOI retrieval, threshold changes or false
+claims that saved votes prove the new ranker improved. Binary-per-file storage
+migration is unnecessary to obtain the measured response improvement here: the
+compatible snapshot adapter now coalesces saves and reuses encodings; remaining
+whole-envelope allocation/storage cost is measured, not declared eliminated.
+
+Acceptance: focused tests first, all Python/Node regressions, a fresh stamped
+build, populated fixture digests, 320/390 px layouts, actual delayed-checkpoint
+response timing, full-export byte comparisons, failed-save/rapid-rating recovery,
+and tab handoff. No live brew, configured provider, email or alert. Real screen
+reader, physical phone, Safari/Firefox and physical GPU/multicore remain external
+validation gaps. Record commands/results and publication status in the release
+report; do not change `docs/evaluation-2026-09-11.md`.
+
+The new rapid-voting review found an additional lifecycle race: a second rating
+could still be queued in the rendered page when navigation or tab transfer paused
+the worker. The parent now drains the page's entire rating queue before pausing
+or cancelling streams. A red regression reproduced the lost latest rating; the
+final real-browser checks preserve both the latest rating and bookmarks across
+navigation, transfer, failed checkpoint refusal and retry. Native pages warn when
+navigating away with ratings still pending.
+
+Fresh desk fixtures must be generated for the current date. An obsolete reused
+fixture correctly rendered an empty day and caused two selectors to time out;
+those runs are retained as failed checks. The reading verifier now bounds RPC
+waits and explicitly waits for committed feedback before testing a clean refresh.
+Its final 40 MiB SQLite timing fixture uses random bytes to avoid a misleading
+compression advantage from zero-filled storage.
+
+Exact commands: `.full-review/reader-experience-2026-10-16/commands.json`.
+Build file inventory and stamped-import checks:
+`.full-review/reader-experience-2026-10-16/release-inventory.json`.
+Final local build `a2ba9944b8061ddf` has 79 allowlisted files, no private data paths,
+and one expected file above 100 MB: the optional 133,093,490-byte GPU model.
+
+Local regression results: prototype 2,341 passed / 3 skipped; native 1,110 passed
+/ 2 skipped; browser unit tests 121 passed; prototype compute tests 5 passed;
+populated Chromium acceptance 45 passed; handoff/navigation 8 passed;
+large startup/recovery 5 passed; local CPU semantic bridge 5 passed; lint and
+diff checks passed. Full-suite JUnit and exact-command records are retained in
+the evidence directory. A final first-run validation-error fix was reproduced
+red and tested green in all related routes: 111 prototype tests and 106 native
+tests. The earlier full suites precede that one-line context fix; CI reruns the
+full final tree before publication.
+
+The incompressible-data test found a verifier race: its old worker could replace
+the deliberately corrupted disposable copy before reload. Fence the old worker
+first, then write the corrupt copy. This preserves the intended recovery test
+instead of interpreting a successfully regenerated saved-reading view as a boot
+failure. Unexpected unload prompts are recorded and fail the clean-refresh check.
+
+Final local follow-ups: the shell skip link now focuses the reading desk without
+changing the hash-router URL. Its pure behavior and actual Chromium keyboard
+interaction are checked. Fresh-build readiness smoke: 5 checks passed. Final
+40 MiB random-data result: route 48 ms while persistence is held; SQL checkpoints
+329–332 ms; three read-only refreshes 96–126 ms with no Python workers or saved-byte
+changes. Full-export equality and restored votes/bookmarks passed. No unexpected
+unload dialog was needed. Synthetic measurements are specific to this host, not
+a guarantee for real reader profiles, storage pressure or physical devices.
+
+Scope decisions still stand: literal-topic evidence and descriptive reading
+counts are shipped; a reader-rated controlled alignment study has not been run.
+Full Python startup remains about 9 seconds here. The provisional list begins
+after selection, not during the initial embedding pass. A renderer rewrite,
+automatic bare-DOI interpretation and binary storage migration were deliberately
+not added. Print styles are supplied; physical print and assistive-technology
+behavior remain unverified. All existing local/private defaults remain intact.

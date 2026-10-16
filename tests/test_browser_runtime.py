@@ -440,7 +440,7 @@ def test_worker_acknowledges_mail_only_after_browser_commit():
 const fs = require('node:fs'), vm = require('node:vm'), assert = require('node:assert/strict');
 const events = [], posted = [];
 let failCommit = false;
-const context = vm.createContext({URL, setTimeout, AbortSignal,
+const context = vm.createContext({URL, setTimeout, clearTimeout, AbortSignal,
   self: {postMessage: message => posted.push(message)},
   fetch: async url => {
     events.push(url.endsWith('/ack') ? 'ack' : 'fetch');
@@ -696,7 +696,7 @@ def test_worker_refreshes_provider_identity_before_brew_and_preserves_digest_on_
 const fs = require('node:fs'), vm = require('node:vm'), assert = require('node:assert/strict');
 const events = [], posted = [];
 let failHealth = false;
-const context = vm.createContext({URL, setTimeout, AbortSignal,
+const context = vm.createContext({URL, setTimeout, clearTimeout, AbortSignal,
   self: {postMessage: message => posted.push(message)},
   fetch: async url => {
     assert.ok(url.endsWith('/health')); events.push('health');
@@ -734,13 +734,15 @@ vm.runInContext(`
 `, context);
 (async () => {
   await context.self.onmessage({data: {id: 1, type: 'request', method: 'POST', path: '/run/start', body: '{}'}});
+  assert.deepEqual(events, ['health', 'save-companion', 'native-request']);
+  assert.equal(await vm.runInContext('storageWriter.flush({force:true})', context), true);
   assert.deepEqual(events, ['health', 'save-companion', 'native-request', 'save-snapshot']);
-  assert.equal(posted[0].status, 200);
+  assert.equal(posted.find(row => row.type === 'response' && row.id === 1).status, 200);
   events.length = 0; failHealth = true;
   await context.self.onmessage({data: {id: 2, type: 'request', method: 'POST', path: '/run/start', body: '{}'}});
   assert.deepEqual(events, ['health']);
-  assert.equal(posted[1].status, 500);
-  assert.match(posted[1].body, /companion health unavailable/);
+  assert.equal(posted.find(row => row.type === 'response' && row.id === 2).status, 500);
+  assert.match(posted.find(row => row.type === 'response' && row.id === 2).body, /companion health unavailable/);
 })().catch(error => {console.error(error); process.exitCode = 1;});
 '''
     result = subprocess.run(['node', '-e', script, str(worker)], capture_output=True, text=True)
@@ -846,7 +848,7 @@ const database = {transaction: (_store, mode) => {
   }, 0);
   return transaction;
 }};
-const context = vm.createContext({URL, setTimeout, databaseFixture: database, self: {postMessage() {}}});
+const context = vm.createContext({URL, setTimeout, clearTimeout, databaseFixture: database, self: {postMessage() {}}});
 vm.runInContext(fs.readFileSync(process.argv[1].replace('worker.mjs', 'storage.mjs'), 'utf8').replace(/^export /gm, ''), context);
 vm.runInContext(fs.readFileSync(process.argv[1], 'utf8').replace(/^import .*$/gm, ''), context);
 vm.runInContext('startupFailed = true; ownership = Promise.resolve(); database = databaseFixture;', context);
@@ -882,7 +884,7 @@ def test_worker_quota_failure_keeps_valid_http_responses_and_reports_unsaved_sta
     script = r'''
 const fs = require('node:fs'), vm = require('node:vm'), assert = require('node:assert/strict');
 const posted = []; let fail = true, generation = 1;
-const context = vm.createContext({URL, setTimeout, self: {postMessage: value => posted.push(value)}});
+const context = vm.createContext({URL, setTimeout, clearTimeout, self: {postMessage: value => posted.push(value)}});
 vm.runInContext(fs.readFileSync(process.argv[1].replace('worker.mjs', 'storage.mjs'), 'utf8').replace(/^export /gm, ''), context);
 vm.runInContext(fs.readFileSync(process.argv[1], 'utf8').replace(/^import .*$/gm, ''), context);
 context.request = {callPromising: async raw => {
@@ -906,7 +908,8 @@ vm.runInContext(`
     await context.self.onmessage({data: {id, type: 'request', method, path: '/fixture'}});
     const response = posted.find(value => value.type === 'response' && value.id === id);
     assert.equal(response.status, 200);
-    assert.equal(response.headers['x-dailydigest-storage'], 'unsaved');
+    assert.equal(response.headers['x-dailydigest-storage'], 'pending');
+    assert.equal(await vm.runInContext('storageWriter.flush({force:true})', context), false);
     assert.equal(response.body, '{"ok":true}');
   }
   assert.ok(posted.some(value => value.type === 'storage-warning' && value.message.includes('quota')));

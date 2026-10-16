@@ -3,6 +3,13 @@ import { formatComputeProgress } from './compute.mjs';
 import { DeferredWorker, extractReadingView, readReadingView, readingViewDocument } from './reading-view.mjs';
 import { createTabHandoff } from './tab-handoff.mjs';
 
+export function backupReminderDue({lastExport, firstOpen, now = Date.now()}) {
+  const exported = lastExport ? new Date(lastExport).getTime() : NaN;
+  const first = firstOpen ? Number(firstOpen) : NaN;
+  const last = Number.isFinite(exported) ? exported : first;
+  return Number.isFinite(last) && now - last >= 7 * 86400000;
+}
+
 export function computeStatusText(result) {
   const completed = result.stats?.completedInputs || 0;
   const backend = result.device === 'webgpu' ? 'GPU' : result.threads > 1 ? `CPU · up to ${result.threads} cores` : 'CPU · one core';
@@ -80,6 +87,25 @@ export function friendlyLoadingStatus(stage, detail = '') {
   return messages[stage] ? messages[stage] + (stage === 'Computing embeddings' && detail ? ` ${detail}` : '') : [stage, detail].filter(Boolean).join(' · ');
 }
 
+export function skipToReadingDesk(event, frame, startup) {
+  event.preventDefault(); // A focus target must not replace the hash-router URL.
+  const target = frame.hidden ? startup : frame.contentDocument?.querySelector('main') || frame;
+  if (target === startup) target.tabIndex = -1;
+  target.focus();
+}
+
+export async function settleRenderedEdits(frame, {timeoutMs = 5000} = {}) {
+  if (!frame.contentDocument) return;
+  const pending = frame.contentWindow?.ddFlushRatings?.();
+  if (!pending) return;
+  let timer;
+  try {
+    await Promise.race([pending, new Promise((_resolve, reject) => {
+      timer = setTimeout(() => reject(new Error('The reading desk is still finishing an action. Wait for your ratings, then try again.')), timeoutMs);
+    })]);
+  } finally { clearTimeout(timer); }
+}
+
 export class WorkerClient {
   constructor(worker) {
     this.worker = worker;
@@ -114,7 +140,7 @@ export class WorkerClient {
     const id = ++this.sequence;
     let finish;
     const settled = new Promise(resolve => {finish = resolve;});
-    this.inFlight.set(id, {promise:settled, finish});
+    this.inFlight.set(id, {promise:settled, finish, mutating:payload.type === 'request' && payload.method && payload.method.toUpperCase() !== 'GET'});
     const promise = new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject, chunk });
       try { this.worker.postMessage({ ...payload, id }); }
@@ -170,6 +196,7 @@ function frameBridge(token, path, origin, publicBase) {
   };
   window.addEventListener('message', ({ source, data }) => {
     if (source !== parent || data?.token !== token) return;
+    if (data.type === 'storage-committed') { window.dispatchEvent(new Event('dd-storage-committed')); return; }
     if (data.type === 'compute-progress') {
       window.dispatchEvent(new CustomEvent('dd-compute-progress', { detail: data.compute }));
       return;
@@ -317,6 +344,7 @@ async function boot() {
       || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
   } catch { document.documentElement.dataset.theme = 'light'; }
   const startup = document.getElementById('startup');
+  document.querySelector('.skip-link').onclick = event => skipToReadingDesk(event, frame, startup);
   const status = document.getElementById('status');
   const startupStatus = document.getElementById('startup-status');
   const updateStartupStages = stage => {
@@ -329,11 +357,24 @@ async function boot() {
   const announcement = document.getElementById('announcements');
   const importNoticeKey = `dailydigest:import-notice:${location.pathname}`;
   const backupKey = `dailydigest:last-backup:${location.pathname}`;
+  const remindBackup = value => {
+    try {
+      const firstKey = `dailydigest:first-open:${location.pathname}`;
+      let first = localStorage.getItem(firstKey);
+      if (!first) { first = String(Date.now()); localStorage.setItem(firstKey, first); }
+      const stale = backupReminderDue({lastExport:value, firstOpen:first});
+      document.getElementById('backup-reminder').hidden = !stale;
+      document.getElementById('backup-reminder-text').textContent = value
+        ? 'Your last backup export started over a week ago. Keep a recent copy outside this browser.'
+        : 'Your reading desk stays in this browser. No backup export is recorded; keep a copy for device changes or data clearing.';
+    } catch { /* Optional reminder cannot block startup. */ }
+  };
   const showLastBackup = value => {
+    remindBackup(value);
     const timestamp = new Date(value);
     if (Number.isFinite(timestamp.getTime())) document.getElementById('backup-status').textContent = `Last backup export started: ${timestamp.toLocaleString()}. Keep the downloaded file private.`;
   };
-  try { const value = localStorage.getItem(backupKey); if (value) showLastBackup(value); } catch { /* optional history */ }
+  try { const value = localStorage.getItem(backupKey); remindBackup(value); if (value) showLastBackup(value); } catch { /* optional history */ }
   navigator.storage?.estimate?.().then(({ usage, quota }) => {
     if (Number.isFinite(usage) && Number.isFinite(quota)) document.getElementById('storage-usage').textContent =
       `Site storage: about ${(usage / 1048576).toFixed(1)} MB used of ${(quota / 1048576).toFixed(0)} MB available to this origin.`;
@@ -353,6 +394,7 @@ async function boot() {
     if (storageWarning && message.includes('saved in this browser')) message = 'Your reading desk · changes need a backup';
     status.textContent = message; status.title = message;
     if (!startup.hidden) startupStatus.textContent = message;
+    status.setAttribute('aria-label', message);
     if (announce && announcement.textContent !== message) announcement.textContent = message;
   };
   const toolbar = document.querySelector('.browser-bar');
@@ -388,7 +430,8 @@ async function boot() {
   const streams = new Map();
   let ready = false, companionBackends = [], themeObserver;
   let runtimeStarted = false, frameGeneration = null, cacheTimer;
-  let tabMoved = false, dirtySetup = false, handoff;
+  const scrollPositions = new Map();
+  let tabMoved = false, dirtySetup = false, hasUnflushedEdits = false, handoff;
   const tabActions = document.getElementById('tab-wait-actions');
   const useThisTab = document.getElementById('use-this-tab');
   const fullDeskKey = `dailydigest:full-desk:${new URL('.', import.meta.url).pathname}`;
@@ -443,7 +486,7 @@ async function boot() {
   releaseReload.onclick = async () => {
     releaseReload.disabled = true;
     if (!runtimeStarted) { location.reload(); return; }
-    try { await client.quiesce(); await companionCall({ type: 'prepare-reload' }); location.reload(); }
+    try { await settleRenderedEdits(frame); await client.quiesce(); await companionCall({ type: 'prepare-reload' }); location.reload(); }
     catch (error) { client.resume(); setReleaseState(); document.getElementById('release-message').textContent = error.message; }
   };
   document.addEventListener('visibilitychange', () => { if (!document.hidden) checkRelease(); });
@@ -454,7 +497,7 @@ async function boot() {
   let navigation = 0;
   let activePath = '/';
   let computeTimer, latestCompute, computeReceivedAt, lastAnnouncement;
-  const computeNotice = 'Brewing uses this device’s processor and memory, and can increase heat, fan noise and battery use. Thousands of new articles may take 20 minutes or more on one CPU core. Choose optional acceleration in Compute. Keep this tab open until the brew finishes to save its calculations.';
+  const computeNotice = 'Brewing uses this device’s processor and memory, and can increase heat, fan noise and battery use. Thousands of new articles may take 20 minutes or more on one CPU core. Choose optional acceleration in Data & compute. Keep this tab open until the brew finishes to save its calculations.';
   frame.addEventListener('load', () => {
     frame.contentWindow.postMessage({ type: 'compute-config', token, message: computeNotice }, '*');
     sendCompanionCapabilities();
@@ -468,6 +511,8 @@ async function boot() {
     }
     const heading = frame.contentDocument?.querySelector('h1, main, [role="main"]');
     if (heading) { heading.setAttribute('tabindex', '-1'); heading.focus({ preventScroll: true }); }
+    if (scrollPositions.has(activePath)) frame.contentWindow.scrollTo(0, scrollPositions.get(activePath));
+    if (frame.contentDocument?.title) document.title = frame.contentDocument.title + ' · DailyDigest';
     frame.contentDocument?.addEventListener('click', () => {
       for (const menu of document.querySelectorAll('.browser-bar > details[open]')) menu.open = false;
     });
@@ -492,8 +537,8 @@ async function boot() {
     frame.contentWindow.postMessage({ type: 'compute-progress', token, compute: info }, '*');
   };
   const errorPanel = document.getElementById('app-error');
-  let errorFocus;
-  const dismissError = () => { errorPanel.hidden = true; errorFocus?.focus(); };
+  let errorFocus, errorSettingsOpen = false;
+  const dismissError = () => { errorPanel.hidden = true; if (errorSettingsOpen) dataSettings.showModal(); errorSettingsOpen = false; errorFocus?.focus(); };
   document.getElementById('reload-app').onclick = () => location.reload();
   document.getElementById('dismiss-error').onclick = dismissError;
   errorPanel.addEventListener('keydown', event => {
@@ -514,7 +559,8 @@ async function boot() {
       return;
     }
     setStatus('Action needs attention');
-    if (errorPanel.hidden) errorFocus = document.activeElement;
+    if (errorPanel.hidden) { errorFocus = document.activeElement; errorSettingsOpen = dataSettings.open; }
+    if (dataSettings.open) dataSettings.close();
     document.getElementById('app-error-message').textContent = message;
     errorPanel.hidden = false;
     document.getElementById('dismiss-error').focus();
@@ -533,9 +579,13 @@ async function boot() {
   document.querySelector('.companion-command').textContent = `dd companion --allowed-origin ${location.origin}`;
   const companionEndpoint = document.getElementById('companion-endpoint');
   const companionToken = document.getElementById('companion-token');
-  const browserMenus = [...document.querySelectorAll('.browser-bar > details')];
+  const dataSettings = document.getElementById('data-settings');
+  document.getElementById('open-data-settings').onclick = () => { dataSettings.showModal(); };
+  document.getElementById('close-data-settings').onclick = () => dataSettings.close();
+  document.getElementById('backup-reminder-open').onclick = () => { dataSettings.showModal(); document.getElementById('browser-data-menu').open = true; };
+  const browserMenus = [...document.querySelectorAll('.device-sections > details')];
   document.addEventListener('click', event => {
-    for (const menu of browserMenus) if (menu.open && !menu.contains(event.target)) menu.open = false;
+    if (event.target === dataSettings) dataSettings.close();
   });
   for (const menu of browserMenus) {
     menu.addEventListener('toggle', () => {
@@ -617,6 +667,7 @@ async function boot() {
     document.getElementById('compute-status').textContent = 'Saving your compute choice before reloading…';
     let reloadPrepared = false;
     try {
+      await settleRenderedEdits(frame);
       await client.quiesce();
       const mode = document.getElementById('compute-mode').value;
       const needsIsolation = mode === 'multicore' && !crossOriginIsolated;
@@ -658,11 +709,16 @@ async function boot() {
   };
   async function navigate(path, options = {}) {
     if (tabMoved) return;
+    if (!frame.hidden && frame.contentDocument) scrollPositions.set(activePath, frame.contentWindow.scrollY);
+    if (typeof path === 'string' && path.startsWith('/done')) scrollPositions.delete('/');
     const version = ++navigation;
-    for (const stream of streams.values()) stream.cancel();
-    streams.clear();
     setStatus('Opening DailyDigest…');
+    frame.inert = true; frame.setAttribute('aria-busy', 'true');
     try {
+      await settleRenderedEdits(frame);
+      if (version !== navigation) return;
+      for (const stream of streams.values()) stream.cancel();
+      streams.clear();
       path = localPath(path);
       let response = await client.call({ type: 'request', path, method: 'GET', ...options });
       for (let redirects = 0; response.status >= 300 && response.status < 400; redirects++) {
@@ -696,8 +752,9 @@ async function boot() {
       previewNotice.hidden = true;
       document.getElementById('backup-runtime-notice').hidden = true;
       startup.dataset.state = 'ready';
-      setStatus('Your reading desk · saved in this browser');
+      setStatus(headers.get('x-dailydigest-storage') === 'pending' ? 'Your reading desk · saving recent changes…' : 'Your reading desk · saved in this browser');
     } catch (error) { if (version === navigation) report(error); }
+    finally { if (version === navigation) { frame.inert = false; frame.removeAttribute('aria-busy'); } }
   }
   worker.addEventListener('message', ({ data }) => {
     if (data.type === 'ready') {
@@ -746,11 +803,28 @@ async function boot() {
       const notice = document.getElementById('storage-warning');
       notice.textContent = storageWarning; notice.hidden = !storageWarning;
       document.getElementById('storage-status').textContent = storageWarning || 'Your latest changes are saved in this browser.';
-      if (storageWarning) setStatus('Storage needs attention. Open Backup to save your changes.');
+      if (storageWarning) setStatus('Storage needs attention. Open Data & compute, then Backup to save your changes.');
     }
     else if (data.type === 'error' && !data.id) report(new Error(data.message || data.error || 'Python startup failed'));
   });
   worker.addEventListener('error', () => report(new Error('Python worker stopped. Reload to reconnect.')));
+  const flushWhenHidden = () => { if (ready && !tabMoved && !client.paused) void client.call({type:'flush-state'}).catch(() => {}); };
+  document.addEventListener('visibilitychange', () => { if (document.hidden) flushWhenHidden(); });
+  window.addEventListener('pagehide', flushWhenHidden);
+  window.addEventListener('beforeunload', event => {
+    if (!tabMoved && (hasUnflushedEdits || dirtySetup || computeBusy || (frame.contentDocument && frame.contentWindow?.ddHasPendingRatings?.()) || [...client.inFlight.values()].some(request => request.mutating))) {
+      event.preventDefault(); event.returnValue = ''; flushWhenHidden();
+    }
+  });
+  worker.addEventListener('message', ({data}) => { if (data.type === 'storage-dirty') hasUnflushedEdits = true; });
+  worker.addEventListener('message', ({data}) => { if (data.type === 'storage-checkpoint') {
+    hasUnflushedEdits = false;
+    void cacheReadingView();
+    if (data.generation === frameGeneration) {
+      setStatus('Your reading desk · saved in this browser');
+      frame.contentWindow?.postMessage({type:'storage-committed', token}, '*');
+    }
+  } });
   window.addEventListener('hashchange', () => {
     if (ready) navigate(routeFromHash(location.hash));
     else startRuntime();
@@ -920,13 +994,14 @@ async function boot() {
       release:async () => {
         if (dirtySetup) throw new Error('Save the unsaved settings in the other tab before switching, or leave its Settings page.');
         if (computeBusy) throw new Error('Finish or stop the brew in the other tab, then try switching again.');
-        frame.inert = true; toolbar.inert = true;
+        frame.inert = true; toolbar.inert = true; dataSettings.inert = true;
         try {
           setStatus('Saving changes before switching tabs…');
+          await settleRenderedEdits(frame);
           await client.quiesce();
           await companionCall({type:'prepare-reload'});
         } catch (error) {
-          client.resume(); frame.inert = false; toolbar.inert = false;
+          client.resume(); frame.inert = false; toolbar.inert = false; dataSettings.inert = false;
           setStatus('This reading desk stays open. ' + error.message);
           throw error;
         }
@@ -934,6 +1009,7 @@ async function boot() {
         worker.terminate();
         client.fail(new Error('Reading desk moved to another tab.'));
         for (const menu of browserMenus) menu.open = false;
+        dataSettings.close();
         errorPanel.hidden = true; releaseNotice.hidden = true;
         document.getElementById('backup-runtime-notice').hidden = true;
         showTabWait('Your latest changes were saved before moving. Use this tab instead to switch back.');
@@ -971,6 +1047,7 @@ async function boot() {
   }
   if (preview && !runtimeStarted) {
     frame.setAttribute('sandbox', 'allow-popups allow-popups-to-escape-sandbox');
+    document.title = `Saved DailyDigest ${preview.date}`;
     frame.srcdoc = readingViewDocument(preview, document.documentElement.dataset.theme);
     frame.hidden = false; startup.hidden = true;
     previewNotice.hidden = false;

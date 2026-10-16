@@ -105,14 +105,15 @@ store.write_impressions(digest_id, [('research', item_id, 0, 0.9)], model_versio
         return;
       }`);
     source = source.replace("    const result = await state.py.globals.get('handle_request')", "    const acceptanceBefore = Number(state.py.globals.get('state_generation')());\n    const result = await state.py.globals.get('handle_request')");
-    source = source.replace('    if (!saved) {', `    if (saved && !jobRunning) {
+    source = source.replace('    const delivered = JSON.parse(result);', `    const saved = await persist({force:true});
+    if (saved && !jobRunning) {
       const persisted = await readSnapshot();
       const generation = Number(state.py.globals.get('state_generation')());
       const equal = persisted === state.py.globals.get('export_snapshot')();
-      self.postMessage({type: 'acceptance-checkpoint', method: data.method || 'GET', path: data.path,
-        before: acceptanceBefore, after: generation, equal});
+      self.postMessage({type:'acceptance-checkpoint', method:data.method || 'GET', path:data.path,
+        before:acceptanceBefore, after:generation, equal});
     }
-    if (!saved) {`);
+    const delivered = JSON.parse(result);`);
     return route.fulfill({response, body: source});
   }
   if (url.startsWith(base)) return route.continue();
@@ -240,6 +241,7 @@ async function startup() {
   return page.evaluate(() => ({ startupDurationMs: Number(document.querySelector('#startup').dataset.durationMs), timings: window.__workerEvents.find(row=>row.timings)?.timings, jspi: typeof WebAssembly.Suspending === 'function', title: document.querySelector('#app').contentDocument.title }));
 }
 async function route(path, selector) {
+  await page.evaluate(() => document.getElementById('data-settings')?.close());
   await page.waitForFunction(() => typeof document.querySelector('#app')?.contentWindow?.ddNavigate === 'function');
   await page.evaluate(path => {
     const app = document.querySelector('#app');
@@ -264,7 +266,14 @@ async function openSection(section) {
   const details = frame().locator(`details.section-block[data-section="${section}"]`);
   if (await details.getAttribute('open') === null) await details.locator('summary.section-toggle').click();
 }
+async function toggleMenu(id) {
+  const open = await page.locator('#'+id).getAttribute('open') !== null;
+  if (!await page.locator('#data-settings').evaluate(node => node.open)) await page.locator('#open-data-settings').click();
+  await page.locator('#'+id+' > summary').click();
+  if (open) await page.locator('#close-data-settings').click();
+}
 async function openCompanionMenu() {
+  if (!await page.locator('#data-settings').evaluate(node => node.open)) await page.locator('#open-data-settings').click();
   if (await page.locator('#companion-menu').getAttribute('open') === null) await page.locator('#companion-menu > summary').click();
 }
 async function digestIdentity(digestId = '') {
@@ -312,10 +321,32 @@ try {
     const evidence = await startup();
     await frame().locator('#interest-editor').waitFor();
     await frame().locator('#browser-storage-note').waitFor({ state: 'visible' });
-    assert.equal(await page.locator('.storage-location').isVisible(), true);
+    assert.match(await page.locator('.storage-location').textContent(), /On this device/);
+    assert.ok((await page.locator('.browser-bar').boundingBox()).height <= 60);
     return evidence;
   }));
   if (!initialReady) throw new Error('Startup failed; dependent acceptance checks cannot run.');
+  await check('first-run-has-equal-topics-research-only-and-sticky-save', async () => {
+    assert.equal(await frame().locator('[data-interest-weight]').first().isHidden(), true);
+    assert.equal(await frame().getByText('Back to today’s digest', {exact:true}).count(), 0);
+    assert.equal(await frame().locator('input[id^="include_"]:checked').count(), 0);
+    await frame().locator('[data-interest-name]').first().fill('DNA nanotechnology');
+    await frame().locator('#add-interest').click();
+    assert.deepEqual(await frame().locator('[data-interest-weight]').evaluateAll(nodes=>nodes.map(node=>node.value)), ['50','50']);
+    assert.equal(await frame().locator('#normalize-interests').isHidden(),true);
+    const names=await frame().locator('[data-interest-name],[data-interest-weight],[data-interest-aliases],[data-interest-description]').evaluateAll(nodes=>nodes.map(node=>node.getAttribute('aria-label')));
+    assert.equal(new Set(names).size,names.length);
+    const save=await frame().locator('.settings-actions').evaluate(node=>{const box=node.getBoundingClientRect();return {top:box.top,bottom:box.bottom,viewport:innerHeight};});
+    assert.ok(save.top>=0 && save.bottom<=save.viewport+1,JSON.stringify(save));
+    assert.equal(await frame().locator('main').count(),1);
+    assert.match(await page.title(), /Set up DailyDigest/);
+    const beforeSkip=page.url();
+    await page.locator('body > .skip-link').focus();await page.locator('body > .skip-link').press('Enter');
+    assert.equal(page.url(),beforeSkip);
+    assert.equal(await frame().locator('main').evaluate(node=>node===document.activeElement),true);
+    await setTopics('');
+    return {equalShares:true,researchOnly:true,optionalPercentages:true,uniqueFieldNames:true,saveVisible:save};
+  });
   await check('fresh-profile-reuses-covered-public-vectors-or-encodes-locally', async () => {
     const response = await page.request.get(base+'assets/public-sources.json');
     assert.equal(response.ok(),true);
@@ -366,7 +397,7 @@ try {
       Object.defineProperty(navigator.storage, 'persist', { configurable: true, value: async () => { window.__storagePermissionCalls++; return false; } });
     });
     assert.equal(await page.evaluate(() => window.__storagePermissionCalls), 0);
-    await page.locator('#browser-data-menu > summary').click();
+    await toggleMenu('browser-data-menu');
     assert.match(await page.locator('#browser-data-menu').textContent(), /browser manages the local storage directory/);
     assert.equal(await page.locator('#protect-storage').isHidden(),true,'Advanced storage controls start collapsed');
     await page.locator('#browser-data-menu .data-tools > details > summary').click();
@@ -375,12 +406,12 @@ try {
     await page.waitForFunction(() => document.querySelector('#storage-status').textContent.includes('not granted'));
     assert.equal(await page.evaluate(() => window.__storagePermissionCalls), 1);
     assert.equal(await page.locator('#storage-consent').isHidden(), true);
-    await page.locator('#browser-data-menu > summary').click();
+    await toggleMenu('browser-data-menu');
     return { explicitOnly: true, denialReported: true, noFolderMigration: true };
   });
   await check('explicit-compute-controls-and-device-warning', async () => {
     const current = await page.evaluate(async () => JSON.parse((await window.__rpc({ type: 'compute-status' })).body));
-    await page.locator('#compute-menu > summary').click();
+    await toggleMenu('compute-menu');
     assert.equal(await page.locator('#compute-mode').inputValue(), 'cpu');
     assert.equal(await page.locator('#compute-mode option[value="multicore"]').isDisabled(), false);
     assert.equal(await page.locator('#compute-mode option[value="gpu"]').isDisabled(), !current.capabilities.gpu);
@@ -390,11 +421,11 @@ try {
       await Promise.all([page.waitForEvent('load'), page.locator('#compute-apply').click()]);
       await startup();
       await page.waitForFunction(() => document.querySelector('#compute-mode').value === 'gpu');
-      await page.locator('#compute-menu > summary').click();
+      await toggleMenu('compute-menu');
       await page.locator('#compute-mode').selectOption('cpu');
       await Promise.all([page.waitForEvent('load'), page.locator('#compute-apply').click()]);
       await startup();
-    } else await page.locator('#compute-menu > summary').click();
+    } else await toggleMenu('compute-menu');
     await frame().locator('#interest-editor').waitFor();
     return { optInPersistsAcrossReload: current.capabilities.gpu, unsupportedChoicesDisabled: true, deviceWarning: true, cpuDefault: true };
   });
@@ -426,6 +457,7 @@ try {
   });
   await check('individual-interest-percentages-must-total-100', async () => {
     await setTopics('RNA delivery | 3\nProtein engineering | 1');
+    if (await frame().locator('#priority-options').getAttribute('open') === null) await frame().locator('#priority-options > summary').click();
     const weights = frame().locator('[data-interest-weight]');
     assert.deepEqual(await weights.evaluateAll(inputs => inputs.map(input => input.value)), ['75', '25']);
     assert.equal(await frame().locator('#topics').inputValue(), 'RNA delivery | 75\nProtein engineering | 25');
@@ -439,7 +471,7 @@ try {
     await frame().locator('#add-interest').click();
     assert.equal(await weights.count(), 3);
     assert.match(await frame().locator('#interest-total').textContent(), /100%.*ready/);
-    await frame().locator('.interest-row').last().getByRole('button', { name: 'Remove', exact: true }).click();
+    await frame().locator('.interest-row').last().getByRole('button', { name: /Remove research topic/ }).click();
     assert.match(await frame().locator('#interest-total').textContent(), /100%.*ready/);
     await weights.first().fill('90');
     await weights.nth(1).fill('25');
@@ -692,6 +724,19 @@ try {
     }
     return evidence;
   });
+  await check('route-title-landmark-and-reading-position-return', async () => {
+    await route('/', '.digest-date');
+    await frame().locator('#source-details').scrollIntoViewIfNeeded();
+    const previous=await page.evaluate(()=>document.querySelector('#app').contentWindow.scrollY);
+    assert.ok(previous>100);
+    await route('/setup', '#interest-editor');assert.match(await page.title(), /Set up DailyDigest/);
+    assert.equal(await frame().locator('main').count(),1);
+    await route('/', '.digest-date');
+    const returned=await page.evaluate(()=>document.querySelector('#app').contentWindow.scrollY);
+    assert.ok(Math.abs(returned-previous)<5,JSON.stringify({previous,returned}));
+    assert.match(await page.title(), /DailyDigest/);
+    return {previous,returned,routeTitles:true,oneMain:true};
+  });
   await check('history-calendar-display-and-pip', async () => {
     await route('/', '.item[data-item-id]');
     const history = frame().locator('.time-machine-link');
@@ -813,7 +858,7 @@ try {
       navigator.serviceWorker.register=async()=>{throw Error('Fixture registration failed');};
     });
     try {
-      await page.locator('#compute-menu > summary').click();
+      await toggleMenu('compute-menu');
       await page.locator('#compute-mode').selectOption('multicore');
       await page.locator('#compute-apply').click();
       await page.waitForFunction(()=>document.querySelector('#compute-status').textContent.includes('Fixture registration failed'));
@@ -849,7 +894,7 @@ try {
     assert.ok(overflow.scrollWidth <= overflow.width + 1, JSON.stringify(overflow));
     assert.ok(overflow.outerScrollWidth <= overflow.outerWidth + 1, JSON.stringify(overflow));
     const statusBox = await page.locator('#status').boundingBox();
-    assert.ok(statusBox.width > 300, JSON.stringify(statusBox));
+    assert.ok(statusBox.width > 100, JSON.stringify(statusBox));
     await openCompanionMenu();
     const companionBox = await page.locator('#companion-menu .data-tools').boundingBox();
     assert.ok(companionBox.x >= 0 && companionBox.x + companionBox.width <= 390, JSON.stringify(companionBox));
@@ -882,10 +927,10 @@ try {
     await page.screenshot({path:`${output}/settings-200-percent.png`,fullPage:true});
     await page.evaluate(() => { document.documentElement.style.zoom = ''; document.querySelector('#app').contentDocument.documentElement.style.zoom = ''; });
     await page.setViewportSize({ width: 800, height: 900 });
-    await page.locator('#compute-menu > summary').click();
+    await toggleMenu('compute-menu');
     const computeBox = await page.locator('#compute-menu .data-tools').boundingBox();
     assert.ok(computeBox.x >= 0 && computeBox.x + computeBox.width <= 800, JSON.stringify(computeBox));
-    await page.locator('#status').click();
+    await page.keyboard.press('Escape');
     assert.equal(await page.locator('#compute-menu').getAttribute('open'), null);
     await page.setViewportSize({ width: 1360, height: 900 });
     return overflow;
@@ -895,13 +940,13 @@ try {
     const listener = request => {if (/\.onnx(?:\?|$)/.test(request.url())) modelRequests.push(request.url());};
     page.on('request', listener);
     try {
-      await page.locator('#compute-menu > summary').click();
+      await toggleMenu('compute-menu');
       await page.locator('#test-gpu').click();
       await page.waitForFunction(() => !document.querySelector('#test-gpu').disabled);
       const message = await page.locator('#gpu-test-result').textContent();
       assert.match(message, /GPU|WebGPU/);
       assert.equal(modelRequests.length, 0);
-      await page.locator('#compute-menu > summary').click();
+      await toggleMenu('compute-menu');
       return {message, modelRequests:0};
     } finally {page.off('request', listener);}
   });
@@ -966,11 +1011,11 @@ try {
       await route('/run?reading_mode=usual', '#brew-button');
       await frame().locator('#brew-button').click();
       await started; clearTimeout(timeout);
-      await page.locator('#compute-menu > summary').click();
+      await toggleMenu('compute-menu');
       await page.waitForFunction(() => document.querySelector('#compute-apply').disabled && document.querySelector('#compute-status').textContent.includes('brew is running'));
       const refused = await page.evaluate(() => window.__rpc({ type: 'configure-compute', mode: 'gpu' }));
       assert.equal(refused.status, 409);
-      await page.locator('#compute-menu > summary').click();
+      await toggleMenu('compute-menu');
       const vote = await page.evaluate(({ id, csrf }) => window.__rpc({ type: 'request',
         method: 'POST', path: `/vote/${id}/70`, headers: { 'x-csrf-token': csrf } }), { id: itemId, csrf });
       assert.equal(vote.status, 200, vote.body);
@@ -1058,6 +1103,13 @@ try {
   await check('real-browser-brew-and-local-model-inference', async () => {
     assert.ok(feed, 'Missing research-feed.xml fixture');
     await route('/run?reading_mode=full', '#brew-button');
+    await page.evaluate(()=>{
+      window.__qualifiedPreview=[];
+      const doc=document.querySelector('#app').contentDocument, preview=doc.querySelector('#brew-preview');
+      new doc.defaultView.MutationObserver(()=>{
+        if(!preview.hidden)window.__qualifiedPreview=[...preview.querySelectorAll('a')].map(node=>node.textContent);
+      }).observe(preview,{attributes:true,attributeFilter:['hidden']});
+    });
     await frame().locator('#mode-full').check();
     await frame().locator('#brew-button').click();
     await page.waitForFunction(() => location.hash.startsWith('#/done') || document.querySelector('#app')?.contentDocument?.querySelector('#err:not([hidden])'), undefined, { timeout: 300000 });
@@ -1071,6 +1123,11 @@ try {
     const slate = titles.map(title => ({ title, fixtureLabel: fixtureLabels.get(title.trim()) || 'seed' }));
     assert.ok(slate.length > 0);
     assert.equal(slate.filter(row => row.fixtureLabel === 'off_interest').length, 0, JSON.stringify(slate));
+    const preview=await page.evaluate(()=>window.__qualifiedPreview);
+    assert.ok(preview.length>0 && preview.length<=8,JSON.stringify(preview));
+    assert.ok(preview.every(title=>titles.includes(title)), 'Provisional picks must belong to the final qualified slate.');
+    assert.match(await frame().locator('.item').first().textContent(), /Fixture Author.*Journal publication/s);
+    assert.match(await frame().locator('.item').first().textContent(), /Shown for|Matched phrase/);
     await page.screenshot({ path: `${output}/brewed-digest.png`, fullPage: true });
     return { digest: await digestIdentity(), selected: await frame().locator('.item[data-item-id]').count(), slate, fixtureRequests: report.fixtureRequests.length };
   });
@@ -1093,9 +1150,9 @@ try {
     const active = await page.evaluate(async () => JSON.parse((await window.__rpc({ type: 'compute-status' })).body));
     const fallback = await page.evaluate(() => window.__workerEvents.some(event => event.type === 'progress' && event.stage === 'Computing embeddings' && /CPU/.test(event.message || '')));
     assert.ok(active.device === 'webgpu' || (active.device === 'wasm' && fallback));
-    await page.locator('#compute-menu > summary').click();
+    await toggleMenu('compute-menu');
     await page.waitForFunction(device => document.querySelector('#compute-status').textContent.includes(device === 'webgpu' ? 'Used GPU for' : 'GPU requested; using CPU fallback'), active.device);
-    await page.locator('#compute-menu > summary').click();
+    await toggleMenu('compute-menu');
     const restored = await page.evaluate(() => window.__rpc({ type: 'configure-compute', mode: 'cpu' }));
     assert.equal(restored.status, 200, restored.body);
     await page.reload(); await startup();
@@ -1116,7 +1173,7 @@ try {
   await check('backup-download-and-import-confirmation', async () => {
     const exported = await snapshot();
     await writeFile(`${output}/exported-backup.json`, JSON.stringify(exported));
-    await page.locator('#browser-data-menu > summary').click();
+    await toggleMenu('browser-data-menu');
     const downloadEvent = page.waitForEvent('download'); await page.locator('#export').click();
     const download = await downloadEvent; await download.saveAs(`${output}/downloaded-backup.json`);
     const downloaded = JSON.parse(await readFile(`${output}/downloaded-backup.json`, 'utf8'));
@@ -1157,6 +1214,7 @@ try {
     const status = await page.evaluate(() => window.__rpc({ type: 'companion-status' }));
     assert.doesNotMatch(status.body, /fictional-acceptance-token/);
     assert.doesNotMatch(JSON.stringify(await snapshot()), /fictional-acceptance-token/);
+    await openCompanionMenu();
     for (const action of ['email', 'push']) {
       const confirmation = page.waitForEvent('dialog').then(dialog => dialog.accept());
       await page.locator(`#companion-${action}`).click();
@@ -1259,7 +1317,7 @@ try {
   await check('multicore-opt-in-on-a-host-without-isolation-headers', async () => {
     const initial = await page.evaluate(() => ({ isolated: crossOriginIsolated, cores: navigator.hardwareConcurrency }));
     if (initial.cores <= 1) return { singleCoreDevice: true };
-    await page.locator('#compute-menu > summary').click();
+    await toggleMenu('compute-menu');
     await page.locator('#compute-mode').selectOption('multicore');
     await Promise.all([page.waitForEvent('load'), page.locator('#compute-apply').click()]);
     await startup();
@@ -1268,7 +1326,7 @@ try {
     assert.equal(status.isolated, true);
     assert.ok(status.threads > 1 && status.threads <= 4, JSON.stringify(status));
     await successfulBrew('usual');
-    await page.locator('#compute-menu > summary').click();
+    await toggleMenu('compute-menu');
     await page.locator('#compute-mode').selectOption('cpu');
     await Promise.all([page.waitForEvent('load'), page.locator('#compute-apply').click()]);
     await startup();
@@ -1340,7 +1398,8 @@ try {
   });
   await check('visible-backup-error-and-keyboard-recovery', async () => {
     const before = await digestIdentity();
-    const dataMenu = page.locator('.browser-bar > details:has(#export)');
+    const dataMenu = page.locator('.device-sections > details:has(#export)');
+    if (!await page.locator('#data-settings').evaluate(node => node.open)) await page.locator('#open-data-settings').click();
     if (await dataMenu.getAttribute('open') === null) await dataMenu.locator(':scope > summary').click();
     await page.locator('#export').focus();
     await page.locator('#import').setInputFiles({ name: 'invalid-backup.json', mimeType: 'application/json', buffer: Buffer.from('{invalid') });

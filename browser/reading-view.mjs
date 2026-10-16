@@ -39,7 +39,7 @@ export function extractReadingView(document, now = new Date()) {
       section:text(node.closest('.section-block') || node, '.section-heading') || node.dataset.section,
       title:text(node, '.title-link'), url:node.querySelector('.title-link')?.getAttribute('href') || '',
       meta:text(node, '.meta'), summary:text(node, '.summary-primary .summary-text, .summary'),
-      reason:text(node, '.reason-line'), opportunity:text(node, '.opportunity-facts'),
+      reason:text(node, '.match-topic, .reason-line'), opportunity:text(node, '.opportunity-facts'),
     }))};
   return validateReadingView(value);
 }

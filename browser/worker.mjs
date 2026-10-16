@@ -296,16 +296,20 @@ async function initialize() {
       ? JSON.stringify([companion.endpoint, companion.provider_identities?.[backend] || 'legacy-provider']) : '';
     globalThis.browserCompanion = companionCall;
     py.globals.get('install_browser')();
+    const encodedFiles = new Map();
     storageWriter = createSnapshotWriter({
       generation: () => Number(py.globals.get('state_generation')()),
       ready: () => Boolean(py.globals.get('snapshot_ready')()),
       capture: () => {
         const names = JSON.parse(py.globals.get('snapshot_file_names')());
-        const checkpoint = capturePrivateSnapshot(names, name => py.FS.readFile('/app/' + name));
+        const checkpoint = capturePrivateSnapshot(names, name => py.FS.readFile('/app/' + name), {cache:encodedFiles, versions:JSON.parse(py.globals.get('snapshot_file_versions')())});
         snapshotLimitWarning = checkpoint.warning;
         return checkpoint.payload;
       }, save: saveSnapshot,
-      warning: message => self.postMessage({ type: 'storage-warning', message: message || snapshotLimitWarning }),
+      warning: message => {
+        self.postMessage({ type: 'storage-warning', message: message || snapshotLimitWarning });
+        if (!message) self.postMessage({type:'storage-checkpoint', generation:Number(py.globals.get('state_generation')())});
+      },
     });
     if (snapshotLimitWarning) self.postMessage({ type: 'storage-warning', message: snapshotLimitWarning });
     const interruptedBrew = await readSnapshot('brew-in-progress');
@@ -378,6 +382,10 @@ self.onmessage = async ({ data }) => {
         self.postMessage(response(data.id, JSON.stringify({cached:true})));
       } else self.postMessage(response(data.id, JSON.stringify({cached:false})));
       return;
+    }
+    if (data.type === 'flush-state') {
+      const saved = await persist({force:true});
+      self.postMessage(response(data.id, JSON.stringify({saved}))); return;
     }
     if (data.type === 'storage-status') {
       self.postMessage(response(data.id, JSON.stringify(storageWriter?.status() || {})));
@@ -492,6 +500,7 @@ self.onmessage = async ({ data }) => {
       self.postMessage(response(data.id, JSON.stringify({ ok: true, reload: true, credentialsOmitted }))); return;
     }
     if (data.type === 'export') {
+      await persist({force:true});
       if (jobRunning || state.py.globals.get('has_jobs')()) throw new Error('Wait for the current brew or ranking job before exporting.');
       self.postMessage(response(data.id, state.py.globals.get('export_portable_snapshot')(data.includeCredentials === true)));
       return;
@@ -531,18 +540,15 @@ self.onmessage = async ({ data }) => {
       }
     }
     const result = await state.py.globals.get('handle_request').callPromising(JSON.stringify(data), emit);
-    // Python tracks mutations, including impressions on GET and votes mid-brew.
-    // A failed checkpoint warns about durability without changing a valid HTTP response.
-    const saved = await persist();
-    if (!saved) {
-      const unsaved = JSON.parse(result);
-      unsaved.headers = { ...unsaved.headers, 'x-dailydigest-storage': 'unsaved' };
-      emit(JSON.stringify(unsaved));
-    } else {
-      const committed = JSON.parse(result);
-      committed.headers = { ...committed.headers, 'x-dailydigest-generation': String(state.py.globals.get('state_generation')()) };
-      emit(JSON.stringify(committed));
-    }
+    // A committed route response reaches the UI before an idle checkpoint.
+    // Forced flushes still fence reload, imports, exports and tab handoff.
+    const delivered = JSON.parse(result);
+    delivered.headers = { ...delivered.headers,
+      'x-dailydigest-generation': String(state.py.globals.get('state_generation')()),
+      'x-dailydigest-storage': storageWriter.status().durable ? 'saved' : 'pending' };
+    if (data.method && data.method.toUpperCase() !== 'GET' && delivered.status < 400 && storageWriter.status().dirty) self.postMessage({type:'storage-dirty'});
+    emit(JSON.stringify(delivered));
+    storageWriter.schedule();
     // Start native background targets only after the start response reaches UI.
     setTimeout(() => { void pumpJobs(); }, 0);
   } catch (error) {

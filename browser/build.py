@@ -334,6 +334,7 @@ def build(output: Path) -> dict:
     for name in ("index.html", "app.mjs", "reading-view.mjs", "tab-handoff.mjs", "compute.mjs", "public-embeddings.mjs", "semantic.mjs", "http.mjs", "storage.mjs", "style.css", "worker.mjs", "manifest.webmanifest",
                  "app-icon.svg", "sw.js"):
         shutil.copyfile(HERE / name, output / name)
+    shutil.copyfile(ROOT / "templates/_design_tokens.css.j2", output / "design-tokens.css")
     shutil.copyfile(HERE / "runtime.py", assets / "runtime.py")
     shutil.copyfile(PROTO / "bge-tokenizer.mjs", output / "bge-tokenizer.mjs")
     for package, files in {

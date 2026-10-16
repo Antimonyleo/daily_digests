@@ -1,9 +1,10 @@
 /** Serialize private checkpoints; unchanged page reads never encode the database. */
 export function createSnapshotWriter({ generation, capture, save, ready = () => true, warning = () => {}, now = Date.now }) {
-  let savedGeneration = 0, pending = null, lastError = null, retryAt = 0;
+  let savedGeneration = 0, pending = null, lastError = null, retryAt = 0, timer;
   const status = () => ({ dirty: generation() !== savedGeneration, saving: Boolean(pending),
     durable: ready() && generation() === savedGeneration && !lastError, error: lastError?.message || null });
   function flush({ force = false } = {}) {
+    clearTimeout(timer); timer = null;
     if (pending) return pending;
     if (!ready()) return Promise.resolve(false);
     if (generation() === savedGeneration) return Promise.resolve(true);
@@ -28,7 +29,11 @@ export function createSnapshotWriter({ generation, capture, save, ready = () => 
     });
     return pending;
   }
-  return { flush, status };
+  function schedule({delayMs = 350} = {}) {
+    if (timer || pending || !status().dirty) return;
+    timer = setTimeout(() => { timer = null; void flush(); }, delayMs);
+  }
+  return { flush, status, schedule };
 }
 
 /** Validate the envelope without Python, including paths, conflicts and base64. */
@@ -50,21 +55,27 @@ function validatePrivatePaths(names) {
 }
 
 /** Match export_snapshot byte-for-byte, including Python's ASCII JSON keys. */
-export function capturePrivateSnapshot(names, readFile) {
+export function capturePrivateSnapshot(names, readFile, {cache = new Map(), versions = {}} = {}) {
   validatePrivatePaths(names);
+  const wanted = new Set(names);
+  for (const name of cache.keys()) if (!wanted.has(name)) cache.delete(name);
   const quote = value => JSON.stringify(value).replace(/[\u007f-\uffff]/g,
     char => '\\u' + char.charCodeAt(0).toString(16).padStart(4, '0'));
   const files = names.map(name => {
-    const bytes = readFile(name);
-    let encoded;
-    if (typeof bytes.toBase64 === 'function') encoded = bytes.toBase64();
-    else {
-      // Older browsers need bounded chunks: spreading a complete database
-      // into fromCharCode recreates the startup call-stack overflow.
-      let binary = '';
-      for (let offset = 0; offset < bytes.length; offset += 32768)
-        binary += String.fromCharCode(...bytes.subarray(offset, offset + 32768));
-      encoded = btoa(binary);
+    const previous = cache.get(name), version = versions[name];
+    let encoded = version !== undefined && previous?.version === version ? previous.encoded : undefined;
+    if (encoded === undefined) {
+      const bytes = readFile(name);
+      if (typeof bytes.toBase64 === 'function') encoded = bytes.toBase64();
+      else {
+        // Older browsers need bounded chunks: spreading a complete database
+        // into fromCharCode recreates the startup call-stack overflow.
+        let binary = '';
+        for (let offset = 0; offset < bytes.length; offset += 32768)
+          binary += String.fromCharCode(...bytes.subarray(offset, offset + 32768));
+        encoded = btoa(binary);
+      }
+      if (version !== undefined) cache.set(name, {version, encoded});
     }
     return quote(name) + ': "' + encoded + '"';
   });

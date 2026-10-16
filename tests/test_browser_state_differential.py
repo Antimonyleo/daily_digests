@@ -129,14 +129,14 @@ def _assert_real_writer_matches(checkpoints):
         process.stdin.on('data', chunk => text += chunk);
         process.stdin.on('end', () => resolve(text));
       }));
-      let checkpoint, stored = null;
+      let checkpoint, stored = null; const cache = new Map();
       const writer = createSnapshotWriter({
         generation: () => checkpoint.generation,
         ready: () => checkpoint.ready,
         capture: () => {
           const files = JSON.parse(checkpoint.snapshot).files;
           return capturePrivateSnapshot(checkpoint.names,
-            name => new Uint8Array(Buffer.from(files[name], 'base64'))).payload;
+            name => new Uint8Array(Buffer.from(files[name], 'base64')), {cache, versions:checkpoint.versions || {}}).payload;
         },
         save: async snapshot => { stored = snapshot; },
       });
@@ -164,10 +164,11 @@ def test_real_mutating_routes_match_full_private_export_after_writer_flush(track
         checkpoints.append({'label': label, 'generation': app.runtime.state_generation(),
                             'ready': app.runtime.snapshot_ready(),
                             'names': json.loads(app.runtime.snapshot_file_names(app.root)),
+                            'versions': json.loads(app.runtime.snapshot_file_versions(app.root)),
                             'snapshot': app.runtime.export_snapshot(app.root)})
 
     checkpoint('initial committed state')
-    for path in ('/healthz', '/setup', '/saved', '/ranking/status'):
+    for path in ('/healthz', '/setup', '/saved', '/ranking/status', '/reading/study'):
         before = app.runtime.state_generation()
         response = _request(app, 'GET', path)
         assert response['status'] == 200, (path, response)
@@ -300,6 +301,7 @@ def test_actual_legacy_migration_marks_c_level_backup_write(tracked_app, monkeyp
     checkpoint = {'label': 'C-level migration backup', 'generation': app.runtime.state_generation(),
                   'ready': app.runtime.snapshot_ready(),
                   'names': json.loads(app.runtime.snapshot_file_names(app.root)),
+                            'versions': json.loads(app.runtime.snapshot_file_versions(app.root)),
                   'snapshot': app.runtime.export_snapshot(app.root)}
     assert 'data/backups/digest-pre-v1.db' in json.loads(checkpoint['snapshot'])['files']
     app.runtime.validate_snapshot_sqlite(app.runtime.decode_snapshot(checkpoint['snapshot']),
