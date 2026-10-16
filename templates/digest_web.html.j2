@@ -20,28 +20,29 @@
   }
   .reading-progress.active .reading-progress-leaf { opacity: 1; }
   .topbar {
-    display: grid; grid-template-columns: 1fr auto; gap: 20px;
-    align-items: center; margin-bottom: 14px;
+    display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px;
+    align-items: start; margin-bottom: 14px;
   }
   .eyebrow {
     color: var(--accent); font-size: 12px; font-weight: 800;
     letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 8px;
   }
 	  h1 {
-	    font-size: clamp(28px, 4vw, 44px); line-height: 1.05;
+	    font-size: clamp(26px, 3vw, 34px); line-height: 1.05;
 	    margin: 0; letter-spacing: 0; overflow-wrap: anywhere;
 	  }
   .subhead {
     margin: 10px 0 0; color: var(--muted); max-width: 620px;
     font-size: 15px; line-height: 1.55;
   }
-  .actions { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 8px; }
+  .actions > a { border-color: transparent; background: transparent; }
+  .actions { display: flex; flex-wrap: wrap; justify-content: flex-start; align-items: center; gap: 8px; }
   .time-machine {
     display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
     margin: -2px 0 14px;
   }
   .time-machine-label {
-    margin-right: 3px; color: var(--muted); font-size: 11px; font-weight: 800;
+    margin-right: 3px; color: var(--muted); font-size: 12px; font-weight: 800;
     letter-spacing: 0.07em; text-transform: uppercase;
   }
   .time-machine-link {
@@ -50,7 +51,7 @@
     background: var(--card); color: var(--text); font-size: 12px; font-weight: 720;
     text-decoration: none;
   }
-  .time-machine-link time { color: var(--muted); font-size: 10px; font-weight: 650; }
+  .time-machine-link time { color: var(--muted); font-size: 12px; font-weight: 650; }
   .time-machine-link:hover { border-color: var(--accent); color: var(--accent-strong); }
   .time-machine-link.active {
     border-color: var(--accent); background: var(--accent-soft); color: var(--accent-strong);
@@ -59,7 +60,7 @@
   .compact-brew {
     display: flex; align-items: center; gap: 7px; min-height: 38px; padding: 5px 6px 5px 10px;
     border: 1px solid var(--border); border-radius: 8px; background: var(--card);
-    color: var(--muted); font-size: 11px; font-weight: 760;
+    color: var(--muted); font-size: 12px; font-weight: 760;
   }
   .compact-brew select {
     min-height: 27px; border: 0; border-radius: 6px; background: var(--panel);
@@ -162,7 +163,7 @@
     display: inline-flex; align-items: center; justify-content: center;
     min-width: 29px; min-height: 18px; padding: 0 4px;
     border: 1px solid var(--border); border-radius: 999px; background: var(--card);
-    color: var(--muted); font-size: 9px; font-weight: 800; white-space: nowrap;
+    color: var(--muted); font-size: 12px; font-weight: 800; white-space: nowrap;
   }
   .tea-break-copy { display: block; min-width: 0; }
   .tea-leaf-drop {
@@ -189,7 +190,7 @@
   .tea-leaf-drop:disabled .tea-leaf-shape { opacity: 0; }
   .pip-move {
     display: none; border: 0; padding: 2px 5px; border-radius: 999px; background: transparent;
-    color: var(--muted); cursor: pointer; font-size: 10px; font-weight: 760;
+    color: var(--muted); cursor: pointer; font-size: 12px; font-weight: 760;
   }
   .pip-move:hover { color: var(--accent-strong); background: var(--accent-soft); }
   .pip-move:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
@@ -283,7 +284,7 @@
     box-shadow: 0 8px 24px rgba(21, 34, 27, 0.04);
   }
   .brew-choice-title { font-size: 14px; font-weight: 810; }
-  .brew-choice-hint { color: var(--muted); font-size: 11px; margin-top: 3px; }
+  .brew-choice-hint { color: var(--muted); font-size: 12px; margin-top: 3px; }
   .density-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
   .density-option { position: relative; }
   .density-option input { position: absolute; opacity: 0; pointer-events: none; }
@@ -293,7 +294,7 @@
     cursor: pointer;
   }
   .density-card strong { font-size: 12px; }
-  .density-card span { color: var(--muted); font-size: 10px; line-height: 1.3; }
+  .density-card span { color: var(--muted); font-size: 12px; line-height: 1.3; }
   .density-option input:checked + .density-card {
     border-color: var(--accent); background: var(--accent-soft);
     box-shadow: 0 0 0 1px var(--accent);
@@ -316,18 +317,18 @@
     background: linear-gradient(135deg, #f7fbf8, var(--accent-soft));
   }
   .cup-kicker {
-    color: var(--accent-strong); font-size: 11px; font-weight: 820;
+    color: var(--accent-strong); font-size: 12px; font-weight: 820;
     letter-spacing: 0.09em; text-transform: uppercase;
   }
   .cup-time { margin-top: 4px; font-size: 27px; font-weight: 840; line-height: 1.1; }
   .cup-label { color: var(--muted); font-size: 12px; margin-top: 4px; }
   .cup-details { display: grid; gap: 9px; }
   .cup-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-  .cup-row-label { color: var(--muted); font-size: 11px; font-weight: 800; min-width: 58px; text-transform: uppercase; letter-spacing: 0.05em; }
+  .cup-row-label { color: var(--muted); font-size: 12px; font-weight: 800; min-width: 58px; text-transform: uppercase; letter-spacing: 0.05em; }
   .cup-chip {
     display: inline-flex; align-items: center; min-height: 25px; padding: 4px 8px;
     border: 1px solid var(--border); border-radius: 999px; background: rgba(255,255,255,0.75);
-    color: var(--copy-secondary); font-size: 11px; font-weight: 720;
+    color: var(--copy-secondary); font-size: 12px; font-weight: 720;
   }
   .catch-up {
     border-top: 1px solid var(--border); padding-top: 8px;
@@ -380,7 +381,7 @@
     border: 1px solid var(--border); border-radius: 8px; background: var(--panel);
   }
   .ranking-kicker {
-    color: var(--muted); font-size: 11px; font-weight: 800;
+    color: var(--muted); font-size: 12px; font-weight: 800;
     letter-spacing: 0.08em; text-transform: uppercase;
   }
   .ranking-counts { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -454,7 +455,7 @@
     display: inline-flex; align-items: center; gap: 5px; min-height: 26px;
     margin-left: 0; padding: 3px 8px; border: 1px solid var(--border);
     border-radius: 999px; background: var(--card); color: var(--muted);
-    font-size: 11px; font-weight: 760; white-space: nowrap; cursor: pointer;
+    font-size: 12px; font-weight: 760; white-space: nowrap; cursor: pointer;
   }
   .bookmark-btn:hover { color: var(--accent-strong); border-color: #9fc2ae; }
   .bookmark-btn.active { color: #7a4b00; border-color: #dcb86b; background: var(--gold-soft); }
@@ -464,7 +465,7 @@
   .known-btn.active .known-label { text-decoration: line-through; }
   .type-label {
     display: inline-flex; align-items: center; min-height: 20px;
-    font-size: 11px; font-weight: 650; color: var(--muted);
+    font-size: 12px; font-weight: 650; color: var(--muted);
     letter-spacing: 0.02em;
   }
   .reason-line { max-width: 96ch; color: var(--muted); font-size: 12px; line-height: 1.4; margin: 5px 0 0; overflow-wrap: anywhere; }
@@ -481,13 +482,13 @@
     display: grid; grid-template-columns: 92px 1fr; gap: 8px; margin: 10px 0 0;
   }
   .summary-field { display: grid; grid-template-columns: 92px 1fr; gap: 8px; }
-  .summary-label { color: var(--accent-strong); font-size: 11px; font-weight: 840; text-transform: uppercase; letter-spacing: 0.04em; }
+  .summary-label { color: var(--accent-strong); font-size: 12px; font-weight: 840; text-transform: uppercase; letter-spacing: 0.04em; }
   .summary-text { max-width: 78ch; color: var(--copy-secondary); font-size: 14px; line-height: 1.6; overflow-wrap: anywhere; }
   .reason-row { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
   .reason-badge {
     display: inline-flex; align-items: center; min-height: 22px; padding: 3px 7px;
     border: 1px solid var(--border); border-radius: 999px; background: var(--panel);
-    color: var(--copy-secondary); font-size: 11px; font-weight: 700;
+    color: var(--copy-secondary); font-size: 12px; font-weight: 700;
   }
   .item-details {
     margin-top: 6px;
@@ -498,7 +499,7 @@
   }
   .item-details-body { display: grid; gap: 10px; padding: 4px 0 8px; }
   .why-copy { max-width: 90ch; color: var(--copy-secondary); font-size: 13px; line-height: 1.55; }
-  .signal-line { color: var(--muted); font-size: 11px; line-height: 1.45; }
+  .signal-line { color: var(--muted); font-size: 12px; line-height: 1.45; }
   .save-state { margin-top: 8px; color: var(--muted); font-size: 12px; }
   .save-state:empty { display: none; }
   .save-state.saved { color: var(--up); }
@@ -509,16 +510,16 @@
     margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border-soft);
   }
   .vote-title {
-    font-size: 11px; color: var(--muted); font-weight: 800; text-transform: uppercase;
+    font-size: 12px; color: var(--muted); font-weight: 800; text-transform: uppercase;
     letter-spacing: 0.08em;
   }
   .vote-row { display: grid; grid-template-columns: repeat(4, minmax(82px, max-content)); gap: 6px; }
   .reason-block { grid-column: 2; }
-  .reason-prompt { margin-top: 9px; color: var(--muted); font-size: 11px; font-weight: 760; }
+  .reason-prompt { margin-top: 9px; color: var(--muted); font-size: 12px; font-weight: 760; }
   .reason-chip-row { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
   .reason-chip {
     border: 1px solid var(--border); border-radius: 999px; background: var(--panel);
-    color: var(--muted); min-height: 25px; padding: 3px 8px; font-size: 11px;
+    color: var(--muted); min-height: 25px; padding: 3px 8px; font-size: 12px;
     cursor: pointer;
   }
   .reason-chip.active { color: var(--accent-strong); border-color: #9fc2ae; background: var(--accent-soft); }
@@ -536,6 +537,9 @@
   .vote-btn.active.good { background: #e4f4eb; border-color: var(--up); color: var(--up); }
   .vote-btn.active.neutral { background: var(--surface-muted); border-color: var(--neutral); color: var(--neutral); }
   .vote-btn.active.bad { background: #fdecea; border-color: var(--down); color: var(--down); }
+  .vote-btn { border-color: var(--control-border); min-height: 44px; }
+  .reason-chip, .bookmark-btn, .filter-chip, .time-machine-link, .pip-move, .tea-leaf-drop { min-height: 44px; }
+  .section-mark { width: 10px; height: 10px; background: var(--accent); border-radius: 50%; display: inline-block; }
   .vote-btn:disabled { opacity: 0.65; cursor: progress; }
   .item.flash { background: var(--flash); transition: background 0.4s; }
   .overflow-shelf {
@@ -555,12 +559,12 @@
   .overflow-votes { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
   .overflow-vote {
     border: 1px solid var(--border); border-radius: 999px; background: var(--card);
-    color: var(--muted); padding: 2px 9px; font-size: 11px; font-weight: 720; cursor: pointer;
+    color: var(--muted); padding: 2px 9px; font-size: 12px; font-weight: 720; cursor: pointer;
   }
   .overflow-vote:hover { color: var(--accent-strong); border-color: #9fc2ae; }
   .overflow-vote.active { color: var(--accent-strong); border-color: #9fc2ae; background: var(--accent-soft); }
   .overflow-vote:disabled { cursor: progress; opacity: 0.6; }
-  .overflow-vote-state { color: var(--muted); font-size: 11px; }
+  .overflow-vote-state { color: var(--muted); font-size: 12px; }
   #overflow-save-btn { margin-bottom: 10px; }
   #overflow-save-btn:disabled { opacity: 0.7; cursor: default; }
   .no-filter-results {
@@ -591,7 +595,7 @@
   .about-brew > summary::-webkit-details-marker { display: none; }
   .about-brew > summary::after { content: "+"; color: var(--muted); font-size: 17px; }
   .about-brew[open] > summary::after { content: "−"; }
-  .about-summary { margin-left: auto; color: var(--muted); font-size: 11px; font-weight: 650; }
+  .about-summary { margin-left: auto; color: var(--muted); font-size: 12px; font-weight: 650; }
   .about-body { display: grid; gap: 12px; padding: 0 14px 14px; }
   html[data-display="compact"] .topbar { margin-bottom: 8px; }
   html[data-display="compact"] .subhead { display: none; }
@@ -601,7 +605,7 @@
   }
   html[data-display="compact"] .cup-kicker { display: none; }
   html[data-display="compact"] .cup-time { margin: 0; font-size: 17px; }
-  html[data-display="compact"] .cup-label { margin-top: 1px; font-size: 11px; }
+  html[data-display="compact"] .cup-label { margin-top: 1px; font-size: 12px; }
   html[data-display="compact"] .cup-details { gap: 4px; }
   html[data-display="compact"] .cup-row { gap: 4px; }
   html[data-display="compact"] .cup-chip { min-height: 21px; padding: 2px 6px; }
@@ -631,14 +635,14 @@
   html[data-display="compact"] .item .summary,
   html[data-display="compact"] .summary-primary { margin-top: 5px; }
   html[data-display="compact"] .summary-primary { grid-template-columns: 72px 1fr; gap: 6px; }
-  html[data-display="compact"] .summary-primary .summary-label { font-size: 10px; white-space: nowrap; }
+  html[data-display="compact"] .summary-primary .summary-label { font-size: 12px; white-space: nowrap; }
   html[data-display="compact"] .item-details { margin-top: 5px; }
   html[data-display="compact"] .item-details summary { padding: 5px 0; }
   html[data-display="compact"] .vote-panel {
     grid-template-columns: minmax(0, 1fr); gap: 5px; margin-top: 6px; padding-top: 6px;
   }
   html[data-display="compact"] .vote-title { display: none; }
-  html[data-display="compact"] .vote-btn { min-height: 29px; padding: 4px 7px; font-size: 11px; }
+  html[data-display="compact"] .vote-btn { min-height: 29px; padding: 4px 7px; font-size: 12px; }
   html[data-display="compact"] .reason-block { grid-column: 1; }
   @media (min-width: 1440px) {
     .tea-break,
@@ -739,6 +743,7 @@
   .source-coverage { margin: 16px 0; padding: 16px 20px; border: 1px solid var(--border); border-radius: 12px; background: var(--card); font-size: 13px; line-height: 1.6; }
   .source-coverage p { margin: 5px 0; overflow-wrap: anywhere; }
   .source-check-time { color: var(--muted); font-size: 12px; }
+  .learning-summary.source-coverage { padding: 8px 12px; margin: 8px 0; font-size: 12px; }
   .source-coverage summary { cursor: pointer; color: var(--accent-strong); }
   .source-coverage ul { margin: 10px 0; padding: 0; list-style: none; max-height: 260px; overflow-y: auto; }
   .source-coverage li { padding: 8px 0; border-top: 1px solid var(--border-soft); overflow-wrap: anywhere; }
@@ -764,8 +769,7 @@
       {% endif %}
       {% if not empty and viewing_today %}
       <form class="compact-brew-form" action="/run" method="get">
-        <input type="hidden" name="autostart" value="1">
-        <label class="compact-brew" for="reading-mode-select">
+            <label class="compact-brew" for="reading-mode-select">
           <span>Today’s serving</span>
           <select id="reading-mode-select" name="reading_mode" aria-label="Choose serving size">
             <option value="full">Energetic</option>
@@ -781,6 +785,12 @@
     </div>
   </header>
 
+  <aside class="learning-summary source-coverage" aria-label="Your reading feedback">
+    <p id="learning-summary-message">{{ ranking_status.learning_message | default(ranking_status.message) }}</p>
+    <p id="usefulness-summary">{{ feedback_summary.useful }} useful of {{ feedback_summary.rated }} rated picks in this digest · {{ feedback_summary.unrated }} unrated.</p>
+    <a href="/reading/study">Review useful picks per digest</a>
+    <details><summary>What the feedback means</summary><p>Useful means marked Relevant or Must read. Ratings help future brews; this saved list does not reshuffle. Unrated papers are unknown, not unsuccessful recommendations.</p></details>
+  </aside>
   {% if recent_brews %}
   <nav class="time-machine" aria-label="Browse recent digests">
     <span class="time-machine-label">Time Machine</span>
@@ -794,7 +804,6 @@
 
   {% if empty %}
   <form class="brew-choice" action="/run" method="get" aria-labelledby="brew-choice-title">
-    <input type="hidden" name="autostart" value="1">
     <div>
       <div class="brew-choice-title" id="brew-choice-title">How are we feeling today?</div>
       <div class="brew-choice-hint">Choose today’s serving size. Source collection stays the same.<br>Summaries: {{ summarizer_label }}</div>
@@ -854,39 +863,10 @@
 
 
 
-  {% if interest_coverage %}
-  <section class="source-coverage" aria-label="Your configured interests">
-    <details><summary>Your interests · {{ interest_coverage|length }} configured</summary>
-      <p>These are your configured interests. Counts describe the saved digest, which may predate your latest settings. Percentages guide relative priority; they do not reserve digest slots. A topic without a selected paper may still have matching papers.</p>
-      <ul>{% for interest in interest_coverage %}
-        <li><strong>{{ interest.title }} · {{ interest.selected }} selected</strong>
-          {% if interest.candidates is not none %}<span>{{ interest.candidates }} scored matches · {{ interest.eligible }} passed eligibility{% if interest.queries %} · Searches: {{ interest.queries|join(', ') }}{% endif %}</span>{% endif %}
-          <span>{{ interest.explanation }}</span>
-          {% for search in interest.searches|default([]) %}<span>{{ search.source }}: {{ search.status }}{% if search.status in ['completed', 'limited'] and search.returned_count == 0 %} · 0 papers returned by this search{% endif %}{% if search.query %} · Searched: <code>{{ search.query }}</code>{% endif %}.{% for warning in search.warnings|default([]) %} Provider notice: {{ warning }}.{% endfor %}</span>{% endfor %}
-          {% if interest.rejections %}<span>Not selected: {% for stage, count in interest.rejections.items() %}{{ stage|replace('_', ' ') }} {{ count }}{% if not loop.last %}; {% endif %}{% endfor %}.</span>{% endif %}
-        </li>{% endfor %}</ul>
-    </details>
-  </section>
+  {% if source_coverage is defined and source_coverage.total %}
+  <p class="feedback-note">Latest source check: {{ source_coverage.responded }} of {{ source_coverage.total }} responded{% if source_coverage.unavailable %} · {{ source_coverage.unavailable }} unavailable{% endif %}. <a href="#source-details">Coverage and freshness</a></p>
   {% endif %}
-
-  {% if source_coverage is defined %}
-  <section class="source-coverage" aria-label="Source coverage and freshness">
-    <strong>Latest source check</strong>
-    {% if source_coverage.total %}
-      <p>{{ source_coverage.responded }} of {{ source_coverage.total }} sources responded{% if source_coverage.unavailable %} · {{ source_coverage.unavailable }} unavailable{% endif %}{% if source_coverage.limited %} · {{ source_coverage.limited }} returned limited results{% endif %}{% if source_coverage.unknown %} · {{ source_coverage.unknown }} unknown{% endif %}.</p>
-      <p class="source-check-time">Checked <time datetime="{{ source_coverage.checked_at }}">{{ source_coverage.checked_label }}</time>{% if source_coverage.public_oldest_label %} · Oldest public feed update: {{ source_coverage.public_oldest_label }}{% endif %}</p>
-      {% if source_coverage.checked_stale or source_coverage.public_stale %}<p>The check or public feed data is over 24 hours old. Brew again to check for updates.</p>{% endif %}
-      <details><summary>See source details</summary><ul>
-        {% for row in source_coverage.rows %}<li><strong>{{ row.name }}</strong><span>{{ row.status }} · {{ row.freshness }}</span></li>{% endfor %}
-      </ul></details>
-      <p class="source-check-time">This is the latest check, including failed attempts. Feed update times are separate from paper publication dates.</p>
-    {% else %}
-      <p>No source check recorded yet. Brew a digest to check your selected sources.</p>
-    {% endif %}
-  </section>
-  {% endif %}
-
-  <main class="digest-card" id="digest-content" tabindex="-1">
+  <section class="digest-card" id="digest-content" tabindex="-1">
     <div class="digest-toolbar">
       <div>
         <div class="digest-date">{{ digest_id }}</div>
@@ -929,7 +909,7 @@
       {% for section in sections %}
       <details class="section-block" data-section="{{ section.key }}"{% if loop.first %} open{% endif %}>
       <summary class="section-toggle">
-        <span class="section-heading"><span aria-hidden="true">{{ section.emoji }}</span>{{ section.title }}</span>
+        <span class="section-heading"><span class="section-mark" aria-hidden="true"></span>{{ section.title }}</span>
         <span class="section-toggle-side"><span class="section-count">{{ section.entries|length }}</span><span class="section-chevron" aria-hidden="true">⌄</span></span>
       </summary>
       {% for item in section.entries %}
@@ -962,7 +942,7 @@
           </div>
           <div class="item-copy">
           <div class="meta">
-            {{ item.source }}{% if item.published %} &middot; {{ item.published }}{% endif %}
+            {% if item.authors %}<span class="authors">{{ item.authors }}</span> · {% endif %}{{ item.source }}{% if item.publication_label %} · <span class="publication-label">{{ item.publication_label }}</span>{% endif %}{% if item.published %} &middot; {{ item.published }}{% endif %}
           </div>
           {% if item.opportunity %}
           <div class="opportunity-facts">
@@ -980,6 +960,7 @@
             &middot; <a href="{{ item.opportunity.calendar_url }}">Add to calendar</a>
           </div>
           {% endif %}
+          {% if item.ranking.primary_facet %}<p class="match-topic"><strong>Shown for {{ item.ranking.primary_facet }}</strong>{% if item.match_evidence %} · Text contains “{{ item.match_evidence.term }}”{% else %} · Semantic match; no exact topic phrase in the supplied text{% endif %}</p>{% endif %}
           {% if item.reason_line %}
           <div class="reason-line">{{ item.reason_line }}</div>
           {% endif %}
@@ -1004,6 +985,7 @@
                   {% endif %}
                 {% endfor %}
               {% endif %}
+              {% if item.match_evidence %}<blockquote class="match-quote">{{ item.match_evidence.quote }}</blockquote><p class="hint">Exact text match explains the topic connection, not scientific quality.</p>{% endif %}
               <div class="why-copy"><strong>Why this recommendation?</strong>
                 {% if item.ranking.primary_facet %}Best-matching interest: {{ item.ranking.primary_facet }}.{% endif %}
                 {% if item.ranking.why_shown %}
@@ -1071,7 +1053,7 @@
     {% for section in empty_enabled_sections %}
     <details class="section-block empty-section" data-section="{{ section.key }}">
       <summary class="section-toggle">
-        <span class="section-heading"><span aria-hidden="true">{{ section.emoji }}</span>{{ section.title }}</span>
+        <span class="section-heading"><span class="section-mark" aria-hidden="true"></span>{{ section.title }}</span>
         <span class="section-toggle-side"><span class="section-count">0</span><span class="section-chevron" aria-hidden="true">⌄</span></span>
       </summary>
       <div class="empty-section-note">
@@ -1127,7 +1109,40 @@
     <div class="footer">
       Your reading history and ratings stay on this computer.
     </div>
-  </main>
+  </section>
+  {% if interest_coverage %}
+  <section class="source-coverage" aria-label="Your configured interests">
+    <details><summary>Your interests · {{ interest_coverage|length }} configured</summary>
+      <p>These are your configured interests. Counts describe the saved digest, which may predate your latest settings. Percentages guide relative priority; they do not reserve digest slots. A topic without a selected paper may still have matching papers.</p>
+      <ul>{% for interest in interest_coverage %}
+        <li><strong>{{ interest.title }} · {{ interest.selected }} selected</strong>
+          {% if interest.candidates is not none %}<span>{{ interest.candidates }} scored matches · {{ interest.eligible }} passed eligibility{% if interest.queries %} · Searches: {{ interest.queries|join(', ') }}{% endif %}</span>{% endif %}
+          <span>{{ interest.explanation }}</span>
+          {% for search in interest.searches|default([]) %}<span>{{ search.source }}: {{ search.status }}{% if search.status in ['completed', 'limited'] and search.returned_count == 0 %} · 0 papers returned by this search{% endif %}{% if search.query %} · Searched: <code>{{ search.query }}</code>{% endif %}.{% for warning in search.warnings|default([]) %} Provider notice: {{ warning }}.{% endfor %}</span>{% endfor %}
+          {% if interest.rejections %}<span>Not selected: {% for stage, count in interest.rejections.items() %}{{ stage|replace('_', ' ') }} {{ count }}{% if not loop.last %}; {% endif %}{% endfor %}.</span>{% endif %}
+        </li>{% endfor %}</ul>
+    </details>
+  </section>
+  {% endif %}
+
+  {% if source_coverage is defined %}
+  <section id="source-details" class="source-coverage" aria-label="Source coverage and freshness">
+    <strong>Latest source check</strong>
+    {% if source_coverage.total %}
+      <p>{{ source_coverage.responded }} of {{ source_coverage.total }} sources responded{% if source_coverage.unavailable %} · {{ source_coverage.unavailable }} unavailable{% endif %}{% if source_coverage.limited %} · {{ source_coverage.limited }} returned limited results{% endif %}{% if source_coverage.unknown %} · {{ source_coverage.unknown }} unknown{% endif %}.</p>
+      <p class="source-check-time">Checked <time datetime="{{ source_coverage.checked_at }}">{{ source_coverage.checked_label }}</time>{% if source_coverage.public_oldest_label %} · Oldest public feed update: {{ source_coverage.public_oldest_label }}{% endif %}</p>
+      {% if source_coverage.checked_stale or source_coverage.public_stale %}<p>The check or public feed data is over 24 hours old. Brew again to check for updates.</p>{% endif %}
+      <details><summary>See source details</summary><ul>
+        {% for row in source_coverage.rows %}<li><strong>{{ row.name }}</strong><span>{{ row.status }} · {{ row.freshness }}</span></li>{% endfor %}
+      </ul></details>
+      <p class="source-check-time">This is the latest check, including failed attempts. Feed update times are separate from paper publication dates.</p>
+    {% else %}
+      <p>No source check recorded yet. Brew a digest to check your selected sources.</p>
+    {% endif %}
+  </section>
+  {% endif %}
+
+
 
   <section class="tea-break" id="tea-break" data-note-kind="{{ 'joke' if daily_note.startswith('Lab joke') else 'fact' }}" aria-label="Pip’s tea break">
     <div class="pip-stage">
@@ -1648,7 +1663,7 @@
   function setStatus(itemEl, text, state) {
     const status = itemEl.querySelector(".save-state");
     if (!status) return;
-    status.classList.remove("saved", "error");
+    status.classList.remove("saved", "error", "pending");
     if (state) status.classList.add(state);
     status.textContent = text;
   }
@@ -1656,6 +1671,7 @@
   async function responsePayload(response) {
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.detail || `HTTP ${response.status}`);
+    payload.storagePending = response.headers.get("x-dailydigest-storage") === "pending";
     return payload;
   }
 
@@ -1689,6 +1705,10 @@
     toastTimer = setTimeout(() => toastEl.classList.remove("show"), 2200);
   }
 
+  window.addEventListener("dd-storage-committed", () => {
+    document.querySelectorAll(".save-state.pending").forEach(status => { status.classList.remove("pending"); status.classList.add("saved"); status.textContent = "Saved in this browser"; });
+  });
+
   function flash(itemEl) {
     itemEl.classList.add("flash");
     setTimeout(() => itemEl.classList.remove("flash"), 600);
@@ -1714,6 +1734,13 @@
     if (thresholdEl) thresholdEl.textContent = status.min_votes_for_lr;
     if (trainBtn) trainBtn.disabled = !status.can_train;
     if (!msgEl) return;
+    const learning = document.getElementById('learning-summary-message');
+    if (learning) learning.textContent = status.learning_message || status.message;
+    const cards = [...document.querySelectorAll('.item')];
+    const rated = cards.filter(card => card.dataset.currentGrade !== '');
+    const useful = rated.filter(card => Number(card.dataset.currentGrade) >= 70);
+    const summary = document.getElementById('usefulness-summary');
+    if (summary) summary.textContent = `${useful.length} useful of ${rated.length} rated picks in this digest · ${cards.length - rated.length} unrated.`;
     msgEl.textContent = status.message || `${status.remaining_votes_for_lr} more ratings unlock personal ranking.`;
   }
 
@@ -1935,32 +1962,26 @@
         }
       });
     }
-    itemEl.querySelectorAll(".vote-btn").forEach((btn) => {
-      btn.addEventListener("click", async () => {
-        const id = itemEl.dataset.itemId;
-        const grade = btn.dataset.grade;
-        setSaving(itemEl, true);
-        setStatus(itemEl, "Saving response...", "");
-        try {
-	          const r = await fetch(`/vote/${id}/${grade}`, {
-	            method: "POST",
-	            headers: { "X-CSRF-Token": CSRF_TOKEN },
-	          });
-          const payload = await responsePayload(r);
-          setActive(itemEl, grade);
-          setFeedbackPending(itemEl, true);
-          applyReaderFilters();
-          updateRankingStatus(payload.ranking_status);
-          const stamp = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-          setStatus(itemEl, `${GRADE_LABEL[grade]} saved at ${stamp}`, "saved");
-          showToast(`${GRADE_LABEL[grade]} response saved`);
-        } catch (e) {
-          setStatus(itemEl, "Response was not saved. " + e.message, "error");
-          flash(itemEl);
-        } finally {
-          setSaving(itemEl, false);
-        }
-      });
+    const rate = createRatingQueue({
+      initial:itemEl.dataset.currentGrade || null,
+      select:grade => setActive(itemEl, grade),
+      send:async grade => responsePayload(await fetch(`/vote/${itemEl.dataset.itemId}/${grade}`, {
+        method:'POST', headers:{'X-CSRF-Token':CSRF_TOKEN},
+      })),
+      busy:saving => {
+        setSaving(itemEl, saving);
+        itemEl.querySelectorAll('.vote-btn').forEach(button => {button.disabled = false;});
+        if (saving) setStatus(itemEl, 'Recording response…', '');
+      },
+      success:(payload, grade) => {
+        setFeedbackPending(itemEl, true); applyReaderFilters(); updateRankingStatus(payload.ranking_status);
+        setStatus(itemEl, payload.storagePending ? `${GRADE_LABEL[grade]} recorded · saving browser copy…` : `${GRADE_LABEL[grade]} saved`, payload.storagePending ? 'pending' : 'saved');
+        showToast(`${GRADE_LABEL[grade]} response recorded`);
+      },
+      failure:error => {setStatus(itemEl, 'Response was not saved. ' + error.message, 'error'); flash(itemEl);},
+    });
+    itemEl.querySelectorAll('.vote-btn').forEach(button => {
+      button.addEventListener('click', () => {void rate(button.dataset.grade);});
     });
     const doneButton = itemEl.querySelector(".feedback-done");
     if (doneButton) doneButton.addEventListener("click", () => {

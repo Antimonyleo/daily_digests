@@ -18,61 +18,7 @@
 </script>
 <title>{% block title %}DailyDigest{% endblock %}</title>
 <style>
-  :root {
-    --bg: #f6f7f4;
-    --card: #ffffff;
-    --panel: #fbfcf9;
-    --border: #dde3dc;
-    --muted: #657169;
-    --text: #15221b;
-    --accent: #256f52;
-    --accent-strong: #174d39;
-    --accent-soft: #e8f3ec;
-    --gold: #b87918;
-    --gold-soft: #fff5dd;
-    --up: #1f7a4d;
-    --neutral: #63706a;
-    --down: #b4493d;
-    --flash: #fff1ed;
-    --shadow: 0 18px 50px rgba(21, 34, 27, 0.08);
-    --bg-top: #eef5f0;
-    --surface-muted: #eef1ed;
-    --surface-hover: #f8faf7;
-    --border-soft: #edf1ec;
-    --copy-secondary: #334238;
-    --ambient-mint: rgba(71, 150, 108, 0.16);
-    --ambient-gold: rgba(223, 176, 85, 0.13);
-    --ambient-blue: rgba(92, 145, 179, 0.10);
-    --ambient-dot: rgba(37, 111, 82, 0.14);
-  }
-  html[data-theme="dark"] {
-    color-scheme: dark;
-    --bg: #0e1511;
-    --card: #151f19;
-    --panel: #111a15;
-    --border: #314038;
-    --muted: #9caaa1;
-    --text: #edf4ef;
-    --accent: #66b58d;
-    --accent-strong: #92d2ac;
-    --accent-soft: #1b3426;
-    --gold: #d5a552;
-    --gold-soft: #3a2d16;
-    --up: #77c69a;
-    --neutral: #a8b2ac;
-    --down: #ef8b7f;
-    --flash: #3d211f;
-    --shadow: 0 18px 50px rgba(0, 0, 0, 0.28);
-    --bg-top: #17231c;
-    --surface-muted: #202c25;
-    --surface-hover: #1a2720;
-    --border-soft: #28362e;
-    --copy-secondary: #c5d0c9;
-    --ambient-mint: rgba(102, 181, 141, 0.11);
-    --ambient-gold: rgba(213, 165, 82, 0.08);
-    --ambient-blue: rgba(92, 145, 179, 0.07);
-    --ambient-dot: rgba(146, 210, 172, 0.11);
-  }
+{% include "_design_tokens.css.j2" %}
   * { box-sizing: border-box; }
   body {
     position: relative; min-height: 100vh; margin: 0; overflow-x: hidden;
@@ -113,7 +59,7 @@
   }
   .header .title { font-size: 12px; color: var(--muted); letter-spacing: 0.08em; text-transform: uppercase; }
   .header .digest-id { font-size: 20px; font-weight: 600; margin-top: 2px; }
-  .footer { padding: 14px 24px; border-top: 1px solid var(--border-soft); font-size: 11px; color: var(--muted); }
+  .footer { padding: 14px 24px; border-top: 1px solid var(--border-soft); font-size: 12px; color: var(--muted); }
   code { background: var(--surface-muted); padding: 1px 4px; border-radius: 3px; font-size: 12px; }
   a { color: var(--accent); }
   :where(a, button, input, textarea, select, summary):focus-visible {
@@ -129,7 +75,7 @@
   .btn {
     display: inline-flex; align-items: center; justify-content: center; gap: 8px;
     min-height: 38px; padding: 8px 13px;
-    border: 1px solid var(--border); border-radius: 8px;
+    border: 1px solid var(--control-border); border-radius: 8px;
     background: var(--card); color: var(--text); text-decoration: none;
     cursor: pointer; font-weight: 650; font-size: 13px;
   }
@@ -168,7 +114,7 @@
   }
   .app-display-options .app-utility:hover { background: var(--surface-hover); }
   .app-display-options [aria-pressed]::after {
-    content: "Off"; color: var(--muted); font-size: 11px; font-weight: 500;
+    content: "Off"; color: var(--muted); font-size: 12px; font-weight: 500;
   }
   .app-display-options [aria-pressed="true"]::after { content: "On"; color: var(--accent); }
   html[data-pip="hidden"] .tea-break { display: none; }
@@ -202,13 +148,27 @@
       transition-duration: 0.01ms !important;
     }
   }
+  @media print {
+    body { background: white; color: black; }
+    body::before, body::after, .actions, .app-utilities, .vote-row, .reason-block,
+    .feedback-actions, .item-head-actions, .tea-break, .reader-toolbar, .brew-choice,
+    .compact-brew-form, .toast, .skip-link, .settings-actions { display: none !important; }
+    .wrap { max-width: none; padding: 0; }
+    .card, .digest-card, .item { box-shadow: none; break-inside: avoid; }
+    details > :not(summary) { display: block !important; }
+    a { color: black; }
+  }
   {% block extra_styles %}{% endblock %}
+  button:not(.active):not([aria-pressed="true"]), input, select, textarea { border-color: var(--control-border); }
+  button, summary, input:not([type="checkbox"]):not([type="radio"]), select { min-height: 44px; }
+
 </style>
 </head>
 <body>
-<div class="wrap">
+<a class="skip-link" href="#page-content">Skip to content</a>
+<main class="wrap" id="page-content" tabindex="-1">
   {% block body %}{% endblock %}
-</div>
+</main>
 <details class="app-utilities" id="display-menu">
   <summary class="app-utility" aria-label="Display" id="display-menu-toggle" aria-controls="display-options">Display</summary>
   <div class="app-display-options" id="display-options" role="group" aria-label="Display preferences">
@@ -220,6 +180,7 @@
   </div>
 </details>
 <script>
+{% include "_rating_queue.js.j2" %}
 (function () {
   const root = document.documentElement;
   const themeButton = document.getElementById("theme-toggle");

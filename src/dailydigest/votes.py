@@ -1171,7 +1171,7 @@ def lr_training_status() -> dict[str, object]:
 
     if preference_active:
         message = (
-            "Personal ranking is active — every rating sharpens the next brew "
+            "Personal ranking is active — new ratings are used by the next brew "
             "automatically."
         )
         training_status = "ready"
@@ -1182,9 +1182,16 @@ def lr_training_status() -> dict[str, object]:
         message = "Legacy LR weights are unavailable; ranking is using topic similarity."
         training_status = "model_missing"
     else:
-        message = f"{remaining} more ratings unlock personal ranking."
+        message = (f"{signed} ratings recorded. Early feedback refines your topic profile as evidence "
+                   f"accumulates; {remaining} more ratings unlock the additional preference-ranking layer.")
         training_status = "needs_votes"
     return {
+        "learning_message": (
+            "Preference ranking active · ratings apply to your next brew." if preference_active
+            else "Topic similarity mode · preference fusion is off." if mode == 'cosine'
+            else "Preference weights unavailable · topic-similarity fallback." if training_status == 'model_missing'
+            else f"{signed} helpful ratings · feedback builds gradually · {remaining} to unlock preference ranking."
+        ),
         "vote_counts": counts,
         "min_votes_for_lr": MIN_VOTES_FOR_LR,
         "remaining_votes_for_lr": remaining,

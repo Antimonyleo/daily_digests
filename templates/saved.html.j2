@@ -40,7 +40,7 @@
   .saved-meta { color: var(--muted); font-size: 12px; margin-top: 7px; }
   .saved-summary { color: var(--text); opacity: 0.82; font-size: 13px; line-height: 1.55; margin-top: 10px; }
   .vote-row, .reason-chip-row, .feedback-actions { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
-  .vote-btn, .reason-chip { min-height:44px; border:1px solid var(--border); border-radius:8px; padding:8px; background:var(--panel); color:var(--text); cursor:pointer; }
+  .vote-btn, .reason-chip { min-height:44px; border:1px solid var(--control-border); border-radius:8px; padding:8px; background:var(--panel); color:var(--text); cursor:pointer; }
   .vote-btn.active, .reason-chip.active { border-color:var(--accent); font-weight:750; }
   .reason-prompt, .vote-title, .save-state { font-size:13px; color:var(--muted); margin-top:12px; }
   .vote-btn:focus-visible, .reason-chip:focus-visible { outline:3px solid var(--accent); outline-offset:2px; }
@@ -132,17 +132,17 @@
       const response = await fetch(url, {method, headers:{"X-CSRF-Token":CSRF_TOKEN}});
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.detail || "Feedback was not saved. Try again.");
+      payload.storagePending = response.headers.get("x-dailydigest-storage") === "pending";
       return payload;
     }
-    card.querySelectorAll(".vote-btn").forEach(button => button.addEventListener("click", async () => {
-      busy(true);
-      try {
-        await write(`/vote/${card.dataset.itemId}/${button.dataset.grade}`, "POST");
-        active(button.dataset.grade);
-        status.textContent = "Rating saved. Reasons are optional.";
-      } catch(error) { status.textContent = error.message; }
-      finally { busy(false); }
-    }));
+    const rate = createRatingQueue({
+      initial:card.dataset.currentGrade || null, select:active,
+      send:grade => write(`/vote/${card.dataset.itemId}/${grade}`, 'POST'),
+      busy:value => {busy(value); card.querySelectorAll('.vote-btn').forEach(b => {b.disabled=false;}); if (value) status.textContent='Recording response…';},
+      success:payload => {status.textContent=payload.storagePending ? 'Rating recorded · saving browser copy…' : 'Rating saved. Reasons are optional.';},
+      failure:error => {status.textContent='Rating was not saved. '+error.message;},
+    });
+    card.querySelectorAll('.vote-btn').forEach(button => button.addEventListener('click', () => {void rate(button.dataset.grade);}));
     clear.addEventListener("click", async () => {
       let cleared = false;
       busy(true);

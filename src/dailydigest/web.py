@@ -464,6 +464,14 @@ def _load_today(
             for item_id in item_ids
         }
         persisted_features = load_digest_features(digest_id)
+        from .reader_insights import match_evidence
+        from .config import load_profile
+
+        try:
+            reader_profile = load_profile(_get_profile_path())
+            facets = reader_profile.canonical_facets
+        except Exception:  # Historical digests remain readable without a profile.
+            facets = {}
         opportunity_profile = None
         if any((row.section or "") in {"opportunities", "events"} for row in rows):
             try:
@@ -506,6 +514,9 @@ def _load_today(
                 tags=ranking.get("tags") or [],
             )
             type_label = content_type_label(ranking.get("content_type"))
+            topic = ranking.get('primary_facet') or ''
+            facet = facets.get(topic)
+            evidence = match_evidence(row, topic, getattr(facet, 'aliases', [])) if topic else None
             if key not in by_section:
                 by_section[key] = []
                 seen_keys.append(key)
@@ -530,6 +541,13 @@ def _load_today(
                     "confidence_score": confidence_score,
                     "ranking": ranking,
                     "reason_line": reason,
+                    "match_evidence": evidence,
+                    "authors": str(row.authors or '').strip()[:400],
+                    "publication_label": (
+                        'Preprint · not peer reviewed' if ranking.get('source_bucket') in {'arxiv_cs', 'arxiv_other', 'bio_med_preprint', 'preprint_other'}
+                        else 'Journal publication' if ranking.get('source_bucket') in {'published_journal', 'low_impact_journal'}
+                        else ''
+                    ),
                     "type_label": type_label,
                     "opportunity": opportunity,
                     "current_vote": current_vote.get(int(row.id)),
@@ -970,6 +988,10 @@ def _load_existing_form_defaults() -> dict[str, str]:
         "event_formats": "",
         "minimum_lead_days": "7",
     }
+    if not _get_profile_path().exists():
+        for key in out:
+            if key.startswith('include_'):
+                out[key] = 'false'
     if _get_profile_path().exists():
         try:
             data = yaml.safe_load(_get_profile_path().read_text()) or {}
@@ -1419,6 +1441,9 @@ def index(request: Request, digest_id: str = "") -> Response:
     overflow_audit = [a for a in overflow_audit if a["item_id"] is not None]
     _overflow_ids = {int(audit["item_id"]) for audit in overflow_audit}
     overflow_saved = bool(_overflow_ids) and _overflow_ids <= carryover_item_ids()
+    from .reader_insights import usefulness_summary
+
+    feedback_summary = usefulness_summary([entry for section in sections for entry in section.get('entries', [])])
     response = templates.TemplateResponse(
         request,
         "digest_web.html.j2",
@@ -1448,12 +1473,21 @@ def index(request: Request, digest_id: str = "") -> Response:
             "catch_up_days": catch_up_days,
             "current_vote_per_item": current_vote,
             "ranking_status": _feedback_status(),
+            "feedback_summary": feedback_summary,
             "empty": len(sections) == 0,
             "brewed": brewed,
             "csrf_token": _CSRF_TOKEN,
         },
     )
     response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@app.get("/reading/study", response_class=HTMLResponse)
+def reading_study(request: Request) -> Response:
+    from .reader_insights import recent_usefulness
+    response = templates.TemplateResponse(request, 'reading_study.html.j2', {'days': recent_usefulness()})
+    response.headers['Cache-Control'] = 'no-store'
     return response
 
 
@@ -1947,6 +1981,7 @@ def setup_get(request: Request) -> Response:
         "setup.html.j2",
         {
             "form": form,
+            "first_run": not _profile_exists(),
             "errors": [],
             "csrf_token": _CSRF_TOKEN,
         },
@@ -2052,6 +2087,7 @@ async def setup_post(request: Request) -> Response:
             "setup.html.j2",
             {
                 "form": render_form,
+                "first_run": not _profile_exists(),
                 "errors": display_errors,
                 "csrf_token": _CSRF_TOKEN,
             },

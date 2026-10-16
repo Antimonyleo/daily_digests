@@ -183,11 +183,11 @@
         </div>
       </fieldset>
       <p class="serving-note">Serving size changes only the final slate—not source coverage, quality checks, or your recommendation profile.</p>
+      <p class="serving-note" id="browser-compute-notice">Brewing uses processor and memory and may increase heat, fan noise and battery use. Keep this tab open. A large first browser brew can take 20 minutes or more; cached comparisons reduce later work.</p>
       <button class="btn primary brew-button" id="brew-button" type="submit">Brew today’s digest</button>
     </form>
   </section>
 
-  <p class="serving-note" id="browser-compute-notice" hidden></p>
   <section id="progress-panel" hidden>
     <div class="cup" aria-hidden="true">
       <div class="steam s1"></div><div class="steam s2"></div><div class="steam s3"></div>
@@ -195,8 +195,14 @@
     </div>
     <h1 id="brew-title">Brewing your cup of research</h1>
     <p class="brew-whisper" id="brew-whisper">Putting the kettle on. Your interests make this blend yours.</p>
-    <p class="lede">We’ll gather the sources, steep them in your interests, and serve your best matches. A large first brew can take a minute or more.</p>
+    <p class="lede">We’ll gather the sources, steep them in your interests, and serve your best matches. A first browser brew with thousands of new papers may take 20 minutes or more on one core. Cached brews can be much faster; total time depends on sources and your device.</p>
 
+    <section id="brew-preview" hidden aria-label="Provisional selected papers">
+      <h2>Qualified papers taking shape</h2>
+      <p class="serving-note">Provisional picks after topic and quality checks. Summaries and saving are still in progress; your previous digest remains unchanged until publication succeeds.</p>
+      <ol id="brew-preview-items"></ol>
+    </section>
+    <p class="serving-note">Progress shows stages, not elapsed-time percentages. A remaining-time estimate appears for text comparisons after a few batches; source and summary time can vary.</p>
     <div class="progress-shell" id="progress-shell" role="progressbar" aria-label="Brewing progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="6">
       <div class="progress-bar" id="progress-bar"></div>
     </div>
@@ -338,6 +344,17 @@
         setProgress("summarize_done", "Digest saved; preparing the preview");
         return;
       }
+      if (stage === "rank_done" && Array.isArray(payload.preview)) {
+        const list = document.getElementById('brew-preview-items'); list.replaceChildren();
+        for (const row of payload.preview.slice(0, 8)) {
+          const item = document.createElement('li'), link = document.createElement('a');
+          try { const url = new URL(row.url); if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) continue; link.href = url.href; }
+          catch { continue; }
+          link.textContent = String(row.title || 'Untitled'); link.target = '_blank'; link.rel = 'noopener noreferrer';
+          item.append(link, document.createTextNode(row.topic ? ` · ${row.topic}` : '')); list.append(item);
+        }
+        document.getElementById('brew-preview').hidden = !list.children.length;
+      }
       if (stage === "stage_start" || stage === "stage_done") {
         if (stage === "stage_start" && friendlyStages[payload.name]) whisper.textContent = friendlyStages[payload.name];
         const names = {ingestion: "Fetching sources", calibration: "Loading feedback",
@@ -357,12 +374,14 @@
       if (stage === "cancelled") {
         es.close();
         cancelButton.disabled = true;
+        document.getElementById("brew-preview").hidden = true;
         showError(payload.message || "Brew stopped before publication. Your saved digest is unchanged.");
         return;
       }
       if (stage === "error") {
         es.close();
         cancelButton.disabled = true;
+        document.getElementById("brew-preview").hidden = true;
         showError("Pipeline failed: " + (payload.message || "unknown error"));
         return;
       }

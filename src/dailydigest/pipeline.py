@@ -1805,6 +1805,12 @@ def run_all(
             "candidates": len(items),
             "picked": len(labeled),
             "reading_mode": reading_mode,
+            # Provisional display only, after every selection/quality gate.
+            # Publication remains atomic and may still fail or be cancelled.
+            "preview": [{"title": row.title or '', "url": row.url or '',
+                         "source": row.source or '',
+                         "topic": str(score_features.get(_row_feature_key(row), {}).get('primary_facet', ''))}
+                        for row, _label, _score in labeled[:8]],
         },
     )
 

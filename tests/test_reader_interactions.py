@@ -315,6 +315,7 @@ def test_display_preferences_and_menu_keyboard_dismissal(storage_available):
     import re
 
     base = TEMPLATE.with_name('_base.html.j2').read_text()
+    base = base.replace('{% include "_rating_queue.js.j2" %}', TEMPLATE.with_name('_rating_queue.js.j2').read_text())
     scripts = re.findall(r'<script>(.*?)</script>', base, re.DOTALL)
     _run_js(f'const storageAvailable = {str(storage_available).lower()};' + '''
         const assert = require('node:assert/strict');

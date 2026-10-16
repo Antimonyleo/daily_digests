@@ -1,0 +1,26 @@
+const pendingRatingOperations = new Set();
+if (typeof window !== 'undefined') {
+  window.ddFlushRatings = () => Promise.all([...pendingRatingOperations]);
+  window.ddHasPendingRatings = () => pendingRatingOperations.size > 0;
+  window.addEventListener('beforeunload', event => {
+    if (pendingRatingOperations.size) { event.preventDefault(); event.returnValue = ''; }
+  });
+}
+// Serialize each card's ratings; only the latest intent may change its visible state.
+function createRatingQueue({initial, send, select, success, failure, busy}) {
+  let confirmed = initial, revision = 0, pending = 0, chain = Promise.resolve();
+  return grade => {
+    const version = ++revision;
+    pending++; select(grade); busy(true);
+    const operation = chain.then(() => send(grade));
+    chain = operation.catch(() => {});
+    const finished = operation.then(result => {
+      confirmed = grade;
+      if (version === revision) success(result, grade);
+    }).catch(error => {
+      if (version === revision) { select(confirmed); failure(error); }
+    }).finally(() => { pendingRatingOperations.delete(finished); pending--; if (!pending) busy(false); });
+    pendingRatingOperations.add(finished);
+    return finished;
+  };
+}
