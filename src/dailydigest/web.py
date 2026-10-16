@@ -1970,6 +1970,7 @@ async def setup_post(request: Request) -> Response:
             "setup.html.j2",
             {
                 "form": render_form,
+                "first_run": not _profile_exists(),
                 "errors": display_errors,
                 "csrf_token": _CSRF_TOKEN,
             },

@@ -36,3 +36,19 @@ def test_learning_line_does_not_claim_ready_when_legacy_weights_are_missing(monk
     assert status['training_status'] == 'model_missing'
     assert 'unavailable' in status['learning_message']
     assert '0 to unlock' not in status['learning_message']
+
+
+def test_first_setup_error_does_not_reintroduce_a_dead_back_link(monkeypatch, tmp_path):
+    import asyncio
+    from dailydigest import web
+    from tests.test_web import _request
+    monkeypatch.setattr(web, '_get_profile_path', lambda: tmp_path / 'absent.yaml')
+    monkeypatch.setattr(web, '_ENV_PATH', tmp_path / '.env')
+    response = asyncio.run(web.setup_post(_request('POST', '/setup', form={
+        '_csrf_token': web._CSRF_TOKEN, 'topics': 'RNA delivery | 40',
+        'topic_weight_mode': 'percentage', 'llm_backend': 'extractive',
+    })))
+    assert response.status_code == 400
+    assert 'Back to today’s digest' not in response.body.decode()
+    assert not (tmp_path / 'absent.yaml').exists()
+    assert not (tmp_path / '.env').exists()
