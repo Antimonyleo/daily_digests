@@ -55,7 +55,7 @@ test('a suspended real job records recovery state until its final checkpoint com
   const suspended = new Promise(resolve => { release = resolve; });
   let jobs = true;
   const events = [], writes = [];
-  const run = production('pumpJobs', { jobRunning:false,
+  const run = production('pumpJobs', { jobRunning:false, computePackagesReady:true,
     saveSnapshot:async(value,key)=>writes.push({value,key}),
     self:{postMessage:value=>events.push(value)}, persist:async()=>{events.push({checkpoint:true});return true;},
     state:{py:{globals:{get:key=>key==='has_jobs'?()=>jobs:{callPromising:async()=>{await suspended;jobs=false;}}}}} });
@@ -99,4 +99,20 @@ test('snapshot commits invalidate the disposable reading copy in the same transa
   operations.length=0;
   await save('small view','reading-view');
   assert.deepEqual(operations,[['put','reading-view','small view']]);
+});
+
+test('calculation packages load once on demand, sharing concurrent preparation', async () => {
+  const order=[];
+  const prepare=production('prepareComputePackages', {computePackagesReady:false,computePackagesPending:null,
+    deferredPackages:['scipy','scikit-learn'],progress:()=>{},
+    state:{py:{loadPackage:async values=>order.push(Array.from(values))}}});
+  await Promise.all([prepare(),prepare()]);await prepare();
+  assert.deepEqual(order, [['scipy','scikit-learn']]);
+});
+
+test('failed calculation-library loading is retryable before any job is queued', async () => {
+  let calls=0;
+  const prepare=production('prepareComputePackages', {computePackagesReady:false,computePackagesPending:null,
+    deferredPackages:['scipy'],progress:()=>{},state:{py:{loadPackage:async()=>{if(++calls===1)throw Error('offline');}}}});
+  await assert.rejects(prepare(),/offline/);await prepare();assert.equal(calls,2);
 });

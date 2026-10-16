@@ -677,7 +677,7 @@ def install_semantic_backend(alignment, browser_score, run_sync):
     """Replace native model loading with the worker's lazy local JS scorer."""
     class BrowserSemanticBackend:
         def score_records(self, records, *, check_cancel=None):
-            from dailydigest.pipeline import BrewCancelled
+            from dailydigest.brew import BrewCancelled
 
             def check():
                 if check_cancel is not None:
@@ -722,7 +722,6 @@ def install_browser():
     except ImportError:
         # Previously cached CPU-only workers can still load the new runtime.
         browserEmbeddingBackend = lambda: 'browser-onnx'
-    import numpy as np
     from dailydigest import job_lock
     from dailydigest.rank import embed, semantic_alignment
 
@@ -747,7 +746,8 @@ def install_browser():
             raise ValueError('The browser bundle contains only BAAI/bge-small-en-v1.5')
 
         def encoder(texts):
-            from dailydigest.pipeline import BrewCancelled
+            import numpy as np
+            from dailydigest.brew import BrewCancelled
             if browser_cancelled():
                 raise BrewCancelled('Brew stopped before publication.')
             try:
@@ -765,8 +765,7 @@ def install_browser():
     # Keep browser vectors distinct from imported native cache backends.
     embed._resolved_backend_name = lambda: str(browserEmbeddingBackend())
 
-    from dailydigest import pipeline, web
-    pipeline.ThreadPoolExecutor = BrowserExecutor
+    from dailydigest import web
     _WEB = web
     web.threading = SimpleNamespace(Thread=BrowserThread, Lock=threading.Lock, Event=threading.Event)
     original_validate = web._validate_setup
@@ -781,7 +780,7 @@ def install_browser():
         return json.loads(run_sync(browserCompanion(path, json.dumps(payload), 'POST', timeout)))
 
     install_companion_providers(summarize, browserCompanionSupports, companion_call,
-                                browserCompanionIdentity, pipeline=pipeline)
+                                browserCompanionIdentity)
 
     def companion_text(system, user, backend, *, timeout=180.0, settings=None):
         if not browserCompanionSupports(backend):
@@ -795,9 +794,11 @@ def install_browser():
         return text
 
     summarize._cli_text = companion_text
-    original_run = web.run_all
-
     def browser_run(*args, **kwargs):
+        from dailydigest import pipeline
+        pipeline.ThreadPoolExecutor = BrowserExecutor
+        pipeline.summary_signature = summarize.summary_signature
+        pipeline.effective_summary_backend = summarize.effective_summary_backend
         provider_error = browser_provider_error(web.get_settings().llm_backend, browserCompanionSupports(web.get_settings().llm_backend))
         if provider_error:
             raise ValueError(provider_error)
@@ -811,7 +812,7 @@ def install_browser():
             run_sync(browserYield())
 
         kwargs['progress_callback'] = progress
-        return original_run(*args, **kwargs)
+        return pipeline.run_all(*args, **kwargs)
 
     web.run_all = browser_run
     return web.app

@@ -20,6 +20,12 @@
 <style>
 {% include "_design_tokens.css.j2" %}
   * { box-sizing: border-box; }
+  .article-figure { margin-top: 12px; font-size: 14px; }
+  .article-figure summary { cursor: pointer; min-height: 44px; padding: 10px 0; }
+  .article-figure figure { margin: 8px 0; }
+  .article-figure img { display: block; width: 100%; max-width: 480px; height: 220px; object-fit: contain; }
+  .article-figure figcaption, .figure-hint { color: var(--muted); font-size: 12px; }
+  @media print { .article-figure { display: none; } }
   body {
     position: relative; min-height: 100vh; margin: 0; overflow-x: hidden;
     background:
@@ -261,6 +267,20 @@
     });
   }
 })();
+</script>
+<script>
+  document.querySelectorAll('.article-figure').forEach(preview => {
+    preview.addEventListener('toggle', () => {
+      const image = preview.querySelector('img[data-src]');
+      if (!preview.open || !image) return;
+      image.addEventListener('error', () => {
+        image.hidden = true;
+        preview.querySelector('.figure-unavailable').hidden = false;
+      }, {once: true});
+      image.src = image.dataset.src;
+      image.removeAttribute('data-src');
+    });
+  });
 </script>
 {% block scripts %}{% endblock %}
 </body>

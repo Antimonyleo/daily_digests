@@ -84,6 +84,7 @@
           {{ item.section }} · {{ item.source }}{% if item.published %} · Published {{ item.published }}{% endif %}{% if item.saved %} · Saved {{ item.saved }}{% endif %}
         </div>
         {% if item.summary %}<div class="saved-summary">{{ item.summary }}</div>{% endif %}
+        {% include "_article_figure.html.j2" %}
         {{ feedback_controls(item) }}
         <div class="save-state" aria-live="polite"></div>
       </div>

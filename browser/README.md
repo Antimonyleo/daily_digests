@@ -11,8 +11,8 @@ links and summaries are available immediately. **Open full reading desk** enable
 ratings, saves and settings; **Brew a new digest** opens the brewing controls.
 Both start the existing runtime on demand. Other deep links start it normally.
 The reading view is explicitly dated, read-only, and stored only in this browser.
-It contains structured display text, never scripts, API keys or a second private
-database. Canonical state changes invalidate it in the same storage transaction;
+It contains structured display text and optional publisher-image links, never
+scripts, API keys or a second private database. Canonical state changes invalidate it in the same storage transaction;
 the displayed digest can regenerate it only after its state is durably saved.
 Missing, invalid or oversized reading copies use the ordinary startup path.
 Backups and recovery continue to use the authoritative private snapshot.
@@ -33,6 +33,28 @@ biomolecular, engineering, chemistry, ecology and astronomy starting points.
 Examples are never applied or saved automatically. Search and wording advice
 stays in an optional disclosure; separate topic/percentage inputs and the 100%
 total requirement remain unchanged.
+
+A first-time visitor can type topics in the startup screen while Python warms
+up. Continue transfers the draft into empty Setup rows with equal percentages;
+it does not save a profile or start a brew. Drafts stay in this tab's session
+storage until transferred. Existing profiles are never overwritten by this path.
+Opening ordinary pages does not import the brew pipeline or NumPy. SciPy and
+scikit-learn packages load before the first brew/training request, with a
+retryable failure before any job is queued. Stop requests made during that
+preparation are retained until the brew start is confirmed. This moves some
+preparation to first compute use; it does not remove all runtime startup work.
+
+When an article feed supplies an image, the digest and saved-paper archive offer
+an optional collapsed **Graphical abstract** or **Article preview**. Only explicit
+image labels establish a graphical abstract; generic thumbnails keep the preview
+label. Opening the disclosure loads the publisher image without cross-origin
+cookies or referrer information; the image links to an enlarged view and the
+publisher article. No image is fetched for a collapsed preview. Embedding/CORS
+restrictions may prevent display, including under multicore isolation; the
+publisher link remains available. Saved read-only views retain image links and
+make no image requests. Images never add ranking weight. Existing metadata must
+be refreshed from a feed before newly supported images appear; no publisher
+scraping, proxy or rehosting is added.
 
 The Python runtime and libraries are prepared when the full desk is opened,
 instead of on every reading visit. Snapshot restoration decodes private files
@@ -142,6 +164,11 @@ DAILYDIGEST_READING_SITE=.full-review/clean-release/site \
 DAILYDIGEST_READING_FIXTURE=.full-review/clean-release/fixtures/fixture-backup.json \
 DAILYDIGEST_READING_REPORT=.full-review/clean-release/reading-view \
 node browser/verify-reading-view.mjs
+# Three fresh startups, first-topic draft, and click-to-load images in normal
+# and cross-origin-isolated Chromium. All external sources/providers are blocked.
+DAILYDIGEST_STARTUP_SITE=.full-review/clean-release/site \
+DAILYDIGEST_STARTUP_REPORT=.full-review/clean-release/startup-figures \
+node browser/verify-startup-figures.mjs
 ```
 
 The browser check intercepts external requests with fictional fixtures. It also

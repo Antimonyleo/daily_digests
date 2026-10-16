@@ -443,6 +443,7 @@
     };
   }
 
+  let startPending = false, stopBeforeStart = false;
   async function startBrew() {
     if (brewButton.disabled) return;
     const readingMode = new FormData(form).get("reading_mode") || "usual";
@@ -456,6 +457,7 @@
     brewButton.disabled = true;
     choicePanel.hidden = true;
     progressPanel.hidden = false;
+    startPending = true;
     try {
       const response = await fetch("/run/start", {
         method: "POST",
@@ -464,7 +466,10 @@
       });
       if (!response.ok) throw new Error("HTTP " + response.status);
       connectStream();
+      startPending = false;
+      if (stopBeforeStart) await stopBrew();
     } catch (error) {
+      startPending = false;
       showError("Could not confirm the brew start. Reconnect to check its status: " + error.message, true);
     }
   }
@@ -474,8 +479,13 @@
   });
   retryButton.addEventListener("click", () => { window.location.href = restartUrl; });
   reconnectButton.addEventListener("click", connectStream);
-  cancelButton.addEventListener("click", async () => {
+  async function stopBrew() {
     cancelButton.disabled = true;
+    if (startPending) {
+      stopBeforeStart = true;
+      detailEl.textContent = 'Stop requested. Waiting for preparation to finish…';
+      return;
+    }
     try {
       const response = await fetch(`/run/cancel?run_id=${encodeURIComponent(RUN_ID)}`, {
         method: "POST", headers: {"X-CSRF-Token": CSRF_TOKEN},
@@ -488,7 +498,8 @@
       cancelButton.disabled = false;
       showError(error.message, true);
     }
-  });
+  }
+  cancelButton.addEventListener("click", stopBrew);
   if (RESUME) {
     choicePanel.hidden = true;
     progressPanel.hidden = false;

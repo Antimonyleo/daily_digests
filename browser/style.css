@@ -3,7 +3,7 @@
 body { margin: 0; }
 body:has(#app:not([hidden])) { height: 100dvh; display: flex; flex-direction: column; overflow: hidden; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-#startup { max-width: 680px; margin: 12vh auto; padding: 24px; line-height: 1.6; }
+#startup { flex: 1; min-height: 0; overflow-y: auto; width: 100%; max-width: 680px; margin: 0 auto; padding: clamp(24px, 8vh, 72px) 24px 24px; line-height: 1.6; }
 h1 { font-size: clamp(28px, 5vw, 44px); line-height: 1.15; }
 .eyebrow { color: #256f52; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .09em; }
 .tea-cup { position: relative; width: 90px; height: 92px; margin: 26px 0 18px; color: #256f52; }
@@ -116,3 +116,8 @@ input, select, textarea { background: var(--card); color: var(--text); }
 }
 
 :root[data-theme="dark"] :is(button, .file-button) { border-color: var(--control-border); }
+
+#startup-topics-form { margin: 20px 0; }
+#startup-topics-form label { display: block; font-weight: 600; margin-bottom: 8px; }
+#startup-topics { display: block; width: 100%; max-width: 560px; min-height: 100px; padding: 12px; background: var(--card); color: var(--text); border: 1px solid var(--control-border); border-radius: 8px; font: inherit; }
+#startup-topics-hint { font-size: 13px; }

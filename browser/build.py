@@ -357,7 +357,12 @@ def build(output: Path) -> dict:
         path = download("https://cdn.jsdelivr.net/pyodide/v0.28.3/full/" + record["file_name"],
                         cache / "pyodide" / record["file_name"], record["sha256"])
         shutil.copyfile(path, output / "node_modules/pyodide" / path.name)
-    (assets / "dependencies.json").write_text(json.dumps({"pyodide": resolved, "micropip": []}))
+    compute_packages = resolve_pyodide_packages(lock, ["scipy", "scikit-learn"])
+    deferred = set(compute_packages) - set(resolve_pyodide_packages(
+        lock, [name for name in PYODIDE_PACKAGES if name not in {"scipy", "scikit-learn"}]))
+    (assets / "dependencies.json").write_text(json.dumps({
+        "pyodide": [name for name in resolved if name not in deferred],
+        "compute": sorted(deferred), "micropip": []}))
     model_root = PROTO / "assets/models/bge-small"
     if not model_root.is_dir():
         raise ValueError("Prepare prototype model assets with npm run prepare-fixture first")

@@ -1,0 +1,12 @@
+{% if item.figure %}
+<details class="article-figure">
+  <summary>{{ item.figure.label }} <span class="figure-hint">· load publisher image</span></summary>
+  <p class="figure-hint">Opening this preview contacts the publisher’s image host. Images do not influence ranking.</p>
+  <figure>
+    <a class="figure-link" href="{{ item.figure.url }}" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer" aria-label="Expand {{ item.figure.label|lower }} for {{ item.title }}">
+      <img data-src="{{ item.figure.url }}" alt="{{ item.figure.alt or item.figure.label }}" loading="lazy" decoding="async" referrerpolicy="no-referrer" crossorigin="anonymous">
+    </a>
+    <figcaption>Image supplied in the article feed · <a href="{{ item.url }}" target="_blank" rel="noopener noreferrer">Publisher article and credit</a>. <span class="figure-unavailable" hidden>Preview unavailable here; open the image or publisher article.</span></figcaption>
+  </figure>
+</details>
+{% endif %}

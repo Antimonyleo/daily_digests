@@ -16,22 +16,24 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
-from typing import Iterable
+from typing import TYPE_CHECKING, Iterable
 
-import numpy as np
 from sqlalchemy import func, select
 
-from .rank import embedding_cache as _embedding_cache
 from .store import (
     DigestItemRow, DigestRow, FeedbackEventRow, ItemRow, VoteRow, init_db, session_scope,
 )
+
+if TYPE_CHECKING:
+    import numpy as np
 
 logger = logging.getLogger(__name__)
 
 
 def embed_item_rows(rows):
     """Indirection kept as the test/runtime injection seam for item embeddings."""
-    return _embedding_cache.embed_item_rows(rows)
+    from .rank.embedding_cache import embed_item_rows as embed
+    return embed(rows)
 
 
 _TOKEN_RE = re.compile(r"^([+-]?)([A-Za-z]+)(\d+)$")
@@ -155,6 +157,7 @@ def _load_vote_exemplars() -> tuple[tuple, tuple]:
     so the model learns strong preferences more sharply. Uses the latest vote per
     item, so changing a vote replaces its exemplar (idempotent).
     """
+    import numpy as np
     from .store import ItemRow as _ItemRow
 
     with _VOTE_REASONS_LOCK:
@@ -201,6 +204,7 @@ def _affinity(cand_unit: np.ndarray, cand_ids, exemplars, k: int = 5) -> np.ndar
     a voted item does not match itself during training). Returns zeros if the
     exemplar set is empty.
     """
+    import numpy as np
     ex_ids, ex_vecs, ex_w = exemplars
     n = cand_unit.shape[0]
     if ex_vecs.shape[0] == 0 or n == 0:
@@ -237,6 +241,7 @@ def knn_preference_scores(rows: list, k: int = KNN_PREFERENCE_K) -> np.ndarray:
     Leave-one-out: a voted candidate never matches its own vote. Returns zeros
     (neutral) when there are no voted exemplars or no usable embeddings.
     """
+    import numpy as np
     n = len(rows)
     if n == 0:
         return np.zeros(0, dtype=np.float32)
@@ -273,6 +278,7 @@ def _knn_scores(
     k: int,
 ) -> np.ndarray:
     """Core kNN math, exemplars passed explicitly (leakage-free benchmarking)."""
+    import numpy as np
     n = cand_unit.shape[0]
     sims = cand_unit @ ex_vecs.T
     out = np.zeros(n, dtype=np.float32)
@@ -314,6 +320,7 @@ def _build_item_features(rows: list, profile_mat: np.ndarray) -> np.ndarray:
     injects collinear, sign-flipped coefficients under a skewed vote history. See
     ``LR_FEATURE_NAMES`` for the full rationale.
     """
+    import numpy as np
     from .rank.source_quality import (
         novelty_score as _nov,
         promotional_score as _promo,
@@ -446,6 +453,7 @@ def _rebuild_rocchio_profile() -> None:
     Called outside a DB session after each vote is recorded.
     """
     try:
+        import numpy as np
         with _VOTE_REASONS_LOCK:
             reason_data = _load_vote_reasons()
         init_db()
@@ -1311,6 +1319,7 @@ def _sample_training_pairs(
     down-voted item until the cap was hit and silently dropped the rest — so
     later-voted positives never influenced training.
     """
+    import numpy as np
     import itertools
 
     n_up = len(up_indices)
@@ -1333,6 +1342,7 @@ def vote_dataset() -> tuple[np.ndarray, np.ndarray] | None:
     Uses real ItemRow objects (not SimpleNamespace) so embeddings are identical
     to what inference uses — preventing train/infer feature distribution mismatch.
     """
+    import numpy as np
     with _VOTE_REASONS_LOCK:
         reason_data = _load_vote_reasons()
     init_db()

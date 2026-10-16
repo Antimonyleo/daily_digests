@@ -337,6 +337,7 @@ def test_display_preferences_and_menu_keyboard_dismissal(storage_available):
                 focus() {this.focused=true;},
             },
             querySelector: () => ({}),
+            querySelectorAll: () => [],
             addEventListener: (type,callback) => docEvents[type]=callback,
             dispatchEvent: () => {},
         };

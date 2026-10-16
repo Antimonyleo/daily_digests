@@ -58,6 +58,11 @@ jobs:
         run: uv run python browser/fetch_public_embeddings.py
       - name: Build static application
         run: uv run python browser/build.py
+      - name: Deferred startup and optional publisher figures
+        env:
+          DAILYDIGEST_STARTUP_SITE: browser/dist
+          DAILYDIGEST_STARTUP_REPORT: .full-review/startup-figures-ci
+        run: node browser/verify-startup-figures.mjs
       - name: Large-checkpoint startup and recovery regression
         env:
           DAILYDIGEST_STORAGE_SITE: browser/dist

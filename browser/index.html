@@ -21,6 +21,13 @@
     <div class="tea-cup" aria-hidden="true"><span class="steam s1"></span><span class="steam s2"></span><span class="steam s3"></span><span class="cup-bowl"></span><span class="cup-handle"></span></div>
     <h1 id="startup-title">Putting the kettle on…</h1>
     <p>Your research reading desk runs on this device. Your profile, ratings and saved papers are saved in this browser. No account or automatic device sync.</p>
+    <form id="startup-topics-form" hidden>
+      <label for="startup-topics">What would you like to read about?</label>
+      <textarea id="startup-topics" rows="3" maxlength="1800" placeholder="Induced proximity&#10;Asymmetric catalysis&#10;RNA delivery" aria-describedby="startup-topics-hint"></textarea>
+      <p id="startup-topics-hint">Start typing while the app opens. One topic per line, up to ten. You can adjust topics and percentages before saving.</p>
+      <button type="submit" id="startup-topics-continue">Continue with these topics</button>
+      <p id="startup-topics-message" role="status"></p>
+    </form>
     <ol id="startup-stages" aria-label="Startup stages"><li data-startup-stage="python">Python and libraries</li><li data-startup-stage="data">Your saved data</li><li data-startup-stage="ready">Reading desk ready</li></ol>
     <details class="startup-details"><summary>First visit and local computing</summary><p><span id="download-size">The CPU model is about 66 MB, plus the Python runtime and libraries.</span> Downloads are cached; models load when needed. Brewing uses processor and memory, and can increase heat, fan noise and battery use. Thousands of new papers may take 20+ minutes on one core. Keep this tab open while brewing. Choose acceleration in Compute and export copies in Backup.</p></details>
     <div class="desk-skeleton" aria-hidden="true"><span></span><span></span><span></span></div>

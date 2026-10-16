@@ -17,6 +17,7 @@ from tenacity import (
 )
 
 from ..models import Item, SourceSpec
+from ..article_figure import feed_figure
 from ._retry import transient_http_error
 
 logger = logging.getLogger(__name__)
@@ -120,6 +121,9 @@ def _entry_metadata(entry) -> dict:
     from types import SimpleNamespace
 
     metadata = {}
+    figure = feed_figure(entry)
+    if figure:
+        metadata['article_figure'] = figure
     # Only exact values in record-level genre fields carry publication identity.
     # Feed categories/subjects and relation links may instead describe a topic
     # or another work; they must never exclude this record.

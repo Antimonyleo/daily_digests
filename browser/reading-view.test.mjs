@@ -26,6 +26,7 @@ test('reading cache is bounded structured content, never HTML or a private snaps
   for (const value of [null, {}, {...fixture(), version:2}, {...fixture(), date:'today'},
     {...fixture(), items:[]}, {...fixture(), credentials:'secret'},
     {...fixture(), items:[{...fixture().items[0], html:'<script>bad()</script>'}]},
+    {...fixture(), items:[{...fixture().items[0], constructor:'unexpected private value'}]},
     {...fixture(), items:Array(501).fill(fixture().items[0])},
     {...fixture(), items:[{...fixture().items[0], summary:'a'.repeat(1000001)}]}]) {
     assert.equal(validateReadingView(value), null);
@@ -59,4 +60,13 @@ test('read-only document escapes content and permits only HTTP article links', (
 test('saved opportunity facts are explicitly historical rather than rechecked eligibility', () => {
   const data=fixture();data.items[0].opportunity='Deadline: 2026-10-20 · Needs verification';
   assert.match(readingViewDocument(data), /Verify current deadlines and eligibility at the official source/);
+});
+
+test('saved reading views retain optional publisher image links without contacting image hosts', () => {
+  const value=fixture();Object.assign(value.items[0],{figureURL:'https://publisher.test/a.png',figureLabel:'Graphical abstract'});
+  assert.ok(validateReadingView(value));
+  const html=readingViewDocument(value);
+  assert.match(html,/Graphical abstract · open publisher image/);
+  assert.doesNotMatch(html,/<img|<script/);
+  value.items[0].figureURL='javascript:alert(1)';assert.equal(validateReadingView(value),null);
 });

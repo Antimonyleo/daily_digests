@@ -11,6 +11,7 @@ import { validateReadingView } from './reading-view.mjs';
 
 let companion = null;
 let boot, state, database, storageWriter, ownership, recoveryPy, startupFailed = false, startupReady = false, jobRunning = false, stateReplacing = false, computeMode = 'cpu';
+let computePackagesReady = false, deferredPackages = [], computePackagesPending;
 let configurationChanging = false, reloadPending = false;
 const progress = (stage, detail) => self.postMessage({ type: 'progress', stage, detail });
 let gpuProbe = null;
@@ -210,6 +211,7 @@ async function initialize() {
     const py = await loadPyodide({ indexURL: new URL('./node_modules/pyodide/', self.location.href).href });
     stage('python-packages', 'Loading libraries', 'Preparing application libraries…');
     await loadPythonPackages(py, dependencies);
+    deferredPackages = dependencies.compute || [];
     stage('application-import', 'Opening application', 'Preparing your reading desk…');
     py.unpackArchive(bundle, 'zip', { extractDir: '/app' });
     py.runPython("import os, sys\nos.chdir('/app')\nsys.path.insert(0, '/app/src')\nsys.path.insert(0, '/app/browser')\nsys.path.insert(0, '/app/site-packages')");
@@ -328,6 +330,17 @@ async function initialize() {
 }
 async function persist(options = {}) {
   return storageWriter ? storageWriter.flush(options) : true;
+}
+async function prepareComputePackages() {
+  if (computePackagesReady) return;
+  if (!computePackagesPending) {
+    progress('Preparing brew libraries', 'Loading calculation libraries for this session…');
+    computePackagesPending = (async () => {
+      if (deferredPackages.length) await state.py.loadPackage(deferredPackages);
+      computePackagesReady = true;
+    })().finally(() => { computePackagesPending = null; });
+  }
+  await computePackagesPending;
 }
 async function pumpJobs() {
   if (jobRunning || !state.py.globals.get('has_jobs')()) return;
@@ -538,6 +551,12 @@ self.onmessage = async ({ data }) => {
         try { await saveSnapshot(next, 'companion'); companion = next; }
         finally { configurationChanging = false; }
       }
+    }
+    if (data.method?.toUpperCase() === 'POST' && ['/run/start', '/refresh', '/ranking/train'].includes(data.path?.split('?')[0])) {
+      // Load before the route acquires a brew lock or queues a target. A failed
+      // package download can then be retried without leaving a stuck brew.
+      await prepareComputePackages();
+      if (stateReplacing || configurationChanging || reloadPending) throw new Error('Application state changed while preparing libraries. Retry after it finishes.');
     }
     const result = await state.py.globals.get('handle_request').callPromising(JSON.stringify(data), emit);
     // A committed route response reaches the UI before an idle checkpoint.

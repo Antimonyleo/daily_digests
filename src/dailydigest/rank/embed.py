@@ -25,8 +25,10 @@ import importlib.util
 import os
 import sys
 from threading import Lock
+from typing import TYPE_CHECKING
 
-import numpy as np
+if TYPE_CHECKING:
+    import numpy as np
 
 # Backwards-compatible defaults, used when settings cannot be loaded (very early
 # import) and as the historical baseline for A/B tests.
@@ -149,6 +151,7 @@ def _runtime_limits() -> tuple[int, int]:
 def _load_fastembed(
     model_name: str, *, device: str, batch_size: int, threads: int
 ):
+    import numpy as np
     from fastembed import TextEmbedding
 
     model = TextEmbedding(
@@ -179,6 +182,7 @@ def _load_fastembed(
 
 
 def _load_sentence_transformers(model_name: str, device: str, *, batch_size: int):
+    import numpy as np
     from sentence_transformers import SentenceTransformer
 
     try:
@@ -303,6 +307,7 @@ def embed_texts(texts: list[str], is_query: bool = False) -> np.ndarray:
     prefix, empty by default. Normalization is applied uniformly here so both
     backends satisfy the same unit-vector (cosine-ready) contract.
     """
+    import numpy as np
     if not texts:
         return np.zeros((0, 0), dtype=np.float32)
     _model, _device, query_prefix, doc_prefix, _b = _embed_config()

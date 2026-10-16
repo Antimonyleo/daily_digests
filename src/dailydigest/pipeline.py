@@ -16,6 +16,7 @@ from urllib.parse import urlsplit
 
 from . import health
 from . import votes as votes_mod
+from .brew import BrewCancelled, READING_MODE_LIMITS, _digest_id, normalize_reading_mode
 from .config import (
     Settings,
     get_settings,
@@ -96,14 +97,6 @@ _ORIGINAL_SCORE_ITEMS = score_items
 _ORIGINAL_SUMMARIZE_ITEMS = summarize_items
 
 
-class BrewCancelled(RuntimeError):
-    """A cooperative cancellation stopped a brew before digest publication."""
-
-READING_MODE_LIMITS: dict[str, int | None] = {
-    "full": None,
-    "usual": 15,
-    "minimal": None,
-}
 MINIMAL_RESEARCH_LIMIT = 5
 # Deadline-bound sections. They are held out of the reading-mode budget so a
 # funding call is never trimmed to one item — but NOT unbounded: exempting them
@@ -196,15 +189,6 @@ def _emit(cb: ProgressCallback | None, stage: str, payload: dict[str, Any]) -> N
         cb(stage, payload)
     except Exception as e:  # noqa: BLE001
         logger.warning("progress_callback failed at stage=%s: %s", stage, e)
-
-
-def normalize_reading_mode(value: str | None, *, default: str = "full") -> str:
-    """Return a supported per-brew reading mode or raise for invalid input."""
-    mode = str(value or default).strip().lower()
-    if mode not in READING_MODE_LIMITS:
-        choices = ", ".join(READING_MODE_LIMITS)
-        raise ValueError(f"unknown reading mode {mode!r}; choose one of: {choices}")
-    return mode
 
 
 def _deadline_sort_key(
@@ -1069,16 +1053,6 @@ def _assign_labels(
         row.item_label = label
         out.append((row, score, label))
     return out
-
-
-def _digest_id() -> str:
-    """Compute the digest id in the user's local TZ.
-
-    We anchor the date to the user's wall clock so that "today's digest"
-    matches the day they expect — not whatever UTC date happens to coincide
-    with their local 8am.
-    """
-    return user_local_date().isoformat()
 
 
 def _selection_reason(row: ItemRow, features: dict[str, Any]) -> str:

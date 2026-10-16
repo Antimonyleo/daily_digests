@@ -1,6 +1,6 @@
 const LOCAL_ORIGIN = 'http://127.0.0.1:8765';
 import { formatComputeProgress } from './compute.mjs';
-import { DeferredWorker, extractReadingView, readReadingView, readingViewDocument } from './reading-view.mjs';
+import { DeferredWorker, extractReadingView, readReadingView, readingViewDocument, hasSavedDesk } from './reading-view.mjs';
 import { createTabHandoff } from './tab-handoff.mjs';
 
 export function backupReminderDue({lastExport, firstOpen, now = Date.now()}) {
@@ -331,7 +331,7 @@ export function renderedDocument(html, token, path, publicURL) {
   // Route focus announces the new page without outlining its non-interactive
   // heading/container. Interactive controls retain their keyboard focus rings.
   const routeFocusStyle = '<style>:is(h1, main, [role="main"])[tabindex="-1"]:focus { outline: none; }</style>';
-  const bridge = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; connect-src 'none'; form-action 'none'; base-uri 'none'">${routeFocusStyle}<script>(${frameBridge.toString()})(${args});</script>`;
+  const bridge = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src https: data: blob:; connect-src 'none'; form-action 'none'; base-uri 'none'">${routeFocusStyle}<script>(${frameBridge.toString()})(${args});</script>`;
   return html.replace(/<head[^>]*>/i, match => match + bridge);
 }
 
@@ -347,6 +347,26 @@ async function boot() {
   document.querySelector('.skip-link').onclick = event => skipToReadingDesk(event, frame, startup);
   const status = document.getElementById('status');
   const startupStatus = document.getElementById('startup-status');
+  const topicDraftForm = document.getElementById('startup-topics-form');
+  const topicDraft = document.getElementById('startup-topics');
+  const topicDraftKey = `dailydigest:startup-topics:${location.pathname}`;
+  let draftSubmitted = false;
+  try { topicDraft.value = sessionStorage.getItem(topicDraftKey) || ''; } catch { /* optional draft retention */ }
+  topicDraft.addEventListener('input', () => {
+    try { sessionStorage.setItem(topicDraftKey, topicDraft.value); } catch { /* keep the on-screen draft */ }
+  });
+  topicDraftForm.addEventListener('submit', event => {
+    event.preventDefault();
+    const topics = topicDraft.value.split('\n').map(value => value.trim()).filter(Boolean);
+    if (topics.length > 10 || topics.some(value => value.length > 160 || value.includes('|'))) {
+      document.getElementById('startup-topics-message').textContent = 'Use up to ten topics, each at most 160 characters. Adjust percentages on the next page.';
+      return;
+    }
+    draftSubmitted = true;
+    document.getElementById('startup-topics-message').textContent = 'Keeping these topics while the reading desk opens…';
+    if (ready) navigate('/setup');
+  });
+
   const updateStartupStages = stage => {
     const dataStage = ['Restoring your data', 'Preparing reading desk', 'Ready'].includes(stage);
     for (const node of document.querySelectorAll('[data-startup-stage]')) {
@@ -524,6 +544,15 @@ async function boot() {
     frame.contentDocument?.addEventListener('click', event => {
       if (event.target.closest?.('button[type="button"]')) markDraft(event);
     });
+    const topics = frame.contentDocument?.getElementById('topics');
+    if (draftSubmitted && topics && !topics.value.trim() && topicDraft.value.trim()) {
+      topics.value = topicDraft.value;
+      topics.dispatchEvent(new frame.contentWindow.Event('input', {bubbles:true}));
+      dirtySetup = true;
+      try { sessionStorage.removeItem(topicDraftKey); } catch { /* harmless retained draft */ }
+      topicDraft.value = '';
+      draftSubmitted = false;
+    }
     void cacheReadingView();
   });
   const displayCompute = () => {
@@ -776,7 +805,10 @@ async function boot() {
         document.getElementById('retained-recovery-help').hidden = !key;
         if (key) button.dataset.key = key;
       }).catch(() => {});
-      navigate(routeFromHash(location.hash));
+      if (!topicDraftForm.hidden && topicDraft.value.trim() && !draftSubmitted) {
+        document.getElementById('startup-topics-message').textContent = 'Ready. Continue to review your topics before saving.';
+        document.getElementById('startup-title').textContent = 'Your reading desk is ready';
+      } else navigate(draftSubmitted ? '/setup' : routeFromHash(location.hash));
     } else if (data.type === 'storage-waiting') {
       showTabWait();
     } else if (data.type === 'brew-interrupted') {
@@ -1059,7 +1091,14 @@ async function boot() {
     companionStatus.textContent = 'Open the full reading desk to connect a companion.';
     document.getElementById('backup-runtime-notice').hidden = false;
     checkRelease();
-  } else startRuntime();
+  } else {
+    // Check only key presence, never deserialize the full private snapshot.
+    hasSavedDesk(indexedDB, `dailydigest:${new URL('.', import.meta.url).pathname}`).then(present => {
+      if (!present && !ready && !startupFailedForDraft()) topicDraftForm.hidden = false;
+    }).catch(() => {});
+    startRuntime();
+  }
+  function startupFailedForDraft() { return ['error', 'waiting', 'moved'].includes(startup.dataset.state); }
 }
 
 if (typeof document !== 'undefined') boot().catch(error => {

@@ -20,13 +20,20 @@ export function validateReadingView(value) {
       !value.items.length || value.items.length > 500 ||
       Object.keys(value).some(key => !['version','date','savedAt','items'].includes(key))) return null;
   const limits = {section:128, title:2000, url:8000, meta:2000, summary:30000, reason:20000, opportunity:20000};
+  const figureFields = {figureURL:8000, figureLabel:40};
   for (const item of value.items) {
-    if (!item || Object.keys(item).length !== Object.keys(limits).length ||
+    if (!item || Object.keys(item).some(key=>!Object.hasOwn(limits,key) && !Object.hasOwn(figureFields,key)) ||
+        Object.entries(figureFields).some(([key, limit])=>key in item && (typeof item[key] !== 'string' || item[key].length > limit)) ||
         Object.entries(limits).some(([key, limit]) => typeof item[key] !== 'string' || item[key].length > limit) ||
         !item.title.trim()) return null;
     try {
       const url = new URL(item.url);
       if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) return null;
+      if (item.figureURL) {
+        const figure = new URL(item.figureURL);
+        if (figure.protocol !== 'https:' || figure.username || figure.password ||
+            !['Graphical abstract','Article preview'].includes(item.figureLabel)) return null;
+      }
     } catch { return null; }
   }
   return JSON.stringify(value).length <= 1000000 ? value : null;
@@ -40,8 +47,28 @@ export function extractReadingView(document, now = new Date()) {
       title:text(node, '.title-link'), url:node.querySelector('.title-link')?.getAttribute('href') || '',
       meta:text(node, '.meta'), summary:text(node, '.summary-primary .summary-text, .summary'),
       reason:text(node, '.match-topic, .reason-line'), opportunity:text(node, '.opportunity-facts'),
+      ...(node.querySelector('.figure-link') ? {
+        figureURL:node.querySelector('.figure-link').getAttribute('href'),
+        figureLabel:text(node, '.article-figure summary').split(' · ')[0].trim(),
+      } : {}),
     }))};
   return validateReadingView(value);
+}
+
+export async function hasSavedDesk(indexedDB, databaseName) {
+  const request = indexedDB.open(databaseName, 1);
+  request.onupgradeneeded = () => request.result.createObjectStore('state');
+  const db = await new Promise((resolve, reject) => {
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+  try {
+    return await new Promise((resolve, reject) => {
+      const key = db.transaction('state').objectStore('state').getKey('snapshot');
+      key.onsuccess = () => resolve(key.result !== undefined);
+      key.onerror = () => reject(key.error);
+    });
+  } finally { db.close(); }
 }
 
 export async function readReadingView(indexedDB, databaseName) {
@@ -70,6 +97,7 @@ export function readingViewDocument(value, theme = 'light') {
     section = item.section;
     return heading + `<article><h3><a href="${escape(item.url)}" target="_blank" rel="noopener noreferrer">${escape(item.title)}</a></h3><p class="meta">${escape(item.meta)}</p>`
       + (item.opportunity ? '<p class="meta">Saved opportunity details. Verify current deadlines and eligibility at the official source.</p>' : '')
+      + (item.figureURL ? `<p class="meta"><a href="${escape(item.figureURL)}" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer">${escape(item.figureLabel)} · open publisher image</a></p>` : '')
       + [item.opportunity, item.reason, item.summary].filter(Boolean).map(text => `<p>${escape(text)}</p>`).join('') + '</article>';
   }).join('');
   const savedAt = new Intl.DateTimeFormat(undefined, {dateStyle:'medium',timeStyle:'short'}).format(new Date(value.savedAt));

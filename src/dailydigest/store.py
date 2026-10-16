@@ -63,6 +63,7 @@ class SavedItem:
     summary: str
     published_at: datetime | None
     saved_at: datetime
+    metadata: dict | None = None
 
 
 class ItemRow(Base):
@@ -855,6 +856,7 @@ def search_bookmarks(query: str = "", limit: int = 200, *, offset: int = 0) -> l
                 summary=item.summary or "",
                 published_at=item.published_at,
                 saved_at=bookmark.created_at,
+                metadata=item_metadata(item),
             )
             for bookmark, item in rows
         ]

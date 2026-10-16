@@ -64,6 +64,7 @@ from pydantic import ValidationError
 from sqlalchemy import func, select
 
 from . import health
+from .article_figure import display_figure
 from . import votes as votes_mod
 from .config import SETTINGS, get_settings, reload_settings, section_enabled
 from .email_render import (
@@ -80,8 +81,7 @@ from .opportunities import (
     load_opportunity_profile,
     opportunity_display,
 )
-from .pipeline import BrewCancelled, _digest_id, normalize_reading_mode, run_all
-from .rank.embed import release_encoder
+from .brew import BrewCancelled, _digest_id, normalize_reading_mode
 from .rank.source_quality import display_breakdown, display_source, source_bucket
 from .store import (
     DigestItemRow,
@@ -106,6 +106,17 @@ from .store import (
 from .tea_break import daily_tea_deck
 
 logger = logging.getLogger(__name__)
+
+
+def run_all(*args, **kwargs):
+    """Load the brew pipeline only when a reader starts a job."""
+    from .pipeline import run_all as run
+    return run(*args, **kwargs)
+
+
+def release_encoder():
+    from .rank.embed import release_encoder as release
+    return release()
 
 
 @contextmanager
@@ -537,6 +548,7 @@ def _load_today(
                     "published": _format_date(row),
                     "summary": row.summary or "",
                     "summary_fields": _summary_fields(row.summary or ""),
+                    "figure": display_figure(item_metadata(row)),
                     "score_raw": _slate_score(row),
                     "confidence_score": confidence_score,
                     "ranking": ranking,
@@ -1512,7 +1524,7 @@ def saved_items(request: Request, q: str = "", page: int = 1) -> Response:
             ratings.setdefault(int(iid), grade if grade is not None else votes_mod.value_to_grade(value))
     items = [{
         "id": row.item_id, "label": row.title, "title": row.title, "url": safe_url(row.url),
-        "source": row.source,
+        "source": row.source, "figure": display_figure(row.metadata),
         "section": SECTION_META.get(row.section, {"title": row.section.title() or "Other"})["title"],
         "summary": row.summary, "published": _saved_date(row.published_at),
         "saved": _saved_date(row.saved_at), "current_grade": ratings.get(row.item_id),
