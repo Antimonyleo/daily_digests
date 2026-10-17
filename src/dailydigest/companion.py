@@ -393,7 +393,7 @@ def _schedule_once(store, settings, lock, status, source_path, *, now=None, stop
             for file in (root / "data").rglob("*"):
                 check_stop()
                 if file.is_file() and not file.is_symlink() and file.name != ".compute.lock":
-                    exported[str(file.relative_to(root))] = base64.b64encode(file.read_bytes()).decode()
+                    exported[file.relative_to(root).as_posix()] = base64.b64encode(file.read_bytes()).decode()
             if ".env" in snapshot["files"]:
                 exported[".env"] = snapshot["files"][".env"]
             # Portable uploads deliberately omit credentials. Preserve that

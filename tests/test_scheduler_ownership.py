@@ -107,7 +107,7 @@ def test_queued_scheduler_can_stop_without_waiting_for_another_request(settings,
         thread.join(2)
 
 
-@pytest.mark.parametrize('model_location', ['host', 'data'])
+@pytest.mark.parametrize('model_location', ['host', 'data', 'windows'])
 def test_uploaded_semantic_model_directory_stays_inside_private_workspace(
     settings, tmp_path, monkeypatch, model_location,
 ):
@@ -123,13 +123,25 @@ def test_uploaded_semantic_model_directory_stays_inside_private_workspace(
     ).decode()
     snapshot['files']['data/semantic-verifier/config.json'] = base64.b64encode(b'{}').decode()
     previous = json.dumps(snapshot)
+    if model_location == 'windows':
+        from pathlib import PureWindowsPath
+
+        relative_to = Path.relative_to
+
+        def windows_relative_name(path, *args, **kwargs):
+            result = relative_to(path, *args, **kwargs)
+            if path.name == 'config.json' and path.parent.name == 'semantic-verifier':
+                return PureWindowsPath(*result.parts)
+            return result
+
+        monkeypatch.setattr(Path, 'relative_to', windows_relative_name)
     store = companion._state_store(tmp_path / 'store')
     companion._write_private(store / 'snapshot.json', previous)
     calls = []
 
     def native_cli(command, *, cwd, env, **kwargs):
         calls.append(command)
-        assert model_location == 'data', 'Host model path reached native subprocess'
+        assert model_location != 'host', 'Host model path reached native subprocess'
         assert env['SEMANTIC_MODEL_DIR'] == str(Path(cwd) / 'data/semantic-verifier')
         assert (Path(env['SEMANTIC_MODEL_DIR']) / 'config.json').read_bytes() == b'{}'
         return subprocess.CompletedProcess(command, 0)

@@ -99,7 +99,8 @@ def test_committed_cleanup_failure_keeps_new_group_and_retries(tmp_path, monkeyp
     with transaction.settings_transaction(tmp_path, {path: b'new'}):
         transaction._durable_write(path, b'new')
     assert path.read_bytes() == b'new'
-    assert (tmp_path / '.settings-transaction.json').stat().st_mode & 0o777 == 0o600
+    if os.name == 'posix':
+        assert (tmp_path / '.settings-transaction.json').stat().st_mode & 0o777 == 0o600
     monkeypatch.setattr(transaction, '_remove_journal', remove)
     transaction.recover_settings_transaction(tmp_path)
     assert path.read_bytes() == b'new'

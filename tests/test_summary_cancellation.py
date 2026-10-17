@@ -97,7 +97,12 @@ def test_stop_closes_active_http_transport_before_timeout(monkeypatch, backend, 
                 self.wfile.write(b'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 99999\r\n\r\n{')
                 self.wfile.flush()
             received.set()
-            if self.rfile.read(1) == b'':
+            try:
+                closed = self.rfile.read(1) == b''
+            except ConnectionResetError:
+                # Windows may reset a socket when its owning process is killed.
+                closed = True
+            if closed:
                 disconnected.set()
 
     class Server(socketserver.ThreadingTCPServer):

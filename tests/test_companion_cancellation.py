@@ -34,7 +34,11 @@ def test_browser_disconnect_closes_companion_provider_transport(monkeypatch, tmp
             self.rfile.read(length)
             received.set()
             with suppress(TimeoutError):
-                if self.rfile.read(1) == b'':
+                try:
+                    closed = self.rfile.read(1) == b''
+                except ConnectionResetError:
+                    closed = True
+                if closed:
                     disconnected.set()
 
     class Provider(socketserver.ThreadingTCPServer):
