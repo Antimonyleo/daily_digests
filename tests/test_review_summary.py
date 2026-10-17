@@ -97,3 +97,36 @@ def test_malformed_provider_item_uses_local_summary_and_fallback_provenance(monk
         [row("The trial reports improved outcomes in 20 adults.")], "api")
     assert provenance == {1: "extractive_fallback"}
     assert summaries[1].startswith("Key finding: The trial reports")
+
+
+def test_caveat_preserves_explicit_abstract_limitation():
+    limitation = "The study is limited to a small sample and lacks independent replication."
+    item = row("We developed a synthesis method and evaluated 300 formulations with improved "
+               "efficiency across six test conditions. " + limitation)
+    caveat = summarize._extractive(item).split("Caveat: ", 1)[1]
+    assert limitation in caveat
+    assert "No major limitation" not in caveat
+
+
+def test_preprint_caveat_keeps_warning_and_stated_limitation():
+    item = row("The study is limited to a small sample of experimental designs.")
+    item.source = "bioRxiv"
+    caveat = summarize._extractive(item).split("Caveat: ", 1)[1]
+    assert "not yet peer-reviewed" in caveat
+    assert "limited to a small sample" in caveat
+
+
+def test_unrecognized_limitations_are_unknown_instead_of_asserted_absent():
+    item = row("The method reports improved performance across 300 formulations and six "
+               "test conditions, achieving reproducible targeting of the selected material.")
+    caveat = summarize._extractive(item).split("Caveat: ", 1)[1]
+    assert "No major limitation" not in caveat
+    assert "check" in caveat.lower()
+
+
+def test_stated_limitation_excerpt_is_bounded():
+    item = row("The study is limited to " + "a specific experimental condition " * 40 + ".")
+    caveat = summarize._extractive(item).split("Caveat: ", 1)[1]
+    assert "limited to" in caveat
+    assert len(caveat) <= 300
+    assert caveat.endswith("…")

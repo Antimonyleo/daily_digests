@@ -46,8 +46,10 @@ class BiorxivSource:
 
     def __init__(self) -> None:
         self.last_fetch_diagnostics: dict = {"queries": []}
+        self.last_fetch_withdrawals: list[Item] = []
 
     def fetch(self, spec: SourceSpec, days: int = 2) -> list[Item]:
+        self.last_fetch_withdrawals = []
         server = (spec.server or "biorxiv").lower()
         today = datetime.now(timezone.utc).date()
         frm = (today - timedelta(days=max(1, days))).isoformat()
@@ -108,11 +110,23 @@ class BiorxivSource:
                         diagnostic["skipped_invalid"] += 1
                         continue
                     # bioRxiv marks retracted/withdrawn work in-band and keeps
-                    # serving it in the daily feed. Recommending a withdrawn
-                    # preprint is never right, so drop it at ingest.
+                    # serving it in the daily feed. Keep notices separate from
+                    # live supply so ingestion can invalidate cached copies even
+                    # when the remaining research coverage cannot support a brew.
                     entry_type = str(entry.get("type") or "").strip().lower()
                     if entry_type == "withdrawn" or title.upper().startswith("WITHDRAWN"):
                         diagnostic["skipped_withdrawn"] += 1
+                        canonical_doi = _canonical_doi(doi)
+                        if canonical_doi:
+                            self.last_fetch_withdrawals.append(Item(
+                                source=spec.name, section=spec.section,
+                                external_id=canonical_doi, url=f"https://doi.org/{canonical_doi}",
+                                title=title, metadata={
+                                    "doi": canonical_doi, "is_retracted": True,
+                                    "preprint_type": "withdrawn",
+                                    "preprint_version": str(entry.get("version") or ""),
+                                },
+                            ))
                         logger.info("biorxiv: skipping withdrawn preprint %s", doi or title[:60])
                         continue
                     link = f"https://doi.org/{doi}" if doi else entry.get("link", "")
@@ -185,6 +199,22 @@ class BiorxivSource:
                         server, cursor, total,
                     )
                     break
+        # URL deduplication later keeps the first item. Choose the authoritative
+        # revision here so upstream ordering cannot discard a newer abstract.
+        withdrawn_ids = {item.external_id for item in self.last_fetch_withdrawals}
+        newest: dict[str, Item] = {}
+        for item in out:
+            if item.external_id in withdrawn_ids:
+                continue
+            prior = newest.get(item.external_id)
+            version = str(item.metadata.get("preprint_version") or "")
+            prior_version = str(prior.metadata.get("preprint_version") or "") if prior else ""
+            if prior is None or (version.isdecimal() and
+                                 (not prior_version.isdecimal() or int(version) > int(prior_version))):
+                newest[item.external_id] = item
+        out = list(newest.values())
+        diagnostic.update(returned_count=len(out), unique_yield=len(out))
+        self.last_fetch_diagnostics["returned_count"] = len(out)
         dates = [item.published_at.date().isoformat() for item in out if item.published_at]
         if dates:
             diagnostic.update(oldest_publication_date=min(dates), newest_publication_date=max(dates))

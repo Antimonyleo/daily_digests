@@ -48,6 +48,9 @@ jobs:
       - name: Install browser dependencies
         working-directory: prototypes/browser-compute
         run: npm ci --ignore-scripts
+      - name: Reject vulnerable Node dependencies
+        working-directory: prototypes/browser-compute
+        run: npm audit --package-lock-only --audit-level=moderate
       - name: Prepare public model and runtime assets
         working-directory: prototypes/browser-compute
         run: npm run prepare-fixture
@@ -104,6 +107,7 @@ jobs:
           path: browser/dist
   deploy:
     needs: build
+    if: ${{ github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -119,7 +123,7 @@ jobs:
         uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4
   notify-failure:
     needs: [build, deploy]
-    if: ${{ always() && (needs.build.result == 'failure' || needs.deploy.result == 'failure') }}
+    if: ${{ always() && github.ref == 'refs/heads/main' && (needs.build.result == 'failure' || needs.deploy.result == 'failure') }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -133,7 +137,7 @@ jobs:
         run: python browser/report_failure.py
   refresh-status:
     needs: [build, deploy]
-    if: ${{ always() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && (needs.build.result == 'failure' || needs.deploy.result == 'failure' || needs.deploy.result == 'success') }}
+    if: ${{ always() && github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && (needs.build.result == 'failure' || needs.deploy.result == 'failure' || needs.deploy.result == 'success') }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:

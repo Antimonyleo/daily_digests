@@ -41,11 +41,46 @@ def _health_path() -> Path:
     return Path(get_settings().db_path).parent / "health.json"
 
 
+def _stats_rows(value: object) -> list[dict]:
+    """Keep damaged diagnostic rows readable without declaring them healthy."""
+    if not isinstance(value, list):
+        return []
+    rows = []
+    for raw in value:
+        row = dict(raw) if isinstance(raw, dict) else {}
+        count = row.get("items", 0)
+        if count is None:
+            count = 0
+        try:
+            if isinstance(count, bool) or (isinstance(count, float) and not count.is_integer()):
+                raise ValueError("invalid item count")
+            row["items"] = int(count)
+            if row["items"] < 0:
+                raise ValueError("negative item count")
+        except (TypeError, ValueError, OverflowError):
+            row.update(items=0, ok=None)
+        if "ok" in row and not isinstance(row["ok"], bool):
+            row["ok"] = None
+        if not isinstance(row.get("source"), str) or not row["source"].strip():
+            row.pop("source", None)
+            row["ok"] = None
+        rows.append(row)
+    return rows
+
+
 def _load_existing(path: Path) -> dict:
     if not path.exists():
         return {"updated_at": None, "latest": [], "history": []}
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError("health metadata must be an object")
+        history = data.get("history")
+        history = history if isinstance(history, list) else []
+        return {**data, "latest": _stats_rows(data.get("latest")), "history": [
+            {**entry, "stats": _stats_rows(entry.get("stats"))}
+            for entry in history if isinstance(entry, dict)
+        ]}
     except Exception as e:  # noqa: BLE001
         logger.warning("health.json unreadable, resetting: %s", e)
         return {"updated_at": None, "latest": [], "history": []}
@@ -109,6 +144,8 @@ def weekly_summary() -> list[dict]:
         if ts is None or ts < cutoff:
             continue
         for s in entry.get("stats") or []:
+            if not s.get("source") or s.get("ok", True) is None:
+                continue
             name = s.get("source") or "(unknown)"
             slot = agg.setdefault(
                 name,

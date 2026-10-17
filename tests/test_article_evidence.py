@@ -131,3 +131,30 @@ def test_journal_prestige_or_promotional_title_cannot_change_article_assessment(
 def test_invalid_supplied_text_is_rejected(title, abstract, full_text):
     with pytest.raises(ValueError):
         assess_article_evidence(title, abstract, full_text=full_text)
+
+
+@pytest.mark.parametrize("text", [
+    "No data are available for independent reproduction of the simulations.",
+    "We provide no source code or datasets for independent reproduction of this model.",
+    "Neither data nor code are available for independent reproduction of this study.",
+])
+def test_negated_resources_never_become_availability_claims(text):
+    assert assess(text)["dimensions"]["data_code"] == {"status": "unknown", "claims": []}
+
+
+def test_negated_independent_clause_cannot_upgrade_experimental_validation():
+    text = "We evaluated the model on experimental data but not on an independent dataset."
+    # The heuristic cannot safely assign scope within this mixed sentence.
+    assert assess(text)["dimensions"]["validation"] == {"status": "unknown", "claims": []}
+
+
+def test_negation_in_another_sentence_does_not_hide_positive_claims_or_change_offsets():
+    text = ("No data are available for independent reproduction. "
+            "We validated the method using experimental measurements. "
+            "Source code is available at https://github.com/example/model.")
+    dimensions = assess(text)["dimensions"]
+    assert dimensions["validation"]["claims"][0]["kind"] == "experimental_validation"
+    assert len(dimensions["data_code"]["claims"]) == 1
+    for key in ("validation", "data_code"):
+        claim = dimensions[key]["claims"][0]
+        assert text[claim["start"]:claim["end"]] == claim["quote"]

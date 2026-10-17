@@ -1,8 +1,11 @@
 """Companion capability tests use fixtures and mocks, never providers/mailboxes."""
 import base64
+import asyncio
 import json
+import os
 from pathlib import Path
 import sqlite3
+import signal
 import sys
 
 from fastapi.testclient import TestClient
@@ -89,7 +92,8 @@ def test_selected_metadata_and_short_profile_use_native_summarizer(settings, mon
     settings.llm_api_key = "private-provider-key"
     calls = []
 
-    def summarize(rows, profile, *, settings, diagnostics):
+    def summarize(rows, profile, *, settings, diagnostics, should_cancel):
+        assert not should_cancel()
         calls.append((rows, profile, settings))
         return {4: "Selected article summary"}, {4: "api"}
 
@@ -120,7 +124,8 @@ def test_summary_budget_is_bounded_and_diagnostics_exclude_private_details(setti
     budgets = []
     monkeypatch.setattr(companion.shutil, "which", lambda command: "/fixture/" + command)
 
-    def summarize(rows, profile, *, settings, diagnostics):
+    def summarize(rows, profile, *, settings, diagnostics, should_cancel):
+        assert not should_cancel()
         budgets.append((settings.llm_summary_budget_seconds, native._CLI_TOTAL_BUDGET))
         diagnostics.update(provider_stopped=True, secret_error="private-provider-key")
         return {4: "Native fallback"}, {4: "extractive_fallback"}
@@ -317,7 +322,7 @@ def test_scheduler_publishes_isolated_updated_browser_snapshot(settings, tmp_pat
     def native_cli(command, *, cwd, env, **kwargs):
         root = Path(cwd)
         calls.append((root, env))
-        assert command[-3:] == ["dailydigest.cli", "run-all", "--gate"]
+        assert command == [sys.executable, '-c', companion._SCHEDULE_BOOTSTRAP]
         assert (root / "data/profile.yaml").read_text() == "bio: Uploaded fixture reader\n"
         assert env["DB_PATH"] == str(root / "data/digest.db")
         assert env["PROFILE_PATH"] == str(root / "data/profile.yaml")
@@ -325,14 +330,18 @@ def test_scheduler_publishes_isolated_updated_browser_snapshot(settings, tmp_pat
         assert env["RESEND_API_KEY"] == ""
         assert env["DIGEST_TO"] == ""
         assert env["IMAP_PASSWORD"] == ""
+        assert env["DD_ENV_PATH"] == ".env"
+        assert env["DD_APP_ROOT"] == str(root)
         with sqlite3.connect(root / "data/digest.db") as connection:
             connection.execute("UPDATE fixture_digest SET value = 'scheduled'")
         (root / "data/digest.html").write_text("Scheduled fixture digest")
         return companion.SimpleNamespace(returncode=0)
 
-    monkeypatch.setattr(companion.subprocess, "run", native_cli)
+    monkeypatch.setattr(companion, "_run_scheduled_process", native_cli)
     monkeypatch.setenv("DB_PATH", str(tmp_path / "original-user-data.db"))
     monkeypatch.setenv("RESEND_API_KEY", "ambient-private-email-key")
+    monkeypatch.setenv("DD_ENV_PATH", "data/.env")
+    monkeypatch.setenv("DD_APP_ROOT", str(tmp_path / "service-private-root"))
     status = {}
     companion._schedule_once(store, settings, companion.RLock(), status,
                              tmp_path / "trusted-public-sources.yaml",
@@ -362,7 +371,7 @@ def test_scheduler_failed_job_preserves_published_snapshot(settings, tmp_path, m
         (Path(cwd) / "data/digest.db").write_bytes(b"failed-stage-only")
         return companion.SimpleNamespace(returncode=1)
 
-    monkeypatch.setattr(companion.subprocess, "run", failed_cli)
+    monkeypatch.setattr(companion, "_run_scheduled_process", failed_cli)
     status = {}
     companion._schedule_once(store, settings, companion.RLock(), status, tmp_path / "sources.yaml",
                              now=datetime(2026, 10, 13, 8, tzinfo=timezone.utc))
@@ -382,7 +391,7 @@ def test_scheduler_preserves_snapshot_credential_metadata(settings, tmp_path, mo
     store = companion._state_store(tmp_path / "scheduler-state")
     uploaded = {**json.loads(scheduler_snapshot()), **metadata}
     companion._write_private(store / "snapshot.json", json.dumps(uploaded))
-    monkeypatch.setattr(companion.subprocess, "run",
+    monkeypatch.setattr(companion, "_run_scheduled_process",
                         lambda *args, **kwargs: companion.SimpleNamespace(returncode=0))
     status = {}
     companion._schedule_once(store, settings, companion.RLock(), status, tmp_path / "sources.yaml",
@@ -421,7 +430,7 @@ def test_scheduler_cleans_only_its_current_workspace(settings, tmp_path, monkeyp
             raise KeyboardInterrupt
         return companion.SimpleNamespace(returncode=0 if outcome == "success" else 1)
 
-    monkeypatch.setattr(companion.subprocess, "run", native_cli)
+    monkeypatch.setattr(companion, "_run_scheduled_process", native_cli)
     status = {}
     if outcome == "interrupted":
         with pytest.raises(KeyboardInterrupt):
@@ -433,7 +442,9 @@ def test_scheduler_cleans_only_its_current_workspace(settings, tmp_path, monkeyp
                                  tmp_path / "sources.yaml",
                                  now=datetime(2026, 10, 13, 8, tzinfo=timezone.utc))
     assert len(workspaces) == 1
-    assert not workspaces[0].exists()
+    # An asynchronous interruption cannot prove separately-sessioned descendants
+    # have finished; retain this invocation too instead of racing their writes.
+    assert workspaces[0].exists() is (outcome == "interrupted")
     assert (retained / "recovery.txt").read_text() == "Previous work requiring preservation audit"
     assert (cache / "model.bin").read_bytes() == b"cached model"
     if outcome == "success":
@@ -452,7 +463,7 @@ def test_scheduler_waits_for_upload_and_reader_time_gate(settings, tmp_path, mon
     def forbidden_cli(*args, **kwargs):
         raise AssertionError("No brew before upload or outside reader's hour")
 
-    monkeypatch.setattr(companion.subprocess, "run", forbidden_cli)
+    monkeypatch.setattr(companion, "_run_scheduled_process", forbidden_cli)
     companion._schedule_once(store, settings, companion.RLock(), status, tmp_path / "sources.yaml")
     assert status["last_status"] == "pending_uploaded_state"
     companion._write_private(store / "snapshot.json", scheduler_snapshot())
@@ -529,7 +540,8 @@ def test_bounded_provider_text_reuses_native_helper_and_server_credentials(setti
     settings.llm_backend, settings.llm_api_key = backend, "private-provider-key"
     calls = []
 
-    def text(system, user, *, settings, timeout):
+    def text(system, user, *, settings, timeout, should_cancel):
+        assert not should_cancel()
         calls.append((system, user, settings.llm_backend, settings.llm_api_key, timeout))
         return "Generated provider tea note"
 
@@ -600,3 +612,182 @@ def test_cli_token_is_private_and_never_printed(settings, tmp_path, monkeypatch,
     assert starts[0]["port"] == 8768
     companion.main()
     assert token_file.read_text().strip() == token
+
+
+def test_failed_atomic_state_replace_preserves_target_and_removes_only_its_stage(tmp_path, monkeypatch):
+    target = tmp_path / 'snapshot.json'
+    target.write_text('previous fixture')
+    retained = tmp_path / '.snapshot-retained'
+    retained.write_text('unrelated recovery fixture')
+
+    def fail_replace(source, destination):
+        assert Path(source).read_text() == 'new fixture'
+        assert destination == target
+        raise OSError('Fixture atomic replacement failed')
+
+    monkeypatch.setattr(companion.os, 'replace', fail_replace)
+    with pytest.raises(OSError, match='Fixture atomic replacement failed'):
+        companion._write_private(target, 'new fixture')
+    assert target.read_text() == 'previous fixture'
+    assert list(tmp_path.glob('.snapshot-*')) == [retained]
+
+
+def test_scheduler_shutdown_waits_for_cooperative_job_cleanup(settings, tmp_path, monkeypatch):
+    entered, release, finished = companion.Event(), companion.Event(), companion.Event()
+
+    def job(*args, **kwargs):
+        entered.set()
+        kwargs.get('stop', release).wait(2)
+        finished.set()
+
+    monkeypatch.setattr(companion, '_run_scheduled_job', job)
+
+    async def lifecycle():
+        app = companion.create_app(token=TOKEN, settings=settings, schedule=True,
+                                   state_dir=tmp_path / 'store')
+        async with app.router.lifespan_context(app):
+            assert entered.wait(1)
+        assert finished.is_set(), 'Shutdown returned while the scheduled job was still running'
+
+    try:
+        asyncio.run(lifecycle())
+    finally:
+        release.set()
+        finished.wait(2)
+
+
+@pytest.mark.skipif(not sys.platform.startswith('linux'), reason='Linux detached-process liveness check')
+def test_scheduled_timeout_reaps_detached_cli_and_its_descendant(tmp_path):
+    import subprocess
+
+    pids = tmp_path / 'fixture-pids.json'
+    cli = (
+        'import json,os,subprocess,sys,time;from pathlib import Path;'
+        'child=subprocess.Popen([sys.executable,"-c","import time;time.sleep(30)"]);'
+        f'Path({str(pids)!r}).write_text(json.dumps([os.getpid(),child.pid]));time.sleep(30)'
+    )
+    entry = (
+        'from dailydigest import pipeline\n'
+        'def fixture_run(*args, **kwargs):\n'
+        ' from dailydigest.summarize import _run_cli_process\n'
+        f' _run_cli_process([{sys.executable!r},"-u","-c",{cli!r}],"",{str(tmp_path)!r},30)\n'
+        'pipeline.run_all=fixture_run\n'
+    )
+    try:
+        with pytest.raises(subprocess.TimeoutExpired) as error:
+            companion._run_scheduled_process(
+                [sys.executable, '-c', entry + companion._SCHEDULE_BOOTSTRAP],
+                cwd=tmp_path, env=dict(os.environ), timeout=5,
+            )
+        assert pids.is_file(), 'Fixture CLI did not start before timeout'
+        assert error.value.workspace_safe_to_remove
+        for pid in json.loads(pids.read_text()):
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                continue
+            # Killed orphans can briefly remain zombies until the OS reaps them.
+            stat = Path(f'/proc/{pid}/stat')
+            if stat.exists():
+                assert stat.read_text().rsplit(')', 1)[1].split()[0] == 'Z'
+            else:
+                pytest.fail('Scheduled timeout left a detached CLI process running')
+    finally:
+        if pids.exists():
+            for pid in json.loads(pids.read_text()):
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+
+
+def test_forced_scheduler_cleanup_retains_workspace_for_recovery(settings, tmp_path, monkeypatch):
+    from datetime import datetime, timezone
+
+    store = companion._state_store(tmp_path / 'store')
+    previous = scheduler_snapshot()
+    companion._write_private(store / 'snapshot.json', previous)
+    workspaces = []
+
+    def forced(command, *, cwd, **kwargs):
+        workspaces.append(Path(cwd))
+        error = companion.subprocess.TimeoutExpired(command, 1800)
+        error.workspace_safe_to_remove = False
+        raise error
+
+    monkeypatch.setattr(companion, '_run_scheduled_process', forced)
+    status = {}
+    companion._schedule_once(store, settings, companion.RLock(), status, tmp_path / 'sources.yaml',
+                             now=datetime(2026, 10, 17, 8, tzinfo=timezone.utc))
+    assert status['last_status'] == 'failed'
+    assert status['workspace_retained'] is True
+    assert (store / 'snapshot.json').read_text() == previous
+    assert len(workspaces) == 1 and workspaces[0].is_dir()
+
+
+def test_scheduled_stop_before_start_never_launches_a_process(tmp_path, monkeypatch):
+    stop = companion.Event()
+    stop.set()
+    monkeypatch.setattr(companion.subprocess, 'Popen',
+                        lambda *args, **kwargs: pytest.fail('Stopped job launched a process'))
+    with pytest.raises(RuntimeError, match='stopped before starting'):
+        companion._run_scheduled_process(['fixture'], cwd=tmp_path, env={}, stop=stop)
+
+
+@pytest.mark.skipif(os.name == 'nt', reason='POSIX process-group escalation')
+def test_unresponsive_scheduled_process_marks_workspace_unsafe_to_remove(monkeypatch):
+    killed = []
+
+    class Unresponsive:
+        pid = 123456789
+
+        def terminate(self):
+            pass
+
+        def wait(self, *, timeout):
+            if not killed:
+                raise companion.subprocess.TimeoutExpired('fixture', timeout)
+            return -signal.SIGKILL
+
+    process = Unresponsive()
+    monkeypatch.setattr(companion.subprocess, 'Popen', lambda *args, **kwargs: process)
+    monkeypatch.setattr(companion.os, 'killpg', lambda pid, sig: killed.append((pid, sig)))
+    instants = iter([0, 2])
+    monkeypatch.setattr(companion.time, 'monotonic', lambda: next(instants))
+    with pytest.raises(companion.subprocess.TimeoutExpired) as error:
+        companion._run_scheduled_process(['fixture'], cwd='unused', env={}, timeout=1)
+    assert killed == [(process.pid, signal.SIGKILL)]
+    assert error.value.workspace_safe_to_remove is False
+
+
+def test_windows_scheduled_cleanup_requests_entire_process_tree(monkeypatch):
+    calls = []
+
+    class Process:
+        pid = 123456789
+
+        def poll(self):
+            return 1
+
+        def wait(self, *, timeout):
+            return 1
+
+    monkeypatch.setattr(companion, 'os', companion.SimpleNamespace(name='nt'))
+    monkeypatch.setattr(companion.subprocess, 'run', lambda command, **kwargs:
+                        calls.append(command) or companion.SimpleNamespace(returncode=0))
+    assert companion._stop_scheduled_process(Process()) is True
+    assert calls == [['taskkill', '/PID', '123456789', '/T', '/F']]
+
+
+@pytest.mark.skipif(os.name == 'nt', reason='POSIX signal return codes')
+def test_externally_killed_scheduled_parent_does_not_claim_descendant_cleanup(monkeypatch):
+    def vanished(*args):
+        raise ProcessLookupError
+
+    process = companion.SimpleNamespace(pid=123456789, terminate=vanished,
+                                        wait=lambda **kwargs: -signal.SIGKILL)
+    monkeypatch.setattr(companion.subprocess, 'Popen', lambda *args, **kwargs: process)
+    monkeypatch.setattr(companion.os, 'killpg', vanished)
+    with pytest.raises(RuntimeError, match='terminated by signal') as error:
+        companion._run_scheduled_process(['fixture'], cwd='unused', env={})
+    assert error.value.workspace_safe_to_remove is False

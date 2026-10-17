@@ -16,6 +16,15 @@ test('a failed latest rating restores the last confirmed rating, not a stale opt
   await Promise.all([queue(70),queue(100)]);assert.deepEqual(paint,[70,100,70]);assert.deepEqual(errors,['offline']);
 });
 
+test('every confirmed intent updates dependent state even when a newer choice is visible',async()=>{
+  const commits=[],shown=[];let finish;
+  const queue=create({initial:10,send:grade=>grade===70?new Promise(done=>{finish=done;}):Promise.resolve({}),
+    select(){},busy(){},committed:(_result,grade)=>commits.push(grade),success:(_result,grade)=>shown.push(grade),failure:()=>assert.fail('unexpected error')});
+  const first=queue(70),latest=queue(null);await new Promise(done=>setImmediate(done));
+  finish({});await Promise.all([first,latest]);
+  assert.deepEqual(commits,[70,null]);assert.deepEqual(shown,[null]);
+});
+
 
 test('the frame drain includes intents still queued behind an in-flight rating',async()=>{
   const window={addEventListener(){}};

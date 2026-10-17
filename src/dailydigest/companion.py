@@ -18,8 +18,9 @@ if __name__ == "__main__" and sys.argv[1:] in (["--version"], ["-v"], ["-V"]):
     raise SystemExit(0)
 
 import argparse
+import asyncio
 import base64
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 from datetime import datetime, timezone
 import hmac
 import hashlib
@@ -28,10 +29,12 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import secrets
+import signal
 import shutil
 from io import StringIO
 import subprocess
 import tempfile
+import time
 from threading import Event, RLock, Thread
 from types import SimpleNamespace
 from typing import Literal
@@ -48,6 +51,16 @@ from pydantic import BaseModel, ConfigDict, Field
 MAX_BODY = 3 * 1024 * 1024
 MAX_STATE = 128 * 1024 * 1024
 BACKENDS = Literal["extractive", "api", "anthropic", "claude_cli", "codex_cli"]
+
+# The scheduler owns the time gate. Install termination cleanup before importing
+# the native app so a separately-sessioned summary CLI unwinds its own cleanup.
+_SCHEDULE_BOOTSTRAP = '''import runpy, signal, sys
+def stopped(signum, frame):
+    raise KeyboardInterrupt
+signal.signal(signal.SIGTERM, stopped)
+sys.argv = ["dailydigest.cli", "run-all"]
+runpy.run_module("dailydigest.cli", run_name="__main__")
+'''
 
 
 class Input(BaseModel):
@@ -99,6 +112,60 @@ class TextInput(Input):
     timeout: float = Field(default=90, gt=0, le=120)
 
 
+@contextmanager
+def _provider_lock(lock, should_cancel):
+    from dailydigest.summarize import _check_cancel
+
+    while True:
+        _check_cancel(should_cancel)
+        if lock.acquire(timeout=0.1):
+            break
+    try:
+        _check_cancel(should_cancel)
+        yield
+    finally:
+        lock.release()
+
+
+async def _run_provider_request(request: Request, operation):
+    """Keep ownership until a disconnected browser's provider has cleaned up."""
+    stop = Event()
+
+    async def disconnected():
+        # These endpoints have already consumed their validated JSON body.
+        # Await receive directly: is_disconnected() uses a cancelled scope and
+        # can miss disconnects behind middleware's checkpointing receive stream.
+        try:
+            while True:
+                message = await request.receive()
+                if message['type'] == 'http.disconnect':
+                    return
+        finally:
+            stop.set()
+
+    work = asyncio.create_task(asyncio.to_thread(operation, stop.is_set))
+    monitor = asyncio.create_task(disconnected())
+    try:
+        await asyncio.wait({work, monitor}, return_when=asyncio.FIRST_COMPLETED)
+        # Shield the Future: cancelling to_thread would abandon its live thread.
+        return await asyncio.shield(work)
+    except asyncio.CancelledError:
+        stop.set()
+        try:
+            await asyncio.shield(work)
+        except Exception:
+            pass
+        raise
+    finally:
+        stop.set()
+        monitor.cancel()
+        try:
+            await monitor
+        except asyncio.CancelledError:
+            pass
+
+
+
 def validate_snapshot(payload):
     try:
         if len(payload.encode()) > MAX_STATE:
@@ -147,21 +214,97 @@ def _state_store(path):
     return store.resolve()
 
 
-def _write_private(path, payload):
+def _write_private(path, payload, *, should_cancel=None):
     if path.is_symlink():
         raise ValueError("Companion files must not be symlinks")
     descriptor, temporary = tempfile.mkstemp(prefix=".snapshot-", dir=path.parent)
-    with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-        stream.write(payload)
-        stream.flush()
-        os.fsync(stream.fileno())
-    os.replace(temporary, path)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+        if should_cancel is not None and should_cancel():
+            raise RuntimeError('Scheduled brew stopped before publication')
+        os.replace(temporary, path)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
 
 
-def _schedule_once(store, settings, lock, status, source_path, *, now=None):
+def _stop_scheduled_process(process):
+    """Allow native cleanup, then bound termination of the outer process tree."""
+    graceful = False
+    if os.name == 'nt':
+        try:
+            completed = subprocess.run(
+                ['taskkill', '/PID', str(process.pid), '/T', '/F'],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5, check=False,
+            )
+            graceful = completed.returncode == 0
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+        if process.poll() is None:
+            process.kill()
+    else:
+        try:
+            process.terminate()
+        except ProcessLookupError:
+            pass
+        try:
+            graceful = process.wait(timeout=5) >= 0
+        except subprocess.TimeoutExpired:
+            pass
+        # The session ID remains ours even if its leader exited during cleanup.
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        return False
+    return graceful
+
+
+def _run_scheduled_process(command, *, cwd, env, stop=None, timeout=1800):
+    if stop is not None and stop.is_set():
+        raise RuntimeError('Scheduled brew stopped before starting')
+    process = subprocess.Popen(
+        command, cwd=cwd, env=env, start_new_session=True,
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    deadline = time.monotonic() + timeout
+    try:
+        while True:
+            if stop is not None and stop.is_set():
+                raise RuntimeError('Scheduled brew stopped')
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise subprocess.TimeoutExpired(command, timeout)
+            try:
+                returncode = process.wait(timeout=min(0.2, remaining))
+                if returncode < 0:
+                    raise RuntimeError('Scheduled child terminated by signal')
+                return subprocess.CompletedProcess(command, returncode)
+            except subprocess.TimeoutExpired:
+                pass
+    except BaseException as error:
+        # If graceful cleanup could not finish, detached descendants cannot be
+        # proven gone. Keep their isolated workspace instead of deleting it.
+        try:
+            error.workspace_safe_to_remove = _stop_scheduled_process(process)
+        except (OSError, subprocess.TimeoutExpired):
+            error.workspace_safe_to_remove = False
+        raise
+
+
+def _schedule_once(store, settings, lock, status, source_path, *, now=None, stop=None):
     """Publish isolated native state only after a successful explicit job."""
     from dailydigest.config import Settings
     from dotenv import dotenv_values
+
+    def check_stop():
+        if stop is not None and stop.is_set():
+            raise RuntimeError('Scheduled brew stopped')
 
     instant = now or datetime.now(timezone.utc)
     with lock:
@@ -169,9 +312,12 @@ def _schedule_once(store, settings, lock, status, source_path, *, now=None):
         if not path.is_file() or path.is_symlink():
             status.update(last_status="pending_uploaded_state", error=None, error_type=None)
             return
-        status.update(last_status="running", last_attempt=instant.isoformat(), error=None, error_type=None)
+        status.update(last_status="running", last_attempt=instant.isoformat(), error=None, error_type=None,
+                      workspace_retained=False)
         root = None
+        workspace_safe_to_remove = True
         try:
+            check_stop()
             original = path.read_text()
             snapshot = validate_snapshot(original)
             files = {name: base64.b64decode(value, validate=True)
@@ -188,6 +334,7 @@ def _schedule_once(store, settings, lock, status, source_path, *, now=None):
                 return
             root = Path(tempfile.mkdtemp(prefix="native-reader-", dir=store))
             for name, content in files.items():
+                check_stop()
                 target = root / name
                 target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
                 target.write_bytes(content)
@@ -203,7 +350,7 @@ def _schedule_once(store, settings, lock, status, source_path, *, now=None):
 
             overrides = {key: private_path(getattr(configured, key)) for key in
                          ("db_path", "profile_path", "opportunity_profile_path")}
-            for key in ("contribution_reranker_path", "contribution_encoder_dir"):
+            for key in ("contribution_reranker_path", "contribution_encoder_dir", "semantic_model_dir"):
                 value = getattr(configured, key)
                 overrides[key] = private_path(value) if value else ""
             overrides.update(sources_path=str(source_path), user_tz=configured.user_tz or "UTC",
@@ -228,37 +375,148 @@ def _schedule_once(store, settings, lock, status, source_path, *, now=None):
             for key, value in safe_settings.model_dump().items():
                 environment[key.upper()] = str(value).lower() if isinstance(value, bool) else str(value)
             environment["TMPDIR"] = str(root)
+            # The service/container may select a writable Settings override.
+            # An uploaded reader must load and recover only its own .env.
+            environment["DD_ENV_PATH"] = ".env"
+            environment["DD_APP_ROOT"] = str(root)
             # Keep model downloads/cache inside the explicitly selected store.
             environment["HF_HOME"] = str(store / "model-cache")
             environment["XDG_CACHE_HOME"] = str(store / "model-cache")
-            completed = subprocess.run(
-                [sys.executable, "-m", "dailydigest.cli", "run-all", "--gate"],
-                cwd=root, env=environment, timeout=1800, check=False,
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            completed = _run_scheduled_process(
+                [sys.executable, '-c', _SCHEDULE_BOOTSTRAP],
+                cwd=root, env=environment, stop=stop,
             )
             if completed.returncode:
                 raise RuntimeError("Native scheduled brew did not complete successfully")
-            exported = {str(file.relative_to(root)): base64.b64encode(file.read_bytes()).decode()
-                        for file in (root / "data").rglob("*")
-                        if file.is_file() and not file.is_symlink() and file.name != ".compute.lock"}
+            check_stop()
+            exported = {}
+            for file in (root / "data").rglob("*"):
+                check_stop()
+                if file.is_file() and not file.is_symlink() and file.name != ".compute.lock":
+                    exported[str(file.relative_to(root))] = base64.b64encode(file.read_bytes()).decode()
             if ".env" in snapshot["files"]:
                 exported[".env"] = snapshot["files"][".env"]
             # Portable uploads deliberately omit credentials. Preserve that
             # metadata so a browser restore retains its own matching secrets.
             updated = json.dumps({**snapshot, "files": exported})
             validate_snapshot(updated)
-            _write_private(path, updated)
+            check_stop()
+            if stop is None:
+                _write_private(path, updated)
+            else:
+                _write_private(path, updated, should_cancel=stop.is_set)
             status.update(last_status="success", last_success=instant.isoformat(), error=None)
-        except Exception as exc:
+        except BaseException as exc:
+            workspace_safe_to_remove = getattr(exc, 'workspace_safe_to_remove', True)
+            if stop is not None and stop.is_set():
+                workspace_safe_to_remove = False
+            if not isinstance(exc, Exception):
+                workspace_safe_to_remove = False
+                raise
             # Preserve the prior snapshot, and disclose failure without private
             # provider URLs, credentials, reader content, or subprocess output.
             status.update(last_status="failed", error="Scheduled brew failed; previous snapshot preserved",
-                          error_type=type(exc).__name__)
+                          error_type=type(exc).__name__, workspace_retained=not workspace_safe_to_remove)
         finally:
-            if root is not None:
+            if (root is not None and workspace_safe_to_remove
+                    and not (stop is not None and stop.is_set())):
                 # Only this invocation's extracted state is disposable. Older
                 # workspaces may contain recovery data and need a separate audit.
                 shutil.rmtree(root)
+
+
+def _scheduled_job_main():
+    """Private coordinator entrypoint: no reader state or credentials in argv."""
+    from dailydigest.config import Settings
+
+    def stopped(signum, frame):
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGTERM, stopped)
+    request = json.load(sys.stdin)
+    status = request['status']
+    try:
+        _schedule_once(Path(request['store']), Settings(_env_file=None, **request['settings']),
+                       RLock(), status, Path(request['source_path']))
+    except KeyboardInterrupt:
+        status.update(last_status='stopped', workspace_retained=True,
+                      error='Scheduled job stopped; private recovery workspace retained')
+    sys.stdout.write(json.dumps(status))
+    sys.stdout.flush()
+
+
+def _run_scheduled_job(store, settings, lock, status, source_path, *, stop, command=None):
+    """Own all scheduled filesystem work in a process with bounded supervision.
+
+    A filesystem syscall can remain in an OS wait despite SIGKILL. Keeping that
+    work out of the service thread allows shutdown to finish without deleting
+    any workspace that a still-exiting coordinator might be using.
+    """
+    while not stop.is_set():
+        if lock.acquire(timeout=.1):
+            break
+    else:
+        return
+    try:
+        if stop.is_set():
+            return
+        payload = json.dumps({'store': str(store), 'settings': settings.model_dump(mode='json'),
+                              'status': dict(status), 'source_path': str(source_path)})
+        process = None
+        try:
+            process = subprocess.Popen(
+                command or [sys.executable, '-c',
+                            'from dailydigest.companion import _scheduled_job_main; _scheduled_job_main()'],
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                text=True, start_new_session=True,
+            )
+            status.update(last_status='running', error=None)
+            deadline = time.monotonic() + 1800
+            transferred = Event()
+            received, transfer_errors = [], []
+
+            def transfer():
+                try:
+                    received.append(process.communicate(input=payload)[0])
+                except Exception as exc:
+                    transfer_errors.append(exc)
+                finally:
+                    transferred.set()
+
+            # Windows communicate writes stdin synchronously, so a coordinator
+            # blocked before reading a large configuration must not trap the
+            # supervisor in that pipe write. This thread owns only the pipes.
+            Thread(target=transfer, daemon=True).start()
+            while True:
+                if stop.is_set():
+                    raise RuntimeError('Scheduled job stopped')
+                if time.monotonic() >= deadline:
+                    raise subprocess.TimeoutExpired(process.args, 1800)
+                if transferred.wait(.2):
+                    break
+            if transfer_errors:
+                raise transfer_errors[0]
+            if process.returncode:
+                raise RuntimeError('Scheduled coordinator did not complete')
+            result = json.loads(received[0])
+            if not isinstance(result, dict) or 'last_status' not in result:
+                raise ValueError('Scheduled coordinator returned invalid status')
+            status.update(result)
+        except BaseException as exc:
+            # Even a reaped coordinator might have left separately-sessioned
+            # descendants after forced termination. Never remove its files here.
+            try:
+                if process is not None:
+                    _stop_scheduled_process(process)
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+            status.update(last_status='stopped' if stop.is_set() else 'failed',
+                          workspace_retained=True, error_type=type(exc).__name__,
+                          error='Scheduled job interrupted; private recovery workspace retained')
+            if not isinstance(exc, Exception):
+                raise
+    finally:
+        lock.release()
 
 
 def _schedule_loop(stop, job):
@@ -295,7 +553,7 @@ def create_app(*, token, allowed_origin="https://antimonyleo.github.io", setting
                        "last_attempt": None, "last_success": None, "error": None}
 
     def scheduled_job():
-        _schedule_once(store, settings, lock, schedule_status, source_path)
+        _run_scheduled_job(store, settings, lock, schedule_status, source_path, stop=stop)
 
     scheduled_job.status = schedule_status
 
@@ -305,8 +563,15 @@ def create_app(*, token, allowed_origin="https://antimonyleo.github.io", setting
         if schedule:
             thread = Thread(target=_schedule_loop, args=(stop, scheduled_job), daemon=True)
             thread.start()
-        yield
-        stop.set()
+        try:
+            yield
+        finally:
+            stop.set()
+            if thread is not None:
+                await asyncio.to_thread(thread.join, 12)
+                if thread.is_alive():
+                    schedule_status.update(last_status='stopping', workspace_retained=True,
+                                           error='Scheduled cleanup is still pending')
 
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
     app.add_middleware(CORSMiddleware, allow_origins=[allowed_origin],
@@ -381,7 +646,7 @@ def create_app(*, token, allowed_origin="https://antimonyleo.github.io", setting
                 "provider_identities": {backend: provider_identity(backend) for backend in available}}
 
     @app.post("/summarize")
-    def summarize(payload: SummaryInput):
+    async def summarize(payload: SummaryInput, request: Request):
         if payload.backend not in backends():
             raise HTTPException(409, "Summary backend is not configured on the companion")
         if len({item.id for item in payload.items}) != len(payload.items):
@@ -389,54 +654,67 @@ def create_app(*, token, allowed_origin="https://antimonyleo.github.io", setting
         if any(len(keyword) > 160 for keyword in payload.profile.keywords):
             raise HTTPException(422, "Reader keywords exceed the short profile limit")
         from dailydigest import summarize as native
+        from dailydigest.brew import BrewCancelled
         from dailydigest.store import ItemRow
 
         rows = [ItemRow(**item.model_dump(exclude={"metadata"}),
                         metadata_json=json.dumps(item.metadata)) for item in payload.items]
         is_cli = payload.backend in {"claude_cli", "codex_cli"}
         diagnostics = {}
-        try:
-            with lock:
+
+        def generate(should_cancel):
+            with _provider_lock(lock, should_cancel):
+                native._check_cancel(should_cancel)
                 budget = min(native._CLI_TOTAL_BUDGET if is_cli else settings.llm_summary_budget_seconds,
                              payload.timeout)
                 configured = settings.model_copy(update={"llm_backend": payload.backend,
                                                          "llm_summary_budget_seconds": budget})
-                # Native CLI batching uses its own total-budget constant. Bound
-                # it for this serialized request and restore it afterwards;
-                # process invocation and sandbox behavior remain native.
                 cli_budget = native._CLI_TOTAL_BUDGET
                 try:
                     if is_cli:
                         native._CLI_TOTAL_BUDGET = budget
-                    summaries, provenance = native.summarize_items_with_provenance(
+                    return native.summarize_items_with_provenance(
                         rows, SimpleNamespace(**payload.profile.model_dump()),
                         settings=configured, diagnostics=diagnostics,
+                        should_cancel=should_cancel,
                     )
                 finally:
                     native._CLI_TOTAL_BUDGET = cli_budget
+
+        try:
+            summaries, provenance = await _run_provider_request(request, generate)
+        except BrewCancelled as exc:
+            raise HTTPException(499, "Summary request stopped") from exc
         except Exception as exc:
             raise HTTPException(502, "Configured summarizer failed") from exc
-        # Preserve actual per-item fallback provenance without provider exception
-        # strings, which can contain configured endpoints or sensitive details.
         return {"summaries": summaries, "provenance": provenance,
                 "diagnostics": {"fallback_items": sum(v != payload.backend for v in provenance.values()),
                                 "provider_stopped": bool(diagnostics.get("provider_stopped", False))}}
 
     @app.post("/text")
-    def text(payload: TextInput):
+    async def text(payload: TextInput, request: Request):
         if payload.backend not in backends():
             raise HTTPException(409, "Text backend is not configured on the companion")
         from dailydigest import summarize as native
+        from dailydigest.brew import BrewCancelled
 
         configured = settings.model_copy(update={"llm_backend": payload.backend})
-        try:
-            with lock:
+
+        def generate(should_cancel):
+            with _provider_lock(lock, should_cancel):
+                native._check_cancel(should_cancel)
                 if payload.backend in {"claude_cli", "codex_cli"}:
-                    output = native._cli_text(payload.system, payload.user, payload.backend,
-                                              timeout=payload.timeout, settings=configured)
-                else:
-                    output = native._llm_text(payload.system, payload.user,
-                                              timeout=payload.timeout, settings=configured)
+                    return native._cli_text(payload.system, payload.user, payload.backend,
+                                            timeout=payload.timeout, settings=configured,
+                                            should_cancel=should_cancel)
+                return native._llm_text(payload.system, payload.user,
+                                        timeout=payload.timeout, settings=configured,
+                                        should_cancel=should_cancel)
+
+        try:
+            output = await _run_provider_request(request, generate)
+        except BrewCancelled as exc:
+            raise HTTPException(499, "Text request stopped") from exc
         except Exception as exc:
             raise HTTPException(502, "Configured text generation failed") from exc
         return {"text": output}

@@ -296,8 +296,34 @@ class Settings(BaseSettings):
             return "UTC"
 
 
+def settings_env_path(root: Path | None = None) -> Path:
+    """Select an explicitly writable dotenv inside the local application root."""
+    root = Path(root or os.environ.get("DD_APP_ROOT") or Path.cwd()).resolve()
+    selected = (root / (os.environ.get("DD_ENV_PATH") or ".env")).resolve()
+    if not selected.is_relative_to(root):
+        raise ValueError("DD_ENV_PATH must remain inside the application root")
+    return selected
+
+
+def _recover_settings_files() -> bool:
+    from .settings_transaction import recover_settings_transaction
+
+    root = Path(os.environ.get("DD_APP_ROOT") or Path.cwd()).resolve()
+    journal_root = settings_env_path(root).parent
+    if journal_root == root:
+        return recover_settings_transaction(root)
+    return recover_settings_transaction(root, journal_root=journal_root)
+
+
 def load_settings() -> Settings:
-    s = Settings()
+    _recover_settings_files()
+    root = Path(os.environ.get("DD_APP_ROOT") or Path.cwd()).resolve()
+    writable = settings_env_path(root)
+    bootstrap = root / ".env"
+    # An explicitly selected writable file overrides the read-only bootstrap.
+    # Missing files remain missing until the user actually saves Settings.
+    env_files = (bootstrap, writable) if writable != bootstrap else bootstrap
+    s = Settings(_env_file=env_files)
     if not s.user_tz:
         try:
             import tzlocal
@@ -408,9 +434,21 @@ def ensure_data_dir() -> None:
 
 
 @lru_cache(maxsize=1)
-def get_settings() -> Settings:
-    """Preferred lazy accessor for settings (cached). Use this in new code."""
+def _cached_settings() -> Settings:
     return load_settings()
+
+
+def get_settings() -> Settings:
+    """Reuse parsed settings after checking for an interrupted private save."""
+    if _recover_settings_files():
+        _cached_settings.cache_clear()
+    return _cached_settings()
+
+
+# Preserve the public cache controls used by callers and isolated tests.
+get_settings.cache_clear = _cached_settings.cache_clear
+get_settings.cache_info = _cached_settings.cache_info
+get_settings.cache_parameters = _cached_settings.cache_parameters
 
 
 def reload_settings() -> None:

@@ -885,6 +885,48 @@ def _opportunity_snapshot_json(metadata: dict) -> str:
     stable = {key: value for key, value in metadata.items() if key != "verified_at"}
     return json.dumps(stable, sort_keys=True, separators=(",", ":"), default=str)
 
+
+def _preprint_version(metadata: dict) -> int:
+    value = str(metadata.get("preprint_version") or "")
+    return int(value) if value.isascii() and value.isdecimal() else 0
+
+
+def mark_research_withdrawn(notices: Iterable[Item]) -> int:
+    """Apply observed withdrawals to cached strong-identity matches, retaining history.
+
+    Notices never create recommendable rows or count toward live research supply.
+    A DOI links the withdrawn preprint itself, not its separately published DOI.
+    """
+    from .dedupe import candidate_identity_keys
+
+    keys = {
+        key for notice in notices
+        if notice.section == "research" and notice.metadata.get("is_retracted") is True
+        for key in candidate_identity_keys(notice, include_publication_links=False)
+        if key.startswith(("doi:", "pmid:", "arxiv:", "url:"))
+    }
+    if not keys:
+        return 0
+    init_db()
+    changed = 0
+    with session_scope() as session:
+        for row in session.scalars(select(ItemRow).where(ItemRow.section == "research")):
+            if not keys.intersection(candidate_identity_keys(row, include_publication_links=False)):
+                continue
+            metadata = item_metadata(row)
+            if metadata.get("is_retracted") is True:
+                continue
+            row.metadata_json = json.dumps(
+                {**metadata, "is_retracted": True, "preprint_type": "withdrawn"},
+                sort_keys=True, separators=(",", ":"),
+            )
+            row.summary = ""
+            row.summary_signature = None
+            row.summary_backend = None
+            changed += 1
+    return changed
+
+
 def upsert_items(items: Iterable[Item]) -> int:
     """Insert items and conservatively refresh richer metadata on duplicates."""
     init_db()
@@ -893,7 +935,7 @@ def upsert_items(items: Iterable[Item]) -> int:
     with session_scope() as s:
         for it in items:
             key = (it.source, it.external_id)
-            if key in seen_keys:
+            if key in seen_keys and not _preprint_version(it.metadata or {}):
                 continue
             seen_keys.add(key)
             metadata_json = json.dumps(
@@ -957,6 +999,13 @@ def upsert_items(items: Iterable[Item]) -> int:
                 )
                 s.execute(snapshot_stmt)
             elif not result.rowcount:
+                old_metadata = item_metadata(row)
+                incoming_metadata = it.metadata or {}
+                old_version = _preprint_version(old_metadata)
+                incoming_version = _preprint_version(incoming_metadata)
+                if old_version and incoming_version and incoming_version < old_version:
+                    continue
+                authoritative_revision = incoming_version > old_version
                 old_title = (row.title or "").strip()
                 old_abstract = (row.abstract or "").strip()
                 new_title = (it.title or "").strip()
@@ -966,7 +1015,7 @@ def upsert_items(items: Iterable[Item]) -> int:
                 # Prefer clearly richer text, including repaired titles whose
                 # word boundaries were collapsed by an upstream provider.
                 if new_title and (
-                    not old_title
+                    authoritative_revision or not old_title
                     or len(new_title) > len(old_title) + 5
                     or (
                         len(new_title) >= int(len(old_title) * 0.8)
@@ -975,15 +1024,13 @@ def upsert_items(items: Iterable[Item]) -> int:
                 ):
                     content_changed = new_title != old_title
                     row.title = new_title
-                if new_abstract and (
-                    not old_abstract or len(new_abstract) > len(old_abstract) + 80
+                if (new_abstract or authoritative_revision) and (
+                    authoritative_revision or not old_abstract or len(new_abstract) > len(old_abstract) + 80
                 ):
                     content_changed = content_changed or new_abstract != old_abstract
                     row.abstract = new_abstract
                 if not (row.authors or "").strip() and (it.authors or "").strip():
                     row.authors = it.authors
-                old_metadata = item_metadata(row)
-                incoming_metadata = it.metadata or {}
                 old_date_source = old_metadata.get("publication_date_source")
                 new_date_source = incoming_metadata.get("publication_date_source")
                 replace_publication_date = (

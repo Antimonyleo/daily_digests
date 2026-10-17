@@ -145,6 +145,27 @@ def feedback_reasons_signature(reason_data: dict | None = None) -> str:
     return hashlib.sha256(canonical.encode()).hexdigest()
 
 
+def feedback_votes_signature(records=None) -> str:
+    """Bind learned directions to canonical signs, grades and recency order.
+
+    Rebuilders supply the same rows that produced their vector. Readers compare
+    against current votes, so failed rebuilds cannot reuse obsolete directions.
+    """
+    if records is None:
+        init_db()
+        with session_scope() as session:
+            records = session.execute(select(
+                VoteRow.item_id, VoteRow.value, VoteRow.grade, VoteRow.created_at,
+            ).order_by(VoteRow.item_id, VoteRow.created_at.desc(), VoteRow.id.desc())).all()
+    canonical = {}
+    for item_id, value, grade, created_at in records:
+        canonical.setdefault(int(item_id), (
+            int(value), grade, _as_utc(created_at).isoformat() if created_at else None,
+        ))
+    payload = json.dumps(canonical, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode()).hexdigest()
+
+
 def _load_vote_exemplars() -> tuple[tuple, tuple]:
     """Return ``(pos, neg)`` exemplar sets from signed votes, each ``(ids, unit_vecs,
     weights)``.
@@ -459,7 +480,7 @@ def _rebuild_rocchio_profile() -> None:
         init_db()
         with session_scope() as s:
             raw = s.execute(
-                select(VoteRow.item_id, VoteRow.value, VoteRow.grade, ItemRow)
+                select(VoteRow.item_id, VoteRow.value, VoteRow.grade, VoteRow.created_at, ItemRow)
                 .join(ItemRow, VoteRow.item_id == ItemRow.id)
                 .order_by(
                     VoteRow.created_at.desc(),
@@ -468,7 +489,8 @@ def _rebuild_rocchio_profile() -> None:
             ).all()
             seen: set[int] = set()
             canonical: list[tuple[object, int, int | None]] = []
-            for item_id, value, grade, row in raw:
+            vote_signature = feedback_votes_signature([record[:4] for record in raw])
+            for item_id, value, grade, _created_at, row in raw:
                 iid = int(item_id)
                 if iid in seen:
                     continue
@@ -515,6 +537,7 @@ def _rebuild_rocchio_profile() -> None:
             vote_count=np.array([len(canonical)], dtype=np.int32),
             feedback_semantics_version=np.array([FEEDBACK_SEMANTICS_VERSION]),
             feedback_reasons_signature=np.array([feedback_reasons_signature(reason_data)]),
+            feedback_votes_signature=np.array([vote_signature]),
         )
         tmp.replace(path)
     except Exception as exc:  # noqa: BLE001

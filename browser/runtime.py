@@ -114,6 +114,9 @@ def _mark_state_changed(*paths):
 
 def snapshot_ready():
     """Never copy database/WAL files while a SQL writer is suspended."""
+    transaction = sys.modules.get('dailydigest.settings_transaction')
+    if transaction is not None and transaction.settings_transaction_active():
+        return False
     return not any(connection.in_transaction() for connection in _STATE_WRITERS)
 
 
@@ -139,7 +142,7 @@ def private_write_audit(event, args, *, root=ROOT):
             relative = path.relative_to(root.absolute())
         except (ValueError, OSError):
             continue
-        if relative == Path('.env') or relative.parts and relative.parts[0] == 'data':
+        if relative in {Path('.env'), Path('.settings-transaction.json')} or relative.parts and relative.parts[0] == 'data':
             if event == 'os.mkdir' and path.exists():
                 continue
             if relative.name != '.compute.lock':
@@ -249,8 +252,9 @@ def _snapshot_paths(root):
     data = root / 'data'
     if data.exists():
         yield from (path for path in data.rglob('*') if path.is_file())
-    if (root / '.env').is_file():
-        yield root / '.env'
+    for name in ('.env', '.settings-transaction.json'):
+        if (root / name).is_file():
+            yield root / name
 
 
 def _sqlite_shared_memory(path):
@@ -289,6 +293,9 @@ def snapshot_file_versions(root=ROOT):
 
 def export_snapshot(root=ROOT, *, include_credentials=True):
     """Internal recovery is complete; portable exports omit credentials by default."""
+    if not include_credentials:
+        from dailydigest.settings_transaction import recover_settings_transaction
+        recover_settings_transaction(root)
     files = {str(path.relative_to(root)): base64.b64encode(path.read_bytes()).decode('ascii')
              for path in _checkpoint_paths(root)}
     snapshot = {'format': 'dailydigest-browser-v1', 'files': files}
@@ -304,6 +311,10 @@ def export_snapshot(root=ROOT, *, include_credentials=True):
 
 
 def export_portable_snapshot(include_credentials=False, *, root=ROOT):
+    # Journals contain previous as well as pending credentials. Resolve them
+    # before every portable export, even one explicitly including credentials.
+    from dailydigest.settings_transaction import recover_settings_transaction
+    recover_settings_transaction(root)
     return export_snapshot(root, include_credentials=bool(include_credentials))
 
 
@@ -374,8 +385,10 @@ def decode_snapshot(payload, *, enforce_import_limits=False):
     decoded = {}
     for name, encoded in files.items():
         path = Path(name)
+        if enforce_import_limits and name == '.settings-transaction.json':
+            raise ValueError('Portable imports cannot contain a settings recovery journal')
         if (path.is_absolute() or '..' in path.parts or
-                name != '.env' and (len(path.parts) < 2 or path.parts[0] != 'data')):
+                name not in {'.env', '.settings-transaction.json'} and (len(path.parts) < 2 or path.parts[0] != 'data')):
             raise ValueError('Backup contains a path outside private browser state')
         if path.name == '.compute.lock' or path in decoded:
             raise ValueError('Backup contains a duplicate or transient lock path')
@@ -396,6 +409,10 @@ def restore_startup_snapshot(payload, *, root=ROOT, scratch_root=None):
     decoded = decode_snapshot(payload)
     validate_snapshot_sqlite(decoded, scratch_root=scratch_root)
     _restore_decoded_snapshot(decoded, root=root)
+    # Recover before any adapter imports config or stages .env values. The
+    # original browser checkpoint remains intact if recovery blocks startup.
+    from dailydigest.settings_transaction import recover_settings_transaction
+    recover_settings_transaction(root)
 
 
 def _restore_decoded_snapshot(decoded, *, overwrite=False, root=ROOT):
@@ -648,7 +665,8 @@ def install_companion_providers(summarize, supports, call, identity=lambda _back
         backend = (settings.llm_backend or 'extractive').lower()
         return backend if supports(backend) else original_effective(settings=settings)
 
-    def companion_batch(batch, backend, *, timeout=180.0):
+    def companion_batch(batch, backend, *, timeout=180.0, should_cancel=None):
+        summarize._check_cancel(should_cancel)
         if not supports(backend):
             raise RuntimeError(f'The connected companion does not advertise {backend} summaries')
         payload = companion_summary_payload(
@@ -656,6 +674,7 @@ def install_companion_providers(summarize, supports, call, identity=lambda _back
         )
         payload['timeout'] = float(timeout)
         result = call('/summarize', payload, timeout)
+        summarize._check_cancel(should_cancel)
         allowed = {int(row.id) for row in batch if row.id is not None}
         generated = {int(key): value for key, value in result.get('summaries', {}).items()
                      if int(key) in allowed and isinstance(value, str) and value.strip()}
@@ -665,24 +684,28 @@ def install_companion_providers(summarize, supports, call, identity=lambda _back
         companion_diagnostics.append(result.get('diagnostics', {}))
         return generated
 
-    def companion_api(batch, *, settings=None, timeout=60.0):
+    def companion_api(batch, *, settings=None, timeout=60.0, should_cancel=None):
         if supports('api'):
-            return companion_batch(batch, 'api', timeout=timeout)
-        return original_api(batch, settings=settings, timeout=timeout)
+            return companion_batch(batch, 'api', timeout=timeout, should_cancel=should_cancel)
+        return original_api(batch, settings=settings, timeout=timeout,
+                            **({'should_cancel': should_cancel} if should_cancel is not None else {}))
 
-    def companion_anthropic(batch, *, settings=None, timeout=60.0):
+    def companion_anthropic(batch, *, settings=None, timeout=60.0, should_cancel=None):
         if supports('anthropic'):
-            return companion_batch(batch, 'anthropic', timeout=timeout)
-        return original_anthropic(batch, settings=settings, timeout=timeout)
+            return companion_batch(batch, 'anthropic', timeout=timeout, should_cancel=should_cancel)
+        return original_anthropic(batch, settings=settings, timeout=timeout,
+                                  **({'should_cancel': should_cancel} if should_cancel is not None else {}))
 
-    def companion_cli(batch, backend, *, settings=None, timeout=180.0):
-        return companion_batch(batch, backend, timeout=timeout)
+    def companion_cli(batch, backend, *, settings=None, timeout=180.0, should_cancel=None):
+        return companion_batch(batch, backend, timeout=timeout, should_cancel=should_cancel)
 
-    def companion_provider(items, backend, *, settings=None, diagnostics=None):
+    def companion_provider(items, backend, *, settings=None, diagnostics=None, should_cancel=None):
         companion_provenance.clear()
         companion_diagnostics.clear()
-        generated, provenance = original_provider(items, backend, settings=settings,
-                                                   diagnostics=diagnostics)
+        generated, provenance = original_provider(
+            items, backend, settings=settings, diagnostics=diagnostics,
+            **({'should_cancel': should_cancel} if should_cancel is not None else {}),
+        )
         provenance.update(companion_provenance)
         if diagnostics is not None:
             diagnostics['fallback_items'] = sum(value == 'extractive_fallback'
@@ -693,17 +716,20 @@ def install_companion_providers(summarize, supports, call, identity=lambda _back
                     row.get('provider_stopped', False) for row in companion_diagnostics)
         return generated, provenance
 
-    def companion_text(system, user, *, settings=None, timeout=None):
+    def companion_text(system, user, *, settings=None, timeout=None, should_cancel=None):
+        summarize._check_cancel(should_cancel)
         if settings is None:
             from dailydigest.config import get_settings
             settings = get_settings()
         backend = (settings.llm_backend or 'extractive').lower()
         if not supports(backend):
-            return original_text(system, user, settings=settings, timeout=timeout)
+            return original_text(system, user, settings=settings, timeout=timeout,
+                                 **({'should_cancel': should_cancel} if should_cancel is not None else {}))
         limit = summarize._CLI_TIMEOUT if backend in {'claude_cli', 'codex_cli'} else summarize._TIMEOUT
         requested = min(limit, timeout) if timeout is not None else limit
         payload = companion_text_payload(system, user, backend, requested)
         result = call('/text', payload, payload['timeout'] + 5)
+        summarize._check_cancel(should_cancel)
         if not isinstance(result.get('text'), str):
             raise ValueError('Companion returned no text response')
         return result['text']
@@ -837,12 +863,14 @@ def install_browser():
     install_companion_providers(summarize, browserCompanionSupports, companion_call,
                                 browserCompanionIdentity)
 
-    def companion_text(system, user, backend, *, timeout=180.0, settings=None):
+    def companion_text(system, user, backend, *, timeout=180.0, settings=None, should_cancel=None):
+        summarize._check_cancel(should_cancel)
         if not browserCompanionSupports(backend):
             raise RuntimeError(f'The connected companion does not advertise {backend} text generation')
         payload = companion_text_payload(system, user, backend, timeout)
         result = json.loads(run_sync(browserCompanion('/text', json.dumps(payload),
                                                      'POST', payload['timeout'] + 5)))
+        summarize._check_cancel(should_cancel)
         text = result.get('text')
         if not isinstance(text, str):
             raise ValueError('Companion returned no text response')

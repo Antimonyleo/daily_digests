@@ -287,7 +287,12 @@ docker compose up --build
 ```
 
 Open <http://127.0.0.1:8765>. The Compose configuration maps only localhost and
-persists both `data/` and `.env` across container rebuilds.
+persists `data/` across container rebuilds. The host `.env` is mounted read-only
+as bootstrap configuration. Saving Settings creates overrides in `data/.env`;
+these take precedence on later starts without changing or copying the host file.
+Keep `data/` when updating the container. To return a saved setting to its host
+bootstrap value, remove that override from `data/.env` while the container is
+stopped. Native and browser installations continue using their root `.env`.
 
 ## Command-line use
 

@@ -304,7 +304,7 @@ const vm = require('node:vm');
 const assert = require('node:assert/strict');
 const posted = [], fetched = [], saved = [];
 const context = vm.createContext({
-  URL, setTimeout, AbortSignal,
+  URL, setTimeout, clearTimeout, setInterval, clearInterval, AbortSignal, AbortController, DOMException,
   self: { postMessage: message => posted.push(message) },
   fetch: async (url, options) => {
     fetched.push({url, options});
@@ -443,7 +443,7 @@ def test_worker_acknowledges_mail_only_after_browser_commit():
 const fs = require('node:fs'), vm = require('node:vm'), assert = require('node:assert/strict');
 const events = [], posted = [];
 let failCommit = false;
-const context = vm.createContext({URL, setTimeout, clearTimeout, AbortSignal,
+const context = vm.createContext({URL, setTimeout, clearTimeout, setInterval, clearInterval, AbortSignal, AbortController, DOMException,
   self: {postMessage: message => posted.push(message)},
   fetch: async url => {
     events.push(url.endsWith('/ack') ? 'ack' : 'fetch');
@@ -525,7 +525,7 @@ const fs = require('node:fs'), vm = require('node:vm'), assert = require('node:a
 const posted = [], confirmed = [];
 const payload = JSON.stringify({html:'<p>Original R3</p>',subject:'DailyDigest 2026-10-16 [run:abc]',
   digest_id:'2026-10-16',run_id:'abc',labeled_items:[['R3',1]]});
-const context = vm.createContext({URL,setTimeout,clearTimeout,AbortSignal,
+const context = vm.createContext({URL,setTimeout,clearTimeout,setInterval,clearInterval,AbortSignal,AbortController,DOMException,
   self:{postMessage:message=>posted.push(message)},
   fetch:async (_url, options)=>{
     const sent=JSON.parse(options.body);
@@ -601,6 +601,26 @@ def test_advertised_companion_api_uses_server_credentials_and_actual_provenance(
     assert set(payload) == {'backend', 'items', 'profile', 'timeout'}
     assert 'llm_api_key' not in json.dumps(payload)
     assert 'token' not in payload
+
+
+def test_companion_transport_preserves_stop_between_summary_batches(runtime, companion_provider_module):
+    from dailydigest.brew import BrewCancelled
+    from dailydigest.config import get_settings
+
+    module, calls = companion_provider_module, []
+    stopped = [False]
+    settings = get_settings().model_copy(update={'llm_backend': 'api', 'llm_api_key': ''})
+
+    def call(path, payload, timeout):
+        calls.append(path)
+        stopped[0] = True
+        return {'summaries': {str(row['id']): 'Fixture summary' for row in payload['items']}}
+
+    runtime.install_companion_providers(module, lambda chosen: chosen == 'api', call)
+    with pytest.raises(BrewCancelled):
+        module.summarize_items_with_provenance(_provider_rows(15), settings=settings,
+                                              should_cancel=lambda: stopped[0])
+    assert calls == ['/summarize']
 
 
 def test_companion_failure_retains_native_api_budget_and_extractive_fallback(
@@ -758,7 +778,7 @@ def test_worker_refreshes_provider_identity_before_brew_and_preserves_digest_on_
 const fs = require('node:fs'), vm = require('node:vm'), assert = require('node:assert/strict');
 const events = [], posted = [];
 let failHealth = false;
-const context = vm.createContext({URL, setTimeout, clearTimeout, AbortSignal,
+const context = vm.createContext({URL, setTimeout, clearTimeout, setInterval, clearInterval, AbortSignal, AbortController, DOMException,
   self: {postMessage: message => posted.push(message)},
   fetch: async url => {
     assert.ok(url.endsWith('/health')); events.push('health');
@@ -1108,3 +1128,56 @@ def test_startup_requires_one_canonical_private_checkpoint(runtime):
     # Restoring a legacy portable snapshot can change JSON ordering/metadata.
     # Capture once after startup; subsequent read-only routes remain clean.
     assert runtime.state_generation() > 0
+
+
+def _pending_settings_journal(root, *, conflict=False):
+    old = b'LLM_API_KEY=old-fixture-secret\r\nLLM_BACKEND=extractive\r\n'
+    new = b'LLM_API_KEY=new-fixture-secret\nLLM_BACKEND=api\n'
+    root.mkdir(parents=True, exist_ok=True)
+    (root / '.env').write_bytes(b'external edit' if conflict else new)
+    document = {'version': 1, 'state': 'prepared', 'files': {'.env': {
+        'old': base64.b64encode(old).decode(), 'new': base64.b64encode(new).decode()}}}
+    (root / '.settings-transaction.json').write_text(json.dumps(document))
+    return old
+
+
+def test_internal_checkpoints_preserve_settings_journal_but_import_rejects_it(runtime, tmp_path):
+    _pending_settings_journal(tmp_path)
+    snapshot = runtime.export_snapshot(tmp_path)
+    assert '.settings-transaction.json' in json.loads(snapshot)['files']
+    names = json.loads(runtime.snapshot_file_names(tmp_path))
+    assert '.settings-transaction.json' in names
+    assert Path('.settings-transaction.json') in runtime.decode_snapshot(snapshot)
+    with pytest.raises(ValueError, match='journal'):
+        runtime.decode_snapshot(snapshot, enforce_import_limits=True)
+
+
+def test_browser_startup_recovers_settings_before_any_config_import(runtime, tmp_path):
+    source, target = tmp_path / 'source', tmp_path / 'target'
+    old = _pending_settings_journal(source)
+    snapshot = runtime.export_snapshot(source)
+    runtime.restore_startup_snapshot(snapshot, root=target, scratch_root=tmp_path)
+    assert (target / '.env').read_bytes() == old
+    assert not (target / '.settings-transaction.json').exists()
+
+
+@pytest.mark.parametrize('credentials', [False, True])
+def test_portable_export_recovers_and_excludes_journal_secrets(runtime, tmp_path, credentials):
+    old = _pending_settings_journal(tmp_path)
+    payload = runtime.export_portable_snapshot(credentials, root=tmp_path)
+    files = json.loads(payload)['files']
+    assert '.settings-transaction.json' not in files
+    assert (tmp_path / '.env').read_bytes() == old
+    decoded = base64.b64decode(files['.env'])
+    assert b'new-fixture-secret' not in decoded
+    assert (b'old-fixture-secret' in decoded) is credentials
+
+
+def test_portable_export_blocks_unresolved_settings_but_internal_checkpoint_preserves(runtime, tmp_path):
+    from dailydigest.settings_transaction import SettingsRecoveryError
+
+    _pending_settings_journal(tmp_path, conflict=True)
+    with pytest.raises(SettingsRecoveryError):
+        runtime.export_portable_snapshot(root=tmp_path)
+    assert '.settings-transaction.json' in json.loads(runtime.export_snapshot(tmp_path))['files']
+    assert (tmp_path / '.env').read_bytes() == b'external edit'

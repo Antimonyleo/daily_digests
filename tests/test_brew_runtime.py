@@ -184,6 +184,23 @@ def test_cancel_after_publication_does_not_report_rollback(offline_brew):
     assert events[-1][0] == "done"
 
 
+def test_pipeline_forwards_stop_callback_to_summary_batches(monkeypatch, offline_brew):
+    stopped = [False]
+
+    def generate(items, profile=None, *, settings=None, diagnostics=None, should_cancel=None):
+        assert callable(should_cancel), "The summary stage must receive the brew's Stop callback"
+        stopped[0] = True
+        assert should_cancel()
+        raise pipeline.BrewCancelled("Stopped between summary batches")
+
+    monkeypatch.setattr(pipeline, 'summarize_items', pipeline._ORIGINAL_SUMMARIZE_ITEMS)
+    monkeypatch.setattr(pipeline, 'summarize_items_with_provenance', generate)
+    with pytest.raises(pipeline.BrewCancelled, match='between summary batches'):
+        pipeline.run_all(dry_run=True, should_cancel=lambda: stopped[0])
+    with store.session_scope() as session:
+        assert session.get(store.DigestRow, offline_brew).item_count == 7
+
+
 def test_progress_names_encoding_before_it_runs(monkeypatch, offline_brew):
     events = []
 
@@ -222,3 +239,31 @@ def test_pipeline_pins_profile_and_summary_settings_before_ingestion(monkeypatch
     monkeypatch.setattr(pipeline, "summarize_items", pipeline._ORIGINAL_SUMMARIZE_ITEMS)
     monkeypatch.setattr(pipeline, "summarize_items_with_provenance", summaries)
     pipeline.run_all(dry_run=True)
+
+
+def test_catch_up_stop_is_not_swallowed_as_optional_provider_failure(monkeypatch):
+    from dailydigest.brew import BrewCancelled
+
+    def stopped(*args, should_cancel=None, **kwargs):
+        assert should_cancel is not None and should_cancel()
+        raise BrewCancelled('Catch-up stopped')
+
+    monkeypatch.setattr(summarize, '_llm_text', stopped)
+    with pytest.raises(BrewCancelled, match='Catch-up stopped'):
+        summarize.synthesize_catch_up(_items(1), 7, should_cancel=lambda: True)
+
+
+def test_pipeline_forwards_stop_to_catch_up_and_preserves_previous_digest(monkeypatch, offline_brew):
+    stop = [False]
+
+    def catch_up(rows, days, *, should_cancel=None, **kwargs):
+        assert should_cancel is not None, 'Catch-up omitted the Stop callback'
+        stop[0] = True
+        assert should_cancel()
+        raise pipeline.BrewCancelled('Active catch-up stopped')
+
+    monkeypatch.setattr(pipeline, 'synthesize_catch_up', catch_up)
+    with pytest.raises(pipeline.BrewCancelled, match='Active catch-up stopped'):
+        pipeline.run_all(dry_run=True, backfill_days=7, should_cancel=lambda: stop[0])
+    with store.session_scope() as session:
+        assert session.get(store.DigestRow, offline_brew).item_count == 7

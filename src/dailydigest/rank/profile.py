@@ -623,7 +623,7 @@ def build_profile_matrix_with_rocchio(profile: Profile, vote_count: int = 0) -> 
         from pathlib import Path
 
         from ..config import get_settings
-        from ..votes import FEEDBACK_SEMANTICS_VERSION, feedback_reasons_signature
+        from ..votes import FEEDBACK_SEMANTICS_VERSION, feedback_reasons_signature, feedback_votes_signature
         learned_path = Path(get_settings().db_path).parent / "learned_profile.npz"
         if not learned_path.exists():
             return static_mat
@@ -641,6 +641,13 @@ def build_profile_matrix_with_rocchio(profile: Profile, vote_count: int = 0) -> 
                 != feedback_reasons_signature()
             ):
                 logger.info("Ignoring learned profile built before feedback reasons changed")
+                return static_mat
+            if (
+                "feedback_votes_signature" not in data.files
+                or str(np.asarray(data["feedback_votes_signature"]).reshape(-1)[0])
+                != feedback_votes_signature()
+            ):
+                logger.info("Ignoring learned profile built before canonical votes changed")
                 return static_mat
             # Practical negatives remain raw ratings but do not increase the
             # strength of a direction learned from fewer informative ratings.

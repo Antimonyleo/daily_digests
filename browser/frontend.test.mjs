@@ -293,7 +293,7 @@ for(const failure of ['registration','activation-timeout','redundant']) test(`Co
   const handler=source.slice(start,source.indexOf('  const download =',start));
   const nodes={'compute-form':{},'compute-apply':{disabled:false},'compute-status':{},'compute-mode':{value:'multicore'}};
   const calls=[];let pending=false,refreshes=0,reloads=0;
-  runInNewContext(handler,{document:{getElementById:id=>nodes[id]},computeApplying:false,crossOriginIsolated:false,
+  runInNewContext(handler,{document:{getElementById:id=>nodes[id]},computeApplying:false,dirtySetup:false,crossOriginIsolated:false,
     frame:{}, settleRenderedEdits:async()=>{}, client:{quiesce:async()=>{},resume(){}},
     navigator:{serviceWorker:{}},isolationRequested:false,isolationKey:'fixture-isolation',localStorage:{setItem(){}},
     companionCall:async data=>{calls.push(data.type);if(data.type==='configure-compute')pending=true;if(data.type==='cancel-reload')pending=false;return{ok:true};},
@@ -329,4 +329,175 @@ test('the shell skip link focuses the reading desk without changing its route',(
   frame.contentDocument=null;skipToReadingDesk(event,frame,startup);assert.equal(focused,'frame');
   frame.hidden=true;skipToReadingDesk(event,frame,startup);assert.equal(focused,'startup');
   assert.equal(startup.tabIndex,-1);assert.equal(prevented,3);
+});
+
+function snapshotCopyControls(action, frame, snapshotState = () => null) {
+  const source=readFileSync(new URL('./app.mjs',import.meta.url),'utf8');
+  const nodes=Object.fromEntries(['export','include-credentials','sync-credentials',
+    'companion-email','companion-inbound','companion-push','companion-pull','recovery-export'].map(id=>[id,{checked:false}]));
+  const copies=[],captured=[],errors=[],companionStatus={};
+  const context={document:{getElementById:id=>nodes[id]},frame,settleRenderedEdits,
+    client:{call:async payload=>{copies.push(payload);captured.push(snapshotState());return {status:200,body:'snapshot'};}},
+    companionCall:async payload=>{copies.push(payload);captured.push(snapshotState());return {};},companionStatus,
+    confirm:()=>true,download(){},localStorage:{setItem(){}},backupKey:'fixture',
+    showLastBackup(){},setStatus(){},restoreProgress(){},report:error=>errors.push(error.message)};
+  const start=action==='download' ? source.indexOf("  document.getElementById('export').onclick =")
+    : action==='raw' ? source.indexOf("  document.getElementById('recovery-export').onclick =")
+      : source.indexOf("  for (const action of ['email', 'inbound', 'push', 'pull'])");
+  const end=action==='download' ? source.indexOf('  async function restoreBackup',start)
+    : action==='raw' ? source.indexOf("  document.getElementById('retained-recovery').onclick",start)
+      : source.indexOf('  let tabChannel;',start);
+  assert.ok(start>=0 && end>start,'Exercise the actual snapshot-copy handler');
+  runInNewContext(source.slice(start,end),context);
+  return {copies,captured,errors,companionStatus,click:nodes[action==='download'?'export':action==='raw'?'recovery-export':'companion-push'].onclick};
+}
+
+for(const action of ['download','push']) {
+  test(`${action} copies wait for the latest queued rating before creating a snapshot`,async()=>{
+    const window={addEventListener(){}};
+    const create=runInNewContext(readFileSync(new URL('../templates/_rating_queue.js.j2',import.meta.url),'utf8')+';createRatingQueue',{window});
+    let release,confirmed=null;
+    const rate=create({initial:null,select(){},busy(){},success(){},failure:error=>assert.fail(error.message),
+      send:async grade=>{if(grade===70)await new Promise(done=>{release=done;});confirmed=grade;return {};}});
+    const first=rate(70),latest=rate(100);
+    await new Promise(done=>setImmediate(done));
+    const controls=snapshotCopyControls(action,{contentDocument:{},contentWindow:window},()=>confirmed);
+    const copying=controls.click();
+    await new Promise(done=>setImmediate(done));
+    const copiedBeforeLatest=controls.copies.length;
+    release();await Promise.all([first,latest,copying]);
+    assert.equal(copiedBeforeLatest,0,'No snapshot may be created while a visible rating is still queued');
+    assert.equal(confirmed,100);assert.equal(controls.copies.length,1);
+    assert.deepEqual(controls.captured,[100],'The copy must capture the latest confirmed rating');
+    assert.equal(controls.copies[0].includeCredentials,false);
+  });
+
+  test(`${action} reports a rating drain failure without creating a stale copy`,async()=>{
+    const controls=snapshotCopyControls(action,{contentDocument:{},contentWindow:{
+      ddFlushRatings:()=>Promise.reject(Error('Ratings are still finishing; try again.'))}});
+    await controls.click();
+    assert.equal(controls.copies.length,0);
+    const message=action==='download'?controls.errors[0]:controls.companionStatus.textContent;
+    assert.match(message,/Ratings are still finishing/);
+  });
+}
+
+test('snapshot downloads remain available without a rendered frame, including raw recovery',async()=>{
+  const normal=snapshotCopyControls('download',{contentDocument:null});await normal.click();
+  assert.equal(normal.copies[0].type,'export');assert.deepEqual(normal.errors,[]);
+  const recovery=snapshotCopyControls('raw',{contentDocument:{},contentWindow:{
+    ddFlushRatings:()=>assert.fail('Raw recovery must work independently of the rendered desk')}});
+  await recovery.click();assert.equal(recovery.copies[0].type,'recovery-export');assert.deepEqual(recovery.errors,[]);
+});
+
+for(const action of ['release','compute']) test(`${action} reload keeps unsaved settings usable before any reload fence`,async()=>{
+  const source=readFileSync(new URL('./app.mjs',import.meta.url),'utf8');
+  const nodes={'compute-form':{},'compute-apply':{disabled:false},'compute-status':{},'compute-mode':{value:'cpu'},'release-message':{}};
+  const effects=[],releaseReload={disabled:false};
+  const context={document:{getElementById:id=>nodes[id]},dirtySetup:true,computeApplying:false,
+    releaseReload,runtimeStarted:true,frame:{draft:'unsaved topics'},settleRenderedEdits:async()=>effects.push('drain'),
+    client:{quiesce:async()=>effects.push('pause'),resume:()=>effects.push('resume')},
+    companionCall:async data=>{effects.push(data.type);return {};},location:{reload:()=>effects.push('reload')},
+    setReleaseState:()=>{releaseReload.disabled=false;},crossOriginIsolated:false,isolationRequested:false,navigator:{},
+    refreshCompute:async()=>{},localStorage:{setItem:()=>effects.push('write')}};
+  const start=source.indexOf(action==='release'?'  releaseReload.onclick =':"  document.getElementById('compute-form').onsubmit =");
+  const end=source.indexOf(action==='release'?"  document.addEventListener('visibilitychange'":'  const download =',start);
+  runInNewContext(source.slice(start,end),context);
+  await (action==='release'?releaseReload.onclick():nodes['compute-form'].onsubmit({preventDefault(){}}));
+  assert.deepEqual(effects,[],'Unsaved edits must be checked before pausing, saving a compute choice or reloading');
+  assert.equal(context.frame.draft,'unsaved topics');assert.equal(context.computeApplying,false);
+  assert.equal(releaseReload.disabled,false);assert.equal(nodes['compute-apply'].disabled,false);
+  assert.match(nodes[action==='release'?'release-message':'compute-status'].textContent,/Save.*settings.*discard/);
+});
+
+function setupDraftTracking(initiallyDirty=false) {
+  const source=readFileSync(new URL('./app.mjs',import.meta.url),'utf8');
+  const fields=new Map([['topics','RNA delivery | 100'],['name','Reader']]);
+  const formListeners={},documentListeners={};
+  const form={fields,addEventListener:(name,handler)=>{(formListeners[name]||=[]).push(handler);}};
+  class FormDataDouble {constructor(target){this.entries=[...target.fields];} [Symbol.iterator](){return this.entries[Symbol.iterator]();}}
+  const helper=source.match(/export function trackSetupDraft\([\s\S]*?\n\}/);
+  const context={dirtySetup:initiallyDirty,activePath:'/setup',
+    document:{querySelectorAll:()=>[]},FormData:FormDataDouble,
+    frame:{contentDocument:{querySelector:()=>form,addEventListener:(name,handler)=>{(documentListeners[name]||=[]).push(handler);}}}};
+  if(helper)context.trackSetupDraft=runInNewContext(helper[0].replace('export ','')+';trackSetupDraft',context);
+  const start=source.indexOf("    frame.contentDocument?.addEventListener('click', () => {");
+  runInNewContext(source.slice(start,source.indexOf("    const topics =",start)),context);
+  return {fields,dirty:()=>context.dirtySetup,
+    dispatch(name){const event={target:{closest:selector=>selector==='form'?form:{}}};
+      for(const listener of [...formListeners[name]||[],...documentListeners[name]||[]])listener(event);
+    }};
+}
+
+test('Settings help buttons leave a clean form clean',()=>{
+  const draft=setupDraftTracking();draft.dispatch('click');assert.equal(draft.dirty(),false);
+});
+
+test('Settings edits become clean when submitted fields return to their original values',()=>{
+  const draft=setupDraftTracking();draft.fields.set('topics','RNA vaccines | 100');draft.dispatch('input');assert.equal(draft.dirty(),true);
+  draft.fields.set('topics','RNA delivery | 100');draft.dispatch('input');assert.equal(draft.dirty(),false);
+});
+
+test('Settings mutator buttons and transferred startup topics still mark changed submitted data dirty',()=>{
+  const draft=setupDraftTracking();draft.fields.set('topics','Protein design | 100');draft.dispatch('click');assert.equal(draft.dirty(),true);
+});
+
+test('Settings validation rerenders retain their unsaved submission even at the new form baseline',()=>{
+  const draft=setupDraftTracking(true);draft.dispatch('change');assert.equal(draft.dirty(),true);
+});
+
+function navigationControls(response) {
+  const source=readFileSync(new URL('./app.mjs',import.meta.url),'utf8');
+  const errors=[],statuses=[],requests=[];
+  const frame={hidden:false,contentDocument:{},contentWindow:{scrollY:0},srcdoc:'original draft',setAttribute(){},removeAttribute(){}};
+  const context={frame,errors,tabMoved:false,scrollPositions:new Map(),activePath:'/setup',navigation:0,
+    setStatus:message=>statuses.push(message),settleRenderedEdits:async()=>{},streams:new Map(),localPath,
+    client:{call:async request=>{requests.push(request);return Array.isArray(response)?response.shift():response;}},Headers,
+    history:{replaceState(){}},crypto:{randomUUID:()=> 'fixture-token'},renderedDocument,
+    location:{href:'https://reader.test/daily_digests/#/setup'},dirtySetup:true,frameGeneration:null,
+    computeTimer:null,clearInterval,latestCompute:null,interactiveSandbox:'allow-scripts allow-same-origin',
+    startup:{hidden:true,dataset:{}},previewNotice:{hidden:true},
+    document:{getElementById:()=>({})},scheduleLinkedBackup:()=>{context.copies++;},copies:0,
+    report:error=>errors.push(error.message)};
+  const helper=source.match(/export function httpErrorMessage\([\s\S]*?\n\}/);
+  if(helper)context.httpErrorMessage=runInNewContext(helper[0].replace('export ','')+';httpErrorMessage',{Headers});
+  const start=source.indexOf('  async function navigate(');
+  const navigate=runInNewContext(source.slice(start,source.indexOf("  worker.addEventListener('message'",start))+';navigate',context);
+  return {context,frame,errors,statuses,requests,navigate};
+}
+
+test('a setup POST validation response renders editable server HTML and remains unsaved',async()=>{
+  const body='<html><head><title>Settings</title></head><body><main><p role="alert">Priorities must total 100%.</p><form method="post" action="/setup"><input name="topics" value="RNA delivery | 40"></form></main></body></html>';
+  const ui=navigationControls({status:400,headers:{'content-type':'text/html'},body});
+  await ui.navigate('/setup',{method:'POST',body:'topics=RNA'});
+  assert.deepEqual(ui.errors,[]);assert.match(ui.frame.srcdoc,/RNA delivery \| 40/);
+  assert.match(ui.frame.srcdoc,/Priorities must total 100%/);assert.equal(ui.context.dirtySetup,true);
+  assert.match(ui.statuses.at(-1),/not.*saved/);assert.equal(ui.context.copies,0);
+});
+
+for(const [path,method,status] of [['/setup','GET',400],['/setup','POST',400],['/setup','POST',500],['/run','POST',400]]) {
+  test(`${method} ${path} HTTP ${status} does not render or echo generic error HTML`,async()=>{
+    const ui=navigationControls({status,headers:{'content-type':'text/html'},body:'<html><body>private error document</body></html>'});
+    await ui.navigate(path,{method});
+    assert.equal(ui.frame.srcdoc,'original draft');assert.equal(ui.errors.length,1);
+    assert.doesNotMatch(ui.errors[0],/html|private error document/);assert.match(ui.errors[0],new RegExp(String(status)));
+  });
+}
+
+test('a JSON navigation error displays its plain detail without dumping the response',async()=>{
+  const ui=navigationControls({status:409,headers:{'content-type':'application/json'},body:JSON.stringify({detail:'A brew is running. Try again when it finishes.',internal:'must not display'})});
+  await ui.navigate('/setup',{method:'POST'});
+  assert.match(ui.errors[0],/A brew is running/);assert.doesNotMatch(ui.errors[0],/[{}]|internal|must not display/);
+  assert.equal(ui.frame.srcdoc,'original draft');
+});
+
+test('structured JSON validation details never dump submitted values into navigation errors',async()=>{
+  const ui=navigationControls({status:422,headers:{'content-type':'application/json'},body:JSON.stringify({detail:[{input:'submitted-secret',msg:'Invalid value'}]})});
+  await ui.navigate('/setup',{method:'POST'});assert.doesNotMatch(ui.errors[0],/submitted-secret|\[|\{/);
+});
+
+test('a redirected GET error cannot become an editable POST validation response',async()=>{
+  const ui=navigationControls([{status:303,headers:{location:'/setup'},body:''},
+    {status:400,headers:{'content-type':'text/html'},body:'<html>unexpected GET error</html>'}]);
+  await ui.navigate('/setup',{method:'POST'});assert.equal(ui.frame.srcdoc,'original draft');assert.equal(ui.errors.length,1);
 });

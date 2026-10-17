@@ -27,7 +27,10 @@ def test_native_ci_covers_linux_and_existing_cross_platform_launcher_modules():
     assert len(test_commands) == 1
     selected = {part for part in shlex.split(test_commands[0]) if part.startswith("tests/")}
     assert {"tests/test_windows_launcher.py", "tests/test_start_script.py",
-            "tests/test_cli_process_tree.py", "tests/test_companion_cli.py"} <= selected
+            "tests/test_cli_process_tree.py", "tests/test_companion_cli.py",
+            "tests/test_scheduler_ownership.py", "tests/test_settings_transaction.py",
+            "tests/test_settings_config_recovery.py", "tests/test_summary_cancellation.py",
+            "tests/test_companion_cancellation.py"} <= selected
     assert all((ROOT / path).is_file() for path in selected)
     for name, job in jobs.items():
         assert "permissions" not in job

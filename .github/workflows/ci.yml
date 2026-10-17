@@ -39,12 +39,9 @@ jobs:
           node --test --test-isolation=none browser/*.test.mjs
           node --test --test-isolation=none prototypes/browser-compute/browser.test.mjs
 
-      - name: Report installed Node dependency advisories
+      - name: Reject vulnerable Node dependencies
         working-directory: prototypes/browser-compute
-        continue-on-error: true
-        # Includes native Node packages excluded by the static build allowlist.
-        # Report them for review; do not auto-upgrade the inference engine.
-        run: npm audit --package-lock-only --omit=dev --audit-level=high
+        run: npm audit --package-lock-only --audit-level=moderate
 
   native-launchers:
     timeout-minutes: 20
@@ -65,4 +62,4 @@ jobs:
           python-version: "3.12"
       - run: uv sync --frozen --group dev
       - name: Native launcher fixtures and asset paths
-        run: uv run --no-sync pytest tests/test_windows_launcher.py tests/test_start_script.py tests/test_package_assets.py tests/test_cli_process_tree.py tests/test_companion_cli.py -rs
+        run: uv run --no-sync pytest tests/test_windows_launcher.py tests/test_start_script.py tests/test_package_assets.py tests/test_cli_process_tree.py tests/test_companion_cli.py tests/test_scheduler_ownership.py tests/test_settings_transaction.py tests/test_settings_config_recovery.py tests/test_summary_cancellation.py tests/test_companion_cancellation.py -rs

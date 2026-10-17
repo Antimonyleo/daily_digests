@@ -34,9 +34,19 @@ def _field(text: str, name: str, following: tuple[str, ...]) -> str:
     return match.group(1).strip(" .;|") if match else ""
 
 
+_DATE_PATTERN = (
+    r"\b(?:\d{4}-\d{1,2}-\d{1,2}|\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4}|"
+    r"[A-Za-z]{3,9}\s+\d{1,2},?\s+\d{4})\b"
+)
+
+
 def _parse_date(value: str) -> date | None:
+    # dateutil otherwise fills missing days/years from today's date, creating
+    # false precision in official facts and calendar downloads.
+    if not re.fullmatch(_DATE_PATTERN, value.strip()):
+        return None
     try:
-        return date_parser.parse(value, fuzzy=True).date()
+        return date_parser.parse(value, fuzzy=False).date()
     except (ValueError, TypeError, OverflowError):
         return None
 
@@ -52,23 +62,20 @@ def _event_range(value: str) -> tuple[date | None, date | None]:
     )
     if same_month:
         first, last, month, year = same_month.groups()
-        return _parse_date(f"{first} {month} {year}"), _parse_date(f"{last} {month} {year}")
-    parts = re.split(r"\s+(?:to|until)\s+|\s+[–-]\s+", text, maxsplit=1)
-    if len(parts) == 2:
-        end = _parse_date(parts[1])
-        start_text = parts[0]
-        if end and not re.search(r"\b\d{4}\b", start_text):
-            start_text = f"{start_text} {end.year}"
-        start = _parse_date(start_text)
-        return start, end
-    parsed = _parse_date(text)
-    return parsed, parsed
-
-
-_DATE_PATTERN = (
-    r"\b(?:\d{4}-\d{1,2}-\d{1,2}|\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4}|"
-    r"[A-Za-z]{3,9}\s+\d{1,2},?\s+\d{4})\b"
-)
+        start, end = _parse_date(f"{first} {month} {year}"), _parse_date(f"{last} {month} {year}")
+    else:
+        parts = re.split(r"\s+(?:to|until)\s+|\s+[–-]\s+", text, maxsplit=1)
+        if len(parts) == 2:
+            end = _parse_date(parts[1])
+            start_text = parts[0]
+            if end and not re.search(r"\b\d{4}\b", start_text):
+                start_text = f"{start_text} {end.year}"
+            start = _parse_date(start_text)
+        else:
+            start = end = _parse_date(text)
+    if start is None or end is None or end < start:
+        return None, None
+    return start, end
 
 
 def _deadline(value: str) -> tuple[date | None, bool]:

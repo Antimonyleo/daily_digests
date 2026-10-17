@@ -12,6 +12,8 @@ import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pytest
+
 from dailydigest.health import latest_snapshot, should_show, weekly_summary
 
 
@@ -265,3 +267,35 @@ def test_coverage_shows_carried_source_failure_and_old_snapshot(tmp_path, monkey
     assert result['rows'][0]['status'] == 'Earlier snapshot'
     assert result['rows'][1]['status'] == 'Limited results'
     assert result['public_stale'] is True
+
+
+@pytest.mark.parametrize('payload', [None, [], 'damaged metadata', 42])
+def test_invalid_health_root_does_not_break_reading_or_next_check(tmp_path, monkeypatch, payload):
+    from dailydigest import health, web
+
+    monkeypatch.setattr(health, '_health_path', lambda: tmp_path/'health.json')
+    (tmp_path/'health.json').write_text(json.dumps(payload))
+    assert latest_snapshot() == []
+    assert weekly_summary() == []
+    assert web._digest_overview([])['scanned'] == 0
+    health.record([health.IngestStats(source='Current', items=3)])
+    assert latest_snapshot()[0]['items'] == 3
+
+
+def test_malformed_health_rows_leave_valid_diagnostics_readable(tmp_path, monkeypatch):
+    from dailydigest import health, web
+
+    monkeypatch.setattr(health, '_health_path', lambda: tmp_path/'health.json')
+    valid = {'source': 'Valid', 'items': 4, 'ok': True, 'diagnostics': {'queries': [{'term': 'DNA'}]}}
+    payload = {'latest': [None, {'source': 'Broken', 'items': 'not a count', 'ok': True}, valid],
+               'history': [None, {'recorded_at': _recent_ts(), 'stats': [None, valid]},
+                           {'recorded_at': _recent_ts(), 'stats': 'broken'}]}
+    (tmp_path/'health.json').write_text(json.dumps(payload))
+    assert web._digest_overview([])['scanned'] == 4
+    coverage = health.coverage_summary()
+    assert coverage['responded'] == 1
+    assert coverage['unknown'] == 2
+    assert weekly_summary() == [{'source': 'Valid', 'items_7d': 4, 'failures_7d': 0, 'last_error': None}]
+    health.record([health.IngestStats(source='Current', items=1)])
+    retained = json.loads((tmp_path/'health.json').read_text())['history']
+    assert any(valid in entry['stats'] for entry in retained)

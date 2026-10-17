@@ -1641,12 +1641,6 @@
       ["must", "good", "neutral", "bad"].forEach((c) => b.classList.remove(c));
       b.classList.add(GRADE_CLASS[g]);
     });
-    if (!NEGATIVE_GRADES.has(String(grade))) {
-      itemEl.querySelectorAll(".reason-chip.active").forEach((chip) => {
-        chip.classList.remove("active");
-        chip.setAttribute("aria-pressed", "false");
-      });
-    }
     const reasonBlock = itemEl.querySelector(".reason-block");
     if (reasonBlock) reasonBlock.hidden = !NEGATIVE_GRADES.has(String(grade));
     syncReasonChips(itemEl);
@@ -1981,16 +1975,26 @@
     const rate = createRatingQueue({
       initial:itemEl.dataset.currentGrade || null,
       select:grade => setActive(itemEl, grade),
-      send:async grade => responsePayload(await fetch(`/vote/${itemEl.dataset.itemId}/${grade}`, {
-        method:'POST', headers:{'X-CSRF-Token':CSRF_TOKEN},
+      send:async grade => responsePayload(await fetch(`/vote/${itemEl.dataset.itemId}${grade === null ? '' : '/' + grade}`, {
+        method:grade === null ? 'DELETE' : 'POST', headers:{'X-CSRF-Token':CSRF_TOKEN},
       })),
+      committed:(_payload, grade) => {
+        if (!NEGATIVE_GRADES.has(String(grade))) itemEl.querySelectorAll('.reason-chip.active').forEach(chip => {
+          chip.classList.remove('active'); chip.setAttribute('aria-pressed', 'false');
+        });
+      },
       busy:saving => {
         setSaving(itemEl, saving);
         itemEl.querySelectorAll('.vote-btn').forEach(button => {button.disabled = false;});
         if (saving) setStatus(itemEl, 'Recording response…', '');
       },
       success:(payload, grade) => {
-        setFeedbackPending(itemEl, true); applyReaderFilters(); updateRankingStatus(payload.ranking_status);
+        setFeedbackPending(itemEl, grade !== null); applyReaderFilters(); updateRankingStatus(payload.ranking_status);
+        if (grade === null) {
+          setStatus(itemEl, payload.storagePending ? 'Rating cleared · saving browser copy…' : 'Rating cleared; saved reading is unchanged.', payload.storagePending ? 'pending' : 'saved');
+          itemEl.querySelector('.vote-btn')?.focus();
+          return;
+        }
         setStatus(itemEl, payload.storagePending ? `${GRADE_LABEL[grade]} recorded · saving browser copy…` : `${GRADE_LABEL[grade]} saved`, payload.storagePending ? 'pending' : 'saved');
         showToast(`${GRADE_LABEL[grade]} response recorded`);
       },
@@ -2009,28 +2013,7 @@
       }
     });
     const clearButton = itemEl.querySelector(".clear-rating");
-    if (clearButton) clearButton.addEventListener("click", async () => {
-      let cleared = false;
-      setSaving(itemEl, true);
-      try {
-        const response = await fetch(`/vote/${itemEl.dataset.itemId}`, {
-          method: "DELETE", headers: {"X-CSRF-Token": CSRF_TOKEN},
-        });
-        const payload = await response.json();
-        if (!response.ok) throw new Error(payload.detail || "Rating was not cleared.");
-        setActive(itemEl, null);
-        setFeedbackPending(itemEl, false);
-        applyReaderFilters();
-        setStatus(itemEl, "Rating cleared; saved reading is unchanged.", "saved");
-        updateRankingStatus(payload.ranking_status);
-        cleared = true;
-      } catch (error) {
-        setStatus(itemEl, error.message, "error");
-      } finally {
-        setSaving(itemEl, false);
-        if (cleared) itemEl.querySelector(".vote-btn")?.focus();
-      }
-    });
+    if (clearButton) clearButton.addEventListener('click', () => {void rate(null);});
     itemEl.querySelectorAll(".reason-chip").forEach((chip) => {
       chip.addEventListener("click", async () => {
         const id = itemEl.dataset.itemId;

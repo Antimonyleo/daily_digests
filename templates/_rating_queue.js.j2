@@ -7,7 +7,7 @@ if (typeof window !== 'undefined') {
   });
 }
 // Serialize each card's ratings; only the latest intent may change its visible state.
-function createRatingQueue({initial, send, select, success, failure, busy}) {
+function createRatingQueue({initial, send, select, success, failure, busy, committed = () => {}}) {
   let confirmed = initial, revision = 0, pending = 0, chain = Promise.resolve();
   return grade => {
     const version = ++revision;
@@ -16,6 +16,7 @@ function createRatingQueue({initial, send, select, success, failure, busy}) {
     chain = operation.catch(() => {});
     const finished = operation.then(result => {
       confirmed = grade;
+      committed(result, grade);
       if (version === revision) success(result, grade);
     }).catch(error => {
       if (version === revision) { select(confirmed); failure(error); }

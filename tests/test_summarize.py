@@ -232,14 +232,13 @@ def test_cli_timeout_kills_the_whole_process_group(monkeypatch):
     )
     monkeypatch.setattr(sm.shutil, "which", lambda name: f"/tools/{name}")
     monkeypatch.setattr(sm.subprocess, "Popen", _HangingPopen)
-    monkeypatch.setattr(sm.os, "getpgid", lambda pid: 4242)
     monkeypatch.setattr(sm.os, "killpg", lambda pgid, sig: killed_groups.append(pgid))
 
     summaries = sm.summarize_items(
         [_row("RNA delivery", "The study reports a screen of 80 formulations.")]
     )
 
-    assert killed_groups == [4242]
+    assert killed_groups == [999]
     assert summaries[1].startswith("Key finding:")  # extractive fallback
 
 

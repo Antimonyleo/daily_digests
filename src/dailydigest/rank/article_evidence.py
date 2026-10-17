@@ -8,7 +8,7 @@ from __future__ import annotations
 import re
 
 
-ARTICLE_EVIDENCE_VERSION = "article-evidence-v1"
+ARTICLE_EVIDENCE_VERSION = "article-evidence-v2"
 _BREAK = re.compile(r"(?<=[.!?;])\s+")
 _VALIDATION = re.compile(r"\b(?:validat(?:e|ed|ions?|ing)|evaluat(?:e|ed|ions?|ing)|test(?:ed|ing)?|benchmark(?:ed|ing)?)\b", re.I)
 _PERFORMED = re.compile(r"\b(?:validated|evaluated|tested|benchmarked|we\s+(?:validate|evaluate|test|benchmark)|(?:validation|evaluation|testing)\s+(?:results|accuracy|performance|confirmed|confirms)|(?:validation|evaluation|testing)\s+was\s+(?:performed|conducted))\b", re.I)
@@ -17,7 +17,9 @@ _INDEPENDENT = re.compile(r"\b(?:independent|external|held[ -]out|hold[ -]out|ou
 _EXPERIMENT = re.compile(r"\b(?:experiment(?:al|ally|s)?|measurements?|assays?|in vitro|in vivo)\b", re.I)
 _BENCHMARK = re.compile(r"\bbenchmarks?\b", re.I)
 _FUTURE = re.compile(r"\b(?:future|will|would|could|might|may|planned|intend|proposed validation)\b", re.I)
-_NEGATED = re.compile(r"\b(?:did not|do not|does not|not (?:validated|evaluated|tested|available|performed)|(?:no|without)\s+(?:\w+\s+){0,3}validation|unavailable)\b", re.I)
+# Mixed positive/negative clauses are ambiguous to this sentence heuristic.
+# Keep them unknown rather than attribute a negated resource or validation type.
+_NEGATED = re.compile(r"\b(?:no|not|neither|never|without|cannot|can't|unavailable|lacks?)\b", re.I)
 _BACKGROUND = re.compile(r"\b(?:previous studies|prior work|earlier work|other studies|related work)\b", re.I)
 _RESOURCE = r"(?:source\s+code|code|data(?:sets?)?|software|scripts?)"
 _AVAILABLE = re.compile(r"\b" + _RESOURCE + r"\b[^.;]{0,65}?\b(?:is|are|was|were|has been|have been)\s+(?:(?:publicly|freely|openly)\s+)?(?:available|deposited|released|accessible|provided|shared)\b", re.I)

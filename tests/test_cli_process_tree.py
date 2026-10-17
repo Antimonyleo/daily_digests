@@ -1,6 +1,7 @@
 """Exercise CLI timeout containment with Python fixtures, never model providers."""
 from __future__ import annotations
 
+from contextlib import suppress
 import json
 import os
 from pathlib import Path
@@ -122,3 +123,123 @@ def test_cli_timeout_terminates_real_descendant_holding_output_pipe(tmp_path, mo
                 pass
         if parents:
             parents[0].wait(timeout=5)
+
+
+@pytest.mark.parametrize('redirect_child', [False, True])
+def test_cli_stop_terminates_active_process_tree(tmp_path, redirect_child):
+    from dailydigest.brew import BrewCancelled
+
+    ready = tmp_path / 'stop-descendant-ready'
+    child = "import os,sys,time; from pathlib import Path; Path(sys.argv[1]).write_text(str(os.getpid())); time.sleep(30)"
+    if redirect_child:
+        child = "import subprocess,sys; sys.exit(subprocess.call([sys.executable,'-u','-c'," + repr(child) + ",sys.argv[1]]))"
+    parent = "import subprocess,sys,time; subprocess.Popen([sys.executable,'-u','-c',sys.argv[1],sys.argv[2]]); time.sleep(30)"
+    observed = []
+    real_popen = subprocess.Popen
+
+    def record(*args, **kwargs):
+        proc = real_popen(*args, **kwargs)
+        observed.append(proc)
+        return proc
+
+    from unittest.mock import patch
+    started = time.monotonic()
+    try:
+        with patch.object(summarize.subprocess, 'Popen', record):
+            with pytest.raises(BrewCancelled):
+                summarize._run_cli_process(
+                    [sys.executable, '-u', '-c', parent, child, str(ready)],
+                    'fixture prompt', str(tmp_path), 30, should_cancel=ready.exists,
+                )
+        assert ready.exists(), 'Fixture did not exercise cancellation after start'
+        pid = int(ready.read_text())
+        deadline = time.monotonic() + 2
+        while _running(pid) and time.monotonic() < deadline:
+            time.sleep(.02)
+        assert not _running(pid), 'Stop left an owned CLI descendant alive'
+        assert observed[0].poll() is not None
+        assert observed[0].stdout.closed
+        assert time.monotonic() - started < 5
+    finally:
+        if observed and observed[0].poll() is None:
+            summarize._kill_process_group(observed[0])
+
+
+@pytest.mark.skipif(sys.platform == 'win32', reason='POSIX process group survives its leader')
+def test_stop_kills_owned_group_after_cli_leader_has_exited(tmp_path, monkeypatch):
+    from dailydigest.brew import BrewCancelled
+
+    ready = tmp_path / 'orphan-ready'
+    child = "import os,sys,time; from pathlib import Path; Path(sys.argv[1]).write_text(str(os.getpid())); time.sleep(30)"
+    parent = "import subprocess,sys; subprocess.Popen([sys.executable,'-u','-c',sys.argv[1],sys.argv[2]])"
+    processes = []
+    real_popen = subprocess.Popen
+
+    def record(*args, **kwargs):
+        process = real_popen(*args, **kwargs)
+        processes.append(process)
+        return process
+
+    def stopped():
+        # Reap the exited leader before cancellation; its child's group still
+        # belongs to this invocation and keeps the inherited stdout pipe open.
+        return bool(ready.exists() and processes and processes[0].poll() is not None)
+
+    monkeypatch.setattr(summarize.subprocess, 'Popen', record)
+    try:
+        with pytest.raises(BrewCancelled):
+            summarize._run_cli_process([sys.executable, '-u', '-c', parent, child, str(ready)],
+                                       '', str(tmp_path), 5, should_cancel=stopped)
+        pid = int(ready.read_text())
+        deadline = time.monotonic() + 1
+        while _running(pid) and time.monotonic() < deadline:
+            time.sleep(.02)
+        assert not _running(pid), 'Stop leaked descendants after their CLI leader exited'
+    finally:
+        if processes:
+            with suppress(ProcessLookupError):
+                os.killpg(processes[0].pid, signal.SIGKILL)
+
+
+def test_cli_stop_with_large_input_and_child_that_never_reads_stdin(tmp_path):
+    """Windows communicate writes stdin before its own timeout can take effect."""
+    from dailydigest.brew import BrewCancelled
+
+    ready = tmp_path / 'no-reader-ready'
+    script = "import sys,time; from pathlib import Path; Path(sys.argv[1]).write_text('ready'); time.sleep(30)"
+    started = time.monotonic()
+    with pytest.raises(BrewCancelled):
+        summarize._run_cli_process([sys.executable, '-u', '-c', script, str(ready)],
+                                   'fixture prompt ' * (1024 * 1024), str(tmp_path), 30,
+                                   should_cancel=ready.exists)
+    assert time.monotonic() - started < 5, 'Stop blocked writing a prompt to non-reading CLI'
+
+
+def test_windows_io_supervisor_stops_a_real_blocking_stdin_write(tmp_path):
+    """Exercise the Windows write ordering with real pipes on every OS."""
+    from dailydigest.brew import BrewCancelled
+
+    ready = tmp_path / 'blocking-stdin-ready'
+    script = "import sys,time; from pathlib import Path; Path(sys.argv[1]).write_text('ready'); time.sleep(30)"
+    process = subprocess.Popen([sys.executable, '-u', '-c', script, str(ready)],
+                               stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE, text=True, start_new_session=True)
+
+    def blocking_communicate(prompt, timeout=None):
+        # Windows communicate writes stdin before applying its timeout. Mimic
+        # exactly that ordering using the fixture child's genuinely full pipe.
+        process.stdin.write(prompt)
+        return '', ''
+
+    process.communicate = blocking_communicate
+    started = time.monotonic()
+    try:
+        with pytest.raises(BrewCancelled):
+            summarize._communicate_windows(process, 'fixture input ' * (1024 * 1024),
+                                           30, ready.exists)
+        assert process.poll() is not None
+        assert process.stdin.closed and process.stdout.closed and process.stderr.closed
+        assert time.monotonic() - started < 5
+    finally:
+        if process.poll() is None:
+            summarize._kill_process_group(process)

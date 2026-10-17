@@ -17,6 +17,19 @@ export async function backupFileText(file) {
   return file.text();
 }
 
+export function httpErrorMessage(response) {
+  const prefix = `DailyDigest HTTP ${response.status}: `;
+  if ((new Headers(response.headers).get('content-type') || '').toLowerCase().includes('json')) {
+    try {
+      const detail = JSON.parse(response.body)?.detail;
+      if (typeof detail === 'string' && detail.trim() && !/[<>]/.test(detail) && !/^[{\[]/.test(detail.trim())) {
+        return prefix + detail.trim().slice(0, 500);
+      }
+    } catch { /* Malformed or structured errors must not dump submitted values. */ }
+  }
+  return prefix + 'The request could not be completed. Please try again.';
+}
+
 export function computeStatusText(result) {
   const completed = result.stats?.completedInputs || 0;
   const backend = result.device === 'webgpu' ? 'GPU' : result.threads > 1 ? `CPU · up to ${result.threads} cores` : 'CPU · one core';
@@ -111,6 +124,14 @@ export async function settleRenderedEdits(frame, {timeoutMs = 5000} = {}) {
       timer = setTimeout(() => reject(new Error('The reading desk is still finishing an action. Wait for your ratings, then try again.')), timeoutMs);
     })]);
   } finally { clearTimeout(timer); }
+}
+
+export function trackSetupDraft(form, changed, {initiallyDirty = false} = {}) {
+  if (!form) return;
+  const snapshot = () => JSON.stringify([...new FormData(form)]);
+  const baseline = snapshot();
+  const update = () => changed(initiallyDirty || snapshot() !== baseline);
+  for (const name of ['input', 'change', 'click']) form.addEventListener(name, update);
 }
 
 export class WorkerClient {
@@ -529,6 +550,11 @@ async function boot() {
   document.getElementById('release-dismiss').onclick = () => { dismissedRelease = releaseNotice.dataset.build; releaseNotice.hidden = true; };
   releaseReload.onclick = async () => {
     releaseReload.disabled = true;
+    if (dirtySetup) {
+      document.getElementById('release-message').textContent = 'Save your unsaved settings, or leave Settings to discard them, before reloading.';
+      setReleaseState();
+      return;
+    }
     if (!runtimeStarted) { location.reload(); return; }
     try { await settleRenderedEdits(frame); await client.quiesce(); await companionCall({ type: 'prepare-reload' }); location.reload(); }
     catch (error) { client.resume(); setReleaseState(); document.getElementById('release-message').textContent = error.message; }
@@ -560,14 +586,8 @@ async function boot() {
     frame.contentDocument?.addEventListener('click', () => {
       for (const menu of document.querySelectorAll('.browser-bar > details[open]')) menu.open = false;
     });
-    const markDraft = event => {
-      if (activePath.split('?')[0] === '/setup' && event.target.closest?.('form')) dirtySetup = true;
-    };
-    frame.contentDocument?.addEventListener('input', markDraft);
-    frame.contentDocument?.addEventListener('change', markDraft);
-    frame.contentDocument?.addEventListener('click', event => {
-      if (event.target.closest?.('button[type="button"]')) markDraft(event);
-    });
+    trackSetupDraft(frame.contentDocument?.querySelector('form[action="/setup"]'),
+      value => { dirtySetup = value; }, {initiallyDirty:dirtySetup});
     const topics = frame.contentDocument?.getElementById('topics');
     if (draftSubmitted && topics && !topics.value.trim() && topicDraft.value.trim()) {
       topics.value = topicDraft.value;
@@ -815,6 +835,10 @@ async function boot() {
   document.getElementById('compute-form').onsubmit = async event => {
     event.preventDefault();
     if (computeApplying) return;
+    if (dirtySetup) {
+      document.getElementById('compute-status').textContent = 'Save your unsaved settings, or leave Settings to discard them, before changing Compute.';
+      return;
+    }
     computeApplying = true;
     document.getElementById('compute-apply').disabled = true;
     document.getElementById('compute-status').textContent = 'Saving your compute choice before reloading…';
@@ -873,17 +897,22 @@ async function boot() {
       for (const stream of streams.values()) stream.cancel();
       streams.clear();
       path = localPath(path);
+      let requestMethod = options.method?.toUpperCase() || 'GET';
       let response = await client.call({ type: 'request', path, method: 'GET', ...options });
       for (let redirects = 0; response.status >= 300 && response.status < 400; redirects++) {
         if (redirects >= 8) throw new Error('DailyDigest returned too many redirects.');
         const headers = new Headers(response.headers);
         if (!headers.has('location')) throw new Error('DailyDigest redirect is missing its destination.');
         path = localPath(headers.get('location'), path);
+        requestMethod = 'GET';
         response = await client.call({ type: 'request', path, method: 'GET' });
       }
       if (version !== navigation) return;
-      if (response.status >= 400) throw new Error(`DailyDigest HTTP ${response.status}: ${response.body}`);
       const headers = new Headers(response.headers);
+      const setupValidation = response.status === 400 && requestMethod === 'POST'
+        && path.split('?')[0] === '/setup' && (headers.get('content-type') || '').toLowerCase().split(';')[0].trim() === 'text/html'
+        && /<form\b[^>]*\baction=["']\/setup["'][^>]*>/i.test(response.body);
+      if (response.status >= 400 && !setupValidation) throw new Error(httpErrorMessage(response));
       if ((headers.get('content-type') || '').includes('text/calendar')) {
         download(response.body, 'text/calendar', 'dailydigest.ics');
         history.replaceState(null, '', '#' + activePath);
@@ -909,8 +938,9 @@ async function boot() {
       previewNotice.hidden = true;
       document.getElementById('backup-runtime-notice').hidden = true;
       startup.dataset.state = 'ready';
-      setStatus(headers.get('x-dailydigest-storage') === 'pending' ? 'Saving recent changes…' : 'Saved in this profile · Backup');
-      if (options.method && options.method.toUpperCase() !== 'GET') scheduleLinkedBackup();
+      setStatus(setupValidation ? 'Settings need correction · changes have not been saved.'
+        : headers.get('x-dailydigest-storage') === 'pending' ? 'Saving recent changes…' : 'Saved in this profile · Backup');
+      if (response.status < 400 && options.method && options.method.toUpperCase() !== 'GET') scheduleLinkedBackup();
     } catch (error) { if (version === navigation) report(error); }
     finally { if (version === navigation) { frame.inert = false; frame.removeAttribute('aria-busy'); } }
   }
@@ -1134,6 +1164,7 @@ async function boot() {
     try {
       const includeCredentials = document.getElementById('include-credentials').checked;
       if (includeCredentials && !confirm('Include saved API keys and credentials in this backup? Keep the downloaded file private.')) return;
+      await settleRenderedEdits(frame);
       const response = await client.call({ type: 'export', includeCredentials });
       if (response.status >= 400) throw new Error(response.body);
       download(response.body, 'application/json', 'dailydigest-browser-backup.json');
@@ -1204,6 +1235,7 @@ async function boot() {
       button.disabled = true;
       companionStatus.textContent = 'Running requested companion action…';
       try {
+        if (action === 'push') await settleRenderedEdits(frame);
         if (action === 'pull') restoreProgress('Restoring Companion data… Keep this tab open.');
         const apply = () => companionCall({ type: `companion-${action}`, ...(action === 'pull' ? { overwrite: true } : {}), ...(action === 'push' ? { includeCredentials } : {}) });
         const result = await (action === 'pull' ? replaceWithCopiesPaused(apply) : apply());

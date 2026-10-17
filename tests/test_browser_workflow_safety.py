@@ -5,6 +5,21 @@ import re
 import yaml
 
 
+def test_dependency_advisories_block_checks_and_publication():
+    root = Path(__file__).resolve().parents[1]
+    for file, job in [('ci.yml', 'browser-unit'), ('browser-pages.yml', 'build')]:
+        workflow = yaml.load((root / '.github/workflows' / file).read_text(), Loader=yaml.BaseLoader)
+        steps = workflow['jobs'][job]['steps']
+        audits = [(i, step) for i, step in enumerate(steps) if 'npm audit ' in step.get('run', '')]
+        assert len(audits) == 1
+        index, audit = audits[0]
+        assert audit.get('continue-on-error', 'false') == 'false'
+        assert '--audit-level=moderate' in audit['run']
+        if file == 'browser-pages.yml':
+            build = next(i for i, step in enumerate(steps) if 'python browser/build.py' in step.get('run', ''))
+            assert index < build
+
+
 def test_release_permissions_checks_and_failure_reporting():
     workflow = yaml.load((Path(__file__).resolve().parents[1]/'.github/workflows/browser-pages.yml').read_text(), Loader=yaml.BaseLoader)
     assert workflow['permissions'] == {'contents': 'read'}
@@ -93,3 +108,11 @@ def test_pull_requests_run_browser_unit_checks_without_publishing():
     assert 'node --test --test-isolation=none browser/*.test.mjs' in runs
     assert 'prototypes/browser-compute/browser.test.mjs' in runs
     assert 'collect_sources.py' not in runs
+
+
+def test_only_main_can_publish_or_update_production_refresh_incidents():
+    workflow = yaml.load((Path(__file__).resolve().parents[1] / '.github/workflows/browser-pages.yml').read_text(), Loader=yaml.BaseLoader)
+    assert 'codex/browser-compute-prototype' in workflow['on']['push']['branches']
+    assert 'if' not in workflow['jobs']['build']
+    for name in ('deploy', 'notify-failure', 'refresh-status'):
+        assert "github.ref == 'refs/heads/main'" in workflow['jobs'][name]['if']

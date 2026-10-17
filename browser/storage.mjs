@@ -42,12 +42,12 @@ const exceedsImportLimit = (payload, names) => names.length > MAX_IMPORT_FILES |
 const storedSizeWarning = (payload, names) => exceedsImportLimit(payload, names)
   ? 'Your saved reading state exceeds the portable import limit. It was preserved; importing a backup of this size is currently unsupported.' : null;
 
-function validatePrivatePaths(names) {
+function validatePrivatePaths(names, { allowSettingsJournal = false } = {}) {
   const paths = new Set(names);
   for (const name of names) {
     if (typeof name !== 'string') throw new Error('Backup contains an invalid private path.');
     const parts = name.split('/');
-    if (name !== '.env' && (parts.length < 2 || parts[0] !== 'data') ||
+    if (name !== '.env' && !(allowSettingsJournal && name === '.settings-transaction.json') && (parts.length < 2 || parts[0] !== 'data') ||
         parts.some(part => !part || part === '.' || part === '..' || part === '.compute.lock') ||
         name.includes('\\')) throw new Error('Backup contains an invalid private path.');
     if (parts.some((_, index) => index > 0 && paths.has(parts.slice(0, index).join('/')))) throw new Error('Backup contains conflicting paths.');
@@ -56,7 +56,7 @@ function validatePrivatePaths(names) {
 
 /** Match export_snapshot byte-for-byte, including Python's ASCII JSON keys. */
 export function capturePrivateSnapshot(names, readFile, {cache = new Map(), versions = {}} = {}) {
-  validatePrivatePaths(names);
+  validatePrivatePaths(names, {allowSettingsJournal:true});
   const wanted = new Set(names);
   for (const name of cache.keys()) if (!wanted.has(name)) cache.delete(name);
   const quote = value => JSON.stringify(value).replace(/[\u007f-\uffff]/g,
@@ -96,7 +96,7 @@ function validBase64(value) {
   return true;
 }
 
-export function validateRecoverySnapshot(payload, { enforceLimits = true } = {}) {
+export function validateRecoverySnapshot(payload, { enforceLimits = true, allowSettingsJournal = false } = {}) {
   const snapshot = JSON.parse(payload);
   if (snapshot?.format !== 'dailydigest-browser-v1' || !snapshot.files ||
       Array.isArray(snapshot.files) || typeof snapshot.files !== 'object') {
@@ -104,7 +104,7 @@ export function validateRecoverySnapshot(payload, { enforceLimits = true } = {})
   }
   const names = Object.keys(snapshot.files);
   if (enforceLimits && exceedsImportLimit(payload, names)) throw new Error('Backup exceeds the recovery limit.');
-  validatePrivatePaths(names);
+  validatePrivatePaths(names, {allowSettingsJournal});
   for (const name of names) {
     if (typeof snapshot.files[name] !== 'string') throw new Error('Backup contains an invalid private path.');
     if (!validBase64(snapshot.files[name])) throw new Error('Backup contains invalid encoded data.');
@@ -114,6 +114,6 @@ export function validateRecoverySnapshot(payload, { enforceLimits = true } = {})
 
 /** Existing checkpoints may grow beyond external import limits; preserve them. */
 export function validateStoredSnapshot(payload) {
-  const snapshot = validateRecoverySnapshot(payload, { enforceLimits: false });
+  const snapshot = validateRecoverySnapshot(payload, { enforceLimits: false, allowSettingsJournal: true });
   return { snapshot, warning: storedSizeWarning(payload, Object.keys(snapshot.files)) };
 }

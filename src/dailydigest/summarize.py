@@ -23,9 +23,11 @@ import subprocess
 import sys
 import tempfile
 import time
+from threading import Event, Thread
 
 import httpx
 
+from .brew import BrewCancelled
 from .rank.source_quality import (
     access_friction_score,
     infer_source_quality,
@@ -41,7 +43,7 @@ logger = logging.getLogger(__name__)
 _READER_CONTEXT: str = ""
 _READER_KEYWORDS: list[str] = []
 _READER_FACETS: dict = {}
-_SUMMARY_VERSION = "summary-v7"
+_SUMMARY_VERSION = "summary-v8"
 
 
 def _set_reader_context(profile: object | None) -> None:
@@ -164,10 +166,21 @@ def _why_read(row: ItemRow) -> str:
 
 
 def _caveat(row: ItemRow, key_point: str) -> str:
+    from .rank.article_evidence import assess_article_evidence
+
     text = f"{row.title or ''} {row.abstract or ''}".lower()
     source = (row.source or "").lower()
+    limitations = assess_article_evidence(
+        row.title or "", row.abstract or "",
+    )["dimensions"]["limitations"]["claims"]
+    limitation = limitations[0]["quote"] if limitations else ""
+    if len(limitation) > 230:
+        limitation = limitation[:229].rsplit(" ", 1)[0].rstrip() + "…"
     if any(p in source for p in ("biorxiv", "medrxiv", "arxiv", "chemrxiv", "preprint")):
-        return "Preprint — not yet peer-reviewed, so treat conclusions as provisional."
+        warning = "Preprint — not yet peer-reviewed, so treat conclusions as provisional."
+        return f"{warning} {limitation}" if limitation else warning
+    if limitation:
+        return limitation
     if any(term in text for term in ("commentary", "editorial", "viewpoint", "opinion")):
         return "This reads as commentary; the substance depends on the linked article."
     if promotional_score(row) >= 0.35:
@@ -178,7 +191,7 @@ def _caveat(row: ItemRow, key_point: str) -> str:
         return "Scope appears narrow (model/system-specific), so generalization is unproven."
     if len(key_point) < 120:
         return "The abstract is thin, so the linked article is needed for the real evidence."
-    return "No major limitation stated in the abstract."
+    return "Limitations were not assessed; check the linked article."
 
 
 def _extractive(row: ItemRow) -> str:
@@ -348,7 +361,55 @@ def _filter_to_batch_ids(summaries: dict[int, str], batch: list[ItemRow]) -> dic
     return {item_id: summary for item_id, summary in summaries.items() if item_id in allowed}
 
 
-def _call_llm(batch: list[ItemRow], *, settings=None, timeout: float = _TIMEOUT) -> dict[int, str]:
+# A fixed interpreter program owns cancellable HTTP, including its resolver.
+# Request metadata/credentials travel on stdin; they never enter argv or files.
+_HTTP_POST_BOOTSTRAP = r"""
+import json, sys
+import httpx
+payload = json.load(sys.stdin)
+try:
+    with httpx.Client(timeout=payload['timeout']) as client:
+        response = client.post(payload['url'], headers=payload['headers'], json=payload['body'])
+        response.raise_for_status()
+        result = {'data': response.json()}
+except Exception as error:
+    result = {'error': type(error).__name__}
+json.dump(result, sys.stdout)
+"""
+
+
+def _http_post(url, *, headers, body, timeout, should_cancel=None):
+    """Own HTTP and DNS work until completion or Stop.
+
+    The cancellable path uses an isolated process so a blocked OS resolver cannot
+    keep asyncio's executor shutdown waiting after Stop. Already accepted remote
+    generation may continue or be billed after the local transport closes.
+    """
+    if should_cancel is None or sys.platform == 'emscripten':
+        # Pyodide's synchronous HTTP bridge already owns an abortable fetch;
+        # native subprocesses/threads are unavailable in that runtime.
+        _check_cancel(should_cancel)
+        with httpx.Client(timeout=timeout) as client:
+            response = client.post(url, headers=headers, json=body)
+            _check_cancel(should_cancel)
+            response.raise_for_status()
+            return response.json()
+    _check_cancel(should_cancel)
+    payload = json.dumps({'url': url, 'headers': headers, 'body': body, 'timeout': timeout})
+    code, stdout, _stderr = _run_cli_process(
+        [sys.executable, '-I', '-u', '-c', _HTTP_POST_BOOTSTRAP], payload,
+        tempfile.gettempdir(), timeout, should_cancel=should_cancel,
+    )
+    if code != 0:
+        raise RuntimeError('Provider transport exited without a response')
+    result = json.loads(stdout)
+    if 'error' in result:
+        raise RuntimeError('Provider request failed (' + str(result['error']) + ')')
+    return result['data']
+
+
+def _call_llm(batch: list[ItemRow], *, settings=None, timeout: float = _TIMEOUT,
+              should_cancel=None) -> dict[int, str]:
     from .config import get_settings
     cfg = settings if settings is not None else get_settings()
     sys_prompt, user_prompt = _build_prompt(batch)
@@ -367,10 +428,8 @@ def _call_llm(batch: list[ItemRow], *, settings=None, timeout: float = _TIMEOUT)
         "Content-Type": "application/json",
     }
     url = cfg.llm_base_url.rstrip("/") + "/chat/completions"
-    with httpx.Client(timeout=timeout) as client:
-        resp = client.post(url, headers=headers, json=body)
-        resp.raise_for_status()
-        data = resp.json()
+    data = _http_post(url, headers=headers, body=body, timeout=timeout,
+                      should_cancel=should_cancel)
     choice = data["choices"][0]
     if choice.get("finish_reason") == "length":
         logger.warning("LLM response truncated (finish_reason=length); batch may be partially summarized")
@@ -379,7 +438,8 @@ def _call_llm(batch: list[ItemRow], *, settings=None, timeout: float = _TIMEOUT)
 
 
 def _anthropic_text(
-    system: str, user: str, max_tokens: int, *, settings=None, timeout: float = _TIMEOUT
+    system: str, user: str, max_tokens: int, *, settings=None, timeout: float = _TIMEOUT,
+    should_cancel=None,
 ) -> str:
     from .config import get_settings
 
@@ -396,10 +456,8 @@ def _anthropic_text(
         "Content-Type": "application/json",
     }
     url = cfg.llm_base_url.rstrip("/") + "/messages"
-    with httpx.Client(timeout=timeout) as client:
-        resp = client.post(url, headers=headers, json=body)
-        resp.raise_for_status()
-        data = resp.json()
+    data = _http_post(url, headers=headers, body=body, timeout=timeout,
+                      should_cancel=should_cancel)
     return "".join(
         str(block.get("text") or "")
         for block in data.get("content", [])
@@ -408,7 +466,7 @@ def _anthropic_text(
 
 
 def _call_anthropic(
-    batch: list[ItemRow], *, settings=None, timeout: float = _TIMEOUT
+    batch: list[ItemRow], *, settings=None, timeout: float = _TIMEOUT, should_cancel=None,
 ) -> dict[int, str]:
     sys_prompt, user_prompt = _build_prompt(batch)
     content = _anthropic_text(
@@ -417,11 +475,12 @@ def _call_anthropic(
         max_tokens=min(300 * len(batch) + 300, 2048),
         settings=settings,
         timeout=timeout,
+        **({'should_cancel': should_cancel} if should_cancel is not None else {}),
     )
     return _filter_to_batch_ids(_parse_id_summary_map(content), batch)
 
 
-def _kill_process_group(proc: subprocess.Popen) -> None:
+def _kill_process_group(proc: subprocess.Popen, *, close_streams=True) -> None:
     """SIGKILL the child's whole process group, then reap it (best effort).
 
     Killing the group — not just ``proc`` — closes the stdout pipe that any
@@ -436,7 +495,10 @@ def _kill_process_group(proc: subprocess.Popen) -> None:
                            timeout=5, check=False)
             proc.kill()  # best effort if the process exited during taskkill
         elif hasattr(os, "killpg"):
-            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            # start_new_session made pid the owned group ID. The CLI leader
+            # may already have exited/reaped while descendants retain pipes;
+            # querying its now-missing PID would leak that still-live group.
+            os.killpg(proc.pid, signal.SIGKILL)
         else:
             proc.kill()
     except (ProcessLookupError, PermissionError, OSError, subprocess.TimeoutExpired):
@@ -448,6 +510,12 @@ def _kill_process_group(proc: subprocess.Popen) -> None:
         proc.wait(timeout=5)
     except Exception:  # noqa: BLE001 - best effort reap
         pass
+    if not close_streams:
+        return
+    _close_process_streams(proc)
+
+
+def _close_process_streams(proc):
     for stream in (proc.stdin, proc.stdout, proc.stderr):
         try:
             if stream is not None:
@@ -456,8 +524,43 @@ def _kill_process_group(proc: subprocess.Popen) -> None:
             pass
 
 
+def _communicate_windows(proc, prompt, timeout, should_cancel):
+    """Supervise Windows' blocking stdin write outside communicate's timeout."""
+    done, outcome = Event(), []
+
+    def communicate():
+        try:
+            outcome.append(proc.communicate(prompt, timeout=timeout))
+        except BaseException as error:
+            outcome.append(error)
+        finally:
+            done.set()
+
+    writer = Thread(target=communicate, daemon=True, name='dailydigest-provider-io')
+    writer.start()
+    try:
+        deadline = time.monotonic() + timeout
+        while not done.wait(max(0.0, min(0.1, deadline - time.monotonic()))):
+            _check_cancel(should_cancel)
+            if time.monotonic() >= deadline:
+                raise subprocess.TimeoutExpired(proc.args, timeout)
+        _check_cancel(should_cancel)
+        if isinstance(outcome[0], BaseException):
+            raise outcome[0]
+        return outcome[0]
+    except BaseException:
+        # Kill the tree before closing Python streams: communicate may hold a
+        # stream lock during its synchronous Windows pipe write.
+        _kill_process_group(proc, close_streams=False)
+        writer.join(timeout=2)
+        if writer.is_alive():
+            raise RuntimeError('Provider I/O did not finish after process termination') from None
+        _close_process_streams(proc)
+        raise
+
+
 def _run_cli_process(
-    command: list[str], prompt: str, cwd: str, timeout: float
+    command: list[str], prompt: str, cwd: str, timeout: float, *, should_cancel=None,
 ) -> tuple[int, str, str]:
     """Run a CLI with ``prompt`` on stdin; returns ``(returncode, stdout, stderr)``.
 
@@ -469,6 +572,7 @@ def _run_cli_process(
     session makes it a process-group leader, so a timeout (or Ctrl-C) can SIGKILL
     the whole tree and free the pipe.
     """
+    _check_cancel(should_cancel)
     proc = subprocess.Popen(  # noqa: S603 - command is built from fixed literals
         command,
         stdin=subprocess.PIPE,
@@ -479,9 +583,29 @@ def _run_cli_process(
         start_new_session=True,
     )
     try:
-        stdout, stderr = proc.communicate(prompt, timeout=timeout)
+        if sys.platform == 'win32':
+            stdout, stderr = _communicate_windows(proc, prompt, timeout, should_cancel)
+        elif should_cancel is None:
+            stdout, stderr = proc.communicate(prompt, timeout=timeout)
+        else:
+            deadline = time.monotonic() + timeout
+            pending_input = prompt
+            while True:
+                _check_cancel(should_cancel)
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise subprocess.TimeoutExpired(command, timeout)
+                try:
+                    stdout, stderr = proc.communicate(pending_input, timeout=min(0.1, remaining))
+                    _check_cancel(should_cancel)
+                    break
+                except subprocess.TimeoutExpired:
+                    # communicate() retains buffered input/output between calls;
+                    # resending the prompt would duplicate it or raise ValueError.
+                    pending_input = None
     except BaseException:
-        _kill_process_group(proc)
+        if sys.platform != 'win32':
+            _kill_process_group(proc)
         raise
     return proc.returncode, stdout or "", stderr or ""
 
@@ -493,6 +617,7 @@ def _cli_text(
     *,
     timeout: float = _CLI_TIMEOUT,
     settings=None,
+    should_cancel=None,
 ) -> str:
     from .config import get_settings
 
@@ -556,7 +681,10 @@ def _cli_text(
             command.append("-")
             prompt = f"{system}\n\n{user}"
 
-        returncode, stdout, stderr = _run_cli_process(command, prompt, workdir, timeout)
+        returncode, stdout, stderr = _run_cli_process(
+            command, prompt, workdir, timeout,
+            **({'should_cancel': should_cancel} if should_cancel is not None else {}),
+        )
     if returncode != 0:
         detail = (stderr or stdout or "unknown CLI error").strip()[:300]
         raise RuntimeError(f"{executable_name} CLI failed: {detail}")
@@ -564,10 +692,14 @@ def _cli_text(
 
 
 def _call_cli(
-    batch: list[ItemRow], backend: str, *, timeout: float = _CLI_TIMEOUT, settings=None
+    batch: list[ItemRow], backend: str, *, timeout: float = _CLI_TIMEOUT, settings=None,
+    should_cancel=None,
 ) -> dict[int, str]:
     sys_prompt, user_prompt = _build_prompt(batch)
-    content = _cli_text(sys_prompt, user_prompt, backend, timeout=timeout, settings=settings)
+    content = _cli_text(
+        sys_prompt, user_prompt, backend, timeout=timeout, settings=settings,
+        **({'should_cancel': should_cancel} if should_cancel is not None else {}),
+    )
     return _filter_to_batch_ids(
         _parse_id_summary_map(_extract_json_object(content)), batch
     )
@@ -577,8 +709,14 @@ def _summarize_via_api(items: list[ItemRow]) -> dict[int, str]:
     return _summarize_via_provider(items, "api")
 
 
+def _check_cancel(should_cancel) -> None:
+    if should_cancel is not None and should_cancel():
+        raise BrewCancelled('Brew stopped before publication.')
+
+
 def _summarize_via_provider_with_provenance(
-    items: list[ItemRow], backend: str, *, settings=None, diagnostics: dict | None = None
+    items: list[ItemRow], backend: str, *, settings=None, diagnostics: dict | None = None,
+    should_cancel=None,
 ) -> tuple[dict[int, str], dict[int, str]]:
     out: dict[int, str] = {}
     provenance: dict[int, str] = {}
@@ -595,6 +733,7 @@ def _summarize_via_provider_with_provenance(
     started = time.monotonic()
     budget_hit = False
     for i in range(0, len(items), _BATCH_SIZE):
+        _check_cancel(should_cancel)
         batch = items[i : i + _BATCH_SIZE]
         remaining = budget - (time.monotonic() - started)
         if remaining <= 0 or (not is_cli and failures >= max_failures):
@@ -610,15 +749,22 @@ def _summarize_via_provider_with_provenance(
         request_timeout = min(_CLI_TIMEOUT if is_cli else _TIMEOUT, remaining)
         try:
             provider_calls += 1
+            cancel_options = {'should_cancel': should_cancel} if should_cancel is not None else {}
             if backend == "anthropic":
-                generated = _call_anthropic(batch, settings=settings, timeout=request_timeout)
+                generated = _call_anthropic(batch, settings=settings, timeout=request_timeout,
+                                            **cancel_options)
             elif backend in {"claude_cli", "codex_cli"}:
-                generated = _call_cli(batch, backend, timeout=request_timeout, settings=settings)
+                generated = _call_cli(batch, backend, timeout=request_timeout, settings=settings,
+                                     **cancel_options)
             else:
-                generated = _call_llm(batch, settings=settings, timeout=request_timeout)
+                generated = _call_llm(batch, settings=settings, timeout=request_timeout,
+                                     **cancel_options)
+            _check_cancel(should_cancel)
             out.update(generated)
             provenance.update({item_id: backend for item_id in generated})
             failures = 0 if generated else failures + 1
+        except BrewCancelled:
+            raise
         except Exception as e:  # noqa: BLE001
             failures += 1
             logger.warning(
@@ -626,11 +772,13 @@ def _summarize_via_provider_with_provenance(
                 i, type(e).__name__, str(e)[:200],
             )
             for row in batch:
+                _check_cancel(should_cancel)
                 if row.id is not None:
                     item_id = int(row.id)
                     out.setdefault(item_id, _extractive(row))
                     provenance.setdefault(item_id, "extractive_fallback")
     for row in items:
+        _check_cancel(should_cancel)
         if row.id is not None and not out.get(int(row.id)):
             item_id = int(row.id)
             out[item_id] = _extractive(row)
@@ -648,8 +796,13 @@ def _summarize_via_provider(items: list[ItemRow], backend: str) -> dict[int, str
     return _summarize_via_provider_with_provenance(items, backend)[0]
 
 
-def _summarize_extractive(items: list[ItemRow]) -> dict[int, str]:
-    return {int(row.id): _extractive(row) for row in items if row.id is not None}
+def _summarize_extractive(items: list[ItemRow], *, should_cancel=None) -> dict[int, str]:
+    summaries = {}
+    for row in items:
+        _check_cancel(should_cancel)
+        if row.id is not None:
+            summaries[int(row.id)] = _extractive(row)
+    return summaries
 
 
 def effective_summary_backend(*, settings=None) -> str:
@@ -696,7 +849,7 @@ def summary_signature(
 
 def summarize_items_with_provenance(
     items: list[ItemRow], profile: object | None = None, *, settings=None,
-    diagnostics: dict | None = None,
+    diagnostics: dict | None = None, should_cancel=None,
 ) -> tuple[dict[int, str], dict[int, str]]:
     """Return summaries plus the actual backend used for every item."""
     _set_reader_context(profile)
@@ -709,15 +862,16 @@ def summarize_items_with_provenance(
     settings = deepcopy(settings if settings is not None else get_settings())
     backend = effective_summary_backend(settings=settings)
     if backend == "extractive":
-        summaries = _summarize_extractive(items)
+        summaries = _summarize_extractive(items, should_cancel=should_cancel)
         return summaries, {item_id: "extractive" for item_id in summaries}
     return _summarize_via_provider_with_provenance(
-        items, backend, settings=settings, diagnostics=diagnostics
+        items, backend, settings=settings, diagnostics=diagnostics,
+        **({'should_cancel': should_cancel} if should_cancel is not None else {}),
     )
 
 
 def summarize_items(
-    items: list[ItemRow], profile: object | None = None, *, settings=None
+    items: list[ItemRow], profile: object | None = None, *, settings=None, should_cancel=None,
 ) -> dict[int, str]:
     """Return ``{item.id: summary}``.
 
@@ -728,10 +882,14 @@ def summarize_items(
     ``profile`` (when given) personalizes the "Why read" field to the reader's
     stated interests, in both the LLM prompt and the extractive fallback.
     """
-    return summarize_items_with_provenance(items, profile=profile, settings=settings)[0]
+    return summarize_items_with_provenance(
+        items, profile=profile, settings=settings,
+        **({'should_cancel': should_cancel} if should_cancel is not None else {}),
+    )[0]
 
 
-def _llm_text(system: str, user: str, *, settings=None, timeout: float | None = None) -> str:
+def _llm_text(system: str, user: str, *, settings=None, timeout: float | None = None,
+              should_cancel=None) -> str:
     """Single plain-text completion via the configured backend. '' if no LLM."""
     from .config import get_settings
 
@@ -745,26 +903,28 @@ def _llm_text(system: str, user: str, *, settings=None, timeout: float | None = 
         }
         headers = {"Authorization": f"Bearer {s.llm_api_key}", "Content-Type": "application/json"}
         url = s.llm_base_url.rstrip("/") + "/chat/completions"
-        with httpx.Client(timeout=min(_TIMEOUT, timeout) if timeout is not None else _TIMEOUT) as client:
-            resp = client.post(url, headers=headers, json=body)
-            resp.raise_for_status()
-            return (resp.json()["choices"][0]["message"]["content"] or "").strip()
+        data = _http_post(url, headers=headers, body=body,
+                          timeout=min(_TIMEOUT, timeout) if timeout is not None else _TIMEOUT,
+                          should_cancel=should_cancel)
+        return (data["choices"][0]["message"]["content"] or "").strip()
     if backend == "anthropic" and s.llm_api_key:
         return _anthropic_text(
             system, user, max_tokens=500, settings=s,
             timeout=min(_TIMEOUT, timeout) if timeout is not None else _TIMEOUT,
+            **({'should_cancel': should_cancel} if should_cancel is not None else {}),
         )
     if backend in {"claude_cli", "codex_cli"}:
         return _cli_text(
             system, user, backend, settings=s,
             timeout=min(_CLI_TIMEOUT, timeout) if timeout is not None else _CLI_TIMEOUT,
+            **({'should_cancel': should_cancel} if should_cancel is not None else {}),
         )
     return ""
 
 
 def synthesize_catch_up(
     rows: list[ItemRow], days: int, profile: object | None = None, *, settings=None,
-    timeout: float | None = None,
+    timeout: float | None = None, should_cancel=None,
 ) -> str:
     """A short 'what you missed' briefing that groups a catch-up backlog into
     themes. Empty on a normal run, with no LLM, or on any failure (never blocks)."""
@@ -782,7 +942,12 @@ def synthesize_catch_up(
     )
     user = f"The reader was away about {days} days. Today's digest items:\n{listing}"
     try:
-        return _llm_text(system, user, settings=settings, timeout=timeout).strip()
+        return _llm_text(
+            system, user, settings=settings, timeout=timeout,
+            **({'should_cancel': should_cancel} if should_cancel is not None else {}),
+        ).strip()
+    except BrewCancelled:
+        raise
     except Exception as e:  # noqa: BLE001
         logger.warning("catch-up synthesis failed: %s", e)
         return ""

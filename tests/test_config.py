@@ -98,7 +98,8 @@ def test_docker_compose_persists_settings_file():
     volumes = compose["services"]["dailydigest"]["volumes"]
 
     assert "./data:/app/data" in volumes
-    assert "./.env:/app/.env" in volumes
+    assert "./.env:/app/.env:ro" in volumes
+    assert compose["services"]["dailydigest"]["environment"]["DD_ENV_PATH"] == "data/.env"
     assert "USER_TZ" not in compose["services"]["dailydigest"]["environment"]
 
 

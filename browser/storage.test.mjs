@@ -147,3 +147,12 @@ test('linear validation preserves conflicting path and import count protections'
   assert.throws(() => validateRecoverySnapshot(payload(many)), /recovery limit/);
   assert.equal(Object.keys(validateStoredSnapshot(payload(many)).snapshot.files).length, 10001);
 });
+
+test('internal settings recovery journals survive checkpoints and remain forbidden in portable imports', () => {
+  const bytes = new TextEncoder().encode('{"private":"pending credential bytes"}');
+  const {payload} = capturePrivateSnapshot(['.settings-transaction.json'], () => bytes);
+  const {snapshot} = validateStoredSnapshot(payload);
+  assert.equal(snapshot.files['.settings-transaction.json'], Buffer.from(bytes).toString('base64'));
+  assert.throws(() => validateRecoverySnapshot(payload), /invalid private path/);
+  assert.throws(() => capturePrivateSnapshot(['.settings-transaction.json/escape'], () => bytes), /invalid private path/);
+});

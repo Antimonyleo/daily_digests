@@ -66,7 +66,7 @@ from sqlalchemy import func, select
 from . import health
 from .article_figure import display_figure
 from . import votes as votes_mod
-from .config import SETTINGS, get_settings, reload_settings, section_enabled
+from .config import SETTINGS, get_settings, reload_settings, section_enabled, settings_env_path
 from .email_render import (
     SECTION_META,
     SECTION_ORDER,
@@ -191,7 +191,7 @@ _TEMPLATE_DIR = (
     if _PACKAGED_TEMPLATE_DIR.is_dir()
     else _REPO_ROOT / "templates"
 )
-_ENV_PATH = _REPO_ROOT / ".env"
+_ENV_PATH = settings_env_path(_REPO_ROOT)
 
 
 def _get_profile_path() -> Path:
@@ -1099,7 +1099,7 @@ def _parse_env_value(value: str) -> str:
     return val
 
 
-def _write_env_file(path: Path, updates: dict[str, str]) -> None:
+def _updated_env_content(path: Path, updates: dict[str, str]) -> str:
     """Update KEY=value lines in place; append new keys at end. Preserves
     comments and blank lines from the original file."""
     if path.exists():
@@ -1127,7 +1127,11 @@ def _write_env_file(path: Path, updates: dict[str, str]) -> None:
         if key not in seen:
             new_lines.append(f"{key}={_format_env_value(val)}")
 
-    _atomic_private_write(path, "\n".join(new_lines) + "\n")
+    return "\n".join(new_lines) + "\n"
+
+
+def _write_env_file(path: Path, updates: dict[str, str]) -> None:
+    _atomic_private_write(path, _updated_env_content(path, updates))
 
 
 def _write_private_yaml(path: Path, payload: dict[str, Any]) -> None:
@@ -1135,20 +1139,20 @@ def _write_private_yaml(path: Path, payload: dict[str, Any]) -> None:
     _atomic_private_write(path, yaml.safe_dump(payload, sort_keys=False))
 
 
-def _atomic_private_write(path: Path, content: str) -> None:
-    """Replace a private text file atomically when the filesystem permits it."""
+def _atomic_private_write(path: Path, content: str | bytes) -> None:
+    """Replace a private file atomically when the filesystem permits it."""
+    encoded = content.encode('utf-8') if isinstance(content, str) else content
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary: Path | None = None
     try:
         with tempfile.NamedTemporaryFile(
-            mode="w",
-            encoding="utf-8",
+            mode="wb",
             dir=path.parent,
             prefix=f".{path.name}.",
             delete=False,
         ) as handle:
             temporary = Path(handle.name)
-            handle.write(content)
+            handle.write(encoded)
             handle.flush()
             os.fsync(handle.fileno())
         if os.name == "posix":
@@ -1159,9 +1163,10 @@ def _atomic_private_write(path: Path, content: str) -> None:
         except OSError as exc:
             # Docker bind-mounted individual files may reject rename(2). Keep
             # that supported, with the smallest possible non-atomic fallback.
-            if exc.errno != errno.EBUSY:
+            from .settings_transaction import settings_transaction_active
+            if exc.errno != errno.EBUSY or settings_transaction_active():
                 raise
-            path.write_text(content, encoding="utf-8")
+            path.write_bytes(encoded)
         if os.name == "posix":
             path.chmod(0o600)
     finally:
@@ -2180,11 +2185,6 @@ async def setup_post(request: Request) -> Response:
             if key in existing:
                 opportunity_payload[key] = existing[key]
 
-    # Read both existing profiles successfully before changing either one.
-    _write_private_yaml(_get_profile_path(), profile)
-    if opportunity_payload is not None:
-        _write_private_yaml(opportunity_path, opportunity_payload)
-
     # Write/update .env.
     default_base_url = (
         "https://api.anthropic.com/v1"
@@ -2224,7 +2224,35 @@ async def setup_post(request: Request) -> Response:
         env_updates["LLM_API_KEY"] = ""
     elif api_key and api_key != "***":
         env_updates["LLM_API_KEY"] = api_key
-    _write_env_file(_ENV_PATH, env_updates)
+    # Journal exact old/new bytes before touching any member. Startup recovery
+    # runs before .env parsing, so an interrupted group is never used silently.
+    from .settings_transaction import SettingsRecoveryError, settings_transaction
+
+    profile_path = _get_profile_path()
+    try:
+        changes = {
+            profile_path: yaml.safe_dump(profile, sort_keys=False).encode(),
+            _ENV_PATH: _updated_env_content(_ENV_PATH, env_updates).encode(),
+        }
+        if opportunity_payload is not None:
+            changes[opportunity_path] = yaml.safe_dump(opportunity_payload, sort_keys=False).encode()
+        # Native/browser journals live beside root .env. An explicit writable
+        # override (Compose) stores the journal in its persistent directory,
+        # while targets still use app-relative names, including custom profiles.
+        transaction_root = _REPO_ROOT if os.environ.get("DD_ENV_PATH") else _ENV_PATH.parent
+        with settings_transaction(transaction_root, changes, writer=_atomic_private_write,
+                                  journal_root=_ENV_PATH.parent):
+            _write_private_yaml(profile_path, profile)
+            if opportunity_payload is not None:
+                _write_private_yaml(opportunity_path, opportunity_payload)
+            _write_env_file(_ENV_PATH, env_updates)
+    except SettingsRecoveryError as exc:
+        raise HTTPException(status_code=500, detail=(
+            "Settings could not be saved, and some configuration files could not be restored. "
+            "Configuration loading is blocked until the recovery journal is resolved."
+        )) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="Settings could not be saved. Previous settings were restored; please try again.") from exc
     # Propagate changes to os.environ so pydantic-settings picks them up,
     # then refresh the in-memory SETTINGS singleton.
     for k, v in env_updates.items():

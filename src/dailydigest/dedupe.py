@@ -407,7 +407,7 @@ def _candidate_representative_score(it: Any) -> float:
     )
 
 
-def candidate_identity_keys(it: Any) -> list[str]:
+def candidate_identity_keys(it: Any, *, include_publication_links: bool = True) -> list[str]:
     """Return durable cross-source identity keys for an item-like object."""
     url = str(getattr(it, "url", "") or "")
     external_id = str(getattr(it, "external_id", "") or "")
@@ -428,7 +428,7 @@ def candidate_identity_keys(it: Any) -> list[str]:
     # A source-declared publication relationship identifies the same work even
     # when the journal version has a new DOI, title, or publication date.
     published_doi = metadata.get("published_doi") if isinstance(metadata, dict) else None
-    if isinstance(published_doi, str):
+    if include_publication_links and isinstance(published_doi, str):
         published_doi = _extract_doi(published_doi)
         if published_doi and f"doi:{published_doi}" not in keys:
             keys.append(f"doi:{published_doi}")

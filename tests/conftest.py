@@ -155,3 +155,28 @@ def _no_network(monkeypatch):
     monkeypatch.setattr(httpx.Client, "stream", _blocked)
     monkeypatch.setattr(httpx.AsyncClient, "get", _blocked)
     monkeypatch.setattr(httpx.AsyncClient, "post", _blocked)
+
+    # Cancellable providers own a separate interpreter; parent HTTP mocks do
+    # not reach it. Only explicitly local protocol fixtures may launch it.
+    import ipaddress
+    import json
+    from urllib.parse import urlsplit
+    from dailydigest import summarize
+
+    original = summarize._run_cli_process
+
+    def guarded(command, prompt, *args, **kwargs):
+        if command and command[-1] == summarize._HTTP_POST_BOOTSTRAP:
+            try:
+                host = urlsplit(json.loads(prompt)['url']).hostname
+                local = host == 'localhost' or ipaddress.ip_address(host).is_loopback
+            except (ValueError, TypeError, KeyError):
+                local = False
+            if not local:
+                _blocked()
+            # A machine's proxy settings must not forward loopback fixtures.
+            monkeypatch.setenv('NO_PROXY', '*')
+            monkeypatch.setenv('no_proxy', '*')
+        return original(command, prompt, *args, **kwargs)
+
+    monkeypatch.setattr(summarize, '_run_cli_process', guarded)

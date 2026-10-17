@@ -108,12 +108,22 @@
 (function () {
   const CSRF_TOKEN = {{ csrf_token|tojson }};
 
+  window.addEventListener('dd-storage-committed', () => {
+    document.querySelectorAll('.save-state.pending').forEach(status => {
+      status.classList.remove('pending'); status.textContent='Saved in this browser';
+    });
+  });
+
   document.querySelectorAll(".saved-card").forEach(card => {
     const status = card.querySelector(".save-state");
     const clear = card.querySelector(".clear-rating");
     const reasonBlock = card.querySelector(".reason-block");
     function busy(value) {
       card.querySelectorAll(".vote-btn, .reason-chip, .clear-rating").forEach(b => b.disabled = value);
+      if (value) status.classList.remove('pending');
+    }
+    function feedbackStatus(message, pending=false) {
+      status.textContent=message; status.classList.toggle('pending',pending);
     }
     function active(grade) {
       card.dataset.currentGrade = grade === null ? "" : String(grade);
@@ -125,9 +135,6 @@
       const negative = ["10", "40"].includes(card.dataset.currentGrade);
       reasonBlock.hidden = !negative;
       clear.hidden = grade === null;
-      if (!negative) card.querySelectorAll(".reason-chip").forEach(b => {
-        b.classList.remove("active"); b.setAttribute("aria-pressed", "false");
-      });
     }
     async function write(url, method) {
       const response = await fetch(url, {method, headers:{"X-CSRF-Token":CSRF_TOKEN}});
@@ -138,31 +145,33 @@
     }
     const rate = createRatingQueue({
       initial:card.dataset.currentGrade || null, select:active,
-      send:grade => write(`/vote/${card.dataset.itemId}/${grade}`, 'POST'),
+      send:grade => write(`/vote/${card.dataset.itemId}${grade === null ? '' : '/' + grade}`, grade === null ? 'DELETE' : 'POST'),
+      committed:(_payload, grade) => {
+        if (!['10','40'].includes(String(grade))) card.querySelectorAll('.reason-chip').forEach(button => {
+          button.classList.remove('active'); button.setAttribute('aria-pressed', 'false');
+        });
+      },
       busy:value => {busy(value); card.querySelectorAll('.vote-btn').forEach(b => {b.disabled=false;}); if (value) status.textContent='Recording response…';},
-      success:payload => {status.textContent=payload.storagePending ? 'Rating recorded · saving browser copy…' : 'Rating saved. Reasons are optional.';},
-      failure:error => {status.textContent='Rating was not saved. '+error.message;},
+      success:(payload, grade) => {
+        feedbackStatus(grade === null
+          ? (payload.storagePending ? 'Rating cleared · saving browser copy…' : 'Rating cleared; this item stays saved.')
+          : (payload.storagePending ? 'Rating recorded · saving browser copy…' : 'Rating saved. Reasons are optional.'),payload.storagePending);
+        if (grade === null) card.querySelector('.vote-btn').focus();
+      },
+      failure:error => {feedbackStatus('Rating was not saved. '+error.message);},
     });
     card.querySelectorAll('.vote-btn').forEach(button => button.addEventListener('click', () => {void rate(button.dataset.grade);}));
-    clear.addEventListener("click", async () => {
-      let cleared = false;
-      busy(true);
-      try { await write(`/vote/${card.dataset.itemId}`, "DELETE"); active(null);
-        status.textContent = "Rating cleared; this item stays saved.";
-        cleared = true;
-      } catch(error) { status.textContent = error.message; }
-      finally { busy(false); if (cleared) card.querySelector(".vote-btn").focus(); }
-    });
+    clear.addEventListener('click', () => {void rate(null);});
     card.querySelectorAll(".reason-chip").forEach(button => button.addEventListener("click", async () => {
       if (!["10", "40"].includes(card.dataset.currentGrade)) return;
       const removing = button.classList.contains("active");
       busy(true);
       try {
-        await write(`/vote/${card.dataset.itemId}/reason/${button.dataset.reason}`, removing ? "DELETE" : "POST");
+        const payload=await write(`/vote/${card.dataset.itemId}/reason/${button.dataset.reason}`, removing ? "DELETE" : "POST");
         button.classList.toggle("active", !removing);
         button.setAttribute("aria-pressed", String(!removing));
-        status.textContent = removing ? "Reason removed." : "Reason saved.";
-      } catch(error) { status.textContent = error.message; }
+        feedbackStatus((removing ? 'Reason removed.' : 'Reason saved.')+(payload.storagePending ? ' Saving browser copy…' : ''),payload.storagePending);
+      } catch(error) { feedbackStatus(error.message); }
       finally { busy(false); }
     }));
   });

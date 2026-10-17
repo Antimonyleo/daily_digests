@@ -419,6 +419,19 @@ try {
     return { explicitOnly: true, denialReported: true, noFolderMigration: true };
   });
   await check('explicit-compute-controls-and-device-warning', async () => {
+    await route('/setup', '#interest-editor');
+    await frame().locator('[data-interest-name]').first().fill('Unsaved compute test topic');
+    await toggleMenu('compute-menu');
+    await page.locator('#compute-apply').click();
+    await page.locator('#compute-status').filter({hasText:'Save your unsaved settings'}).waitFor();
+    assert.equal(await frame().locator('[data-interest-name]').first().inputValue(),'Unsaved compute test topic');
+    assert.equal(await page.locator('#compute-apply').isEnabled(),true);
+    await toggleMenu('compute-menu');
+    // A fresh Settings navigation explicitly discards this fictional draft.
+    await route('/setup', '#interest-editor');
+    await frame().locator('[data-browser-action="open-guide"]').click();
+    await page.locator('#quick-guide').waitFor();
+    await page.locator('#close-guide').click();
     const current = await page.evaluate(async () => JSON.parse((await window.__rpc({ type: 'compute-status' })).body));
     await toggleMenu('compute-menu');
     assert.equal(await page.locator('#compute-mode').inputValue(), 'cpu');
@@ -436,7 +449,8 @@ try {
       await startup();
     } else await toggleMenu('compute-menu');
     await frame().locator('#interest-editor').waitFor();
-    return { optInPersistsAcrossReload: current.capabilities.gpu, unsupportedChoicesDisabled: true, deviceWarning: true, cpuDefault: true };
+    return { unsavedSettingsPreserved:true, helpDoesNotDirtySettings:true,
+      optInPersistsAcrossReload: current.capabilities.gpu, unsupportedChoicesDisabled: true, deviceWarning: true, cpuDefault: true };
   });
   await check('muted-research-examples-require-explicit-use-and-save', async () => {
     const topics = frame().locator('#topics');
@@ -490,6 +504,32 @@ try {
     assert.deepEqual(await weights.evaluateAll(inputs => inputs.map(input => input.value)), ['50', '50']);
     await route('/setup', '#interest-editor');
     return { separateFields: true, shownEqualsSubmitted: true, underAndOverBlocked: true, addRemoveNormalizes: true };
+  });
+  await check('server-settings-validation-remains-editable-and-private', async () => {
+    const before = await snapshot();
+    await frame().locator('form[action="/setup"]').evaluate(form => {
+      // A listener-free clone exercises server validation independently of the
+      // editor's client checks, through the actual document submission bridge.
+      const submitted = form.cloneNode(true);
+      submitted.hidden = true;
+      submitted.querySelector('#name').value = 'Fictional unsaved validation name';
+      submitted.querySelector('#topics').value = 'RNA delivery | -1';
+      submitted.querySelector('#llm_api_key').value = 'fixture-key-must-not-return';
+      form.after(submitted);
+      submitted.dispatchEvent(new SubmitEvent('submit', {bubbles:true, cancelable:true}));
+    });
+    await frame().locator('.errors').waitFor();
+    assert.equal(await frame().locator('#name').inputValue(), 'Fictional unsaved validation name');
+    assert.equal(await frame().locator('#llm_api_key').inputValue(), '');
+    assert.equal((await frame().locator('body').innerHTML()).includes('fixture-key-must-not-return'), false);
+    assert.match(await page.locator('#status').textContent(), /changes have not been saved/);
+    assert.deepEqual((await snapshot()).files, before.files);
+    await toggleMenu('compute-menu');
+    await page.locator('#compute-apply').click();
+    await page.waitForFunction(() => document.querySelector('#compute-status').textContent.includes('Save your unsaved settings'));
+    await toggleMenu('compute-menu');
+    await route('/setup', '#interest-editor');
+    return {editableForm:true, draftPreserved:true, keyNotReflected:true, stateUnchanged:true, controlledReloadBlocked:true};
   });
   await check('local-wording-variants-are-explicit-and-do-not-autosave', async () => {
     await setTopics('quantum error correction (QEC) | 100');

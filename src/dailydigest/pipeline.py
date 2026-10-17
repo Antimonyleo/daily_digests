@@ -27,6 +27,7 @@ from .config import (
 )
 from .dedupe import (
     cap_near_duplicates,
+    candidate_identity_keys,
     dedupe_by_url,
     dedupe_ranking_candidates,
     filter_english,
@@ -430,15 +431,16 @@ def ingest_all(
             diagnostics = getattr(source, "last_fetch_diagnostics", {})
             if isinstance(diagnostics, dict):
                 stat.diagnostics = deepcopy(diagnostics)
-            results.append((index, spec, fetched, stat))
+            withdrawals = deepcopy(getattr(source, "last_fetch_withdrawals", []))
+            results.append((index, spec, fetched, stat, withdrawals))
         return results
 
-    fetched_by_index: dict[int, tuple[Any, list[Item], IngestStats]] = {}
+    fetched_by_index: dict[int, tuple[Any, list[Item], IngestStats, list[Item]]] = {}
     with ThreadPoolExecutor(max_workers=min(4, max(1, len(groups)))) as executor:
         futures = [executor.submit(_fetch_group, group) for group in groups.values()]
         for future in as_completed(futures):
-            for index, spec, fetched, stat in future.result():
-                fetched_by_index[index] = (spec, fetched, stat)
+            for index, spec, fetched, stat, withdrawals in future.result():
+                fetched_by_index[index] = (spec, fetched, stat, withdrawals)
 
     # A request cancelled inside the final adapter can be wrapped as an ordinary
     # fetch error. Preserve cancellation before interpreting empty/failed supply.
@@ -447,8 +449,23 @@ def ingest_all(
 
     # Restore configured order before dedupe. That keeps source precedence and
     # outputs deterministic even though independent providers fetched in parallel.
+    withdrawn_notices = [notice for _, _, _, notices in fetched_by_index.values() for notice in notices]
+    withdrawn_keys = {
+        key for notice in withdrawn_notices
+        if notice.section == "research" and notice.metadata.get("is_retracted") is True
+        for key in candidate_identity_keys(notice, include_publication_links=False)
+        if key.startswith(("doi:", "pmid:", "arxiv:", "url:"))
+    }
     for index in range(len(specs)):
-        spec, fetched, stat = fetched_by_index[index]
+        spec, fetched, stat, withdrawals = fetched_by_index[index]
+        if withdrawn_keys:
+            live = [item for item in fetched if item.section != "research" or not withdrawn_keys.intersection(
+                candidate_identity_keys(item, include_publication_links=False))]
+            if len(live) != len(fetched):
+                stat.diagnostics["withdrawn_items_excluded"] = len(fetched) - len(live)
+            fetched = live
+        if withdrawals:
+            stat.diagnostics["withdrawals_observed"] = len(withdrawals)
         stats.append(stat)
         if stat.ok and str(spec.name) in personalized_sources:
             personalized_responded.add(str(spec.name))
@@ -470,6 +487,12 @@ def ingest_all(
 
     if stats_out is not None:
         stats_out.extend(stats)
+    if withdrawn_notices:
+        # An observed withdrawal remains authoritative even if insufficient
+        # live supply aborts publication. Notices never count as research supply.
+        from .store import mark_research_withdrawn
+
+        mark_research_withdrawn(withdrawn_notices)
     try:
         health.record(stats)
     except Exception as e:  # noqa: BLE001
@@ -1840,6 +1863,7 @@ def run_all(
         generated, summary_backends = summarize_items_with_provenance(
             to_summarize, profile=profile, settings=section_settings,
             diagnostics=summary_diagnostics,
+            **({"should_cancel": should_cancel} if should_cancel is not None else {}),
         )
     new_summaries = {
         item_id: summary
@@ -2028,11 +2052,14 @@ def run_all(
                 _synth = synthesize_catch_up(
                     selected_rows, window_days, profile=profile, settings=section_settings,
                     timeout=catch_up_timeout,
+                    **({'should_cancel': should_cancel} if should_cancel is not None else {}),
                 )
                 if _synth:
                     _audits["catch_up_synthesis"] = [
                         {"days": window_days, "text": _synth}
                     ]
+            except BrewCancelled:
+                raise
             except Exception as _e:  # noqa: BLE001
                 logger.warning("catch-up synthesis write failed: %s", _e)
         check_cancel()

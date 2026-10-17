@@ -183,6 +183,17 @@ try{
     assert.equal(await canonicalHash(),canonical,'Read-only refresh must leave canonical bytes unchanged');
   }
   report.checks.push('three refreshes show the saved articles without starting any worker or changing saved bytes');
+  const readingURL=page.url();
+  await page.locator('body > .skip-link').focus();
+  await page.locator('body > .skip-link').press('Enter');
+  assert.equal(await page.evaluate(()=>document.activeElement===document.querySelector('#app')),true,
+    'The shell skip link must focus the isolated saved reading frame');
+  await page.keyboard.press('Tab');
+  assert.equal(await frame().locator('a').first().evaluate(link=>document.activeElement===link),true,
+    'Tab after skipping must reach the first saved article');
+  assert.equal(page.url(),readingURL,'Skipping to saved reading must preserve the hash route');
+  assert.equal(await page.evaluate(()=>window.__workerStarts),0);
+  report.checks.push('keyboard skip link enters the isolated saved reading frame and reaches its first article without changing the route or starting Python');
   await page.screenshot({path:output+'/desktop-reading.png',fullPage:true});
   await page.setViewportSize({width:390,height:844});
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);

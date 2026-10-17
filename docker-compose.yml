@@ -16,18 +16,12 @@ services:
     # Create .env from .env.example before starting Compose.
     volumes:
       - ./data:/app/data
-      - ./.env:/app/.env
+      - ./.env:/app/.env:ro
     environment:
       # Opt into the container's non-loopback (0.0.0.0) bind. Safe only because
       # the port above is mapped to 127.0.0.1 on the host; the app has no auth.
       DD_ALLOW_REMOTE_BIND: "1"
-      # Compose reads these optional values from the host's .env file. Extractive
-      # summaries remain the zero-configuration default.
-      LLM_BACKEND: "${LLM_BACKEND:-extractive}"
-      LLM_BASE_URL: "${LLM_BASE_URL:-https://api.openai.com/v1}"
-      LLM_API_KEY: "${LLM_API_KEY:-}"
-      LLM_MODEL: "${LLM_MODEL:-gpt-4o-mini}"
-      # USER_TZ is intentionally read from the mounted .env instead of being
-      # overridden here. Setup records the browser's IANA timezone so digest
-      # dates and schedules follow the reader rather than container UTC.
+      # Bootstrap comes from the read-only root .env. Settings saves override
+      # it in the directory-mounted data volume, allowing durable replacements.
+      DD_ENV_PATH: "data/.env"
     restart: unless-stopped

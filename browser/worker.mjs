@@ -12,7 +12,7 @@ import { validateReadingView } from './reading-view.mjs';
 let companion = null;
 let boot, state, database, storageWriter, ownership, recoveryPy, startupFailed = false, startupReady = false, jobRunning = false, stateReplacing = false, computeMode = 'cpu';
 let computePackagesReady = false, deferredPackages = [], computePackagesPending;
-let configurationChanging = false, reloadPending = false;
+let configurationChanging = false, reloadPending = false, emailSending = false;
 const progress = (stage, detail) => self.postMessage({ type: 'progress', stage, detail });
 let gpuProbe = null;
 
@@ -142,21 +142,38 @@ function companionEndpoint(value) {
 }
 async function companionCall(path, payload = null, method = 'POST', timeout = 180, configuration = companion) {
   if (!configuration?.endpoint) throw new Error('Configure the optional local companion explicitly before using this action.');
-  let result;
-  try { result = await fetch(configuration.endpoint + path, {
-    method, credentials: 'omit', mode: 'cors', signal: AbortSignal.timeout(Math.ceil(timeout * 1000)),
-    headers: { 'X-DailyDigest-Token': configuration.token, ...(payload !== null ? { 'Content-Type': 'application/json' } : {}) },
-    ...(payload !== null ? { body: payload } : {}),
-  }); } catch (error) {
+  const controller = new AbortController();
+  const cancellable = path === '/summarize' || path === '/text';
+  const checkStop = () => {
+    if (cancellable && state?.py.globals.get('browser_cancelled')?.()) {
+      controller.abort(new DOMException('Brew stopped before publication.', 'AbortError'));
+    }
+  };
+  checkStop();
+  controller.signal.throwIfAborted();
+  const stopTimer = cancellable ? setInterval(checkStop, 100) : null;
+  const timeoutTimer = setTimeout(() => controller.abort(new DOMException('Companion request timed out.', 'TimeoutError')), Math.ceil(timeout * 1000));
+  try {
+    const result = await fetch(configuration.endpoint + path, {
+      method, credentials: 'omit', mode: 'cors', signal: controller.signal,
+      headers: { 'X-DailyDigest-Token': configuration.token, ...(payload !== null ? { 'Content-Type': 'application/json' } : {}) },
+      ...(payload !== null ? { body: payload } : {}),
+    });
+    const body = await result.text();
+    checkStop();
+    controller.signal.throwIfAborted();
+    if (!result.ok) throw new Error(`Companion request failed (HTTP ${result.status}): ${body}`);
+    return body;
+  } catch (error) {
     if (error.name === 'TypeError') throw new Error('Could not reach Companion. Check that the helper is running, the URL is correct and its allowed origin matches this site. If Chrome asks for local-network access, allow it in this site’s permissions, then try again.', {cause:error});
     throw error;
+  } finally {
+    if (stopTimer !== null) clearInterval(stopTimer);
+    clearTimeout(timeoutTimer);
   }
-  const body = await result.text();
-  if (!result.ok) throw new Error(`Companion request failed (HTTP ${result.status}): ${body}`);
-  return body;
 }
 function idleForCompanion() {
-  if (stateReplacing || configurationChanging || reloadPending || jobRunning || state.py.globals.get('has_jobs')()) {
+  if (stateReplacing || configurationChanging || reloadPending || emailSending || jobRunning || state.py.globals.get('has_jobs')()) {
     const error = new Error('Wait for the current brew or state change before using this action.');
     error.status = 409;
     throw error;
@@ -401,7 +418,7 @@ self.onmessage = async ({ data }) => {
     await initialize();
     if (data.type === 'cancel-request') { state.py.globals.get('cancel_request')(data.id); return; }
     if (data.type === 'cancel-reload') {
-      if (stateReplacing || configurationChanging) {
+      if (stateReplacing || configurationChanging || emailSending) {
         self.postMessage(response(data.id, JSON.stringify({ detail: 'A state change is still being saved. Reload preparation cannot be cancelled yet.' }), 409));
         return;
       }
@@ -409,8 +426,8 @@ self.onmessage = async ({ data }) => {
       self.postMessage(response(data.id, JSON.stringify({ ok: true })));
       return;
     }
-    if (stateReplacing || configurationChanging || reloadPending) {
-      self.postMessage(response(data.id, JSON.stringify({ detail: reloadPending ? 'The application is about to reload. Wait for the page to reopen.' : stateReplacing
+    if (stateReplacing || configurationChanging || reloadPending || emailSending) {
+      self.postMessage(response(data.id, JSON.stringify({ detail: emailSending ? 'Wait for email delivery and its browser confirmation to finish.' : reloadPending ? 'The application is about to reload. Wait for the page to reopen.' : stateReplacing
         ? 'Backup import is replacing browser state. Wait for the page to reload.'
         : 'Browser settings are being saved. Retry this action after they finish.' }), 409));
       return;
@@ -518,20 +535,23 @@ self.onmessage = async ({ data }) => {
     }
     if (data.type === 'companion-email' || data.type === 'companion-push') {
       idleForCompanion();
-      const payload = data.type === 'companion-email' ? state.py.globals.get('companion_email_payload')()
-        : data.type === 'companion-push' ? JSON.stringify({ snapshot: state.py.globals.get('export_portable_snapshot')(data.includeCredentials === true) }) : '{}';
-      const path = data.type === 'companion-email' ? '/email' : data.type === 'companion-push' ? '/state' : '/inbound';
-      let requestPayload = payload;
-      if (data.type === 'companion-email') {
-        const {html, subject, digest_id} = JSON.parse(payload);
-        requestPayload = JSON.stringify({html, subject, digest_id});
-      }
-      const body = await companionCall(path, requestPayload, data.type === 'companion-push' ? 'PUT' : 'POST');
-      if (data.type === 'companion-email' && JSON.parse(body).sent === true) {
-        state.py.globals.get('companion_email_sent')(payload);
-        if (!await persist({ force: true })) throw new Error('The companion sent the email, but saving the browser delivery confirmation failed. Keep this tab open and export a backup.');
-      }
-      self.postMessage(response(data.id, body)); return;
+      emailSending = data.type === 'companion-email';
+      try {
+        const payload = data.type === 'companion-email' ? state.py.globals.get('companion_email_payload')()
+          : data.type === 'companion-push' ? JSON.stringify({ snapshot: state.py.globals.get('export_portable_snapshot')(data.includeCredentials === true) }) : '{}';
+        const path = data.type === 'companion-email' ? '/email' : data.type === 'companion-push' ? '/state' : '/inbound';
+        let requestPayload = payload;
+        if (data.type === 'companion-email') {
+          const {html, subject, digest_id} = JSON.parse(payload);
+          requestPayload = JSON.stringify({html, subject, digest_id});
+        }
+        const body = await companionCall(path, requestPayload, data.type === 'companion-push' ? 'PUT' : 'POST');
+        if (data.type === 'companion-email' && JSON.parse(body).sent === true) {
+          state.py.globals.get('companion_email_sent')(payload);
+          if (!await persist({ force: true })) throw new Error('The companion sent the email, but saving the browser delivery confirmation failed. Keep this tab open and export a backup.');
+        }
+        self.postMessage(response(data.id, body)); return;
+      } finally { emailSending = false; }
     }
     if (data.type === 'companion-pull') {
       idleForCompanion();
@@ -589,7 +609,7 @@ self.onmessage = async ({ data }) => {
       // Load before the route acquires a brew lock or queues a target. A failed
       // package download can then be retried without leaving a stuck brew.
       await prepareComputePackages();
-      if (stateReplacing || configurationChanging || reloadPending) throw new Error('Application state changed while preparing libraries. Retry after it finishes.');
+      if (stateReplacing || configurationChanging || reloadPending || emailSending) throw new Error('Application state changed while preparing libraries. Retry after it finishes.');
     }
     const result = await state.py.globals.get('handle_request').callPromising(JSON.stringify(data), emit);
     // A committed route response reaches the UI before an idle checkpoint.

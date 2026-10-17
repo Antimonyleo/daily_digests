@@ -16,7 +16,7 @@ function harness(overrides = {}) {
   const replies = [], writes = [], requests = [];
   const context = vm.createContext({ self: { postMessage: row => replies.push(row) },
     initialize: async () => {}, persist: async () => true, stateReplacing: false,
-    validateRecoverySnapshot, validateReadingView, configurationChanging: false, reloadPending: false, jobRunning: false, companion: null, gpuProbe: null,
+    validateRecoverySnapshot, validateReadingView, configurationChanging: false, reloadPending: false, emailSending: false, jobRunning: false, companion: null, gpuProbe: null,
     state: { py: { globals: { get: key => key === 'handle_request' ? { callPromising: async payload => {
       requests.push(JSON.parse(payload)); return '{}';
     } } : () => false } } },
@@ -213,4 +213,67 @@ for(const flag of ['stateReplacing','configurationChanging']) test(`cancel-reloa
   assert.equal(h.replies[0].status,409);
   assert.equal(h.context.reloadPending,true);
   assert.equal(h.context[flag],true);
+});
+
+function emailHarness(overrides = {}) {
+  const sent = [];
+  const h = harness(overrides);
+  const get = h.context.state.py.globals.get;
+  h.context.state.py.globals.get = key => ({
+    companion_email_payload: () => JSON.stringify({ html: '<p>Fixture</p>', subject: 'Fixture', digest_id: '2026-10-16' }),
+    companion_email_sent: payload => sent.push(payload),
+    handle_import: { callPromising: async () => {} },
+  }[key] || get(key));
+  return { ...h, sent };
+}
+
+test('email fences desk replacement, configuration, brewing and reload through delivery checkpoint', async () => {
+  const remote = deferred(), checkpoint = deferred(), checkpointStarted = deferred();
+  const h = emailHarness({
+    companionCall: path => path === '/email' ? remote.promise : Promise.resolve(JSON.stringify({ ok: true })),
+    persist: async () => { checkpointStarted.resolve(); return checkpoint.promise; },
+  });
+  const sending = h.send({ id: 60, type: 'companion-email' });
+  await turn();
+  const blocked = [
+    { type: 'import', overwrite: true, body: JSON.stringify({ format: 'dailydigest-browser-v1', files: {} }) },
+    { type: 'companion-pull', overwrite: true }, h.configure,
+    { type: 'request', method: 'POST', path: '/run/start' }, { type: 'prepare-reload' },
+  ];
+  // Rejections must not wait for the in-flight delivery checkpoint.
+  h.context.persist = async () => true;
+  for (const [index, data] of blocked.entries()) {
+    await h.send({ ...data, id: 70 + index });
+    assert.equal(h.replies.find(row => row.id === 70 + index).status, 409);
+  }
+  h.context.persist = async () => { checkpointStarted.resolve(); return checkpoint.promise; };
+  remote.resolve(JSON.stringify({ sent: true }));
+  await checkpointStarted.promise;
+  assert.equal(h.sent.length, 1);
+  assert.equal(h.context.emailSending, true);
+  h.context.persist = async () => true;
+  await h.send({ id: 80, type: 'prepare-reload' });
+  assert.equal(h.replies.find(row => row.id === 80).status, 409);
+  checkpoint.resolve(true); await sending;
+  assert.equal(h.replies.find(row => row.id === 60).status, 200);
+  assert.equal(h.context.emailSending, false);
+  await h.send({ id: 81, type: 'prepare-reload' });
+  assert.equal(h.replies.find(row => row.id === 81).status, 200);
+});
+
+for (const failure of ['network', 'checkpoint']) test(`email releases its fence after ${failure} failure`, async () => {
+  const remote = deferred();
+  const h = emailHarness({ companionCall: () => remote.promise, persist: async () => failure !== 'checkpoint' });
+  const sending = h.send({ id: 90, type: 'companion-email' });
+  await turn();
+  assert.equal(h.context.emailSending, true);
+  if (failure === 'network') remote.resolve(Promise.reject(Error('Fixture network failure')));
+  else remote.resolve(JSON.stringify({ sent: true }));
+  await sending;
+  assert.equal(h.replies.find(row => row.id === 90).status, 500);
+  assert.equal(h.sent.length, failure === 'network' ? 0 : 1);
+  assert.equal(h.context.emailSending, false);
+  h.context.persist = async () => true;
+  await h.send({ id: 91, type: 'prepare-reload' });
+  assert.equal(h.replies.find(row => row.id === 91).status, 200);
 });

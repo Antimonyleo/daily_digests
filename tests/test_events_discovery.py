@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
+import pytest
+
 
 class TestMultipleDeadlines:
     """Official pages list several routes to attend; one closed route is not closed."""
@@ -74,3 +76,50 @@ class TestRegionPreference:
         from dailydigest.opportunities import _region_matches
 
         assert not _region_matches(["United States"], "EMBL Heidelberg, Germany")
+
+
+@pytest.mark.parametrize("text", ["December 2026", "2027", "17 August", "August", "17"])
+def test_incomplete_event_dates_never_inherit_todays_components(text):
+    from dailydigest.ingest.events_rss import _deadline, _event_range, _parse_date
+
+    assert _parse_date(text) is None
+    assert _event_range(text) == (None, None)
+    assert _deadline(text) == (None, False)
+
+
+@pytest.mark.parametrize("text", [
+    "25 - 17 Aug 2026", "31 - 32 Aug 2026", "17 Aug 2026 to August 2026",
+    "December 2026 to 17 January 2027", "20 Aug 2026 to 17 Aug 2026",
+])
+def test_invalid_or_partial_event_range_is_rejected_as_a_whole(text):
+    from dailydigest.ingest.events_rss import _event_range
+
+    assert _event_range(text) == (None, None)
+
+
+@pytest.mark.parametrize("text,start,end", [
+    ("17 - 25 Aug 2026", date(2026, 8, 17), date(2026, 8, 25)),
+    ("17 Aug to 2 Sep 2026", date(2026, 8, 17), date(2026, 9, 2)),
+    ("30 Dec 2026 to 2 Jan 2027", date(2026, 12, 30), date(2027, 1, 2)),
+    ("2026-08-17", date(2026, 8, 17), date(2026, 8, 17)),
+    ("August 17, 2026", date(2026, 8, 17), date(2026, 8, 17)),
+])
+def test_complete_event_dates_and_explicit_range_inheritance_are_preserved(text, start, end):
+    from dailydigest.ingest.events_rss import _event_range
+
+    assert _event_range(text) == (start, end)
+
+
+def test_feed_does_not_publish_a_month_only_event_as_an_official_exact_date(monkeypatch):
+    from dailydigest.ingest import events_rss
+    from dailydigest.models import SourceSpec
+
+    feed = b'''<rss version="2.0"><channel><title>Events</title><item>
+        <title>RNA workshop</title><link>https://example.test/event</link>
+        <description>Date: December 2026 Location: Online Deadline: November 2026</description>
+        </item></channel></rss>'''
+    monkeypatch.setattr(events_rss, "_today", lambda: date(2026, 10, 1))
+    monkeypatch.setattr(events_rss, "_http_get_bytes", lambda url: feed if url.endswith("feed") else b"")
+    spec = SourceSpec(name="Events", kind="events_rss", section="events",
+                      url="https://example.test/feed", lookahead_days=365)
+    assert events_rss.EventsRSSSource().fetch(spec) == []

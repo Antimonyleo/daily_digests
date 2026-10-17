@@ -177,3 +177,113 @@ def test_setup_preserves_all_files_when_opportunity_profile_is_unreadable(
     assert profile_path.read_text() == original_profile
     assert opportunity_path.read_text() == content
     assert env_path.read_text() == original_env
+
+
+def _setup_save_case(tmp_path, monkeypatch, *, existing=True):
+    from dailydigest import web
+
+    paths = [tmp_path / 'profile.yaml', tmp_path / 'opportunities.yaml', tmp_path / '.env']
+    contents = [b'bio: Original profile\r\nkeywords: [RNA]\r\n',
+                b'description: Original private details\r\n',
+                b'# Keep original formatting\r\nLLM_BACKEND=extractive\r\nLLM_API_KEY=old-secret\r\n']
+    for path, content in zip(paths, contents, strict=True):
+        if existing:
+            path.write_bytes(content)
+    monkeypatch.setattr(web, '_get_profile_path', lambda: paths[0])
+    monkeypatch.setattr(web, '_get_opportunity_profile_path', lambda: paths[1])
+    monkeypatch.setattr(web, '_ENV_PATH', paths[2])
+    request = _request('POST', '/setup', form={
+        '_csrf_token': web._CSRF_TOKEN, 'bio': 'Updated profile',
+        'topics': 'RNA delivery | 10', 'llm_backend': 'extractive',
+        'llm_api_key': 'submitted-secret', 'include_opportunities': 'true',
+        'opportunity_career_stage': 'assistant professor',
+        'opportunity_institution_type': 'nonprofit university',
+        'opportunity_country': 'United States', 'opportunity_applicant_role': 'principal investigator',
+    })
+    return request, paths, contents
+
+
+@pytest.mark.parametrize('stage', ['opportunity', 'env'])
+@pytest.mark.parametrize('existing', [True, False])
+def test_setup_rolls_back_partial_config_writes_without_reloading(tmp_path, monkeypatch, stage, existing):
+    from dailydigest import web
+
+    request, paths, originals = _setup_save_case(tmp_path, monkeypatch, existing=existing)
+    reloaded = []
+    monkeypatch.setattr(web, 'reload_settings', lambda: reloaded.append(True))
+    before_key = web.os.environ.get('LLM_API_KEY')
+    if stage == 'opportunity':
+        write = web._write_private_yaml
+
+        def fail_opportunity(path, payload):
+            write(path, payload)
+            if path == paths[1]:
+                raise OSError('write failed; submitted-secret')
+
+        monkeypatch.setattr(web, '_write_private_yaml', fail_opportunity)
+    else:
+        write = web._write_env_file
+
+        def fail_env(path, updates):
+            write(path, updates)
+            raise OSError('write failed; submitted-secret')
+
+        monkeypatch.setattr(web, '_write_env_file', fail_env)
+
+    with pytest.raises((OSError, HTTPException)) as error:
+        asyncio.run(web.setup_post(request))
+    for path, original in zip(paths, originals, strict=True):
+        if existing:
+            assert path.read_bytes() == original
+        else:
+            assert not path.exists()
+    assert reloaded == []
+    assert web.os.environ.get('LLM_API_KEY') == before_key
+    assert isinstance(error.value, HTTPException)
+    assert error.value.status_code == 503
+    assert 'submitted-secret' not in error.value.detail
+
+
+def test_setup_reports_partial_state_if_exception_rollback_also_fails(tmp_path, monkeypatch):
+    from dailydigest import web
+
+    request, paths, originals = _setup_save_case(tmp_path, monkeypatch)
+    write_env, write_private = web._write_env_file, web._atomic_private_write
+    reloaded = []
+    monkeypatch.setattr(web, 'reload_settings', lambda: reloaded.append(True))
+
+    def fail_env(path, updates):
+        write_env(path, updates)
+        raise OSError('write failed; submitted-secret')
+
+    def fail_rollback(path, content):
+        if path == paths[0] and content == originals[0]:
+            raise OSError('restore failed; submitted-secret')
+        write_private(path, content)
+
+    monkeypatch.setattr(web, '_write_env_file', fail_env)
+    monkeypatch.setattr(web, '_atomic_private_write', fail_rollback)
+    with pytest.raises((OSError, HTTPException)) as error:
+        asyncio.run(web.setup_post(request))
+    assert paths[1].read_bytes() == originals[1]
+    assert paths[2].read_bytes() == originals[2]
+    assert reloaded == []
+    assert isinstance(error.value, HTTPException)
+    assert error.value.status_code == 500
+    assert 'could not be restored' in error.value.detail
+    assert 'submitted-secret' not in error.value.detail
+
+
+def test_private_write_restores_exact_bytes_on_bind_mounted_files(tmp_path, monkeypatch):
+    from dailydigest import web
+
+    path = tmp_path / '.env'
+    path.write_bytes(b'changed\n')
+
+    def busy_mount(*args):
+        raise OSError(errno.EBUSY, 'bind-mounted file')
+
+    monkeypatch.setattr(web.os, 'replace', busy_mount)
+    original = b'# original\r\nLLM_BACKEND=extractive\r\n'
+    web._atomic_private_write(path, original)
+    assert path.read_bytes() == original

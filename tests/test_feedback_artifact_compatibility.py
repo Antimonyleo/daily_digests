@@ -41,6 +41,7 @@ def test_new_vote_builds_versioned_rocchio_accepted_by_reader(monkeypatch):
     with np.load(path, allow_pickle=False) as data:
         assert str(data["feedback_semantics_version"][0]) == votes.FEEDBACK_SEMANTICS_VERSION
         assert str(data["feedback_reasons_signature"][0]) == votes.feedback_reasons_signature()
+        assert str(data["feedback_votes_signature"][0]) == votes.feedback_votes_signature()
     result = profile.build_profile_matrix_with_rocchio(Profile(bio="Reader"), 2)
     assert result.shape == (3, 2)
     np.testing.assert_array_equal(result[:2], static)
@@ -70,7 +71,8 @@ def test_practical_ratings_do_not_inflate_strength_of_two_informative_votes(monk
     path = Path(config.get_settings().db_path).parent / "learned_profile.npz"
     np.savez(path, profile=np.array([1., 0.]), vote_count=np.array([2]),
              feedback_semantics_version=np.array([votes.FEEDBACK_SEMANTICS_VERSION]),
-             feedback_reasons_signature=np.array([votes.feedback_reasons_signature()]))
+             feedback_reasons_signature=np.array([votes.feedback_reasons_signature()]),
+             feedback_votes_signature=np.array([votes.feedback_votes_signature()]))
     static = np.eye(2, dtype=np.float32)
     monkeypatch.setattr(profile, "build_profile_matrix", lambda _p: static.copy())
     # 98 practical ratings + 2 informative: the persisted informative count is
@@ -135,3 +137,41 @@ def test_failed_rocchio_rebuild_after_practical_reason_uses_static_and_preserves
     result = profile.build_profile_matrix_with_rocchio(Profile(bio="Reader"), 2)
     np.testing.assert_array_equal(result, static)
     assert (path.read_bytes(), path.stat().st_mtime_ns) == before
+
+
+@pytest.mark.parametrize("change", [(-1, 10), (1, 70), (0, None)])
+@pytest.mark.parametrize("failure", ["encoder", "write"])
+def test_changed_votes_cannot_reuse_old_rocchio_when_rebuild_fails(monkeypatch, change, failure):
+    static = np.eye(2, dtype=np.float32)
+    monkeypatch.setattr(profile, "build_profile_matrix", lambda _p: static.copy())
+    monkeypatch.setattr(votes, "embed_item_rows", lambda rows: np.tile([1., 0.], (len(rows), 1)))
+    store.init_db()
+    with store.session_scope() as session:
+        rows = [store.ItemRow(source="Nature", section="research", external_id=str(i),
+                             url=f"https://example.test/{i}", title=f"Methods {i}") for i in range(2)]
+        session.add_all(rows)
+        session.flush()
+        ids = [row.id for row in rows]
+    for iid in ids:
+        assert votes.record_vote_by_id(iid, 1, 100)
+    path = Path(config.get_settings().db_path).parent / "learned_profile.npz"
+    before = path.read_bytes(), path.stat().st_mtime_ns
+    assert profile.build_profile_matrix_with_rocchio(Profile(bio="Reader"), 2).shape == (3, 2)
+
+    def unavailable(*_args, **_kwargs):
+        raise OSError("Fixture backend unavailable")
+
+    with monkeypatch.context() as fail:
+        if failure == "encoder":
+            fail.setattr(votes, "embed_item_rows", unavailable)
+        else:
+            fail.setattr(np, "savez", unavailable)
+        assert votes.record_vote_by_id(ids[0], *change)
+    assert votes.get_vote_value(ids[0]) == change[0]
+    assert (path.read_bytes(), path.stat().st_mtime_ns) == before
+    np.testing.assert_array_equal(profile.build_profile_matrix_with_rocchio(Profile(bio="Reader"), 2), static)
+    assert (path.read_bytes(), path.stat().st_mtime_ns) == before
+    # A later successful rebuild binds the artifact to the new canonical state.
+    votes._rebuild_rocchio_profile()
+    with np.load(path, allow_pickle=False) as data:
+        assert str(data["feedback_votes_signature"][0]) == votes.feedback_votes_signature()

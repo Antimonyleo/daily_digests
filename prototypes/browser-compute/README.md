@@ -32,6 +32,14 @@ downloads public model/runtime assets once and computes the separate native
 reference. `--ignore-scripts` avoids irrelevant Node/CUDA installation hooks;
 the prototype uses browser CPU/WebAssembly, not Node inference.
 
+Use Node 24, as in CI. The lockfile overrides the native-only `sharp` dependency
+to 0.35.5 to pick up its patched image libraries while retaining the tested
+Transformers.js inference version. The `global-agent` 4.1.3 override removes its
+retired logging dependencies while retaining the bootstrap API used by the native
+installer. Static publication excludes `sharp` and `onnxruntime-node`. CI blocks
+moderate or higher dependency advisories before publication. Do not apply
+`npm audit fix --force` without rerunning inference parity checks.
+
 Generated model assets and dependencies are ignored by Git. They must be
 prepared before serving; copying only the tracked HTML/JavaScript is insufficient.
 This prototype has not been published to GitHub Pages. Relative asset URLs are
