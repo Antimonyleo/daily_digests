@@ -3,6 +3,12 @@ __pycache__/
 *.egg-info/
 .venv/
 .env
+.env.*
+!.env.example
+..env.*
+# Interrupted Settings saves contain private configuration and credentials.
+.settings-transaction*
+..settings-transaction*
 data/
 config/profile.yaml
 # Local AI-tool configuration is private and never part of a release.
