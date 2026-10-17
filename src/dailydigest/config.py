@@ -29,6 +29,8 @@ class Settings(BaseSettings):
     llm_model: str = "gpt-4o-mini"
     # Summarizer: extractive | api | anthropic | claude_cli | codex_cli
     llm_backend: str = "extractive"
+    # Stop starting optional HTTP summary batches once this per-run budget is
+    # spent, or after repeated provider failures. Remaining items stay local.
     llm_summary_budget_seconds: float = Field(default=180.0, gt=0, le=3600)
     llm_summary_max_failures: int = Field(default=2, ge=1, le=10)
 
@@ -68,9 +70,18 @@ class Settings(BaseSettings):
     # (prestige is a mild tie-breaker). Higher values reward high-quality AND
     # relevant work more and suppress low-impact venues harder.
     research_quality_weight: float = Field(default=1.4, ge=0.0, le=5.0)
-    # Optional experimental matching has no demonstrated extra selection benefit.
+    # Optional local contribution-evidence ordering; zero preserves current
+    # ordering. This leaves raw relevance/quality scores and eligibility intact.
+    contribution_order_strength: float = Field(default=0.0, ge=0.0, le=0.1)
+    # Optional experimental local topic verification. Offline testing has not
+    # established an extra selection benefit, so normal brewing avoids its cost.
     semantic_matching: bool = False
     semantic_model_dir: str = ""
+    # Explicit local learned reranker. Empty paths keep normal ranking unchanged.
+    # Provision an evaluated artifact and its exact encoder assets together.
+    contribution_reranker_path: str = ''
+    contribution_encoder_dir: str = ''
+    contribution_reranker_weight: float = Field(default=0.7, ge=0.0, le=1.0)
     # Scale of the topic-priority selection nudge. Multiplied by a normalized
     # per-interest priority (0..1) after the relevance and quality gates. It
     # never changes stored final scores or eligibility. Max nudge = scale*1.0.
@@ -138,8 +149,9 @@ class Settings(BaseSettings):
     citation_polite_email: str = ""
 
     # Cross-day near-duplicate suppression: drop a candidate whose embedding is
-    # within `threshold` cosine of an item shown in a sent digest over the last
-    # `days` days — catches the same paper/story re-syndicated via another source.
+    # within `threshold` cosine of an item in a published local/email digest or
+    # viewed selection over the last `days` days. Research identity/version
+    # matches additionally use a 14-day cooldown without changing cosine gates.
     cross_day_dedupe: bool = True
     cross_day_dedupe_days: int = Field(default=7, ge=1, le=60)
     cross_day_dedupe_threshold: float = Field(default=0.93, ge=0.5, le=1.0)
@@ -199,17 +211,8 @@ class Settings(BaseSettings):
     # lower it to be more inclusive. (Stable now that profile cosine is a true
     # unit cosine; ~0.5–0.6 is weak/off-topic, ~0.65+ is a solid match.)
     min_topic_relevance: float = Field(default=0.65, ge=0.0, le=1.0)
-    # Venue-aware relaxation of the topic floor. A top/high/strong-tier journal in
-    # the reader's field is itself a strong quality prior, so it should clear the
-    # relevance gate at a slightly lower raw topic cosine than an anonymous
-    # preprint or aggregator hit. The effective topic score used at the gate is
-    # ``topic + venue_relevance_credit * prestige_excess`` (research only), where
-    # prestige_excess = prestige - 0.50. At 0.10, a high-tier venue (prestige
-    # 0.90, excess 0.40) gets +0.04; a top-tier venue (0.99) gets ~+0.049.
-    # Because the credit is small, an OFF-topic prestigious paper (low cosine)
-    # still fails the gate — it only rescues genuinely borderline top-venue work
-    # that bge-small's compressed cosine scores just under the floor. Set to 0 to
-    # restore the pure venue-blind floor.
+    # Retained for older experiment/replay configurations. Current relevance
+    # gating never uses publication reputation to establish reader topic fit.
     venue_relevance_credit: float = Field(default=0.10, ge=0.0, le=0.5)
     # FINAL-fused-score cutoff for the research section. Section SIZING gates on
     # topic cosine (min_topic_relevance), but the picker then fills those slots by
@@ -258,6 +261,7 @@ class Settings(BaseSettings):
     imap_port: int = 993
     imap_user: str = ""
     imap_password: str = ""
+    imap_mailbox: str = "INBOX"
 
     @field_validator("top_research", mode="before")
     @classmethod

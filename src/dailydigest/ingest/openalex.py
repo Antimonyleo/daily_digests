@@ -203,8 +203,10 @@ class OpenAlexSource:
                     })
                     continue
                 # One OR search per parent keeps overlapping synonyms from
-                # returning the same small slice repeatedly. Quoted aliases
-                # cannot introduce their own Boolean operators.
+                # returning the same small slice repeatedly. Keep the original
+                # unquoted: OpenAlex quotes impose phrase adjacency, so adding
+                # an alias must not narrow the original stemmed word search.
+                # Explicit aliases remain quoted literal phrases.
                 phrases = list(dict.fromkeys([term, *aliases.get(term.casefold(), [])]))
                 query = term if len(phrases) == 1 else (
                     "((" + term + ") OR "
@@ -432,15 +434,20 @@ class OpenAlexVenuesSource:
 
     MAX_ITEMS = 120
 
+    def __init__(self) -> None:
+        self.last_fetch_diagnostics: dict[str, Any] = {"queries": []}
+
     def fetch(self, spec: SourceSpec, days: int = 2) -> list[Item]:
+        self.last_fetch_diagnostics = {"queries": [], "returned_count": 0}
         venue_ids = [v for v in (spec.venue_ids or []) if v]
         if not venue_ids:
             logger.debug("%s: no venue_ids configured", spec.name)
             return []
         works = OpenAlexSource()
+        self.last_fetch_diagnostics = works.last_fetch_diagnostics
         headers = works._headers(spec)
         extra_filter = "primary_location.source.id:" + "|".join(venue_ids)
-        return works._fetch_works(
+        out = works._fetch_works(
             spec,
             days,
             headers,
@@ -448,6 +455,8 @@ class OpenAlexVenuesSource:
             extra_filter=extra_filter,
             use_venue_source=True,
         )
+        self.last_fetch_diagnostics["returned_count"] = len(out)
+        return out
 
 
 class OpenAlexAuthorsSource:
@@ -464,36 +473,68 @@ class OpenAlexAuthorsSource:
     MAX_AUTHORS = 25
     MAX_ITEMS = 120
 
+    def __init__(self) -> None:
+        self.last_fetch_diagnostics: dict[str, Any] = {"queries": []}
+
     def fetch(self, spec: SourceSpec, days: int = 2) -> list[Item]:
+        self.last_fetch_diagnostics = {"queries": [], "returned_count": 0}
         names = watched_author_names(self.MAX_AUTHORS)
         if not names:
             return []
         works = OpenAlexSource()
+        self.last_fetch_diagnostics = works.last_fetch_diagnostics
         headers = works._headers(spec)
         author_ids: list[str] = []
         for name in names:
             aid = self._resolve_author_id(name, headers)
             if aid:
                 author_ids.append(aid)
+        failed = any(query["failure"] for query in self.last_fetch_diagnostics.get("author_queries", []))
+        self.last_fetch_diagnostics.update(
+            author_resolution_complete=not failed, truncated=failed,
+        )
         if not author_ids:
+            if failed:
+                raise RuntimeError(f"{spec.name}: author resolution failed; no author works query possible")
             logger.debug("%s: no watched-author ids resolved", spec.name)
             return []
         extra_filter = "author.id:" + "|".join(author_ids)
-        return works._fetch_works(
-            spec, days, headers, cap=self.MAX_ITEMS, extra_filter=extra_filter
-        )
+        try:
+            out = works._fetch_works(
+                spec, days, headers, cap=self.MAX_ITEMS, extra_filter=extra_filter
+            )
+        finally:
+            self.last_fetch_diagnostics["truncated"] = failed or any(
+                query["truncated"] for query in self.last_fetch_diagnostics["queries"]
+            )
+        self.last_fetch_diagnostics["returned_count"] = len(out)
+        return out
 
     def _resolve_author_id(self, name: str, headers: dict[str, str]) -> str | None:
+        diagnostic: dict[str, Any] = {
+            "query": name, "attempted": True, "request_count": 1,
+            "request_count_includes_retries": False,
+            "failure": None, "stop_reason": None, "resolved_id": None,
+        }
+        self.last_fetch_diagnostics.setdefault("author_queries", []).append(diagnostic)
         try:
             payload = _get_json(
                 self.AUTHORS_URL, {"search": name, "per-page": "1"}, headers
             )
+            if not isinstance(payload, dict) or not isinstance(payload.get("results"), list):
+                raise RuntimeError("Invalid OpenAlex author response")
+            results = payload["results"]
+            if not results:
+                diagnostic["stop_reason"] = "no_match"
+                return None
+            raw_id = str(results[0].get("id") or "")
+            # id is a URL like https://openalex.org/A5023888391 → keep the bare id.
+            author_id = raw_id.rstrip("/").rsplit("/", 1)[-1] or None
+            if not author_id:
+                raise RuntimeError("OpenAlex author match has no id")
+            diagnostic.update(stop_reason="matched", resolved_id=author_id)
+            return author_id
         except Exception as e:  # noqa: BLE001
+            diagnostic.update(failure=type(e).__name__, stop_reason="failure")
             logger.warning("author resolve failed for %r: %s", name, e)
             return None
-        results = (payload or {}).get("results") or []
-        if not results:
-            return None
-        raw_id = str(results[0].get("id") or "")
-        # id is a URL like https://openalex.org/A5023888391 → keep the bare id.
-        return raw_id.rstrip("/").rsplit("/", 1)[-1] or None

@@ -79,14 +79,22 @@ embedding model are downloaded once. Later starts reuse them.
 
 The app opens <http://127.0.0.1:8765>. On the setup page:
 
-1. Add 1–10 specific interests using individual topic and percentage fields.
-   Shares must total 100% before saving; use **Normalize to 100%** or
-   **Distribute evenly** to adjust them. Older relative weights convert to the
-   displayed whole percentages when you save. Percentages guide priority
-   rather than guarantee digest slots. The no-JavaScript fallback still accepts
-   one topic per line with an optional relative weight, such as
-   `DNA nanotechnology | 3`.
-2. Keep **Extractive** selected for the easiest free setup.
+1. Add 1–10 specific interests, for example:
+
+   ```text
+   colloidal self-assembly
+   DNA nanotechnology
+   gene and RNA therapeutics
+   ```
+
+   Each interest has its own topic and percentage field. Shares must total 100%
+   before saving; use **Normalize to 100%** or **Distribute evenly** to adjust them.
+   Older relative weights are converted to the displayed whole percentages when
+   you save. The no-JavaScript fallback still accepts `DNA nanotechnology | 3`.
+   Percentages guide priority rather than guarantee digest slots. **Personal details & topics to see less often**
+   holds optional bio and downweight preferences.
+2. Keep **Extractive** selected for the easiest free setup. Expand the summary
+   settings only when you want to change how summaries are made.
 3. Choose whether to include Funding & Opportunities, Events & Calls, Industry,
    AI tools & methods, Clinical & Regulatory, and World news. Research is always
    included.
@@ -138,6 +146,32 @@ items are kept when old unsaved feed items are cleaned up. Use **Time Machine**
 at the top of the digest to revisit the three most recent saved brews, including
 across days when no digest was made.
 
+**Saved reading** has pages covering your whole archive and lets you rate or
+add reasons later. **Clear rating** removes the current preference and its
+reasons while keeping the item saved. Under **Unrated**, a newly rated card
+stays visible until you press **Done**, so you can finish optional reasons;
+unfinished feedback also survives a reload in the same browser tab. **Hmmm**
+is a mild negative preference; **Not for me** is a stronger one.
+
+Research versions share a fourteen-day cooldown from their last digest
+appearance. An explicit publication link or a distinctive unchanged title
+matches a preprint to its journal version; the version-title fallback checks
+author agreement. One brew keeps one representative, and a same-day rebrew can upgrade
+to the journal version. A journal publication months later remains eligible.
+Changed titles without publication links can still escape this check.
+
+If brew status disconnects, use **Reconnect** to observe the same run or
+**Read latest saved digest** to keep reading. Starting a new brew is a separate
+action. **Stop before publishing** requests cancellation at the next safe
+stage boundary; a running fetch or encoder call finishes first. Stage timings
+and summary-cache/provider counts are recorded locally. Optional HTTP summaries
+have an aggregate scheduling budget and stop after repeated failures, falling
+back to local summaries; HTTP inactivity timeouts are not an absolute wall-time
+deadline. Settings changes wait until brewing or ranking work finishes.
+
+For explicit local backups and a recovery rehearsal that preserves saved items,
+ratings and retained history, see [Local backup and recovery](docs/local-recovery.md).
+
 Funding calls and events stay open for weeks, so DailyDigest treats them as a
 standing shortlist and may re-show an active, relevant item while its deadline
 remains actionable. When you have seen enough of a call, press **Mark known**
@@ -150,30 +184,41 @@ HTML previews, and unreferenced feed items according to `RETENTION_DAYS`
 anything still referenced by a retained digest are preserved. Embeddings stay on disk rather than in memory;
 only the active model is loaded during a compute job and released afterward.
 
-Use **Night theme** on any page to switch between light and dark colors. On the
+Open **Display** on any page to switch **Night theme** on or off. On the
 digest page, **Compact view** condenses the overview, filters, section headers,
 recommendation metadata, and feedback controls so substantially more entries fit
-on screen without shrinking the paper titles. Both choices are remembered by
-that browser. The controls appear in the lower-right corner on larger screens
-and near the end of the page on smaller screens. Browsers that support local
-progressive-web-app installation also show **Add to desktop**. This creates an
+on screen while keeping titles readable. **Show Pip** lets you hide or restore
+the companion. These choices are remembered by that browser. The Display menu
+appears in the lower-right corner on larger screens and near the end of the page
+on smaller screens. Press Escape to close it and return focus to its button.
+Browsers that support local progressive-web-app installation also show
+**Add to desktop** inside Display. This creates an
 app-like shortcut and standalone window; it does not install or start the
 DailyDigest server. The server still needs to be running because private digest
 pages are deliberately not stored in the browser's offline cache.
 
 Pip, the tea-cup companion, serves a rotating daily deck of science facts
 and lab jokes. On wide desktops Pip sits in the lower-left margin; on smaller
-screens it returns to the normal page flow. Select the leaf floating above Pip
+screens the tea break follows the digest, keeping the recommendations close to
+the top. Select the leaf floating above Pip
 to drop it into the cup and hear another note, up to ten leaves per daily digest.
 After the tenth leaf, Pip calls the tea break finished. On wide screens Pip can
 be dragged, moved through preset positions, or adjusted
 with the arrow keys; the browser remembers the position. On mouse-equipped
-devices Pip also reacts subtly to the pointer. Its brief animations respect the
-operating system's reduced-motion preference.
+devices Pip also reacts subtly to the pointer. Pip blinks once on arrival and
+gives a small hop when you successfully save or rate an item while it is visible.
+Its brief animations respect the operating system's reduced-motion preference.
+The current note and leaf count are restored together after a refresh.
+
+The **Unrated** filter shows picks that have not received feedback; it does not
+track whether you opened their links. Touch devices use larger rating and save
+controls, including in Compact view. Keyboard readers can use **Skip to
+recommendations** to move past the header.
 
 A slim green-to-gold bar at the top of the window tracks reading position through
 the digest itself. It reaches the end when the bottom of the recommendation card
 enters the reading area, independent of the setup and diagnostic panels around it.
+It updates when you expand sections, filter picks, or change the display density.
 
 Funding and event cards show the official source, current status, deadline,
 available amount when stated, location/date for events, and a conservative
@@ -261,6 +306,325 @@ uv run dd --help               # list every command
 
 Local preview files are written under `data/`. The CLI uses the same interests,
 votes, database, and settings as the browser app.
+
+### Checking ranking quality
+
+Normal brewing requires research papers to clear the reader's topic floor
+independently of journal prestige. Quality evidence still orders eligible work.
+Longer abstracts are retained and profile-driven OpenAlex searches include
+preprints. Add aliases and describe useful papers in each interest's search
+details to clarify ambiguous terms; no model guarantees literature coverage or
+verifies scientific validity.
+
+An experimental local joint topic check is available with `SEMANTIC_MATCHING=true`
+but disabled by default: it has not demonstrated an additional selection gain.
+It checks up to 48 papers, records partial text coverage, preserves existing
+quality/preference scores, and never vetoes an otherwise-related paper. First use
+caches about 92 MB of public weights; reader text stays local. `SEMANTIC_MODEL_DIR`
+can provision the exact pinned files offline. Normal brewing avoids this download
+and computation. The improved relevance gate remains active in either mode.
+
+Every new brew captures the complete local candidate pool, rejected stages,
+scores, source classifications, profile, selection settings, source diagnostics,
+and final display order in a compressed local run record. Rebrewing the same day
+keeps both records. Feedback changes also append timestamped events; older votes
+remain available but are not presented as reconstructed historical events.
+Run records expire with their digest's retention policy. Profiles and article
+metadata in these records are private data, like the rest of `data/`.
+
+```bash
+uv run dd eval-ranking --section research --k 11 --json
+uv run dd ranking-runs --limit 10
+uv run dd replay-run RUN_ID
+uv run dd replay-run RUN_ID --outcome-as-of 2026-10-15T00:00:00Z
+```
+
+`eval-ranking` uses displayed order and current latest feedback. It reports
+judged coverage and precision bounds; unrated papers remain unknown. It cannot
+establish how an older algorithm would have performed. `replay-run` independently
+runs the real source caps, relevance floor, final-score cutoff, exploration, and
+reading-mode rules against frozen inputs. It must match the recorded slate.
+This verifies selection; it does not re-fetch sources, recompute embeddings, or
+reconstruct earlier eligibility decisions. Feedback metrics require an explicit
+outcome cutoff and use only recorded feedback events.
+
+The October 2026 changes correct tied preference fusion, preserve quality
+confidence through citation enrichment, distribute OpenAlex's fixed retrieval
+budget across core interests before context, and prevent profile-driven PubMed
+queries from independently admitting every clinical trial. Diagnostics distinguish
+valid empty results, failures, and capped retrieval. These are correctness fixes;
+improved personal relevance still needs measurement.
+
+The follow-up quality review also replaced substring journal matching with
+explicit identities, preserved known publication-type/retraction exclusions
+through ingestion, deduplication and reingestion, and kept quality gates active
+on sparse days. Exploration swaps must pass the same selection constraints.
+Negative-interest weights scale the excess negative match after comparing it
+with topic relevance. Venue prestige remains a source-level heuristic: neither
+a prestigious journal nor a passing replay proves that a paper fits your work.
+Supplied challenger slates that cannot be reproduced from their declared inputs
+are explicitly unverified in evaluation reports.
+
+Source diversity counts exact journal aliases together, including abbreviated
+and full International Edition names. New run captures freeze this identity;
+older captures without it retain their original feed-name caps during replay.
+Configured preprint adapters and explicit preprint metadata cannot receive
+published-journal protection. Metadata-only Ahead-of-Print placeholders do not
+receive contribution scores. Populated seed papers, interest weights, and facet
+weights bind local contribution artifacts to the reader profile; older artifacts
+for weighted or seeded profiles require explicit revalidation and re-export.
+
+Citation enrichment preserves article citation boosts, but does not add a second
+positive venue bonus to journals already covered by the curated quality prior.
+It still supplies venue evidence for previously unknown sources and honors
+contradictory low-impact evidence. A DOI enables metadata lookup; its presence
+does not establish article quality or research relevance.
+
+When optional enrichment is enabled, raw topic scores bound the lookup batch;
+venue evidence is resolved before quality scoring and preference fusion, without
+another embedding pass. The later citation adjustment reuses that evidence.
+Low-impact evidence already included in quality scoring does not incur a second
+negative venue adjustment. Novelty keywords retain a small bonus but cannot waive
+the low-impact penalty. Citation velocity requires a known publication date;
+missing, future, and RSS update-only dates receive no velocity boost. RSS ingest
+preserves explicit DOI fields/links and date provenance. New local run captures
+include the venue-impact weight, resolved enrichment inputs, and applied boosts;
+older captures retain their original selection replay scope.
+
+The experimental semantic-scope classifier compares specific core-interest
+anchors against contextual and off-interest anchors. It can abstain when text
+is thin, similarity is weak, or scope classes are too close. Multiple core
+facets can match; journal prestige and user usefulness grades are not classifier
+inputs. It is **offline only**, with no change to daily serving defaults:
+
+```bash
+uv run python scripts/experiment_scope.py --output /tmp/scope-benchmark.json
+uv run python scripts/experiment_scope.py --benchmark /tmp/labeled-scope.json \
+  --snapshot /tmp/ranking-snapshot.json --cache-db /tmp/digest-copy.db \
+  --output /tmp/scope-replay.json
+```
+
+The bundled 72-example corpus is fictional, independently authored development
+data. Thresholds use only its calibration split; the separate evaluation split
+reports abstentions, false core assignments, core retention, and facet accuracy.
+Custom corpora use the same schema in `tests/fixtures/research_scope_benchmark.json`.
+Keep paper families in one split and reader usefulness separate from scope labels.
+Known failure cases can use `evaluation_group: known_regression` so they remain
+distinct from newly sampled evaluation examples. `coverage_viable` only tests
+recall and coverage constraints; it does not certify precision or justify release.
+
+Optional replay requires an exported complete ranking snapshot and matching
+encoder signatures/canonical facet names. The cache is read-only; stale vectors
+are re-embedded locally without cache writes. A cached model must be available:
+network access is blocked. Reports refuse existing output files and configured
+production data/profile directories. Replay filters the full originally eligible
+research pool, then reruns the actual source caps, exploration and reading-mode
+selector, including replacements and shortfalls. Frozen upstream eligibility and
+rank scores are unchanged; this does not test a new retrieval or scoring pipeline.
+
+Initial October 2026 experiments did **not** justify enabling this classifier:
+synthetic thresholds rejected valid real papers, while provisional real-abstract
+calibration still produced many false core labels. Reports always retain
+`promotion_eligible: false`. Further work needs stronger article–interest
+discrimination and independent reader-grounded evaluation.
+
+The follow-up pairwise experiment uses an explicit local ONNX cross-encoder
+(`dailydigest.rank.cross_encoder.LocalCrossEncoder`) to score interest–article
+pairs. It never downloads models or calls a provider. Its raw logits are not
+relevance probabilities. A second fixed classifier learns scope classes from
+these query scores using standardized logistic regression; ambiguous labels are
+excluded, and thresholds use family-disjoint out-of-fold predictions. Facet
+labels still come from query matches and require separate evaluation.
+
+```bash
+uv run python scripts/experiment_pair_scope.py --benchmark /tmp/labeled-scope.json \
+  --scores /tmp/pair-scores.jsonl --manifest /tmp/scoring-manifest.json \
+  --snapshot /tmp/ranking-snapshot.json --output /tmp/pair-scope-report.json
+```
+
+The runner checks internal consistency of cached model, query, protocol and
+article fingerprints before fitting either arm; it does not independently
+authenticate model assets or protocol contents. Model assets must be provisioned explicitly for
+scoring; the experiment runner consumes previously computed local scores.
+Unknown annotations are reported separately from confirmed non-core errors.
+Benchmark validation also rejects cross-split long-title aliases, even when
+feed dates or abstract versions differ. Previously inspected examples belong in
+a separate regression group, not the fresh evaluation headline. These stronger
+local alternatives remain experimental: neither is enabled in daily ranking.
+
+The contribution follow-up adds a small local text-evidence signal in
+`rank/contribution.py`. It distinguishes stated engineering/method contributions
+from natural mechanisms, applications and reviews, and records supporting
+abstract passages. It is a heuristic, with neutral results when evidence is
+missing. `CONTRIBUTION_ORDER_STRENGTH=0.04` optionally nudges the consideration
+order of eligible research; the default is `0`, and relevance/quality scores
+and eligibility remain intact. On the inspected October snapshot this heuristic
+did not improve the selected slate, so it is not a recommended serving setting.
+Local summaries use the same evidence to explain contributions and context.
+
+The learned contribution reranker in `rank/contribution_ranker.py` trains fixed
+pairwise comparisons of core, context and off-interest papers from calibration
+families. Its score changes final research scores through a fixed 70% contribution
+signal / 30% original-score mixture. It retains raw topic gates, source limits
+and incomplete-abstract neutrality; the signal is not a probability or a measure
+of scientific quality. Calibration folds separate paper families before fitting
+scalers and pairs. Only explicitly designated calibration examples fit its
+coefficients or score scale. Previously assessed papers may become calibration
+data in a subsequent experiment with a separate, unseen evaluation set.
+
+Evaluate existing local logits without a database, provider call or live brew:
+
+```bash
+uv run python scripts/experiment_contribution_ranker.py \
+  --benchmark /tmp/labeled-scope.json --scores /tmp/raw-pairs.jsonl \
+  --manifest /tmp/pair-scoring-manifest.json --snapshot /tmp/day.json \
+  --fresh-labels /tmp/blind-labels.json --output /tmp/new-contribution-report.json \
+  --artifact /tmp/new-contribution-artifact.json
+```
+
+Normal ranking stays unchanged until both `CONTRIBUTION_RERANKER_PATH` and
+`CONTRIBUTION_ENCODER_DIR` explicitly identify an evaluated artifact and its local
+ONNX assets. `CONTRIBUTION_RERANKER_WEIGHT` defaults to `0.7`; setting it to `0`
+disables this path. Serving verifies the reader's interest profile and exact
+encoder/runtime identity, scores before within-day duplicate selection, and
+persists the model fingerprint and signal with selected-item explanations.
+Configured-model failures abort before replacing the digest. No model downloads
+or automatic activation occur. CPU inference scores 24 pairs per eligible
+research article and can add substantial brew time; the offline runner uses
+cached logits. Offline replay preserves captured duplicate eligibility and
+topic/coverage bonuses, so it cannot prove full live-pipeline parity.
+
+On the single October 2 captured pool, a separate 56-paper assessment improved
+balanced tier-pair ordering accuracy from 59.1% to 74.2% on 52 definitive
+families. A separate post-selection scope audit found 9 core, 1 context and
+1 uncertain paper versus 5 core, 4 context and 2 off-interest papers at the same
+11-paper budget. These are analyst scope assessments, not reader usefulness or
+article-quality results; context/off-interest separation and unrepresented
+facets remain limitations. The experiment does not enable itself.
+
+A subsequent frozen comparison expanded calibration to 275 definitive families
+and assessed 53 newly blinded papers (48 definitive). On the same new holdout,
+balanced tier-pair ordering was 67.5% for original scores, 78.2% for the previous
+learned artifact, 79.4% for expanded training with the full abstract, and 74.5%
+for expanded training with extracted author claims. The expanded model's 1.18
+point gain affected only context/off-interest ordering; an exploratory paired
+family bootstrap interval was -3.61 to +5.84 points. This does not establish
+superiority. Claim-focused input also restored a known off-interest paper to
+the replayed slate and is not recommended for ranking. Only one independent
+captured day and no completed reader usefulness judgments were available.
+
+`rank/contribution_claims.py` retains exact author statements and their stated
+task/object for inspection; introducing a method does not imply core relevance.
+`rank/article_evidence.py` separately records quoted validation, data/code
+availability, and limitations from supplied text. Selected research shows this
+evidence in Details, and summaries can use the same bounded article text.
+These are unverified author claims. Unknown evidence remains unknown and does
+not change article scores. Full text can be supplied explicitly to the evidence
+helper; the digest does not retrieve it automatically. Facet changes also
+invalidate cached personalized summaries.
+
+The shared digest evaluator accepts multiple captured days and separate reader
+judgments. It measures useful papers at top five and full digest size, observed
+important-paper misses, source/topic coverage and repeated families. Analyst
+scope annotations remain separate from reader usefulness. It can also produce
+a blinded judgment packet with a private mapping back to snapshots:
+
+```bash
+uv run python scripts/evaluate_digest_variants.py \
+  --snapshot /tmp/day1.json --snapshot /tmp/day2.json \
+  --judgments /tmp/judgments.jsonl --challengers /tmp/challengers.json \
+  --outcome-as-of 2026-10-05T00:00:00Z --output /tmp/new-comparison.json \
+  --packet /tmp/new-blind-packet.jsonl
+```
+
+Omit `--judgments` to prepare a packet before rating. Fill its explicit `rater`,
+`useful`, `important`, `scope`, `facets`, `contribution`, `evidence` and optional
+`rejection_reason` fields; leave unresolved judgments null. To evaluate completed
+blinded rows, supply their `.manifest.json` using `--judgment-manifest`. Outputs
+must be new files outside configured production data/profile directories.
+For a daily audit of the actual retained runs, use the existing SQLite database
+read-only. This picks the latest saved brew per observed local day before the
+explicit cutoff and uses only timestamped feedback events, including clears:
+
+```bash
+uv run python scripts/evaluate_digest_variants.py \
+  --database data/digest.db --days 7 \
+  --outcome-as-of 2026-10-14T00:00:00Z \
+  --output reviews/week1.json --packet reviews/week1-papers.jsonl
+```
+
+The command does not brew, migrate, call providers, or read today's mutable votes.
+Use the digest ratings as usual: **Must read** supplies an explicit importance
+grade, **Relevant** supplies positive usefulness, and **Hmmm** or **Not for me**
+supplies a negative preference. Unrated/cleared items stay unknown. For the packet,
+review both selected papers and sampled omissions; write completed rows to a
+separate JSONL file and use `--judgments` plus `--judgment-manifest` to reevaluate
+with the same database and a later outcome cutoff. Omit `--days` on this second
+command: the manifest pins the exact original runs even after later rebrews.
+Missing or changed snapshots fail the manifest check. Saved feedback and packet
+labels are outcomes, not independent
+holdout labels when already used to tune the ranker.
+
+The report separates observed important omissions in the eligible pool from
+important ineligible records and grade-100 item IDs outside the supplied pools.
+Ineligible records show their captured rejection stage for review; an expected
+cooldown or another selected version can explain them. Outside-pool IDs are review leads, not
+verified retrieval misses: they may be older papers or another publication
+version. Papers never collected need explicit reader examples (title/DOI and the
+day they should have appeared) before upstream coverage can be assessed. Do not
+infer article quality or relevance from venue reputation or unrated items.
+
+arXiv's explicit publication DOI and journal reference are retained as metadata.
+The DOI connects renamed preprint/journal versions for deduplication and the
+14-day reading cooldown. A journal reference does not promote the preprint's
+venue or refresh its original submission date; no DOI is inferred from citations.
+
+Counterfactual declarations contain a slate and, when scores/order change, its
+modified snapshot; article/source evidence and original candidate restrictions
+must match. Reuse `rerank_snapshot_contributions()` to generate the contribution
+ordering experiment. Pure `audit_coverage()` and `audit_selection_snapshot()` helpers
+report metadata/stage losses and score distributions from the same snapshots.
+
+Feedback reasons now distinguish contextual or low-quality content from practical
+rejections. Already-known, duplicate, timing, access and article-quality reasons
+alone do not teach semantic dislike; mixed off-topic/contextual reasons still do.
+Duplicate and article-quality reasons affect the specific item rather than its
+publisher. Existing incompatible learned profile/LR artifacts are preserved and
+ignored until normal feedback/training builds compatible versions; no data
+migration is required.
+
+Experimental canonical/additive profile anchors, bounded learned-profile
+blending, and alternative fusion weights are available through offline helpers.
+They are not new serving defaults. The evaluation sequence is:
+
+1. Verify snapshot selection parity and source coverage on retained runs.
+2. Compare a small predeclared set of challengers on identical pools and reading
+   budgets. Keep explicit dislikes, quality gates, and opportunity eligibility.
+3. Blindly judge the union of baseline and challenger picks plus a sampled set
+   of rejected candidates. Track useful papers at actual slate size and top five,
+   must-read recovery, strong rejections, topic coverage, and unknown-label bounds.
+4. Review paired results by day and reading mode at a predeclared endpoint. A
+   provisional target is one additional useful research paper per ordinary digest
+   with a positive paired interval and no must-read or strong-rejection regression.
+   Twenty days or 150 judgments are collection milestones, not guarantees of power.
+5. Promote one challenger only after that evidence, keep its configuration
+   reversible, and collect a fresh holdout before tuning again.
+
+Historical rated-item benchmarks are component diagnostics with exposure bias
+and current metadata. They cannot substitute for those prospective judgments.
+For reproducible component contrasts, use a disposable database copy and frozen
+profile with cached models:
+
+```bash
+uv run python scripts/experiment_ranking_variants.py \
+  --db /tmp/ranking-review/digest.db \
+  --profile /tmp/ranking-review/profile.yaml \
+  --output /tmp/ranking-review/variants.json
+```
+
+This runner blocks model downloads and reports nine fixed variants at diagnostic
+depths 5, 11, and 15 on two disjoint test windows. It omits downstream penalties
+and selection rules, reports that limitation, and never selects a serving winner.
 
 ## Troubleshooting
 

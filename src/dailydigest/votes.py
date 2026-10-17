@@ -9,25 +9,31 @@ embedding-based training matrix used by :class:`rank.ranker.LRRanker`.
 from __future__ import annotations
 
 import json
+import hashlib
 import logging
 import re
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
-from typing import Iterable
+from typing import TYPE_CHECKING, Iterable
 
-import numpy as np
 from sqlalchemy import func, select
 
-from .rank import embedding_cache as _embedding_cache
-from .store import DigestItemRow, DigestRow, ItemRow, VoteRow, init_db, session_scope
+from .store import (
+    DigestItemRow, DigestRow, FeedbackEventRow, ItemRow, VoteRow, init_db, session_scope,
+)
+
+if TYPE_CHECKING:
+    import numpy as np
 
 logger = logging.getLogger(__name__)
 
 
 def embed_item_rows(rows):
     """Indirection kept as the test/runtime injection seam for item embeddings."""
-    return _embedding_cache.embed_item_rows(rows)
+    from .rank.embedding_cache import embed_item_rows as embed
+    return embed(rows)
 
 
 _TOKEN_RE = re.compile(r"^([+-]?)([A-Za-z]+)(\d+)$")
@@ -40,6 +46,8 @@ ALLOWED_REASONS = {
     "not_urgent",
     "access_friction",
     "duplicate",
+    "too_contextual",
+    "low_quality",
 }
 REASON_PENALTIES = {
     "off_topic": 0.12,
@@ -50,7 +58,15 @@ REASON_PENALTIES = {
     "not_urgent": 0.07,
     "access_friction": 0.08,
     "duplicate": 0.10,
+    "too_contextual": 0.08,
+    "low_quality": 0.10,
 }
+_NON_SEMANTIC_REASONS = {
+    "already_known", "not_urgent", "duplicate", "access_friction", "low_quality",
+    "low_impact", "promotional",
+}
+# Training-policy provenance, independent of the unchanged feature dimensions.
+FEEDBACK_SEMANTICS_VERSION = "reason-aware-v1"
 _GENERALIZED_REASON_HALF_LIFE_DAYS = 60.0
 _GOOD_VOTE_COUNTER_SIGNAL = 0.14
 _SOURCE_GENERALIZATION_CAP = 0.12
@@ -108,6 +124,27 @@ def _add_capped_signal(target: dict[str, float], key: str, delta: float, cap: fl
     target[key] = max(0.0, min(cap, target.get(key, 0.0) + delta))
 
 
+def is_semantic_vote(value: int, reasons: Iterable[str]) -> bool:
+    """Whether a rating teaches topic preference rather than a practical issue.
+
+    Positive and unexplained negative ratings retain their existing meaning.
+    A negative explained solely by access, timing, repetition, or article quality
+    does not establish dislike of related research. Mixed topic reasons still do.
+    Raw ratings and their item/source penalties are retained independently.
+    """
+    valid = {reason for reason in reasons if isinstance(reason, str) and reason in ALLOWED_REASONS}
+    return value == 1 or (value == -1 and (not valid or not valid.issubset(_NON_SEMANTIC_REASONS)))
+
+
+def feedback_reasons_signature(reason_data: dict | None = None) -> str:
+    """Fingerprint supplied training reasons or the current persisted state."""
+    if reason_data is None:
+        with _VOTE_REASONS_LOCK:
+            reason_data = _load_vote_reasons()
+    canonical = json.dumps(reason_data, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode()).hexdigest()
+
+
 def _load_vote_exemplars() -> tuple[tuple, tuple]:
     """Return ``(pos, neg)`` exemplar sets from signed votes, each ``(ids, unit_vecs,
     weights)``.
@@ -120,8 +157,11 @@ def _load_vote_exemplars() -> tuple[tuple, tuple]:
     so the model learns strong preferences more sharply. Uses the latest vote per
     item, so changing a vote replaces its exemplar (idempotent).
     """
+    import numpy as np
     from .store import ItemRow as _ItemRow
 
+    with _VOTE_REASONS_LOCK:
+        reason_data = _load_vote_reasons()
     init_db()
     with session_scope() as s:
         raw = s.execute(
@@ -138,7 +178,7 @@ def _load_vote_exemplars() -> tuple[tuple, tuple]:
                 continue
             seen.add(iid)
             v = int(value)
-            if v not in (-1, 1):
+            if not is_semantic_vote(v, reason_data.get(str(iid)) or []):
                 continue
             s.expunge(row)
             g = int(grade) if grade is not None else value_to_grade(v)
@@ -164,6 +204,7 @@ def _affinity(cand_unit: np.ndarray, cand_ids, exemplars, k: int = 5) -> np.ndar
     a voted item does not match itself during training). Returns zeros if the
     exemplar set is empty.
     """
+    import numpy as np
     ex_ids, ex_vecs, ex_w = exemplars
     n = cand_unit.shape[0]
     if ex_vecs.shape[0] == 0 or n == 0:
@@ -200,6 +241,7 @@ def knn_preference_scores(rows: list, k: int = KNN_PREFERENCE_K) -> np.ndarray:
     Leave-one-out: a voted candidate never matches its own vote. Returns zeros
     (neutral) when there are no voted exemplars or no usable embeddings.
     """
+    import numpy as np
     n = len(rows)
     if n == 0:
         return np.zeros(0, dtype=np.float32)
@@ -236,6 +278,7 @@ def _knn_scores(
     k: int,
 ) -> np.ndarray:
     """Core kNN math, exemplars passed explicitly (leakage-free benchmarking)."""
+    import numpy as np
     n = cand_unit.shape[0]
     sims = cand_unit @ ex_vecs.T
     out = np.zeros(n, dtype=np.float32)
@@ -277,6 +320,7 @@ def _build_item_features(rows: list, profile_mat: np.ndarray) -> np.ndarray:
     injects collinear, sign-flipped coefficients under a skewed vote history. See
     ``LR_FEATURE_NAMES`` for the full rationale.
     """
+    import numpy as np
     from .rank.source_quality import (
         novelty_score as _nov,
         promotional_score as _promo,
@@ -409,6 +453,9 @@ def _rebuild_rocchio_profile() -> None:
     Called outside a DB session after each vote is recorded.
     """
     try:
+        import numpy as np
+        with _VOTE_REASONS_LOCK:
+            reason_data = _load_vote_reasons()
         init_db()
         with session_scope() as s:
             raw = s.execute(
@@ -426,8 +473,8 @@ def _rebuild_rocchio_profile() -> None:
                 if iid in seen:
                     continue
                 seen.add(iid)
-                if int(value) not in (-1, 1):
-                    # Latest vote is neutral → this item contributes nothing.
+                if not is_semantic_vote(int(value), reason_data.get(str(iid)) or []):
+                    # Neutral or purely practical rejection: no topic pull.
                     continue
                 s.expunge(row)
                 canonical.append((row, int(value), grade))
@@ -466,6 +513,8 @@ def _rebuild_rocchio_profile() -> None:
             tmp,
             profile=learned,
             vote_count=np.array([len(canonical)], dtype=np.int32),
+            feedback_semantics_version=np.array([FEEDBACK_SEMANTICS_VERSION]),
+            feedback_reasons_signature=np.array([feedback_reasons_signature(reason_data)]),
         )
         tmp.replace(path)
     except Exception as exc:  # noqa: BLE001
@@ -492,6 +541,11 @@ def _update_rocchio(item_id: int | None = None, vote_value: int | None = None, g
 # Single source of truth: reference this constant in docs/code, do not hardcode.
 MIN_VOTES_FOR_LR = 30
 _VOTE_REASONS_LOCK = Lock()
+_FEEDBACK_MUTATION_LOCK = Lock()
+
+
+class FeedbackStateError(RuntimeError):
+    """Feedback could not be read or safely persisted; explicit recovery is needed."""
 
 
 def _vote_reasons_path() -> Path:
@@ -500,23 +554,88 @@ def _vote_reasons_path() -> Path:
     return Path(get_settings().db_path).parent / "vote_reasons.json"
 
 
-def _load_vote_reasons() -> dict:
+def _read_vote_reasons() -> tuple[dict, bytes | None]:
     path = _vote_reasons_path()
-    if not path.exists():
-        return {}
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except Exception as e:  # noqa: BLE001
-        logger.warning("vote reasons unreadable, resetting: %s", e)
-        return {}
+        original = path.read_bytes()
+    except FileNotFoundError:
+        return {}, None
+    except OSError as exc:
+        raise FeedbackStateError(
+            "Feedback reasons cannot be read. Restore or repair vote_reasons.json before changing feedback."
+        ) from exc
+    def unique_keys(pairs):
+        parsed = {}
+        for key, value in pairs:
+            if key in parsed:
+                raise ValueError("duplicate item key")
+            parsed[key] = value
+        return parsed
+
+    try:
+        data = json.loads(original, object_pairs_hook=unique_keys)
+        if not isinstance(data, dict) or any(
+            not key.isdecimal() or int(key) <= 0 or str(int(key)) != key
+            or not isinstance(reasons, list)
+            or any(not isinstance(reason, str) for reason in reasons)
+            for key, reasons in data.items()
+        ):
+            raise ValueError("expected item IDs mapped to lists of reason strings")
+    except (ValueError, UnicodeError) as exc:
+        raise FeedbackStateError(
+            "Feedback reasons are invalid. Restore or repair vote_reasons.json before changing feedback; "
+            "the existing file has been preserved."
+        ) from exc
+    return data, original
+
+
+def _load_vote_reasons() -> dict:
+    return _read_vote_reasons()[0]
 
 
 def _write_vote_reasons(data: dict) -> None:
+    _replace_vote_reasons(json.dumps(data, indent=2, sort_keys=True).encode("utf-8"))
+
+
+def _replace_vote_reasons(content: bytes) -> None:
     path = _vote_reasons_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
+    tmp.write_bytes(content)
     tmp.replace(path)
+
+
+@contextmanager
+def _feedback_transaction():
+    """Validate before DB changes; compensate a file change if DB commit fails.
+
+    The process lock serializes readers of the reason file with these writes.
+    SQLite and a JSON file cannot provide a crash-atomic two-resource commit;
+    this preserves both originals for ordinary write/commit failures.
+    """
+    with _VOTE_REASONS_LOCK:
+        data, original = _read_vote_reasons()
+        previous = {key: list(reasons) for key, reasons in data.items()}
+        written = False
+        try:
+            with session_scope() as session:
+                yield session, data
+                if data != previous:
+                    _write_vote_reasons(data)
+                    written = True
+        except Exception as exc:
+            if written:
+                try:
+                    if original is None:
+                        _vote_reasons_path().unlink()
+                    else:
+                        _replace_vote_reasons(original)
+                except OSError as recovery_error:
+                    raise FeedbackStateError(
+                        "Feedback commit and reason-file recovery failed. Stop changing feedback "
+                        "and restore vote_reasons.json from backup."
+                    ) from recovery_error
+            raise FeedbackStateError("Feedback and reasons were not saved. Retry after checking local storage.") from exc
 
 
 def parse_vote_line(line: str) -> tuple[list[str], list[str]]:
@@ -614,30 +733,23 @@ def record_votes(line: str, digest_id: str | None = None) -> dict[str, int]:
         counts["unknown"] = len(up_labels) + len(down_labels)
         return counts
 
-    with session_scope() as s:
-        up_ids, up_missing = _resolve_labels(s, up_labels, target_digest)
-        down_ids, down_missing = _resolve_labels(s, down_labels, target_digest)
+    with _FEEDBACK_MUTATION_LOCK:
+        with _feedback_transaction() as (s, reasons):
+            up_ids, up_missing = _resolve_labels(s, up_labels, target_digest)
+            down_ids, down_missing = _resolve_labels(s, down_labels, target_digest)
+            for label in up_missing + down_missing:
+                logger.warning("vote: unknown label %r in digest %s", label, target_digest)
+            for item_id in up_ids:
+                _upsert_vote(s, item_id, 1)
+                reasons.pop(str(item_id), None)
+            for item_id in down_ids:
+                _upsert_vote(s, item_id, -1)
+            counts.update(up=len(up_ids), down=len(down_ids), unknown=len(up_missing) + len(down_missing))
+        if up_ids or down_ids:
+            from .rank.ranker import reset_lr_cache
 
-        for label in up_missing + down_missing:
-            logger.warning(
-                "vote: unknown label %r in digest %s", label, target_digest
-            )
-
-        for item_id in up_ids:
-            _upsert_vote(s, item_id, 1)
-        for item_id in down_ids:
-            _upsert_vote(s, item_id, -1)
-
-        counts["up"] = len(up_ids)
-        counts["down"] = len(down_ids)
-        counts["unknown"] = len(up_missing) + len(down_missing)
-
-    # Rebuild the Rocchio learned profile from the canonical vote set (outside the
-    # DB session). One rebuild covers all votes in this batch and is idempotent.
-    for item_id in up_ids:
-        _clear_vote_reasons(item_id)
-    if up_ids or down_ids:
-        _update_rocchio()
+            reset_lr_cache()
+            _update_rocchio()
 
     return counts
 
@@ -656,17 +768,49 @@ def record_vote_by_id(item_id: int, value: int, grade: int | None = None) -> boo
         return False
 
     init_db()
-    with session_scope() as s:
-        if s.get(ItemRow, item_id) is None:
-            return False
+    with _FEEDBACK_MUTATION_LOCK:
+        with _feedback_transaction() as (s, reasons):
+            if s.get(ItemRow, item_id) is None:
+                return False
+            _upsert_vote(s, item_id, value, grade)
+            if value == 1:
+                reasons.pop(str(int(item_id)), None)
+        from .rank.ranker import reset_lr_cache
 
-        _upsert_vote(s, item_id, value, grade)
+        reset_lr_cache()
+        _update_rocchio(item_id, value, grade)
+    return True
 
-    # Rebuild the learned profile from the canonical votes. This runs even for a
-    # neutral vote so that clearing a prior signed vote removes its contribution.
-    _update_rocchio(item_id, value, grade)
-    if value == 1:
-        _clear_vote_reasons(item_id)
+
+def clear_rating_by_id(item_id: int) -> bool:
+    """Clear current preference without deleting the item or its feedback history.
+
+    A value-zero event records the explicit clearing action, never a neutral
+    canonical vote. An already-unrated item is an idempotent no-op.
+    """
+    init_db()
+    with _FEEDBACK_MUTATION_LOCK:
+        with _feedback_transaction() as (s, reasons):
+            if s.get(ItemRow, item_id) is None:
+                return False
+            rows = s.execute(select(VoteRow).where(VoteRow.item_id == item_id)).scalars().all()
+            removed_reasons = reasons.pop(str(int(item_id)), None)
+            changed = bool(rows) or removed_reasons is not None
+            if changed:
+                from .rank.ranker import _lr_weights_path, reset_lr_cache
+
+                # Invalidate before commit: failure must not clear the vote while
+                # a derived model still teaches it. A later DB failure can leave
+                # missing caches, which are safely rebuilt from canonical votes.
+                reset_lr_cache()
+                for path in (_learned_profile_path(), _lr_weights_path()):
+                    path.unlink(missing_ok=True)
+                for row in rows:
+                    s.delete(row)
+                s.add(FeedbackEventRow(item_id=item_id, value=0, grade=None,
+                                       recorded_at=datetime.now(timezone.utc)))
+        if changed:
+            _update_rocchio()
     return True
 
 
@@ -712,32 +856,30 @@ def _latest_vote_values(item_ids: Iterable[int] | None = None) -> dict[int, int]
     return latest
 
 
-def _clear_vote_reasons(item_id: int) -> None:
-    """Remove stale reason chips for an item that is now marked Relevant."""
-    with _VOTE_REASONS_LOCK:
-        data = _load_vote_reasons()
-        if data.pop(str(int(item_id)), None) is not None:
-            _write_vote_reasons(data)
-
-
 def record_vote_reason(item_id: int, reason: str) -> bool:
     """Persist an optional qualitative feedback reason for a non-positive vote."""
     if reason not in ALLOWED_REASONS:
         return False
     init_db()
-    with session_scope() as s:
-        if s.get(ItemRow, item_id) is None:
-            return False
-    if _latest_vote_values([item_id]).get(int(item_id)) not in (-1, 0):
-        return False
-    with _VOTE_REASONS_LOCK:
-        data = _load_vote_reasons()
-        key = str(int(item_id))
-        reasons = list(data.get(key) or [])
-        if reason not in reasons:
-            reasons.append(reason)
-        data[key] = reasons
-        _write_vote_reasons(data)
+    with _FEEDBACK_MUTATION_LOCK:
+        with _feedback_transaction() as (s, data):
+            if s.get(ItemRow, item_id) is None:
+                return False
+            value = s.execute(select(VoteRow.value).where(VoteRow.item_id == item_id)
+                              .order_by(VoteRow.created_at.desc(), VoteRow.id.desc()).limit(1)).scalar()
+            if value not in (-1, 0):
+                return False
+            key = str(int(item_id))
+            reasons = list(data.get(key) or [])
+            changed = reason not in reasons
+            if changed:
+                reasons.append(reason)
+                data[key] = reasons
+        if changed:
+            from .rank.ranker import reset_lr_cache
+
+            reset_lr_cache()
+            _update_rocchio()
     return True
 
 
@@ -746,18 +888,22 @@ def remove_vote_reason(item_id: int, reason: str) -> bool:
     if reason not in ALLOWED_REASONS:
         return False
     init_db()
-    with session_scope() as s:
-        if s.get(ItemRow, item_id) is None:
-            return False
-    with _VOTE_REASONS_LOCK:
-        data = _load_vote_reasons()
-        key = str(int(item_id))
-        reasons = [r for r in list(data.get(key) or []) if r != reason]
-        if reasons:
-            data[key] = reasons
-        else:
-            data.pop(key, None)
-        _write_vote_reasons(data)
+    with _FEEDBACK_MUTATION_LOCK:
+        with _feedback_transaction() as (s, data):
+            if s.get(ItemRow, item_id) is None:
+                return False
+            key = str(int(item_id))
+            previous = list(data.get(key) or [])
+            reasons = [r for r in previous if r != reason]
+            if reasons:
+                data[key] = reasons
+            else:
+                data.pop(key, None)
+        if reasons != previous:
+            from .rank.ranker import reset_lr_cache
+
+            reset_lr_cache()
+            _update_rocchio()
     return True
 
 
@@ -866,7 +1012,6 @@ def reason_penalty_map(rows: Iterable[object] | None = None) -> dict[str, float]
         "low_impact",
         "promotional",
         "access_friction",
-        "duplicate",
     }
     now = datetime.now(timezone.utc)
     for row, timestamp in voted_rows:
@@ -1146,6 +1291,7 @@ def _upsert_vote(s, item_id: int, value: int, grade: int | None = None) -> None:
     for duplicate in existing_rows[1:]:
         s.delete(duplicate)
     now = datetime.now(timezone.utc)
+    s.add(FeedbackEventRow(item_id=item_id, value=value, grade=grade, recorded_at=now))
     if existing is None:
         s.add(VoteRow(item_id=item_id, value=value, grade=grade, created_at=now))
         return
@@ -1173,6 +1319,7 @@ def _sample_training_pairs(
     down-voted item until the cap was hit and silently dropped the rest — so
     later-voted positives never influenced training.
     """
+    import numpy as np
     import itertools
 
     n_up = len(up_indices)
@@ -1191,10 +1338,13 @@ def _sample_training_pairs(
 def vote_dataset() -> tuple[np.ndarray, np.ndarray] | None:
     """Build (X, y) for LR training using engineered features.
 
-    Returns None if fewer than MIN_VOTES_FOR_LR signed votes exist.
+    Returns None if fewer than MIN_VOTES_FOR_LR informative signed votes exist.
     Uses real ItemRow objects (not SimpleNamespace) so embeddings are identical
     to what inference uses — preventing train/infer feature distribution mismatch.
     """
+    import numpy as np
+    with _VOTE_REASONS_LOCK:
+        reason_data = _load_vote_reasons()
     init_db()
     with session_scope() as s:
         raw_rows = s.execute(
@@ -1211,7 +1361,7 @@ def vote_dataset() -> tuple[np.ndarray, np.ndarray] | None:
             if iid in seen_ids:
                 continue
             seen_ids.add(iid)
-            if int(value) not in (-1, 1):
+            if not is_semantic_vote(int(value), reason_data.get(str(iid)) or []):
                 continue
             s.expunge(row)
             rows.append(row)

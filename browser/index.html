@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>DailyDigest · Browser</title>
+  <link rel="stylesheet" href="./design-tokens.css">
+  <link rel="stylesheet" href="./style.css">
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="icon" href="./app-icon.svg" type="image/svg+xml">
+</head>
+<body>
+  <a class="skip-link" href="#app">Skip to reading desk</a>
+  <main id="startup" aria-labelledby="startup-title">
+    <p class="eyebrow">DailyDigest in your browser</p>
+    <div id="tab-wait-actions" hidden>
+      <p>Your reading desk is safe. Only one tab can edit it at a time. Switching saves the other tab first; an active brew or unsaved settings must be finished there.</p>
+      <button id="use-this-tab" type="button">Use this tab instead</button>
+    </div>
+    <div class="tea-cup" aria-hidden="true"><span class="steam s1"></span><span class="steam s2"></span><span class="steam s3"></span><span class="cup-bowl"></span><span class="cup-handle"></span></div>
+    <h1 id="startup-title">Putting the kettle on…</h1>
+    <p>Your research reading desk runs on this device. Your profile, ratings and saved papers are saved in this browser. No account or automatic device sync.</p>
+    <form id="startup-topics-form" hidden>
+      <label for="startup-topics">What would you like to read about?</label>
+      <textarea id="startup-topics" rows="3" maxlength="1800" placeholder="Induced proximity&#10;Asymmetric catalysis&#10;RNA delivery" aria-describedby="startup-topics-hint"></textarea>
+      <p id="startup-topics-hint">Start typing while the app opens. One topic per line, up to ten. You can adjust topics and percentages before saving.</p>
+      <button type="submit" id="startup-topics-continue">Continue with these topics</button>
+      <p id="startup-topics-message" role="status"></p>
+    </form>
+    <ol id="startup-stages" aria-label="Startup stages"><li data-startup-stage="python">Python and libraries</li><li data-startup-stage="data">Your saved data</li><li data-startup-stage="ready">Reading desk ready</li></ol>
+    <details class="startup-details"><summary>First visit and local computing</summary><p><span id="download-size">The CPU model is about 66 MB, plus the Python runtime and libraries.</span> Downloads are cached; models load when needed. Brewing uses processor and memory, and can increase heat, fan noise and battery use. Thousands of new papers may take 20+ minutes on one core. Keep this tab open while brewing. Choose acceleration in Compute and export copies in Backup.</p></details>
+    <div class="desk-skeleton" aria-hidden="true"><span></span><span></span><span></span></div>
+    <p id="startup-status">Warming up your reading desk. A fresh cup is on its way.</p>
+    <button id="retry" hidden type="button">Retry startup</button>
+    <div id="recovery-tools" hidden>
+      <p>Your saved data has not been removed. Download the original data before trying recovery. Raw recovery files may include credentials.</p>
+      <button id="recovery-export" type="button">Download original data</button>
+      <label class="file-button recovery-import-label">Restore a backup<input id="recovery-import" type="file" accept="application/json,.json"></label>
+      <button id="recovery-reset" type="button">Start a fresh reading desk</button>
+    </div>
+  </main>
+  <aside id="reading-view-notice" class="reading-view-notice" aria-label="Saved reading view" hidden>
+    <p id="reading-view-status"></p>
+    <div><button id="reading-view-open" type="button">Open full reading desk</button><button id="reading-view-brew" type="button">Brew a new digest</button></div>
+  </aside>
+  <aside id="backup-reminder" class="backup-reminder" role="status" hidden><span id="backup-reminder-text"></span> <button id="backup-reminder-open" type="button">Backup options</button></aside>
+  <iframe id="app" title="DailyDigest reading desk" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-downloads" hidden></iframe>
+  <aside id="app-error" class="app-error" role="alert" hidden>
+    <p id="app-error-message"></p>
+    <button id="reload-app" type="button">Reload app</button>
+    <button id="dismiss-error" type="button">Dismiss</button>
+  </aside>
+  <aside id="transfer-notice" class="app-error" role="status" hidden>
+    <p id="transfer-message"></p>
+    <button id="dismiss-transfer" type="button">Dismiss</button>
+  </aside>
+  <aside id="source-freshness" class="storage-consent" role="status" hidden></aside>
+  <aside id="release-notice" class="release-notice" role="status" hidden><span id="release-message">A new version is available.</span> <button id="release-reload" type="button">Save and reload</button><button id="release-dismiss" type="button">Later</button></aside>
+  <aside id="interruption-notice" class="storage-consent" role="status" hidden><p id="interruption-message"></p><button id="interruption-dismiss" type="button">Dismiss</button></aside>
+  <footer class="browser-bar">
+    <span id="storage-warning" class="storage-warning" role="alert" hidden></span>
+    <div class="browser-status"><span id="status">Opening your reading desk…</span></div>
+    <span id="announcements" class="visually-hidden" role="status" aria-live="polite" aria-atomic="true"></span>
+    <button id="install" type="button" hidden title="Install a DailyDigest browser app shortcut">Install</button>
+    <button id="open-data-settings" type="button">Data &amp; compute</button>
+  </footer>
+  <dialog id="data-settings" aria-labelledby="data-settings-title">
+    <button id="close-data-settings" type="button">Back to reading</button>
+    <h1 id="data-settings-title">Data &amp; compute</h1>
+    <p class="storage-location">On this device · No auto-sync. Your browser stores your reading desk; no account is required.</p>
+    <div class="device-sections">
+    <details id="compute-menu">
+      <summary>Compute</summary>
+      <div class="data-tools">
+        <p>Brewing runs on your device. Choose optional acceleration for new text comparisons.</p>
+        <form id="compute-form">
+          <label for="compute-mode">Local computation</label>
+          <select id="compute-mode" aria-describedby="compute-support" disabled>
+            <option value="cpu">CPU · one core (default)</option>
+            <option value="gpu">Use GPU acceleration (experimental, opt-in)</option>
+            <option value="multicore">CPU · up to four cores</option>
+          </select>
+          <p id="compute-support">Checking this browser’s capabilities…</p>
+          <button id="compute-apply" disabled type="submit">Apply and reload</button>
+        </form>
+        <button id="test-gpu" type="button" disabled>Test GPU</button><p id="gpu-test-result" role="status"></p>
+        <p id="compute-status" role="status">CPU · one core. GPU acceleration is optional and may vary by device.</p>
+        <details><summary>More about computing</summary><p>Choose a mode, then Apply and reload. Finish or stop an active brew first. Acceleration speeds new text comparisons; fetching and other work still use the CPU. Cached comparisons need no acceleration, and the existing digest does not change when you switch.</p>
+        <p>Switching between CPU and GPU can require recalculating saved text comparisons.</p>
+        <p>First-time GPU setup downloads a separate model export, about 133 MB.</p>
+        <p>Brewing uses processor and memory and can increase heat, fan noise and battery use. Thousands of new articles may take 20 minutes or more on one CPU core. GPU support is experimental while hardware performance is being verified across devices. CPU fallback keeps the same ranking rules.</p></details>
+      </div>
+    </details>
+    <details id="companion-menu">
+      <summary>Companion <span class="optional-label">(optional)</span></summary>
+      <div class="data-tools">
+        <p>An optional helper on your computer connects this page to your Claude or Codex login, email and scheduled brews. Skip it to read in the browser.</p>
+        <details><summary>Install the helper</summary>
+        <p>Install DailyDigest on the companion computer, then run:</p>
+        <code class="companion-command">dd companion --allowed-origin https://antimonyleo.github.io</code>
+        <p>The command prints the location of your reusable private token. Your Claude or Codex login must be on that computer. Connect only to a helper you trust.</p></details>
+        <form id="companion-form">
+          <label for="companion-endpoint">Local server URL</label>
+          <input id="companion-endpoint" type="url" required placeholder="http://127.0.0.1:8768" autocomplete="url">
+          <label for="companion-token">Access token</label>
+          <input id="companion-token" type="password" required autocomplete="off">
+          <button id="companion-connect" disabled type="submit">Connect</button>
+          <button id="companion-disconnect" disabled type="button">Disconnect</button>
+        </form>
+        <p id="companion-status" role="status">No companion configured.</p>
+        <p id="companion-summary-help" hidden>Select a provider supported by your companion in Settings to use its summaries during a brew. Provider credentials stay on the companion.</p>
+        <p id="companion-schedule-help" hidden>For scheduled brews, send browser state once and keep the companion running. Restore companion state to retrieve its latest digest.</p>
+        <div class="companion-actions">
+          <label><input id="sync-credentials" type="checkbox"> Include credentials when sending browser state</label>
+          <button id="companion-email" disabled type="button">Send latest digest email</button>
+          <button id="companion-inbound" disabled type="button">Import email feedback</button>
+          <button id="companion-push" disabled type="button">Send browser state</button>
+          <button id="companion-pull" disabled type="button">Restore companion state</button>
+        </div>
+      </div>
+    </details>
+    <details id="browser-data-menu">
+      <summary>Backup</summary>
+      <div class="data-tools">
+        <p>Your interests, ratings and saved papers are saved automatically in this browser. There is no automatic sync between devices. Export a backup before clearing browser data or switching computers.</p>
+        <p id="backup-runtime-notice" hidden>Open the full reading desk to export or import a backup.</p>
+        <button id="export" disabled type="button">Export backup</button>
+        <label class="file-button">Import backup<input id="import" type="file" accept="application/json,.json" disabled></label>
+        <p>Importing replaces this reading desk. People sharing this browser profile see the same reading desk.</p>
+        <details><summary>More about storage</summary><p>Other project sites on this hostname share its security origin. Use separate browser profiles for separate readers.</p>
+        <p id="storage-status" role="status">Checking storage protection…</p>
+        <p>Your browser manages the local storage directory on macOS, Windows and Linux. Protect storage to reduce automatic clearing; export a backup to keep a copy in a folder you choose. No account is required.</p>
+        <p id="storage-usage"></p>
+        <p id="backup-status">No backup export recorded on this device.</p>
+        <button id="protect-storage" type="button">Protect browser storage</button>
+        <button id="retained-recovery" type="button" hidden>Download previous recovery copy</button>
+        <p id="retained-recovery-help" hidden>Recovery copies can include credentials. Keep the downloaded file private.</p>
+        <label><input id="include-credentials" type="checkbox"> Include saved API keys and credentials in backup</label>
+        <p>Portable backups exclude credentials by default. You may need to configure a provider again on another device.</p>
+        </details>
+      </div>
+    </details>
+  <aside id="storage-consent" class="storage-consent" aria-label="Keep your reading desk" hidden>
+    <p>Your reading desk is saved in this browser. Protect it from automatic clearing? Your browser chooses the storage location. Keep backups for device changes, loss or manual clearing.</p>
+    <div><button id="consent-protect-storage" type="button">Protect local data</button><button id="dismiss-storage-consent" type="button">Not now</button></div>
+  </aside>
+    </div>
+  </dialog>
+  <script type="module" src="./app.mjs?compute=v1"></script>
+</body>
+</html>

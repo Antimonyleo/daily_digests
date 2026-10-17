@@ -100,6 +100,8 @@ def canonicalize_url(url: str) -> str:
 
 
 def dedupe_by_url(items: list[Item]) -> list[Item]:
+    _preserve_preprint_publication_links(items)
+    _preserve_research_exclusions(items)
     seen: set[str] = set()
     out: list[Item] = []
     for it in items:
@@ -123,6 +125,8 @@ def dedupe_ranking_candidates[T](items: list[T]) -> list[T]:
     When duplicates disagree, keep the richest/highest-quality representative
     rather than whichever source happened to be fetched first.
     """
+    _preserve_preprint_publication_links(items)
+    _preserve_research_exclusions(items)
     key_to_index: dict[str, int] = {}
     # deleted[i] = True means out[i] was merged into another slot
     deleted: list[bool] = []
@@ -162,7 +166,206 @@ def dedupe_ranking_candidates[T](items: list[T]) -> list[T]:
         for key in keys:
             key_to_index[key] = idx
 
-    return [item for item, d in zip(out, deleted, strict=True) if not d]
+    distinct = [item for item, d in zip(out, deleted, strict=True) if not d]
+    # Publication versions often have different DOIs and publication dates.
+    # Keep this title fallback separate from record identity: it must not copy
+    # a preprint's publication genre or retraction status onto a journal record.
+    version_titles: dict[str, list[int]] = {}
+    result: list[T] = []
+    for item in distinct:
+        title = publication_version_title_key(item)
+        match = next((index for index in version_titles.get(title, [])
+                      if are_publication_versions(item, result[index])), None)
+        if match is None:
+            if title:
+                version_titles.setdefault(title, []).append(len(result))
+            result.append(item)
+        elif _candidate_representative_score(item) > _candidate_representative_score(result[match]):
+            result[match] = item
+    return result
+
+
+def publication_version_title_key(row: Any) -> str:
+    """Distinctive exact title for a conservative preprint/journal fallback.
+
+    Preserve Unicode letters and numbers: alpha/beta targets or different study
+    numbers are substantive differences, not punctuation to discard.
+    """
+    if str(getattr(row, "section", "") or "").casefold() != "research":
+        return ""
+    title = _normalized_title_key(str(getattr(row, "title", "") or ""))
+    return title if len(title) >= 40 and len(set(title.split())) >= 6 else ""
+
+
+def are_publication_versions(left: Any, right: Any) -> bool:
+    """Match a preprint and journal version by a distinctive unchanged title.
+
+    Explicit DOI relationships are handled by durable identity keys separately.
+    A vague shared topic, short title or conflicting author list is insufficient.
+    """
+    from .rank.source_quality import is_preprint_source, should_skip_item
+
+    title = publication_version_title_key(left)
+    if not title or title != publication_version_title_key(right):
+        return False
+    if is_preprint_source(left) == is_preprint_source(right):
+        return False
+    if should_skip_item(left) or should_skip_item(right):
+        return False
+    # Initials and separators differ between feeds (Dao TM vs Dao, T. M.).
+    # Keep the author sequence and letters; remove formatting, not names.
+    authors = [re.sub(r"[\W_]+", "", str(getattr(row, "authors", "") or "").casefold())
+               for row in (left, right)]
+    if not all(authors) or authors[0] == authors[1]:
+        return True
+    signatures = [_author_signatures(str(getattr(row, "authors", "") or "")) for row in (left, right)]
+    if not all(signatures) or len(signatures[0]) != len(signatures[1]):
+        return False
+    return all(a[:2] == b[:2] and not (a[2] and b[2] and a[2] != b[2])
+               for a, b in zip(*signatures, strict=True))
+
+
+def _author_signatures(raw: str) -> list[tuple[str, str, str]]:
+    """Surname/initials plus known first name for the adapters' author lists.
+
+    Handles surname-first initials and given-name-first full names. Ordered
+    lists must agree; conflicting known first names are evidence against a match.
+    This is only supporting evidence for an already identical distinctive title.
+    """
+    parts = raw.split(";") if ";" in raw else raw.split(",")
+    if len(parts) == 2 and re.fullmatch(r"[A-Z.\s]+", parts[1].strip()):
+        parts = [raw]  # Single surname-first author, e.g. Dao, T. M.
+    result = []
+    for part in parts:
+        words = re.findall(r"[^\W\d_]+", part)
+        if len(words) < 2:
+            return []
+        if "," in part:
+            surname, given = part.split(",", 1)
+            surname = re.sub(r"[\W_]+", "", surname.casefold())
+            given_words = re.findall(r"[^\W\d_]+", given)
+        elif words[-1].isupper() and len(words[-1]) <= 4:
+            surname, given_words = "".join(words[:-1]).casefold(), [words[-1]]
+        else:
+            surname, given_words = words[-1].casefold(), words[:-1]
+        if not surname or not given_words:
+            return []
+        initials = "".join(word.casefold() if word.isupper() and len(word) <= 4
+                           else word[0].casefold() for word in given_words)
+        first_name = given_words[0].casefold() if len(given_words[0]) > 1 and not given_words[0].isupper() else ""
+        result.append((surname, initials, first_name))
+    return result
+
+
+def _preserve_preprint_publication_links(items: list[Any]) -> None:
+    """Retain a unique explicit publication link across copies of one preprint.
+
+    Group by the preprint's own identifier, never its published DOI or title.
+    Conflicting links stay unresolved. This copies no venue/genre/quality claims.
+    """
+    from .rank.source_quality import _row_metadata, is_preprint_source
+
+    groups: dict[str, list[tuple[Any, dict]]] = {}
+    for item in items:
+        if getattr(item, "section", "") != "research" or not is_preprint_source(item):
+            continue
+        metadata = _row_metadata(item)
+        url, external = str(getattr(item, "url", "") or ""), str(getattr(item, "external_id", "") or "")
+        arxiv = _extract_arxiv_id(url, external, str(getattr(item, "source", "")).lower())
+        doi = _extract_doi(str(metadata.get("doi") or ""), external, url) if not arxiv else None
+        key = f"arxiv:{arxiv}" if arxiv else f"doi:{doi}" if doi else "url:" + _normalized_url(url)
+        if key != "url:":
+            groups.setdefault(key, []).append((item, metadata))
+    for group in groups.values():
+        links = {_canonical_doi(metadata["published_doi"]) for _, metadata in group
+                 if isinstance(metadata.get("published_doi"), str)}
+        links = {link for link in links if re.fullmatch(r"10\.\d{4,9}/\S+", link)}
+        if len(links) != 1:
+            continue
+        link = next(iter(links))
+        for item, metadata in group:
+            if metadata.get("published_doi"):
+                continue
+            metadata = {**metadata, "published_doi": link}
+            if isinstance(getattr(item, "metadata", None), dict):
+                item.metadata = metadata
+            else:
+                item.metadata_json = json.dumps(metadata, sort_keys=True, separators=(",", ":"))
+
+
+def _preserve_research_exclusions(items: list[Any]) -> None:
+    """Attach explicit genres/exclusions to copies sharing a durable identity.
+
+    A rich RSS row must not erase a database record's explicit retraction or
+    publication genre when chosen as representative. Only DOI, PMID, arXiv and URL
+    links connect evidence; title-based dedupe never transfers it. Existing
+    metadata is retained, and this does not write to the database.
+    """
+    from .rank.source_quality import _row_metadata, research_publication_metadata
+
+    if not any(research_publication_metadata(item) for item in items):
+        return
+    parent = list(range(len(items)))
+
+    def find(index: int) -> int:
+        while parent[index] != index:
+            parent[index] = parent[parent[index]]
+            index = parent[index]
+        return index
+
+    by_key: dict[str, int] = {}
+    for index, item in enumerate(items):
+        if getattr(item, "section", "") != "research":
+            continue
+        for key in candidate_identity_keys(item):
+            if not key.startswith(("doi:", "pmid:", "arxiv:", "url:")):
+                continue
+            if key in by_key:
+                parent[find(index)] = find(by_key[key])
+            else:
+                by_key[key] = index
+
+    evidence_by_root: dict[int, dict[str, Any]] = {}
+    for index, item in enumerate(items):
+        evidence = research_publication_metadata(item)
+        if not evidence:
+            continue
+        shared = evidence_by_root.setdefault(find(index), {})
+        if evidence.get("is_retracted") is True:
+            shared["is_retracted"] = True
+        shared.setdefault("publication_types", set()).update(evidence.get("publication_types", []))
+        provenance = shared.setdefault("publication_type_evidence", [])
+        for record in evidence.get("publication_type_evidence", []):
+            if record not in provenance:
+                provenance.append(record)
+
+    for index, item in enumerate(items):
+        evidence = evidence_by_root.get(find(index))
+        if not evidence:
+            continue
+        metadata = dict(_row_metadata(item))
+        if evidence.get("is_retracted") is True:
+            metadata["is_retracted"] = True
+        if evidence.get("publication_types"):
+            current_types = metadata.get("publication_types", [])
+            if not isinstance(current_types, list):
+                current_types = []
+            current_types = [value for value in current_types if isinstance(value, str)]
+            known_types = {value.strip().casefold() for value in current_types}
+            metadata["publication_types"] = current_types + sorted(
+                evidence["publication_types"] - known_types
+            )
+        if evidence.get("publication_type_evidence"):
+            provenance = metadata.get("publication_type_evidence", [])
+            provenance = list(provenance) if isinstance(provenance, list) else []
+            for record in evidence["publication_type_evidence"]:
+                if record not in provenance:
+                    provenance.append(record)
+            metadata["publication_type_evidence"] = provenance
+        if isinstance(getattr(item, "metadata", None), dict):
+            item.metadata = metadata
+        else:
+            item.metadata_json = json.dumps(metadata, sort_keys=True, separators=(",", ":"))
 
 
 def _candidate_representative_score(it: Any) -> float:
@@ -222,6 +425,13 @@ def candidate_identity_keys(it: Any) -> list[str]:
     doi = _extract_doi(metadata_doi, external_id, url)
     if doi:
         keys.append(f"doi:{doi}")
+    # A source-declared publication relationship identifies the same work even
+    # when the journal version has a new DOI, title, or publication date.
+    published_doi = metadata.get("published_doi") if isinstance(metadata, dict) else None
+    if isinstance(published_doi, str):
+        published_doi = _extract_doi(published_doi)
+        if published_doi and f"doi:{published_doi}" not in keys:
+            keys.append(f"doi:{published_doi}")
 
     pmid = _extract_pmid(url, external_id, source)
     if pmid:
@@ -285,15 +495,19 @@ def _extract_pmid(url: str, external_id: str, source: str) -> str | None:
 
 
 def _extract_arxiv_id(url: str, external_id: str, source: str) -> str | None:
-    values = [url]
+    values: list[str] = []
+    parsed = urlparse(unquote(url or ""))
+    host = (parsed.hostname or "").lower()
+    if host == "arxiv.org" or host.endswith(".arxiv.org"):
+        # Preserve legacy identifiers (e.g. cond-mat/9901234), and only read
+        # document paths. Digits in unrelated publisher URLs are not arXiv IDs.
+        match = re.fullmatch(r"/(?:abs|pdf)/(.+?)(?:\.pdf)?/?", parsed.path)
+        if match:
+            values.append(match.group(1))
     if "arxiv" in source:
         values.append(external_id)
     for value in values:
-        text = unquote(value or "")
-        parsed = urlparse(text)
-        if parsed.netloc.lower().endswith("arxiv.org") and parsed.path:
-            text = parsed.path.rsplit("/", 1)[-1]
-        match = _ARXIV_RE.search(text)
+        match = _ARXIV_RE.fullmatch(unquote(value or "").strip())
         if match:
             return match.group(1).lower()
     return None
@@ -359,7 +573,7 @@ def _same_day_title_key(title: str, dt: datetime | None) -> str:
 
 def _normalized_title_key(title: str) -> str:
     title = _JOURNAL_ISSUE_SUFFIX_RE.sub("", title.strip())
-    return re.sub(r"[^a-z0-9]+", " ", title.lower()).strip()
+    return re.sub(r"[\W_]+", " ", title.casefold()).strip()
 
 
 def filter_english(items: list[Item]) -> list[Item]:

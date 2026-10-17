@@ -172,7 +172,7 @@ def test_low_venue_impact_flags_item_for_cap():
     assert source_bucket(strong) == "published_journal"
 
 
-def test_mid_impact_venue_keeps_uncertain_policy_when_enriched():
+def test_mid_impact_venue_keeps_uncertain_prior_when_enriched():
     now = datetime(2026, 6, 1, tzinfo=timezone.utc)
     pub = now - timedelta(days=30)
     hidden = _item("HIDDEN", "https://doi.org/10.1000/hidden", published_at=pub)
@@ -196,13 +196,18 @@ def test_mid_impact_venue_keeps_uncertain_policy_when_enriched():
         scored, settings=_settings(citation_enrichment=True), fetcher=fake_fetch, now=now
     )
 
-    from dailydigest.rank.source_quality import is_low_impact_research, source_bucket
+    from dailydigest.rank.source_quality import (
+        is_low_impact_research, quality_adjusted_score, source_bucket, venue_evidence,
+    )
 
     for row in (hidden, direct):
         assert getattr(row, "venue_low_impact", False) is False
         assert getattr(row, "venue_high_impact", False) is False
         assert source_bucket(row) == "unknown_journal"
         assert is_low_impact_research(row) is False
+        assert quality_adjusted_score(row, .8) < .8
+        assert row.enrichment_evidence["venue_impact"] in {2., 4.}
+        assert venue_evidence(row)["observation_status"] == "fresh"
 
 
 def test_cached_enrichment_exposes_real_venue_and_keeps_scores_bounded():

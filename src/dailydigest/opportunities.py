@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
@@ -219,6 +220,21 @@ def assess_opportunity(
             return OpportunityAssessment(False, "unknown", "location is outside preferences")
         return OpportunityAssessment(True, "unknown", "verify event requirements")
 
+    country = profile.country.casefold()
+    is_us = country in {"us", "u.s.", "usa", "united states", "united states of america"}
+    eligibility_text = str(metadata.get("eligibility_description") or "").casefold()
+    # Only short affirmative clauses justify exclusion. Negated, qualified,
+    # or more complex eligibility prose needs review, not substring inference.
+    domestic_only = re.search(
+        r"(?:^|[.;]\s*)"
+        r"(?:(?:applicants|applications|institutions|organizations|eligibility) "
+        r"(?:must be|are|is) )?"
+        r"(?:domestic only|u\.s\. only|united states only)\s*(?:[.;]|$)",
+        eligibility_text,
+    )
+    if not is_us and domestic_only:
+        return OpportunityAssessment(False, "unlikely", "country is outside eligibility")
+
     tags = [
         str(tag).casefold() for tag in (metadata.get("eligibility_tags") or []) if str(tag).strip()
     ]
@@ -227,26 +243,13 @@ def assess_opportunity(
 
     official = metadata.get("official") is True
     if any("unrestricted" in tag or "all applicant" in tag for tag in tags):
+        if not is_us:
+            return OpportunityAssessment(True, "unknown", "country eligibility needs review")
         if official:
             return OpportunityAssessment(True, "likely", "call is open to broad applicant types")
         return OpportunityAssessment(True, "unknown", "verify eligibility on the official source")
     if all("other" in tag or "see text" in tag for tag in tags):
         return OpportunityAssessment(True, "unknown", "official eligibility text needs review")
-
-    country = profile.country.casefold()
-    is_us = country in {"us", "u.s.", "usa", "united states", "united states of america"}
-    eligibility_text = str(metadata.get("eligibility_description") or "").casefold()
-    if not is_us and eligibility_text:
-        welcomes_foreign = any(
-            marker in eligibility_text
-            for marker in ("foreign institution", "non-domestic", "international applicant")
-        )
-        domestic_only = any(
-            marker in eligibility_text
-            for marker in ("domestic only", "u.s. only", "united states only")
-        )
-        if domestic_only and not welcomes_foreign:
-            return OpportunityAssessment(False, "unlikely", "country is outside eligibility")
 
     institution = profile.institution_type.casefold()
     markers: tuple[str, ...] = ()
@@ -257,7 +260,9 @@ def assess_opportunity(
     if not markers:
         return OpportunityAssessment(True, "unknown", "institution type needs review")
     if any(marker in tag for marker in markers for tag in tags):
-        if not is_us and not eligibility_text:
+        # Applicant-type tags and free text do not establish country eligibility;
+        # even a mention of foreign institutions may explicitly exclude them.
+        if not is_us:
             return OpportunityAssessment(True, "unknown", "country eligibility needs review")
         if not official:
             return OpportunityAssessment(True, "unknown", "verify eligibility on the official source")

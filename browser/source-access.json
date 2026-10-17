@@ -1,0 +1,1947 @@
+{
+  "generatedAt": "2026-10-14T06:17:15.246Z",
+  "origin": "http://127.0.0.1:8766",
+  "sourceConfig": "config/sources.yaml",
+  "configuredSources": 84,
+  "browser": "152.0.7977.64",
+  "method": "Real isolated Chrome CORS fetch, credentials omitted; public neutral samples only",
+  "limits": [
+    "Origin-specific observations are not a guarantee for a future HTTPS host.",
+    "Readable HTTP is transport evidence, not complete pipeline/eligibility validation.",
+    "Timeout/network errors do not establish that a source is unavailable everywhere.",
+    "HTTP-only feeds will also face mixed-content restrictions on HTTPS deployments.",
+    "No public proxy or no-cors fallback; sources lacking CORS need an explicitly configured trusted companion."
+  ],
+  "summary": {
+    "rss": {
+      "cors_blocked": 64,
+      "readable_http_success": 3
+    },
+    "biorxiv": {
+      "readable_http_success": 2
+    },
+    "arxiv": {
+      "cors_blocked": 4
+    },
+    "pubmed": {
+      "readable_http_success": 2
+    },
+    "openalex_venues": {
+      "readable_http_success": 4
+    },
+    "openalex": {
+      "readable_http_success": 1
+    },
+    "openalex_authors": {
+      "readable_http_success": 1
+    },
+    "clinicaltrials": {
+      "readable_http_success": 1
+    },
+    "fda_api": {
+      "readable_http_success": 1
+    },
+    "grants_gov": {
+      "readable_http_success": 3
+    },
+    "events_rss": {
+      "readable_http_success": 1
+    }
+  },
+  "results": [
+    {
+      "section": "research",
+      "name": "Nature Biotechnology",
+      "kind": "rss",
+      "url": "https://www.nature.com/nbt.rss",
+      "readable": false,
+      "exception": "TypeError",
+      "error": "Failed to fetch",
+      "elapsedMs": 91,
+      "outcome": "cors_blocked",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "https://www.nature.com/nbt.rss",
+          "status": 200
+        }
+      ],
+      "consoleEvidence": [
+        "Access to fetch at 'https://www.nature.com/nbt.rss' from origin 'http://127.0.0.1:8766' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource."
+      ]
+    },
+    {
+      "section": "research",
+      "name": "Nature Medicine",
+      "kind": "rss",
+      "url": "https://www.nature.com/nm.rss",
+      "readable": false,
+      "exception": "TypeError",
+      "error": "Failed to fetch",
+      "elapsedMs": 93,
+      "outcome": "cors_blocked",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "https://www.nature.com/nm.rss",
+          "status": 200
+        }
+      ],
+      "consoleEvidence": [
+        "Access to fetch at 'https://www.nature.com/nm.rss' from origin 'http://127.0.0.1:8766' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource."
+      ]
+    },
+    {
+      "section": "research",
+      "name": "Nature Methods",
+      "kind": "rss",
+      "url": "https://www.nature.com/nmeth.rss",
+      "readable": false,
+      "exception": "TypeError",
+      "error": "Failed to fetch",
+      "elapsedMs": 94,
+      "outcome": "cors_blocked",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "https://www.nature.com/nmeth.rss",
+          "status": 200
+        }
+      ],
+      "consoleEvidence": [
+        "Access to fetch at 'https://www.nature.com/nmeth.rss' from origin 'http://127.0.0.1:8766' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource."
+      ]
+    },
+    {
+      "section": "research",
+      "name": "Nature",
+      "kind": "rss",
+      "url": "https://www.nature.com/nature.rss",
+      "readable": false,
+      "exception": "TypeError",
+      "error": "Failed to fetch",
+      "elapsedMs": 283,
+      "outcome": "cors_blocked",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "https://www.nature.com/nature.rss",
+          "status": 303
+        }
+      ],
+      "consoleEvidence": [
+        "Access to fetch at 'https://www.nature.com/nature.rss' from origin 'http://127.0.0.1:8766' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource."
+      ]
+    },
+    {
+      "section": "research",
+      "name": "Science",
+      "kind": "rss",
+      "url": "https://www.science.org/action/showFeed?type=etoc&feed=rss&jc=science",
+      "readable": false,
+      "exception": "TypeError",
+      "error": "Failed to fetch",
+      "elapsedMs": 66,
+      "outcome": "cors_blocked",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "https://www.science.org/action/showFeed?type=etoc&feed=rss&jc=science",
+          "status": 200
+        }
+      ],
+      "consoleEvidence": [
+        "Access to fetch at 'https://www.science.org/action/showFeed?type=etoc&feed=rss&jc=science' from origin 'http://127.0.0.1:8766' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource."
+      ]
+    },
+    {
+      "section": "research",
+      "name": "The Lancet",
+      "kind": "rss",
+      "url": "https://www.thelancet.com/rssfeed/lancet_current.xml",
+      "readable": false,
+      "exception": "TypeError",
+      "error": "Failed to fetch",
+      "elapsedMs": 139,
+      "outcome": "cors_blocked",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "https://www.thelancet.com/rssfeed/lancet_current.xml",
+          "status": 200
+        }
+      ],
+      "consoleEvidence": [
+        "Access to fetch at 'https://www.thelancet.com/rssfeed/lancet_current.xml' from origin 'http://127.0.0.1:8766' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource."
+      ]
+    },
+    {
+      "section": "research",
+      "name": "Cell",
+      "kind": "rss",
+      "url": "https://www.cell.com/cell/current.rss",
+      "readable": false,
+      "exception": "TypeError",
+      "error": "Failed to fetch",
+      "elapsedMs": 178,
+      "outcome": "cors_blocked",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "https://www.cell.com/cell/current.rss",
+          "status": 200
+        }
+      ],
+      "consoleEvidence": [
+        "Access to fetch at 'https://www.cell.com/cell/current.rss' from origin 'http://127.0.0.1:8766' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource."
+      ]
+    },
+    {
+      "section": "research",
+      "name": "NEJM",
+      "kind": "rss",
+      "url": "https://www.nejm.org/action/showFeed?type=etoc&feed=rss&jc=nejm",
+      "readable": false,
+      "exception": "TypeError",
+      "error": "Failed to fetch",
+      "elapsedMs": 398,
+      "outcome": "cors_blocked",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "https://www.nejm.org/action/showFeed?type=etoc&feed=rss&jc=nejm",
+          "status": 200
+        }
+      ],
+      "consoleEvidence": [
+        "Access to fetch at 'https://www.nejm.org/action/showFeed?type=etoc&feed=rss&jc=nejm' from origin 'http://127.0.0.1:8766' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource."
+      ]
+    },
+    {
+      "section": "research",
+      "name": "PNAS",
+      "kind": "rss",
+      "url": "https://www.pnas.org/action/showFeed?type=etoc&feed=rss&jc=pnas",
+      "readable": false,
+      "exception": "TypeError",
+      "error": "Failed to fetch",
+      "elapsedMs": 40,
+      "outcome": "cors_blocked",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "https://www.pnas.org/action/showFeed?type=etoc&feed=rss&jc=pnas",
+          "status": 200
+        }
+      ],
+      "consoleEvidence": [
+        "Access to fetch at 'https://www.pnas.org/action/showFeed?type=etoc&feed=rss&jc=pnas' from origin 'http://127.0.0.1:8766' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource."
+      ]
+    },
+    {
+      "section": "research",
+      "name": "eLife",
+      "kind": "rss",
+      "url": "https://elifesciences.org/rss/ahead.xml",
+      "readable": false,
+      "exception": "TypeError",
+      "error": "Failed to fetch",
+      "elapsedMs": 63,
+      "outcome": "cors_blocked",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "https://elifesciences.org/rss/ahead.xml",
+          "status": 200
+        }
+      ],
+      "consoleEvidence": [
+        "Access to fetch at 'https://elifesciences.org/rss/ahead.xml' from origin 'http://127.0.0.1:8766' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource."
+      ]
+    },
+    {
+      "section": "research",
+      "name": "medRxiv (recent)",
+      "kind": "biorxiv",
+      "url": "https://api.biorxiv.org/details/medrxiv/2026-10-13/2026-10-13/0",
+      "readable": true,
+      "status": 200,
+      "finalUrl": "https://api.biorxiv.org/details/medrxiv/2026-10-13/2026-10-13/0",
+      "contentType": "application/json",
+      "bodyBytes": 81952,
+      "sample": "{\"messages\":[{\"status\":\"ok\",\"category\":\"all\",\"interval\":\"2026-10-13:2026-10-13\",\"cursor\":0,\"count\":3",
+      "opportunityId": null,
+      "elapsedMs": 607,
+      "outcome": "readable_http_success",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "https://api.biorxiv.org/details/medrxiv/2026-10-13/2026-10-13/0",
+          "status": 200
+        }
+      ],
+      "consoleEvidence": []
+    },
+    {
+      "section": "research",
+      "name": "bioRxiv (recent)",
+      "kind": "biorxiv",
+      "url": "https://api.biorxiv.org/details/biorxiv/2026-10-13/2026-10-13/0",
+      "readable": true,
+      "status": 200,
+      "finalUrl": "https://api.biorxiv.org/details/biorxiv/2026-10-13/2026-10-13/0",
+      "contentType": "application/json",
+      "bodyBytes": 67164,
+      "sample": "{\"messages\":[{\"status\":\"ok\",\"category\":\"all\",\"interval\":\"2026-10-13:2026-10-13\",\"cursor\":0,\"count\":3",
+      "opportunityId": null,
+      "elapsedMs": 768,
+      "outcome": "readable_http_success",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "https://api.biorxiv.org/details/biorxiv/2026-10-13/2026-10-13/0",
+          "status": 200
+        }
+      ],
+      "consoleEvidence": []
+    },
+    {
+      "section": "research",
+      "name": "arXiv cond-mat.soft",
+      "kind": "arxiv",
+      "url": "https://export.arxiv.org/api/query?search_query=cat%3Acond-mat.soft&max_results=1",
+      "readable": false,
+      "exception": "TypeError",
+      "error": "Failed to fetch",
+      "elapsedMs": 144,
+      "outcome": "cors_blocked",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "https://export.arxiv.org/api/query?search_query=cat%3Acond-mat.soft&max_results=1",
+          "status": 200
+        }
+      ],
+      "consoleEvidence": [
+        "Access to fetch at 'https://export.arxiv.org/api/query?search_query=cat%3Acond-mat.soft&max_results=1' from origin 'http://127.0.0.1:8766' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource."
+      ]
+    },
+    {
+      "section": "research",
+      "name": "arXiv q-bio.BM",
+      "kind": "arxiv",
+      "url": "https://export.arxiv.org/api/query?search_query=cat%3Aq-bio.BM&max_results=1",
+      "readable": false,
+      "exception": "TypeError",
+      "error": "Failed to fetch",
+      "elapsedMs": 145,
+      "outcome": "cors_blocked",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "https://export.arxiv.org/api/query?search_query=cat%3Aq-bio.BM&max_results=1",
+          "status": 200
+        }
+      ],
+      "consoleEvidence": [
+        "Access to fetch at 'https://export.arxiv.org/api/query?search_query=cat%3Aq-bio.BM&max_results=1' from origin 'http://127.0.0.1:8766' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource."
+      ]
+    },
+    {
+      "section": "research",
+      "name": "arXiv cs.LG",
+      "kind": "arxiv",
+      "url": "https://export.arxiv.org/api/query?search_query=cat%3Acs.LG&max_results=1",
+      "readable": false,
+      "exception": "TypeError",
+      "error": "Failed to fetch",
+      "elapsedMs": 148,
+      "outcome": "cors_blocked",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "https://export.arxiv.org/api/query?search_query=cat%3Acs.LG&max_results=1",
+          "status": 200
+        }
+      ],
+      "consoleEvidence": [
+        "Access to fetch at 'https://export.arxiv.org/api/query?search_query=cat%3Acs.LG&max_results=1' from origin 'http://127.0.0.1:8766' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource."
+      ]
+    },
+    {
+      "section": "research",
+      "name": "arXiv q-bio.QM",
+      "kind": "arxiv",
+      "url": "https://export.arxiv.org/api/query?search_query=cat%3Aq-bio.QM&max_results=1",
+      "readable": false,
+      "exception": "TypeError",
+      "error": "Failed to fetch",
+      "elapsedMs": 149,
+      "outcome": "cors_blocked",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "https://export.arxiv.org/api/query?search_query=cat%3Aq-bio.QM&max_results=1",
+          "status": 200
+        }
+      ],
+      "consoleEvidence": [
+        "Access to fetch at 'https://export.arxiv.org/api/query?search_query=cat%3Aq-bio.QM&max_results=1' from origin 'http://127.0.0.1:8766' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource."
+      ]
+    },
+    {
+      "section": "research",
+      "name": "PubMed (your topics)",
+      "kind": "pubmed",
+      "url": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&term=clinical%20trial&retmode=json&retmax=1",
+      "readable": true,
+      "status": 200,
+      "finalUrl": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&term=clinical%20trial&retmode=json&retmax=1",
+      "contentType": "application/json; charset=UTF-8",
+      "bodyBytes": 435,
+      "sample": "{\"header\":{\"type\":\"esearch\",\"version\":\"0.3\"},\"esearchresult\":{\"count\":\"1575125\",\"retmax\":\"1\",\"retsta",
+      "opportunityId": null,
+      "elapsedMs": 198,
+      "outcome": "readable_http_success",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&term=clinical%20trial&retmode=json&retmax=1",
+          "status": 200
+        }
+      ],
+      "consoleEvidence": []
+    },
+    {
+      "section": "research",
+      "name": "ACS flagships (via OpenAlex)",
+      "kind": "openalex_venues",
+      "url": "https://api.openalex.org/works?filter=primary_location.source.id%3AS145476921&per-page=1",
+      "readable": true,
+      "status": 200,
+      "finalUrl": "https://api.openalex.org/works?filter=primary_location.source.id%3AS145476921&per-page=1",
+      "contentType": "application/json",
+      "bodyBytes": 24766,
+      "sample": "{\"meta\": {\"count\": 29620, \"db_response_time_ms\": 13, \"page\": 1, \"per_page\": 1, \"groups_count\": null,",
+      "opportunityId": null,
+      "elapsedMs": 265,
+      "outcome": "readable_http_success",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "https://api.openalex.org/works?filter=primary_location.source.id%3AS145476921&per-page=1",
+          "status": 200
+        }
+      ],
+      "consoleEvidence": []
+    },
+    {
+      "section": "research",
+      "name": "OpenAlex (your topics)",
+      "kind": "openalex",
+      "url": "https://api.openalex.org/works?search=biotechnology&per-page=1",
+      "readable": true,
+      "status": 200,
+      "finalUrl": "https://api.openalex.org/works?search=biotechnology&per-page=1",
+      "contentType": "application/json",
+      "bodyBytes": 8633,
+      "sample": "{\"meta\": {\"count\": 2318353, \"db_response_time_ms\": 86, \"page\": 1, \"per_page\": 1, \"groups_count\": nul",
+      "opportunityId": null,
+      "elapsedMs": 424,
+      "outcome": "readable_http_success",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "https://api.openalex.org/works?search=biotechnology&per-page=1",
+          "status": 200
+        }
+      ],
+      "consoleEvidence": []
+    },
+    {
+      "section": "research",
+      "name": "OpenAlex (your authors)",
+      "kind": "openalex_authors",
+      "url": "https://api.openalex.org/authors?search=Smith&per-page=1",
+      "readable": true,
+      "status": 200,
+      "finalUrl": "https://api.openalex.org/authors?search=Smith&per-page=1",
+      "contentType": "application/json",
+      "bodyBytes": 104555,
+      "sample": "{\"meta\": {\"count\": 108783, \"db_response_time_ms\": 37, \"page\": 1, \"per_page\": 1, \"groups_count\": null",
+      "opportunityId": null,
+      "elapsedMs": 571,
+      "outcome": "readable_http_success",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "https://api.openalex.org/authors?search=Smith&per-page=1",
+          "status": 200
+        }
+      ],
+      "consoleEvidence": []
+    },
+    {
+      "section": "research",
+      "name": "Nature Nanotechnology",
+      "kind": "rss",
+      "url": "https://www.nature.com/nnano.rss",
+      "readable": false,
+      "exception": "TypeError",
+      "error": "Failed to fetch",
+      "elapsedMs": 18,
+      "outcome": "cors_blocked",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "https://www.nature.com/nnano.rss",
+          "status": 200
+        }
+      ],
+      "consoleEvidence": [
+        "Access to fetch at 'https://www.nature.com/nnano.rss' from origin 'http://127.0.0.1:8766' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource."
+      ]
+    },
+    {
+      "section": "research",
+      "name": "Nature Materials",
+      "kind": "rss",
+      "url": "https://www.nature.com/nmat.rss",
+      "readable": false,
+      "exception": "TypeError",
+      "error": "Failed to fetch",
+      "elapsedMs": 18,
+      "outcome": "cors_blocked",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "https://www.nature.com/nmat.rss",
+          "status": 200
+        }
+      ],
+      "consoleEvidence": [
+        "Access to fetch at 'https://www.nature.com/nmat.rss' from origin 'http://127.0.0.1:8766' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource."
+      ]
+    },
+    {
+      "section": "research",
+      "name": "ACS field flagships (via OpenAlex)",
+      "kind": "openalex_venues",
+      "url": "https://api.openalex.org/works?filter=primary_location.source.id%3AS37391459&per-page=1",
+      "readable": true,
+      "status": 200,
+      "finalUrl": "https://api.openalex.org/works?filter=primary_location.source.id%3AS37391459&per-page=1",
+      "contentType": "application/json",
+      "bodyBytes": 18934,
+      "sample": "{\"meta\": {\"count\": 17900, \"db_response_time_ms\": 9, \"page\": 1, \"per_page\": 1, \"groups_count\": null, ",
+      "opportunityId": null,
+      "elapsedMs": 190,
+      "outcome": "readable_http_success",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "https://api.openalex.org/works?filter=primary_location.source.id%3AS37391459&per-page=1",
+          "status": 200
+        }
+      ],
+      "consoleEvidence": []
+    },
+    {
+      "section": "research",
+      "name": "ChemRxiv (via OpenAlex)",
+      "kind": "openalex_venues",
+      "url": "https://api.openalex.org/works?filter=primary_location.source.id%3AS4393918830&per-page=1",
+      "readable": true,
+      "status": 200,
+      "finalUrl": "https://api.openalex.org/works?filter=primary_location.source.id%3AS4393918830&per-page=1",
+      "contentType": "application/json",
+      "bodyBytes": 23984,
+      "sample": "{\"meta\": {\"count\": 29517, \"db_response_time_ms\": 13, \"page\": 1, \"per_page\": 1, \"groups_count\": null,",
+      "opportunityId": null,
+      "elapsedMs": 196,
+      "outcome": "readable_http_success",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "https://api.openalex.org/works?filter=primary_location.source.id%3AS4393918830&per-page=1",
+          "status": 200
+        }
+      ],
+      "consoleEvidence": []
+    },
+    {
+      "section": "research",
+      "name": "Nature Chemistry",
+      "kind": "rss",
+      "url": "https://www.nature.com/nchem.rss",
+      "readable": false,
+      "exception": "TypeError",
+      "error": "Failed to fetch",
+      "elapsedMs": 10,
+      "outcome": "cors_blocked",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "https://www.nature.com/nchem.rss",
+          "status": 200
+        }
+      ],
+      "consoleEvidence": [
+        "Access to fetch at 'https://www.nature.com/nchem.rss' from origin 'http://127.0.0.1:8766' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource."
+      ]
+    },
+    {
+      "section": "research",
+      "name": "Nature Physics",
+      "kind": "rss",
+      "url": "https://www.nature.com/nphys.rss",
+      "readable": false,
+      "exception": "TypeError",
+      "error": "Failed to fetch",
+      "elapsedMs": 11,
+      "outcome": "cors_blocked",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "https://www.nature.com/nphys.rss",
+          "status": 200
+        }
+      ],
+      "consoleEvidence": [
+        "Access to fetch at 'https://www.nature.com/nphys.rss' from origin 'http://127.0.0.1:8766' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource."
+      ]
+    },
+    {
+      "section": "research",
+      "name": "Nature Photonics",
+      "kind": "rss",
+      "url": "https://www.nature.com/nphoton.rss",
+      "readable": false,
+      "exception": "TypeError",
+      "error": "Failed to fetch",
+      "elapsedMs": 11,
+      "outcome": "cors_blocked",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "https://www.nature.com/nphoton.rss",
+          "status": 200
+        }
+      ],
+      "consoleEvidence": [
+        "Access to fetch at 'https://www.nature.com/nphoton.rss' from origin 'http://127.0.0.1:8766' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource."
+      ]
+    },
+    {
+      "section": "research",
+      "name": "Nature Catalysis",
+      "kind": "rss",
+      "url": "https://www.nature.com/natcatal.rss",
+      "readable": false,
+      "exception": "TypeError",
+      "error": "Failed to fetch",
+      "elapsedMs": 220,
+      "outcome": "cors_blocked",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "https://www.nature.com/natcatal.rss",
+          "status": 303
+        }
+      ],
+      "consoleEvidence": [
+        "Access to fetch at 'https://www.nature.com/natcatal.rss' from origin 'http://127.0.0.1:8766' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource."
+      ]
+    },
+    {
+      "section": "research",
+      "name": "Nature Energy",
+      "kind": "rss",
+      "url": "https://www.nature.com/nenergy.rss",
+      "readable": false,
+      "exception": "TypeError",
+      "error": "Failed to fetch",
+      "elapsedMs": 9,
+      "outcome": "cors_blocked",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "https://www.nature.com/nenergy.rss",
+          "status": 200
+        }
+      ],
+      "consoleEvidence": [
+        "Access to fetch at 'https://www.nature.com/nenergy.rss' from origin 'http://127.0.0.1:8766' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource."
+      ]
+    },
+    {
+      "section": "research",
+      "name": "Nature Communications",
+      "kind": "rss",
+      "url": "https://www.nature.com/ncomms.rss",
+      "readable": false,
+      "exception": "TypeError",
+      "error": "Failed to fetch",
+      "elapsedMs": 17,
+      "outcome": "cors_blocked",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "https://www.nature.com/ncomms.rss",
+          "status": 200
+        }
+      ],
+      "consoleEvidence": [
+        "Access to fetch at 'https://www.nature.com/ncomms.rss' from origin 'http://127.0.0.1:8766' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource."
+      ]
+    },
+    {
+      "section": "research",
+      "name": "Nature Sustainability",
+      "kind": "rss",
+      "url": "https://www.nature.com/natsustain.rss",
+      "readable": false,
+      "exception": "TypeError",
+      "error": "Failed to fetch",
+      "elapsedMs": 213,
+      "outcome": "cors_blocked",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "https://www.nature.com/natsustain.rss",
+          "status": 303
+        }
+      ],
+      "consoleEvidence": [
+        "Access to fetch at 'https://www.nature.com/natsustain.rss' from origin 'http://127.0.0.1:8766' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource."
+      ]
+    },
+    {
+      "section": "research",
+      "name": "Nature Reviews Drug Discovery",
+      "kind": "rss",
+      "url": "https://www.nature.com/nrd.rss",
+      "readable": false,
+      "exception": "TypeError",
+      "error": "Failed to fetch",
+      "elapsedMs": 227,
+      "outcome": "cors_blocked",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "https://www.nature.com/nrd.rss",
+          "status": 303
+        }
+      ],
+      "consoleEvidence": [
+        "Access to fetch at 'https://www.nature.com/nrd.rss' from origin 'http://127.0.0.1:8766' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource."
+      ]
+    },
+    {
+      "section": "research",
+      "name": "Nature Reviews Chemistry",
+      "kind": "rss",
+      "url": "https://www.nature.com/natrevchem.rss",
+      "readable": false,
+      "exception": "TypeError",
+      "error": "Failed to fetch",
+      "elapsedMs": 11,
+      "outcome": "cors_blocked",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "https://www.nature.com/natrevchem.rss",
+          "status": 200
+        }
+      ],
+      "consoleEvidence": [
+        "Access to fetch at 'https://www.nature.com/natrevchem.rss' from origin 'http://127.0.0.1:8766' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource."
+      ]
+    },
+    {
+      "section": "research",
+      "name": "Nature Reviews Materials",
+      "kind": "rss",
+      "url": "https://www.nature.com/natrevmats.rss",
+      "readable": false,
+      "exception": "TypeError",
+      "error": "Failed to fetch",
+      "elapsedMs": 11,
+      "outcome": "cors_blocked",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "https://www.nature.com/natrevmats.rss",
+          "status": 200
+        }
+      ],
+      "consoleEvidence": [
+        "Access to fetch at 'https://www.nature.com/natrevmats.rss' from origin 'http://127.0.0.1:8766' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource."
+      ]
+    },
+    {
+      "section": "research",
+      "name": "Nature Reviews Cancer",
+      "kind": "rss",
+      "url": "https://www.nature.com/nrc.rss",
+      "readable": false,
+      "exception": "TypeError",
+      "error": "Failed to fetch",
+      "elapsedMs": 12,
+      "outcome": "cors_blocked",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "https://www.nature.com/nrc.rss",
+          "status": 200
+        }
+      ],
+      "consoleEvidence": [
+        "Access to fetch at 'https://www.nature.com/nrc.rss' from origin 'http://127.0.0.1:8766' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource."
+      ]
+    },
+    {
+      "section": "research",
+      "name": "Nature Reviews Genetics",
+      "kind": "rss",
+      "url": "https://www.nature.com/nrg.rss",
+      "readable": false,
+      "exception": "TypeError",
+      "error": "Failed to fetch",
+      "elapsedMs": 13,
+      "outcome": "cors_blocked",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "https://www.nature.com/nrg.rss",
+          "status": 200
+        }
+      ],
+      "consoleEvidence": [
+        "Access to fetch at 'https://www.nature.com/nrg.rss' from origin 'http://127.0.0.1:8766' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource."
+      ]
+    },
+    {
+      "section": "research",
+      "name": "Nature Reviews Microbiology",
+      "kind": "rss",
+      "url": "https://www.nature.com/nrmicro.rss",
+      "readable": false,
+      "exception": "TypeError",
+      "error": "Failed to fetch",
+      "elapsedMs": 8,
+      "outcome": "cors_blocked",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "https://www.nature.com/nrmicro.rss",
+          "status": 200
+        }
+      ],
+      "consoleEvidence": [
+        "Access to fetch at 'https://www.nature.com/nrmicro.rss' from origin 'http://127.0.0.1:8766' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource."
+      ]
+    },
+    {
+      "section": "research",
+      "name": "Science Translational Medicine",
+      "kind": "rss",
+      "url": "https://www.science.org/action/showFeed?type=etoc&feed=rss&jc=stm",
+      "readable": false,
+      "exception": "TypeError",
+      "error": "Failed to fetch",
+      "elapsedMs": 44,
+      "outcome": "cors_blocked",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "https://www.science.org/action/showFeed?type=etoc&feed=rss&jc=stm",
+          "status": 200
+        }
+      ],
+      "consoleEvidence": [
+        "Access to fetch at 'https://www.science.org/action/showFeed?type=etoc&feed=rss&jc=stm' from origin 'http://127.0.0.1:8766' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource."
+      ]
+    },
+    {
+      "section": "research",
+      "name": "Science Advances",
+      "kind": "rss",
+      "url": "https://www.science.org/action/showFeed?type=etoc&feed=rss&jc=sciadv",
+      "readable": false,
+      "exception": "TypeError",
+      "error": "Failed to fetch",
+      "elapsedMs": 45,
+      "outcome": "cors_blocked",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "https://www.science.org/action/showFeed?type=etoc&feed=rss&jc=sciadv",
+          "status": 200
+        }
+      ],
+      "consoleEvidence": [
+        "Access to fetch at 'https://www.science.org/action/showFeed?type=etoc&feed=rss&jc=sciadv' from origin 'http://127.0.0.1:8766' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource."
+      ]
+    },
+    {
+      "section": "research",
+      "name": "Science Robotics",
+      "kind": "rss",
+      "url": "https://www.science.org/action/showFeed?type=etoc&feed=rss&jc=scirobotics",
+      "readable": false,
+      "exception": "TypeError",
+      "error": "Failed to fetch",
+      "elapsedMs": 115,
+      "outcome": "cors_blocked",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "https://www.science.org/action/showFeed?type=etoc&feed=rss&jc=scirobotics",
+          "status": 200
+        }
+      ],
+      "consoleEvidence": [
+        "Access to fetch at 'https://www.science.org/action/showFeed?type=etoc&feed=rss&jc=scirobotics' from origin 'http://127.0.0.1:8766' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource."
+      ]
+    },
+    {
+      "section": "research",
+      "name": "Science Signaling",
+      "kind": "rss",
+      "url": "https://www.science.org/action/showFeed?type=etoc&feed=rss&jc=signaling",
+      "readable": false,
+      "exception": "TypeError",
+      "error": "Failed to fetch",
+      "elapsedMs": 48,
+      "outcome": "cors_blocked",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "https://www.science.org/action/showFeed?type=etoc&feed=rss&jc=signaling",
+          "status": 200
+        }
+      ],
+      "consoleEvidence": [
+        "Access to fetch at 'https://www.science.org/action/showFeed?type=etoc&feed=rss&jc=signaling' from origin 'http://127.0.0.1:8766' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource."
+      ]
+    },
+    {
+      "section": "research",
+      "name": "Science Immunology",
+      "kind": "rss",
+      "url": "https://www.science.org/action/showFeed?type=etoc&feed=rss&jc=sciimmunol",
+      "readable": false,
+      "exception": "TypeError",
+      "error": "Failed to fetch",
+      "elapsedMs": 50,
+      "outcome": "cors_blocked",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "https://www.science.org/action/showFeed?type=etoc&feed=rss&jc=sciimmunol",
+          "status": 200
+        }
+      ],
+      "consoleEvidence": [
+        "Access to fetch at 'https://www.science.org/action/showFeed?type=etoc&feed=rss&jc=sciimmunol' from origin 'http://127.0.0.1:8766' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource."
+      ]
+    },
+    {
+      "section": "research",
+      "name": "Cell Reports",
+      "kind": "rss",
+      "url": "https://www.cell.com/cell-reports/current.rss",
+      "readable": false,
+      "exception": "TypeError",
+      "error": "Failed to fetch",
+      "elapsedMs": 53,
+      "outcome": "cors_blocked",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "https://www.cell.com/cell-reports/current.rss",
+          "status": 200
+        }
+      ],
+      "consoleEvidence": [
+        "Access to fetch at 'https://www.cell.com/cell-reports/current.rss' from origin 'http://127.0.0.1:8766' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource."
+      ]
+    },
+    {
+      "section": "research",
+      "name": "Cell Stem Cell",
+      "kind": "rss",
+      "url": "https://www.cell.com/cell-stem-cell/current.rss",
+      "readable": false,
+      "exception": "TypeError",
+      "error": "Failed to fetch",
+      "elapsedMs": 57,
+      "outcome": "cors_blocked",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "https://www.cell.com/cell-stem-cell/current.rss",
+          "status": 200
+        }
+      ],
+      "consoleEvidence": [
+        "Access to fetch at 'https://www.cell.com/cell-stem-cell/current.rss' from origin 'http://127.0.0.1:8766' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource."
+      ]
+    },
+    {
+      "section": "research",
+      "name": "Cell Metabolism",
+      "kind": "rss",
+      "url": "https://www.cell.com/cell-metabolism/current.rss",
+      "readable": false,
+      "exception": "TypeError",
+      "error": "Failed to fetch",
+      "elapsedMs": 57,
+      "outcome": "cors_blocked",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "https://www.cell.com/cell-metabolism/current.rss",
+          "status": 200
+        }
+      ],
+      "consoleEvidence": [
+        "Access to fetch at 'https://www.cell.com/cell-metabolism/current.rss' from origin 'http://127.0.0.1:8766' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource."
+      ]
+    },
+    {
+      "section": "research",
+      "name": "Cancer Cell",
+      "kind": "rss",
+      "url": "https://www.cell.com/cancer-cell/current.rss",
+      "readable": false,
+      "exception": "TypeError",
+      "error": "Failed to fetch",
+      "elapsedMs": 59,
+      "outcome": "cors_blocked",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "https://www.cell.com/cancer-cell/current.rss",
+          "status": 200
+        }
+      ],
+      "consoleEvidence": [
+        "Access to fetch at 'https://www.cell.com/cancer-cell/current.rss' from origin 'http://127.0.0.1:8766' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource."
+      ]
+    },
+    {
+      "section": "research",
+      "name": "Immunity",
+      "kind": "rss",
+      "url": "https://www.cell.com/immunity/current.rss",
+      "readable": false,
+      "exception": "TypeError",
+      "error": "Failed to fetch",
+      "elapsedMs": 60,
+      "outcome": "cors_blocked",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "https://www.cell.com/immunity/current.rss",
+          "status": 200
+        }
+      ],
+      "consoleEvidence": [
+        "Access to fetch at 'https://www.cell.com/immunity/current.rss' from origin 'http://127.0.0.1:8766' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource."
+      ]
+    },
+    {
+      "section": "research",
+      "name": "Cell Host and Microbe",
+      "kind": "rss",
+      "url": "https://www.cell.com/cell-host-microbe/current.rss",
+      "readable": false,
+      "exception": "TypeError",
+      "error": "Failed to fetch",
+      "elapsedMs": 67,
+      "outcome": "cors_blocked",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "https://www.cell.com/cell-host-microbe/current.rss",
+          "status": 200
+        }
+      ],
+      "consoleEvidence": [
+        "Access to fetch at 'https://www.cell.com/cell-host-microbe/current.rss' from origin 'http://127.0.0.1:8766' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource."
+      ]
+    },
+    {
+      "section": "research",
+      "name": "Neuron",
+      "kind": "rss",
+      "url": "https://www.cell.com/neuron/current.rss",
+      "readable": false,
+      "exception": "TypeError",
+      "error": "Failed to fetch",
+      "elapsedMs": 64,
+      "outcome": "cors_blocked",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "https://www.cell.com/neuron/current.rss",
+          "status": 200
+        }
+      ],
+      "consoleEvidence": [
+        "Access to fetch at 'https://www.cell.com/neuron/current.rss' from origin 'http://127.0.0.1:8766' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource."
+      ]
+    },
+    {
+      "section": "research",
+      "name": "Molecular Cell",
+      "kind": "rss",
+      "url": "https://www.cell.com/molecular-cell/current.rss",
+      "readable": false,
+      "exception": "TypeError",
+      "error": "Failed to fetch",
+      "elapsedMs": 63,
+      "outcome": "cors_blocked",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "https://www.cell.com/molecular-cell/current.rss",
+          "status": 200
+        }
+      ],
+      "consoleEvidence": [
+        "Access to fetch at 'https://www.cell.com/molecular-cell/current.rss' from origin 'http://127.0.0.1:8766' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource."
+      ]
+    },
+    {
+      "section": "research",
+      "name": "Cell Systems",
+      "kind": "rss",
+      "url": "https://www.cell.com/cell-systems/current.rss",
+      "readable": false,
+      "exception": "TypeError",
+      "error": "Failed to fetch",
+      "elapsedMs": 66,
+      "outcome": "cors_blocked",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "https://www.cell.com/cell-systems/current.rss",
+          "status": 200
+        }
+      ],
+      "consoleEvidence": [
+        "Access to fetch at 'https://www.cell.com/cell-systems/current.rss' from origin 'http://127.0.0.1:8766' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource."
+      ]
+    },
+    {
+      "section": "research",
+      "name": "Cell Chemical Biology",
+      "kind": "rss",
+      "url": "https://www.cell.com/cell-chemical-biology/current.rss",
+      "readable": false,
+      "exception": "TypeError",
+      "error": "Failed to fetch",
+      "elapsedMs": 89,
+      "outcome": "cors_blocked",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "https://www.cell.com/cell-chemical-biology/current.rss",
+          "status": 200
+        }
+      ],
+      "consoleEvidence": [
+        "Access to fetch at 'https://www.cell.com/cell-chemical-biology/current.rss' from origin 'http://127.0.0.1:8766' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource."
+      ]
+    },
+    {
+      "section": "research",
+      "name": "Cell Genomics",
+      "kind": "rss",
+      "url": "https://www.cell.com/cell-genomics/current.rss",
+      "readable": false,
+      "exception": "TypeError",
+      "error": "Failed to fetch",
+      "elapsedMs": 64,
+      "outcome": "cors_blocked",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "https://www.cell.com/cell-genomics/current.rss",
+          "status": 200
+        }
+      ],
+      "consoleEvidence": [
+        "Access to fetch at 'https://www.cell.com/cell-genomics/current.rss' from origin 'http://127.0.0.1:8766' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource."
+      ]
+    },
+    {
+      "section": "research",
+      "name": "Chem (Cell Press)",
+      "kind": "rss",
+      "url": "https://www.cell.com/chem/current.rss",
+      "readable": false,
+      "exception": "TypeError",
+      "error": "Failed to fetch",
+      "elapsedMs": 63,
+      "outcome": "cors_blocked",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "https://www.cell.com/chem/current.rss",
+          "status": 200
+        }
+      ],
+      "consoleEvidence": [
+        "Access to fetch at 'https://www.cell.com/chem/current.rss' from origin 'http://127.0.0.1:8766' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource."
+      ]
+    },
+    {
+      "section": "research",
+      "name": "Med (Cell Press)",
+      "kind": "rss",
+      "url": "https://www.cell.com/med/current.rss",
+      "readable": false,
+      "exception": "TypeError",
+      "error": "Failed to fetch",
+      "elapsedMs": 70,
+      "outcome": "cors_blocked",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "https://www.cell.com/med/current.rss",
+          "status": 200
+        }
+      ],
+      "consoleEvidence": [
+        "Access to fetch at 'https://www.cell.com/med/current.rss' from origin 'http://127.0.0.1:8766' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource."
+      ]
+    },
+    {
+      "section": "research",
+      "name": "Chemical Science",
+      "kind": "rss",
+      "url": "http://feeds.rsc.org/rss/sc",
+      "readable": false,
+      "exception": "TypeError",
+      "error": "Failed to fetch",
+      "elapsedMs": 255,
+      "outcome": "cors_blocked",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "http://feeds.rsc.org/rss/sc",
+          "status": 200
+        }
+      ],
+      "consoleEvidence": [
+        "Access to fetch at 'http://feeds.rsc.org/rss/sc' from origin 'http://127.0.0.1:8766' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource."
+      ]
+    },
+    {
+      "section": "research",
+      "name": "Advanced Materials",
+      "kind": "rss",
+      "url": "https://onlinelibrary.wiley.com/feed/15214095/most-recent",
+      "readable": false,
+      "exception": "TypeError",
+      "error": "Failed to fetch",
+      "elapsedMs": 73,
+      "outcome": "cors_blocked",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "https://onlinelibrary.wiley.com/feed/15214095/most-recent",
+          "status": 200
+        }
+      ],
+      "consoleEvidence": [
+        "Access to fetch at 'https://onlinelibrary.wiley.com/feed/15214095/most-recent' from origin 'http://127.0.0.1:8766' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource."
+      ]
+    },
+    {
+      "section": "research",
+      "name": "Angew. Chem. Int. Ed.",
+      "kind": "rss",
+      "url": "https://onlinelibrary.wiley.com/feed/15213773/most-recent",
+      "readable": false,
+      "exception": "TypeError",
+      "error": "Failed to fetch",
+      "elapsedMs": 73,
+      "outcome": "cors_blocked",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "https://onlinelibrary.wiley.com/feed/15213773/most-recent",
+          "status": 200
+        }
+      ],
+      "consoleEvidence": [
+        "Access to fetch at 'https://onlinelibrary.wiley.com/feed/15213773/most-recent' from origin 'http://127.0.0.1:8766' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource."
+      ]
+    },
+    {
+      "section": "research",
+      "name": "Chem. Soc. Rev.",
+      "kind": "rss",
+      "url": "http://feeds.rsc.org/rss/cs",
+      "readable": false,
+      "exception": "TypeError",
+      "error": "Failed to fetch",
+      "elapsedMs": 151,
+      "outcome": "cors_blocked",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "http://feeds.rsc.org/rss/cs",
+          "status": 200
+        }
+      ],
+      "consoleEvidence": [
+        "Access to fetch at 'http://feeds.rsc.org/rss/cs' from origin 'http://127.0.0.1:8766' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource."
+      ]
+    },
+    {
+      "section": "research",
+      "name": "Energy and Environmental Science",
+      "kind": "rss",
+      "url": "http://feeds.rsc.org/rss/ee",
+      "readable": false,
+      "exception": "TypeError",
+      "error": "Failed to fetch",
+      "elapsedMs": 154,
+      "outcome": "cors_blocked",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "http://feeds.rsc.org/rss/ee",
+          "status": 200
+        }
+      ],
+      "consoleEvidence": [
+        "Access to fetch at 'http://feeds.rsc.org/rss/ee' from origin 'http://127.0.0.1:8766' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource."
+      ]
+    },
+    {
+      "section": "research",
+      "name": "Small (Wiley)",
+      "kind": "rss",
+      "url": "https://onlinelibrary.wiley.com/feed/16136829/most-recent",
+      "readable": false,
+      "exception": "TypeError",
+      "error": "Failed to fetch",
+      "elapsedMs": 35,
+      "outcome": "cors_blocked",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "https://onlinelibrary.wiley.com/feed/16136829/most-recent",
+          "status": 200
+        }
+      ],
+      "consoleEvidence": [
+        "Access to fetch at 'https://onlinelibrary.wiley.com/feed/16136829/most-recent' from origin 'http://127.0.0.1:8766' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource."
+      ]
+    },
+    {
+      "section": "research",
+      "name": "Advanced Functional Materials",
+      "kind": "rss",
+      "url": "https://onlinelibrary.wiley.com/feed/16163028/most-recent",
+      "readable": false,
+      "exception": "TypeError",
+      "error": "Failed to fetch",
+      "elapsedMs": 40,
+      "outcome": "cors_blocked",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "https://onlinelibrary.wiley.com/feed/16163028/most-recent",
+          "status": 200
+        }
+      ],
+      "consoleEvidence": [
+        "Access to fetch at 'https://onlinelibrary.wiley.com/feed/16163028/most-recent' from origin 'http://127.0.0.1:8766' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource."
+      ]
+    },
+    {
+      "section": "research",
+      "name": "Advanced Science",
+      "kind": "rss",
+      "url": "https://onlinelibrary.wiley.com/feed/21983844/most-recent",
+      "readable": false,
+      "exception": "TypeError",
+      "error": "Failed to fetch",
+      "elapsedMs": 68,
+      "outcome": "cors_blocked",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "https://onlinelibrary.wiley.com/feed/21983844/most-recent",
+          "status": 200
+        }
+      ],
+      "consoleEvidence": [
+        "Access to fetch at 'https://onlinelibrary.wiley.com/feed/21983844/most-recent' from origin 'http://127.0.0.1:8766' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource."
+      ]
+    },
+    {
+      "section": "research",
+      "name": "Nucleic Acids Research",
+      "kind": "rss",
+      "url": "https://academic.oup.com/rss/site_5127/3091.xml",
+      "readable": false,
+      "exception": "TypeError",
+      "error": "Failed to fetch",
+      "elapsedMs": 271,
+      "outcome": "cors_blocked",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "https://academic.oup.com/rss/site_5127/3091.xml",
+          "status": 200
+        }
+      ],
+      "consoleEvidence": [
+        "Access to fetch at 'https://academic.oup.com/rss/site_5127/3091.xml' from origin 'http://127.0.0.1:8766' has been blocked by CORS policy: The 'Access-Control-Allow-Origin' header has a value 'https://academic.oup.com' that is not equal to the supplied origin. Have the server send the header with a valid value."
+      ]
+    },
+    {
+      "section": "industry",
+      "name": "FierceBiotech",
+      "kind": "rss",
+      "url": "https://www.fiercebiotech.com/rss/xml",
+      "readable": false,
+      "exception": "TypeError",
+      "error": "Failed to fetch",
+      "elapsedMs": 43,
+      "outcome": "cors_blocked",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "https://www.fiercebiotech.com/rss/xml",
+          "status": 403
+        }
+      ],
+      "consoleEvidence": [
+        "Access to fetch at 'https://www.fiercebiotech.com/rss/xml' from origin 'http://127.0.0.1:8766' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource."
+      ]
+    },
+    {
+      "section": "industry",
+      "name": "BioPharma Dive",
+      "kind": "rss",
+      "url": "https://www.biopharmadive.com/feeds/news/",
+      "readable": true,
+      "status": 200,
+      "finalUrl": "https://www.biopharmadive.com/feeds/news/",
+      "contentType": "application/rss+xml; charset=utf-8",
+      "bodyBytes": 9496,
+      "sample": "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<rss version=\"2.0\" xmlns:atom=\"http://www.w3.org/2005/Atom\"><",
+      "opportunityId": null,
+      "elapsedMs": 59,
+      "outcome": "readable_http_success",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "https://www.biopharmadive.com/feeds/news/",
+          "status": 200
+        }
+      ],
+      "consoleEvidence": []
+    },
+    {
+      "section": "industry",
+      "name": "Endpoints News",
+      "kind": "rss",
+      "url": "https://endpts.com/feed/",
+      "readable": false,
+      "exception": "TypeError",
+      "error": "Failed to fetch",
+      "elapsedMs": 75,
+      "outcome": "cors_blocked",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "https://endpts.com/feed/",
+          "status": 301
+        }
+      ],
+      "consoleEvidence": [
+        "Access to fetch at 'https://endpts.com/feed/' from origin 'http://127.0.0.1:8766' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource."
+      ]
+    },
+    {
+      "section": "industry",
+      "name": "STAT News",
+      "kind": "rss",
+      "url": "https://www.statnews.com/feed/",
+      "readable": false,
+      "exception": "TypeError",
+      "error": "Failed to fetch",
+      "elapsedMs": 298,
+      "outcome": "cors_blocked",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "https://www.statnews.com/feed/",
+          "status": 200
+        }
+      ],
+      "consoleEvidence": [
+        "Access to fetch at 'https://www.statnews.com/feed/' from origin 'http://127.0.0.1:8766' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource."
+      ]
+    },
+    {
+      "section": "regulatory",
+      "name": "FDA Drug Approvals (CDER)",
+      "kind": "rss",
+      "url": "https://www.fda.gov/about-fda/contact-fda/stay-informed/rss-feeds/drugs/rss.xml",
+      "readable": false,
+      "exception": "TypeError",
+      "error": "Failed to fetch",
+      "elapsedMs": 129,
+      "outcome": "cors_blocked",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "https://www.fda.gov/about-fda/contact-fda/stay-informed/rss-feeds/drugs/rss.xml",
+          "status": 200
+        }
+      ],
+      "consoleEvidence": [
+        "Access to fetch at 'https://www.fda.gov/about-fda/contact-fda/stay-informed/rss-feeds/drugs/rss.xml' from origin 'http://127.0.0.1:8766' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource."
+      ]
+    },
+    {
+      "section": "regulatory",
+      "name": "FDA Press Announcements",
+      "kind": "rss",
+      "url": "https://www.fda.gov/about-fda/contact-fda/stay-informed/rss-feeds/press-releases/rss.xml",
+      "readable": false,
+      "exception": "TypeError",
+      "error": "Failed to fetch",
+      "elapsedMs": 130,
+      "outcome": "cors_blocked",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "https://www.fda.gov/about-fda/contact-fda/stay-informed/rss-feeds/press-releases/rss.xml",
+          "status": 200
+        }
+      ],
+      "consoleEvidence": [
+        "Access to fetch at 'https://www.fda.gov/about-fda/contact-fda/stay-informed/rss-feeds/press-releases/rss.xml' from origin 'http://127.0.0.1:8766' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource."
+      ]
+    },
+    {
+      "section": "regulatory",
+      "name": "ClinicalTrials.gov (recent updates)",
+      "kind": "clinicaltrials",
+      "url": "https://clinicaltrials.gov/api/v2/studies?pageSize=1&format=json",
+      "readable": true,
+      "status": 200,
+      "finalUrl": "https://clinicaltrials.gov/api/v2/studies?pageSize=1&format=json",
+      "contentType": "application/json",
+      "bodyBytes": 14908,
+      "sample": "{\"studies\":[\n{\"protocolSection\":{\"identificationModule\":{\"nctId\":\"NCT05905835\",\"orgStudyIdInfo\":{\"id",
+      "opportunityId": null,
+      "elapsedMs": 176,
+      "outcome": "readable_http_success",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "https://clinicaltrials.gov/api/v2/studies?pageSize=1&format=json",
+          "status": 200
+        }
+      ],
+      "consoleEvidence": []
+    },
+    {
+      "section": "regulatory",
+      "name": "openFDA Drug Approvals",
+      "kind": "fda_api",
+      "url": "https://api.fda.gov/drug/drugsfda.json?limit=1&search=submissions.submission_status:AP",
+      "readable": true,
+      "status": 200,
+      "finalUrl": "https://api.fda.gov/drug/drugsfda.json?limit=1&search=submissions.submission_status:AP",
+      "contentType": "application/json; charset=utf-8",
+      "bodyBytes": 4825,
+      "sample": "{\n  \"meta\": {\n    \"disclaimer\": \"Do not rely on openFDA to make decisions regarding medical care. Wh",
+      "opportunityId": null,
+      "elapsedMs": 275,
+      "outcome": "readable_http_success",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "https://api.fda.gov/drug/drugsfda.json?limit=1&search=submissions.submission_status:AP",
+          "status": 200
+        }
+      ],
+      "consoleEvidence": []
+    },
+    {
+      "section": "world",
+      "name": "Al Jazeera (World)",
+      "kind": "rss",
+      "url": "https://www.aljazeera.com/xml/rss/all.xml",
+      "readable": false,
+      "exception": "TypeError",
+      "error": "Failed to fetch",
+      "elapsedMs": 131,
+      "outcome": "cors_blocked",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "https://www.aljazeera.com/xml/rss/all.xml",
+          "status": 200
+        }
+      ],
+      "consoleEvidence": [
+        "Access to fetch at 'https://www.aljazeera.com/xml/rss/all.xml' from origin 'http://127.0.0.1:8766' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource."
+      ]
+    },
+    {
+      "section": "world",
+      "name": "MIT Technology Review",
+      "kind": "rss",
+      "url": "https://www.technologyreview.com/feed/",
+      "readable": false,
+      "exception": "TypeError",
+      "error": "Failed to fetch",
+      "elapsedMs": 149,
+      "outcome": "cors_blocked",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "https://www.technologyreview.com/feed/",
+          "status": 200
+        }
+      ],
+      "consoleEvidence": [
+        "Access to fetch at 'https://www.technologyreview.com/feed/' from origin 'http://127.0.0.1:8766' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource."
+      ]
+    },
+    {
+      "section": "world",
+      "name": "BBC World",
+      "kind": "rss",
+      "url": "https://feeds.bbci.co.uk/news/world/rss.xml",
+      "readable": false,
+      "exception": "TypeError",
+      "error": "Failed to fetch",
+      "elapsedMs": 205,
+      "outcome": "cors_blocked",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "https://feeds.bbci.co.uk/news/world/rss.xml",
+          "status": 200
+        }
+      ],
+      "consoleEvidence": [
+        "Access to fetch at 'https://feeds.bbci.co.uk/news/world/rss.xml' from origin 'http://127.0.0.1:8766' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource."
+      ]
+    },
+    {
+      "section": "world",
+      "name": "Hacker News (front)",
+      "kind": "rss",
+      "url": "https://hnrss.org/frontpage",
+      "readable": false,
+      "exception": "TypeError",
+      "error": "Failed to fetch",
+      "elapsedMs": 2871,
+      "outcome": "cors_blocked",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "https://hnrss.org/frontpage",
+          "status": 200
+        }
+      ],
+      "consoleEvidence": [
+        "Access to fetch at 'https://hnrss.org/frontpage' from origin 'http://127.0.0.1:8766' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource."
+      ]
+    },
+    {
+      "section": "ai",
+      "name": "Simon Willison",
+      "kind": "rss",
+      "url": "https://simonwillison.net/atom/everything/",
+      "readable": true,
+      "status": 200,
+      "finalUrl": "https://simonwillison.net/atom/everything/",
+      "contentType": "application/xml; charset=utf-8",
+      "bodyBytes": 105989,
+      "sample": "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<feed xml:lang=\"en-us\" xmlns=\"http://www.w3.org/2005/Atom\"><t",
+      "opportunityId": null,
+      "elapsedMs": 54,
+      "outcome": "readable_http_success",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "https://simonwillison.net/atom/everything/",
+          "status": 200
+        }
+      ],
+      "consoleEvidence": []
+    },
+    {
+      "section": "ai",
+      "name": "Hugging Face Blog",
+      "kind": "rss",
+      "url": "https://huggingface.co/blog/feed.xml",
+      "readable": false,
+      "exception": "TypeError",
+      "error": "Failed to fetch",
+      "elapsedMs": 127,
+      "outcome": "cors_blocked",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "https://huggingface.co/blog/feed.xml",
+          "status": 200
+        }
+      ],
+      "consoleEvidence": [
+        "Access to fetch at 'https://huggingface.co/blog/feed.xml' from origin 'http://127.0.0.1:8766' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource."
+      ]
+    },
+    {
+      "section": "ai",
+      "name": "Import AI (Jack Clark)",
+      "kind": "rss",
+      "url": "https://jack-clark.net/feed/",
+      "readable": false,
+      "exception": "TypeError",
+      "error": "Failed to fetch",
+      "elapsedMs": 543,
+      "outcome": "cors_blocked",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "https://jack-clark.net/feed/",
+          "status": 200
+        }
+      ],
+      "consoleEvidence": [
+        "Access to fetch at 'https://jack-clark.net/feed/' from origin 'http://127.0.0.1:8766' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource."
+      ]
+    },
+    {
+      "section": "ai",
+      "name": "The Gradient",
+      "kind": "rss",
+      "url": "https://thegradient.pub/rss/",
+      "readable": true,
+      "status": 200,
+      "finalUrl": "https://thegradient.pub/rss/",
+      "contentType": "text/xml; charset=utf-8",
+      "bodyBytes": 591428,
+      "sample": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><rss xmlns:dc=\"http://purl.org/dc/elements/1.1/\" xmlns:content",
+      "opportunityId": null,
+      "elapsedMs": 707,
+      "outcome": "readable_http_success",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "https://thegradient.pub/rss/",
+          "status": 200
+        }
+      ],
+      "consoleEvidence": []
+    },
+    {
+      "section": "ai",
+      "name": "Latent Space",
+      "kind": "rss",
+      "url": "https://www.latent.space/feed",
+      "readable": false,
+      "exception": "TypeError",
+      "error": "Failed to fetch",
+      "elapsedMs": 60,
+      "outcome": "cors_blocked",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "https://www.latent.space/feed",
+          "status": 200
+        }
+      ],
+      "consoleEvidence": [
+        "Access to fetch at 'https://www.latent.space/feed' from origin 'http://127.0.0.1:8766' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource."
+      ]
+    },
+    {
+      "section": "opportunities",
+      "name": "Grants.gov",
+      "kind": "grants_gov",
+      "url": "https://api.grants.gov/v1/api/search2",
+      "method": "POST",
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "body": "{\"rows\":1,\"keyword\":\"research\",\"oppStatuses\":\"forecasted|posted\"}",
+      "readable": true,
+      "status": 200,
+      "finalUrl": "https://api.grants.gov/v1/api/search2",
+      "contentType": "application/json",
+      "bodyBytes": 14141,
+      "sample": "{\"errorcode\":0,\"msg\":\"Webservice Succeeds\",\"token\":\"eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.Ikgyek5abDE",
+      "opportunityId": "332894",
+      "elapsedMs": 547,
+      "outcome": "readable_http_success",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "https://api.grants.gov/v1/api/search2",
+          "status": 200
+        }
+      ],
+      "consoleEvidence": []
+    },
+    {
+      "section": "opportunities",
+      "name": "Grants.gov (fellowships and career awards)",
+      "kind": "grants_gov",
+      "url": "https://api.grants.gov/v1/api/search2",
+      "method": "POST",
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "body": "{\"rows\":1,\"keyword\":\"research\",\"oppStatuses\":\"forecasted|posted\"}",
+      "readable": true,
+      "status": 200,
+      "finalUrl": "https://api.grants.gov/v1/api/search2",
+      "contentType": "application/json",
+      "bodyBytes": 14141,
+      "sample": "{\"errorcode\":0,\"msg\":\"Webservice Succeeds\",\"token\":\"eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.Ikgyek5abDE",
+      "opportunityId": "332894",
+      "elapsedMs": 581,
+      "outcome": "readable_http_success",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "https://api.grants.gov/v1/api/search2",
+          "status": 200
+        },
+        {
+          "url": "https://api.grants.gov/v1/api/search2",
+          "status": 200
+        }
+      ],
+      "consoleEvidence": []
+    },
+    {
+      "section": "events",
+      "name": "EMBL Events",
+      "kind": "events_rss",
+      "url": "https://www.embl.org/about/info/course-and-conference-office/events/feed/",
+      "readable": true,
+      "status": 200,
+      "finalUrl": "https://www.embl.org/about/info/course-and-conference-office/events/feed/",
+      "contentType": "application/rss+xml; charset=UTF-8",
+      "bodyBytes": 695700,
+      "sample": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><rss version=\"2.0\"\n\txmlns:content=\"http://purl.org/rss/1.0/mod",
+      "opportunityId": null,
+      "elapsedMs": 2646,
+      "outcome": "readable_http_success",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "https://www.embl.org/about/info/course-and-conference-office/events/feed/",
+          "status": 200
+        }
+      ],
+      "consoleEvidence": []
+    },
+    {
+      "section": "supplementary",
+      "name": "PubMed abstract endpoint",
+      "kind": "pubmed",
+      "url": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=pubmed&id=31452104&retmode=xml&rettype=abstract",
+      "readable": true,
+      "status": 200,
+      "finalUrl": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=pubmed&id=31452104&retmode=xml&rettype=abstract",
+      "contentType": "text/xml; charset=UTF-8",
+      "bodyBytes": 6081,
+      "sample": "<?xml version=\"1.0\" ?>\n<!DOCTYPE PubmedArticleSet PUBLIC \"-//NLM//DTD PubMedArticle, 1st January 202",
+      "opportunityId": null,
+      "elapsedMs": 173,
+      "outcome": "readable_http_success",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=pubmed&id=31452104&retmode=xml&rettype=abstract",
+          "status": 200
+        }
+      ],
+      "consoleEvidence": []
+    },
+    {
+      "section": "supplementary",
+      "name": "ACS Crossref fallback",
+      "kind": "openalex_venues",
+      "url": "https://api.crossref.org/prefixes/10.1021/works?rows=1",
+      "readable": true,
+      "status": 200,
+      "finalUrl": "https://api.crossref.org/prefixes/10.1021/works?rows=1",
+      "contentType": "application/json",
+      "bodyBytes": 4553,
+      "sample": "{\"status\":\"ok\",\"message-type\":\"work-list\",\"message-version\":\"1.0.0\",\"message\":{\"facets\":{},\"total-re",
+      "opportunityId": null,
+      "elapsedMs": 812,
+      "outcome": "readable_http_success",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "https://api.crossref.org/prefixes/10.1021/works?rows=1",
+          "status": 200
+        }
+      ],
+      "consoleEvidence": []
+    },
+    {
+      "section": "supplementary",
+      "name": "Grants.gov official detail",
+      "kind": "grants_gov",
+      "url": "https://api.grants.gov/v1/api/fetchOpportunity",
+      "method": "POST",
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "body": "{\"opportunityId\":\"332894\"}",
+      "readable": true,
+      "status": 200,
+      "finalUrl": "https://api.grants.gov/v1/api/fetchOpportunity",
+      "contentType": "application/json",
+      "bodyBytes": 58236,
+      "sample": "{\"errorcode\":0,\"msg\":\"Webservice Succeeds\",\"token\":\"eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.Ikgyek5abDE",
+      "opportunityId": null,
+      "elapsedMs": 241,
+      "outcome": "readable_http_success",
+      "evidence": [],
+      "underlyingHttp": [
+        {
+          "url": "https://api.grants.gov/v1/api/fetchOpportunity",
+          "status": 200
+        }
+      ],
+      "consoleEvidence": []
+    }
+  ],
+  "observedVariability": [
+    {
+      "family": "grants_gov",
+      "observation": "The initial browser audit observed CORS failures for both configured searches; an immediate second audit returned readable HTTP 200 for both searches and official detail. Do not treat either result as a guarantee of future availability."
+    }
+  ],
+  "configuredSummary": {
+    "cors_blocked": 68,
+    "readable_http_success": 16
+  }
+}

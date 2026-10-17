@@ -14,7 +14,7 @@ import numpy as np
 from sqlalchemy import delete, select
 
 from ..store import ItemEmbeddingRow, ItemRow, init_db, session_scope
-from .embed import active_embedding_signature, embed_texts
+from .embed import active_embedding_signature, embed_texts, pin_cached_embedding_backend
 
 
 def item_text(row: ItemRow) -> str:
@@ -95,10 +95,24 @@ def embed_item_rows(rows: list[ItemRow]) -> np.ndarray:
                 missing_indexes.append(idx)
 
     new_vecs = None
+    if not missing_indexes:
+        # Cache vectors already identify their producing backend. Bind subsequent
+        # query encoding to it, but neither load the model nor open a write txn.
+        pin_cached_embedding_backend()
+        return np.vstack(vectors).astype(np.float32, copy=False)
     if missing_indexes:
         new_vecs = embed_texts([texts[idx] for idx in missing_indexes]).astype(
             np.float32, copy=False
         )
+        actual_model = active_embedding_signature()
+        if actual_model != model_name:
+            # Auto loading fell back. Previously cached preferred-backend rows
+            # cannot share a returned matrix with freshly encoded fallback rows.
+            if len(missing_indexes) != len(rows):
+                new_vecs = embed_texts(texts).astype(np.float32, copy=False)
+                missing_indexes = list(range(len(rows)))
+            vectors = [None] * len(rows)
+            model_name = actual_model
 
     with session_scope() as s:
         # Keep one active vector per item. Prefix/model changes should re-embed,

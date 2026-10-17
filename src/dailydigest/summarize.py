@@ -40,17 +40,20 @@ logger = logging.getLogger(__name__)
 # summarize_items; the prompt builders and the extractive fallback read it.
 _READER_CONTEXT: str = ""
 _READER_KEYWORDS: list[str] = []
-_SUMMARY_VERSION = "summary-v3"
+_READER_FACETS: dict = {}
+_SUMMARY_VERSION = "summary-v6"
 
 
 def _set_reader_context(profile: object | None) -> None:
-    global _READER_CONTEXT, _READER_KEYWORDS
+    global _READER_CONTEXT, _READER_KEYWORDS, _READER_FACETS
     if profile is None:
         _READER_CONTEXT, _READER_KEYWORDS = "", []
+        _READER_FACETS = {}
         return
     bio = str(getattr(profile, "bio", "") or "").strip().replace("\n", " ")
     kws = [str(k).strip() for k in (getattr(profile, "keywords", []) or []) if str(k).strip()]
     _READER_KEYWORDS = kws
+    _READER_FACETS = getattr(profile, "canonical_facets", {}) or {kw: {"aliases": [kw]} for kw in kws}
     parts = []
     if bio:
         parts.append(bio[:400])
@@ -124,6 +127,18 @@ def _sentence_score(sentence: str) -> tuple[int, int]:
 
 
 def _why_read(row: ItemRow) -> str:
+    if (row.section or "").lower() == "research" and _READER_FACETS:
+        from .rank.contribution import analyze_contribution
+
+        contribution = analyze_contribution(row.title, row.abstract, _READER_FACETS)
+        topics = ", ".join(contribution["facets"][:2])
+        if contribution["priority"] > 0:
+            article = "an" if contribution["kind"] == "engineering" else "a"
+            return f"it reports {article} {contribution['kind']} contribution relevant to {topics}."
+        if contribution["priority"] < 0:
+            return f"it offers background context for {topics}."
+        suffix = f" for {topics}" if topics else ""
+        return f"the abstract's contribution match remains unclear{suffix}; check its relevance to your interests."
     matched = _matched_interests(row)
     if matched:
         return f"it connects to your interest in {', '.join(matched)}."
@@ -174,6 +189,18 @@ def _extractive(row: ItemRow) -> str:
         candidates = [sent.strip() for sent in sents if sent.strip()]
     ranked = sorted(candidates, key=_sentence_score, reverse=True)
     selected = sorted(ranked[:2], key=lambda sent: candidates.index(sent))
+    if (row.section or "").lower() == "research" and _READER_FACETS:
+        from .rank.contribution import analyze_contribution
+
+        evidence = analyze_contribution(title, abstract, _READER_FACETS)["evidence"]
+        if not evidence:
+            from .rank.contribution_claims import contribution_claims
+
+            claims = contribution_claims(abstract)['claims']
+            preferred = [c for c in claims if c['role'] in ('introduced_method', 'engineered_system')]
+            evidence = [c['quote'] for c in (preferred or claims)[:1]]
+        if evidence:
+            selected = [evidence[0], *[sent for sent in selected if sent != evidence[0]]][:2]
     key_point = " ".join(selected).strip()
     if not key_point:
         return title
@@ -185,6 +212,10 @@ def _extractive(row: ItemRow) -> str:
 
 
 def _build_prompt(batch: list[ItemRow]) -> tuple[str, str]:
+    from .rank.article_evidence import assess_article_evidence
+    from .rank.contribution import analyze_contribution
+    from .rank.contribution_claims import contribution_claims
+
     payload = [
         {
             "id": row.id,
@@ -193,6 +224,14 @@ def _build_prompt(batch: list[ItemRow]) -> tuple[str, str]:
             "section": (row.section or "").strip(),
             "published_at": row.published_at.isoformat() if row.published_at else "",
             "abstract": (row.abstract or "").strip()[:1500],
+            "contribution_evidence": analyze_contribution(
+                row.title, (row.abstract or "").strip()[:1500], _READER_FACETS,
+            ) if row.section == "research" else None,
+            "author_claims": contribution_claims((row.abstract or '').strip()[:1500])
+            if row.section == 'research' else None,
+            "article_evidence": assess_article_evidence(
+                row.title or '', (row.abstract or '').strip()[:1500],
+            ) if row.section == 'research' else None,
         }
         for row in batch
     ]
@@ -205,8 +244,11 @@ def _build_prompt(batch: list[ItemRow]) -> tuple[str, str]:
         "company/regulatory move — include specific numbers/entities from the abstract; do "
         "not paraphrase the title.\n"
         "Why read: explicitly BRIDGE the item to the reader's own interests — name the "
-        "specific interest it touches AND brainstorm one concrete connecting idea (e.g. how "
-        "the method/result could transfer to, combine with, or inform their work). Make the "
+        "specific interest it touches and identify supporting evidence in the abstract. "
+        "Use contribution_evidence as a tentative text signal, checking its supporting passage. "
+        "Check author_claims for the actual stated task and object; its action role alone does not establish relevance. "
+        "Distinguish a new engineering or prediction method from a natural mechanism, "
+        "existing-tool application, or review. Mark inferred transfer ideas as hypotheses. Make the "
         "association explicit, not vague. If the link is genuinely thin, say so plainly rather "
         "than forcing it. " + reader_clause + "\n"
         "Caveat: state a GENUINE limitation of the finding itself — e.g. small sample, in-vitro "
@@ -214,6 +256,8 @@ def _build_prompt(batch: list[ItemRow]) -> tuple[str, str]:
         "peer-reviewed, or a strong claim on thin evidence. Only if the abstract truly reveals no "
         "limitation, say 'No major limitation stated in the abstract.' Do NOT default to a "
         "no-caveat answer when a real scientific limitation exists.\n"
+        "article_evidence contains author-reported claims, not independently verified results. "
+        "Keep unknown evidence unknown; missing text does not establish poor quality or absent validation.\n"
         "Stay factual and non-promotional. "
         "Return strict JSON: an object mapping the item's integer id (as a string) to one string "
         "containing the three labeled fields separated by newlines. No prose, no markdown fences. "
@@ -499,54 +543,47 @@ def _summarize_via_api(items: list[ItemRow]) -> dict[int, str]:
 
 
 def _summarize_via_provider_with_provenance(
-    items: list[ItemRow], backend: str, *, settings=None, diagnostics=None
+    items: list[ItemRow], backend: str, *, settings=None, diagnostics: dict | None = None
 ) -> tuple[dict[int, str], dict[int, str]]:
     out: dict[int, str] = {}
     provenance: dict[int, str] = {}
     is_cli = backend in {"claude_cli", "codex_cli"}
+    from .config import get_settings
+
+    settings = settings if settings is not None else get_settings()
+    budget = _CLI_TOTAL_BUDGET if is_cli else float(
+        getattr(settings, "llm_summary_budget_seconds", 180.0)
+    )
+    max_failures = int(getattr(settings, "llm_summary_max_failures", 2))
+    failures = 0
+    provider_calls = 0
     started = time.monotonic()
     budget_hit = False
-    provider_calls = 0
-    failures = 0
     for i in range(0, len(items), _BATCH_SIZE):
         batch = items[i : i + _BATCH_SIZE]
-        cli_timeout = _CLI_TIMEOUT
-        # Wall-clock guard for the subprocess backends: one misbehaving CLI must
-        # not dominate the brew. Once the budget is gone the rest goes extractive.
-        if is_cli:
-            remaining = _CLI_TOTAL_BUDGET - (time.monotonic() - started)
-            if budget_hit or remaining <= 0:
-                if not budget_hit:
-                    logger.warning(
-                        "%s exceeded the total summarize budget (%.0fs); using "
-                        "extractive summaries for the remaining items",
-                        backend,
-                        _CLI_TOTAL_BUDGET,
-                    )
-                    budget_hit = True
-                continue
-            cli_timeout = min(_CLI_TIMEOUT, remaining)
-        request_timeout = cli_timeout
-        if not is_cli and settings is not None:
-            remaining = float(getattr(settings, "llm_summary_budget_seconds", 180)) - (time.monotonic() - started)
-            if remaining <= 0 or failures >= int(getattr(settings, "llm_summary_max_failures", 2)):
+        remaining = budget - (time.monotonic() - started)
+        if remaining <= 0 or (not is_cli and failures >= max_failures):
+            if not budget_hit:
+                logger.warning(
+                    "%s summary budget/circuit breaker reached; using local summaries",
+                    backend,
+                )
                 budget_hit = True
-                break
-            request_timeout = min(_TIMEOUT, remaining)
+            break
+        # HTTPX timeouts bound network inactivity, not absolute wall time. This
+        # remaining budget also prevents starting another request after expiry.
+        request_timeout = min(_CLI_TIMEOUT if is_cli else _TIMEOUT, remaining)
         try:
             provider_calls += 1
             if backend == "anthropic":
-                generated = (_call_anthropic(batch) if settings is None else
-                             _call_anthropic(batch, settings=settings, timeout=request_timeout))
+                generated = _call_anthropic(batch, settings=settings, timeout=request_timeout)
             elif backend in {"claude_cli", "codex_cli"}:
-                generated = (_call_cli(batch, backend, timeout=cli_timeout) if settings is None else
-                             _call_cli(batch, backend, timeout=request_timeout, settings=settings))
+                generated = _call_cli(batch, backend, timeout=request_timeout, settings=settings)
             else:
-                generated = (_call_llm(batch) if settings is None else
-                             _call_llm(batch, settings=settings, timeout=request_timeout))
-            failures = 0 if generated else failures + 1
+                generated = _call_llm(batch, settings=settings, timeout=request_timeout)
             out.update(generated)
             provenance.update({item_id: backend for item_id in generated})
+            failures = 0 if generated else failures + 1
         except Exception as e:  # noqa: BLE001
             failures += 1
             logger.warning(
@@ -564,8 +601,11 @@ def _summarize_via_provider_with_provenance(
             out[item_id] = _extractive(row)
             provenance[item_id] = "extractive_fallback"
     if diagnostics is not None:
-        diagnostics.update(provider_calls=provider_calls, provider_stopped=budget_hit,
-                           fallback_items=sum(value == "extractive_fallback" for value in provenance.values()))
+        diagnostics.update(
+            provider_calls=provider_calls,
+            provider_stopped=budget_hit or (not is_cli and failures >= max_failures),
+            fallback_items=sum(value == "extractive_fallback" for value in provenance.values()),
+        )
     return out, provenance
 
 
@@ -591,13 +631,13 @@ def effective_summary_backend(*, settings=None) -> str:
 
 
 def summary_signature(
-    row: ItemRow, profile: object | None = None, *, backend: str | None = None
+    row: ItemRow, profile: object | None = None, *, backend: str | None = None, settings=None
 ) -> str:
     """Fingerprint all inputs that can materially change a stored summary."""
     from .config import get_settings
 
-    settings = get_settings()
-    selected_backend = backend or effective_summary_backend()
+    settings = settings if settings is not None else get_settings()
+    selected_backend = backend or effective_summary_backend(settings=settings)
     payload = {
         "version": _SUMMARY_VERSION,
         "backend": selected_backend,
@@ -613,29 +653,37 @@ def summary_signature(
         "section": row.section or "",
         "bio": str(getattr(profile, "bio", "") or ""),
         "keywords": list(getattr(profile, "keywords", []) or []),
+        "canonical_facets": getattr(profile, "canonical_facets", {}) or {},
     }
     raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
 def summarize_items_with_provenance(
-    items: list[ItemRow], profile: object | None = None, *, settings=None, diagnostics=None
+    items: list[ItemRow], profile: object | None = None, *, settings=None,
+    diagnostics: dict | None = None,
 ) -> tuple[dict[int, str], dict[int, str]]:
     """Return summaries plus the actual backend used for every item."""
     _set_reader_context(profile)
     if not items:
         return {}, {}
 
+    from copy import deepcopy
+    from .config import get_settings
+
+    settings = deepcopy(settings if settings is not None else get_settings())
     backend = effective_summary_backend(settings=settings)
     if backend == "extractive":
         summaries = _summarize_extractive(items)
         return summaries, {item_id: "extractive" for item_id in summaries}
-    if settings is None and diagnostics is None:
-        return _summarize_via_provider_with_provenance(items, backend)
-    return _summarize_via_provider_with_provenance(items, backend, settings=settings, diagnostics=diagnostics)
+    return _summarize_via_provider_with_provenance(
+        items, backend, settings=settings, diagnostics=diagnostics
+    )
 
 
-def summarize_items(items: list[ItemRow], profile: object | None = None) -> dict[int, str]:
+def summarize_items(
+    items: list[ItemRow], profile: object | None = None, *, settings=None
+) -> dict[int, str]:
     """Return ``{item.id: summary}``.
 
     Backend chosen by ``SETTINGS.llm_backend``. API backends require
@@ -645,7 +693,7 @@ def summarize_items(items: list[ItemRow], profile: object | None = None) -> dict
     ``profile`` (when given) personalizes the "Why read" field to the reader's
     stated interests, in both the LLM prompt and the extractive fallback.
     """
-    return summarize_items_with_provenance(items, profile=profile)[0]
+    return summarize_items_with_provenance(items, profile=profile, settings=settings)[0]
 
 
 def _llm_text(system: str, user: str, *, settings=None, timeout: float | None = None) -> str:
@@ -679,10 +727,13 @@ def _llm_text(system: str, user: str, *, settings=None, timeout: float | None = 
     return ""
 
 
-def synthesize_catch_up(rows: list[ItemRow], days: int, profile: object | None = None) -> str:
+def synthesize_catch_up(
+    rows: list[ItemRow], days: int, profile: object | None = None, *, settings=None,
+    timeout: float | None = None,
+) -> str:
     """A short 'what you missed' briefing that groups a catch-up backlog into
     themes. Empty on a normal run, with no LLM, or on any failure (never blocks)."""
-    if days <= 2 or not rows:
+    if days <= 2 or not rows or (timeout is not None and timeout <= 0):
         return ""
     _set_reader_context(profile)
     listing = "\n".join(
@@ -696,7 +747,7 @@ def synthesize_catch_up(rows: list[ItemRow], days: int, profile: object | None =
     )
     user = f"The reader was away about {days} days. Today's digest items:\n{listing}"
     try:
-        return _llm_text(system, user).strip()
+        return _llm_text(system, user, settings=settings, timeout=timeout).strip()
     except Exception as e:  # noqa: BLE001
         logger.warning("catch-up synthesis failed: %s", e)
         return ""

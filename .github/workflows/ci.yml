@@ -22,7 +22,7 @@ jobs:
           python-version: "3.12"
       - run: uv sync --frozen --group dev
       - run: uv run --no-sync ruff check --select F,B src tests
-      - name: Full native unit tests
+      - name: Unit tests and packaged asset paths
         run: uv run --no-sync pytest -rs
 
   native-launchers:
@@ -42,5 +42,5 @@ jobs:
           enable-cache: true
           python-version: "3.12"
       - run: uv sync --frozen --group dev
-      - name: Native launcher fixtures
-        run: uv run --no-sync pytest tests/test_windows_launcher.py tests/test_start_script.py tests/test_cli_process_tree.py tests/test_companion_cli.py -rs
+      - name: Native launcher fixtures and asset paths
+        run: uv run --no-sync pytest tests/test_windows_launcher.py tests/test_start_script.py tests/test_package_assets.py tests/test_cli_process_tree.py tests/test_companion_cli.py -rs

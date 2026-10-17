@@ -2,7 +2,7 @@ name: DailyDigest browser Pages
 
 on:
   push:
-    branches: [codex/browser-compute-prototype]
+    branches: [main, codex/browser-compute-prototype]
     paths: [browser/**, src/**, templates/**, tests/**, pyproject.toml, .github/workflows/ci.yml, config/sources.yaml, prototypes/browser-compute/**, .github/workflows/browser-pages.yml, uv.lock]
   workflow_dispatch:
   schedule:
@@ -19,11 +19,10 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      # Native main bootstraps the browser branch until that application is merged.
-      # Do not deploy the older native-only main source as the browser site.
+      # The event commit is authoritative; scheduled/manual runs use their selected branch.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: codex/browser-compute-prototype
+          ref: ${{ github.sha }}
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
         with:
           enable-cache: true
@@ -59,6 +58,11 @@ jobs:
         run: uv run python browser/fetch_public_embeddings.py
       - name: Build static application
         run: uv run python browser/build.py
+      - name: Deferred startup and optional publisher figures
+        env:
+          DAILYDIGEST_STARTUP_SITE: browser/dist
+          DAILYDIGEST_STARTUP_REPORT: .full-review/startup-figures-ci
+        run: node browser/verify-startup-figures.mjs
       - name: Large-checkpoint startup and recovery regression
         env:
           DAILYDIGEST_STORAGE_SITE: browser/dist
@@ -66,6 +70,16 @@ jobs:
         run: node browser/verify-storage-startup.mjs
       - name: Prepare isolated browser acceptance fixtures
         run: uv run python browser/make_test_fixture.py --output .full-review/browser-launch-2026-10-13
+      - name: Instant saved reading view and on-demand controls
+        env:
+          DAILYDIGEST_READING_SITE: browser/dist
+          DAILYDIGEST_READING_REPORT: .full-review/reading-view-ci
+        run: node browser/verify-reading-view.mjs
+      - name: Two-tab handoff without lost feedback
+        env:
+          DAILYDIGEST_TAB_SITE: browser/dist
+          DAILYDIGEST_TAB_REPORT: .full-review/tab-handoff-ci
+        run: node browser/verify-tab-handoff.mjs
       - name: Full browser acceptance at the project subpath
         env:
           DAILYDIGEST_BROWSER_URL: http://127.0.0.1:8767/daily_digests/
@@ -101,7 +115,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: codex/browser-compute-prototype
+          ref: ${{ github.sha }}
       - name: Report failed publication or source refresh
         continue-on-error: true
         env:
@@ -117,7 +131,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: codex/browser-compute-prototype
+          ref: ${{ github.sha }}
       - name: Maintain recurring source refresh issue
         env:
           DAILYDIGEST_ALERT_MODE: github-issue

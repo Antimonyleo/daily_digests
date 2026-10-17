@@ -203,7 +203,7 @@ def _schedule_once(store, settings, lock, status, source_path, *, now=None):
             overrides = {key: private_path(getattr(configured, key)) for key in
                          ("db_path", "profile_path", "opportunity_profile_path")}
             for key in ("contribution_reranker_path", "contribution_encoder_dir"):
-                value = getattr(configured, key, "")
+                value = getattr(configured, key)
                 overrides[key] = private_path(value) if value else ""
             overrides.update(sources_path=str(source_path), user_tz=configured.user_tz or "UTC",
                              imap_user="", imap_password="")
@@ -389,7 +389,7 @@ def create_app(*, token, allowed_origin="https://antimonyleo.github.io", setting
         diagnostics = {}
         try:
             with lock:
-                budget = min(native._CLI_TOTAL_BUDGET if is_cli else getattr(settings, "llm_summary_budget_seconds", 180.0),
+                budget = min(native._CLI_TOTAL_BUDGET if is_cli else settings.llm_summary_budget_seconds,
                              payload.timeout)
                 configured = settings.model_copy(update={"llm_backend": payload.backend,
                                                          "llm_summary_budget_seconds": budget})

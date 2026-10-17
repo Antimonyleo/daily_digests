@@ -1,6 +1,8 @@
 {% extends "_base.html.j2" %}
+{% from "_feedback_controls.html.j2" import feedback_controls %}
 {% block title %}Saved reading · DailyDigest{% endblock %}
 {% block extra_styles %}
+  .rating-help { color: var(--muted); font-size: 12px; margin: 8px 0; }
   .wrap { max-width: 920px; }
   .saved-header {
     display: flex; align-items: end; justify-content: space-between; gap: 18px;
@@ -37,6 +39,11 @@
   .saved-title:hover { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
   .saved-meta { color: var(--muted); font-size: 12px; margin-top: 7px; }
   .saved-summary { color: var(--text); opacity: 0.82; font-size: 13px; line-height: 1.55; margin-top: 10px; }
+  .vote-row, .reason-chip-row, .feedback-actions { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
+  .vote-btn, .reason-chip { min-height:44px; border:1px solid var(--control-border); border-radius:8px; padding:8px; background:var(--panel); color:var(--text); cursor:pointer; }
+  .vote-btn.active, .reason-chip.active { border-color:var(--accent); font-weight:750; }
+  .reason-prompt, .vote-title, .save-state { font-size:13px; color:var(--muted); margin-top:12px; }
+  .vote-btn:focus-visible, .reason-chip:focus-visible { outline:3px solid var(--accent); outline-offset:2px; }
   .remove-saved { align-self: start; white-space: nowrap; }
   .empty-archive {
     padding: 48px 24px; text-align: center; border: 1px dashed var(--border);
@@ -48,6 +55,7 @@
   }
 {% endblock %}
 {% block body %}
+  {% if feedback_warning %}<p role="alert">Feedback is paused: {{ feedback_warning }}</p>{% endif %}
   <header class="saved-header">
     <div>
       <div class="eyebrow">Your personal library</div>
@@ -65,17 +73,20 @@
     <button class="btn primary" type="submit">Search</button>
   </form>
 
-  <p class="archive-meta" id="archive-count">{{ items|length }} saved item{{ '' if items|length == 1 else 's' }}{% if query %} matching “{{ query }}”{% endif %}</p>
+  <p class="archive-meta" id="archive-count">{{ total }} saved item{{ '' if total == 1 else 's' }}{% if query %} matching “{{ query }}”{% endif %}</p>
   {% if items %}
   <main class="saved-list" id="saved-list">
     {% for item in items %}
-    <article class="saved-card" data-item-id="{{ item.id }}">
+    <article class="saved-card" data-item-id="{{ item.id }}" data-current-grade="{{ item.current_grade if item.current_grade is not none else '' }}">
       <div>
         <a class="saved-title" href="{{ item.url }}" target="_blank" rel="noopener">{{ item.title }}</a>
         <div class="saved-meta">
           {{ item.section }} · {{ item.source }}{% if item.published %} · Published {{ item.published }}{% endif %}{% if item.saved %} · Saved {{ item.saved }}{% endif %}
         </div>
         {% if item.summary %}<div class="saved-summary">{{ item.summary }}</div>{% endif %}
+        {% include "_article_figure.html.j2" %}
+        {{ feedback_controls(item) }}
+        <div class="save-state" aria-live="polite"></div>
       </div>
       <button class="btn remove-saved" type="button">Remove</button>
     </article>
@@ -86,12 +97,75 @@
     {% if query %}No saved items match “{{ query }}”.{% else %}Nothing saved yet. Use “Save for later” on any digest item.{% endif %}
   </div>
   {% endif %}
+  {% if pages > 1 %}<nav class="saved-actions" aria-label="Saved reading pages">
+    {% if previous_page %}<a class="btn" href="{{ previous_page }}">Previous page</a>{% endif %}
+    <span>Page {{ page }} of {{ pages }}</span>
+    {% if next_page %}<a class="btn" href="{{ next_page }}">Next page</a>{% endif %}
+  </nav>{% endif %}
 {% endblock %}
 {% block scripts %}
 <script>
 (function () {
   const CSRF_TOKEN = {{ csrf_token|tojson }};
-  const countEl = document.getElementById("archive-count");
+
+  document.querySelectorAll(".saved-card").forEach(card => {
+    const status = card.querySelector(".save-state");
+    const clear = card.querySelector(".clear-rating");
+    const reasonBlock = card.querySelector(".reason-block");
+    function busy(value) {
+      card.querySelectorAll(".vote-btn, .reason-chip, .clear-rating").forEach(b => b.disabled = value);
+    }
+    function active(grade) {
+      card.dataset.currentGrade = grade === null ? "" : String(grade);
+      card.querySelectorAll(".vote-btn").forEach(b => {
+        const selected = b.dataset.grade === card.dataset.currentGrade;
+        b.classList.toggle("active", selected);
+        b.setAttribute("aria-pressed", String(selected));
+      });
+      const negative = ["10", "40"].includes(card.dataset.currentGrade);
+      reasonBlock.hidden = !negative;
+      clear.hidden = grade === null;
+      if (!negative) card.querySelectorAll(".reason-chip").forEach(b => {
+        b.classList.remove("active"); b.setAttribute("aria-pressed", "false");
+      });
+    }
+    async function write(url, method) {
+      const response = await fetch(url, {method, headers:{"X-CSRF-Token":CSRF_TOKEN}});
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.detail || "Feedback was not saved. Try again.");
+      payload.storagePending = response.headers.get("x-dailydigest-storage") === "pending";
+      return payload;
+    }
+    const rate = createRatingQueue({
+      initial:card.dataset.currentGrade || null, select:active,
+      send:grade => write(`/vote/${card.dataset.itemId}/${grade}`, 'POST'),
+      busy:value => {busy(value); card.querySelectorAll('.vote-btn').forEach(b => {b.disabled=false;}); if (value) status.textContent='Recording response…';},
+      success:payload => {status.textContent=payload.storagePending ? 'Rating recorded · saving browser copy…' : 'Rating saved. Reasons are optional.';},
+      failure:error => {status.textContent='Rating was not saved. '+error.message;},
+    });
+    card.querySelectorAll('.vote-btn').forEach(button => button.addEventListener('click', () => {void rate(button.dataset.grade);}));
+    clear.addEventListener("click", async () => {
+      let cleared = false;
+      busy(true);
+      try { await write(`/vote/${card.dataset.itemId}`, "DELETE"); active(null);
+        status.textContent = "Rating cleared; this item stays saved.";
+        cleared = true;
+      } catch(error) { status.textContent = error.message; }
+      finally { busy(false); if (cleared) card.querySelector(".vote-btn").focus(); }
+    });
+    card.querySelectorAll(".reason-chip").forEach(button => button.addEventListener("click", async () => {
+      if (!["10", "40"].includes(card.dataset.currentGrade)) return;
+      const removing = button.classList.contains("active");
+      busy(true);
+      try {
+        await write(`/vote/${card.dataset.itemId}/reason/${button.dataset.reason}`, removing ? "DELETE" : "POST");
+        button.classList.toggle("active", !removing);
+        button.setAttribute("aria-pressed", String(!removing));
+        status.textContent = removing ? "Reason removed." : "Reason saved.";
+      } catch(error) { status.textContent = error.message; }
+      finally { busy(false); }
+    }));
+  });
   document.querySelectorAll(".remove-saved").forEach((button) => {
     button.addEventListener("click", async () => {
       const card = button.closest(".saved-card");
@@ -103,10 +177,7 @@
           headers: { "X-CSRF-Token": CSRF_TOKEN },
         });
         if (!response.ok) throw new Error("HTTP " + response.status);
-        card.remove();
-        const remaining = document.querySelectorAll(".saved-card").length;
-        if (countEl) countEl.textContent = `${remaining} saved item${remaining === 1 ? "" : "s"}`;
-        if (remaining === 0) window.location.reload();
+        window.location.reload();
       } catch (error) {
         button.disabled = false;
         button.textContent = "Try again";

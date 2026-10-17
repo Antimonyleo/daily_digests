@@ -134,6 +134,9 @@
     .mode-card, .progress-bar { transition: none; }
     .cup .steam, ul.stages li.active .marker::before { animation: none; }
   }
+  #progress-panel[data-state="paused"] .cup .steam { animation: none; opacity: 0; }
+  #progress-panel[data-state="paused"] ul.stages li.active .marker::before { animation: none; }
+  .brew-whisper { color: var(--muted); font-size: 14px; margin: 0 0 18px; }
   html[data-theme="dark"] .mode-option input:checked + .mode-card {
     background: linear-gradient(160deg, var(--panel), var(--accent-soft));
   }
@@ -190,8 +193,9 @@
       <div class="steam s1"></div><div class="steam s2"></div><div class="steam s3"></div>
       <div class="body"></div><div class="handle"></div>
     </div>
-    <h1>Brewing today’s digest</h1>
-    <p class="lede">Fetching fresh sources, ranking them against your profile, and preparing your chosen serving.</p>
+    <h1 id="brew-title">Brewing your cup of research</h1>
+    <p class="brew-whisper" id="brew-whisper">Putting the kettle on. Your interests make this blend yours.</p>
+    <p class="lede">We’ll gather the sources, steep them in your interests, and serve your best matches. A first browser brew with thousands of new papers may take 20 minutes or more on one core. Cached brews can be much faster; total time depends on sources and your device.</p>
 
     <section id="brew-preview" hidden aria-label="Provisional selected papers">
       <h2>Qualified papers taking shape</h2>
@@ -203,6 +207,9 @@
       <div class="progress-bar" id="progress-bar"></div>
     </div>
     <div class="detail" id="detail" aria-live="polite">Starting the kettle...</div>
+    <p id="compute-current" aria-live="off" hidden></p>
+    <p class="serving-note" id="completed-stage" hidden></p>
+    <p class="serving-note">Stages show actual work; their duration varies with the source and model.</p>
 
     <ul class="stages" id="stages" aria-live="polite">
       <li data-stage="ingest"><span class="marker"></span><span class="text">Fetching from sources…</span></li>
@@ -215,7 +222,11 @@
 
     <div class="err" id="err" role="alert" hidden></div>
     <button class="btn retry" id="retry-button" type="button" hidden>Try again</button>
+    <button class="btn retry" id="reconnect-button" type="button" hidden>Reconnect</button>
+    <a class="btn retry" id="new-brew-link" href="{{ restart_url }}" hidden>Start a new brew</a>
+    <button class="btn retry" id="cancel-button" type="button">Stop before publishing</button>
   </section>
+  <p><a href="{{ saved_reading_url }}">Read latest saved digest</a></p>
 </div>
 {% endblock %}
 {% block scripts %}
@@ -224,8 +235,10 @@
   const RUN_ID = {{ run_id|tojson }};
   const CSRF_TOKEN = {{ csrf_token|tojson }};
   const AUTOSTART = {{ autostart|tojson }};
+  const RESUME = {{ resume|tojson }};
   const RESUME_URL = {{ resume_url|tojson }};
   const RESTART_URL = {{ restart_url|tojson }};
+  let restartUrl = RESTART_URL;
   const form = document.getElementById("brew-form");
   const brewButton = document.getElementById("brew-button");
   const choicePanel = document.getElementById("choice-panel");
@@ -233,9 +246,24 @@
   const stagesEl = document.getElementById("stages");
   const errEl = document.getElementById("err");
   const retryButton = document.getElementById("retry-button");
+  const reconnectButton = document.getElementById("reconnect-button");
+  const newBrewLink = document.getElementById("new-brew-link");
+  const cancelButton = document.getElementById("cancel-button");
   const detailEl = document.getElementById("detail");
   const progressBar = document.getElementById("progress-bar");
   const progressShell = document.getElementById("progress-shell");
+  const whisper = document.getElementById("brew-whisper");
+  const computeCurrent = document.getElementById("compute-current");
+  const completedStage = document.getElementById("completed-stage");
+  window.addEventListener("dd-compute-progress", event => {
+    if (progressPanel.hidden || progressPanel.dataset.state === "paused") return;
+    computeCurrent.hidden = false;
+    computeCurrent.textContent = event.detail.message;
+  });
+  const friendlyStages = {ingestion: "Gathering the tea leaves from your sources…",
+    calibration: "Getting your blend ready…", profile_encoding: "Getting to know your research taste…",
+    deduplication: "Picking out repeated leaves…", ranking: "Letting your interests steep…",
+    summary: "Preparing the highlights for your cup…", publication: "Saving your brew…", render: "Setting your reading desk…"};
 
   const STAGE_MAP = {
     ingest_start: "ingest", ingest_done: "ingest", dedupe_done: "dedupe",
@@ -253,8 +281,9 @@
 
   function setProgress(stage, text) {
     if (PROGRESS[stage]) {
-      progressBar.style.width = PROGRESS[stage] + "%";
-      progressShell.setAttribute("aria-valuenow", String(PROGRESS[stage]));
+      const value = Math.max(Number(progressShell.getAttribute("aria-valuenow") || 0), PROGRESS[stage]);
+      progressBar.style.width = value + "%";
+      progressShell.setAttribute("aria-valuenow", String(value));
     }
     if (text) detailEl.textContent = text;
   }
@@ -272,21 +301,36 @@
     const item = stagesEl.querySelector(`li[data-stage="${key}"] .text`);
     if (item) item.textContent = text;
   }
-  function showError(message) {
+  function showError(message, reconnect = false) {
+    window.dispatchEvent(new Event("dd-compute-stop"));
+    progressPanel.dataset.state = "paused";
+    computeCurrent.hidden = true;
+    document.getElementById("brew-title").textContent = reconnect ? "Let’s check on your brew" : "This brew needs attention";
+    whisper.textContent = "Your latest saved digest is still available below.";
     errEl.hidden = false;
     errEl.textContent = message;
-    retryButton.hidden = false;
+    retryButton.hidden = reconnect;
+    reconnectButton.hidden = !reconnect;
+    newBrewLink.hidden = !reconnect;
   }
 
+  let stream;
   function connectStream() {
+    progressPanel.dataset.state = "brewing";
+    document.getElementById("brew-title").textContent = "Brewing your cup of research";
+    if (stream) stream.close();
+    errEl.hidden = true;
+    reconnectButton.hidden = true;
+    newBrewLink.hidden = true;
     const es = new EventSource(`/run/stream?run_id=${encodeURIComponent(RUN_ID)}`);
+    stream = es;
     let streamFailures = 0;
     es.onopen = () => { streamFailures = 0; };
     es.onerror = () => {
       streamFailures += 1;
       if (es.readyState === EventSource.CLOSED || streamFailures >= 3) {
         es.close();
-        showError("Lost the brew status. The server may have restarted; please try again.");
+        showError("Lost the brew status. The brew may still be running. Reconnect to check, or read your latest saved digest.", true);
       }
     };
     es.onmessage = (event) => {
@@ -294,6 +338,12 @@
       try { data = JSON.parse(event.data); } catch (_) { return; }
       const stage = data.stage;
       const payload = data.payload || {};
+      if (stage === "published") {
+        cancelButton.disabled = true;
+        cancelButton.textContent = "Digest published";
+        setProgress("summarize_done", "Digest saved; preparing the preview");
+        return;
+      }
       if (stage === "rank_done" && Array.isArray(payload.preview)) {
         const list = document.getElementById('brew-preview-items'); list.replaceChildren();
         for (const row of payload.preview.slice(0, 8)) {
@@ -305,8 +355,32 @@
         }
         document.getElementById('brew-preview').hidden = !list.children.length;
       }
+      if (stage === "stage_start" || stage === "stage_done") {
+        if (stage === "stage_start" && friendlyStages[payload.name]) whisper.textContent = friendlyStages[payload.name];
+        const names = {ingestion: "Fetching sources", calibration: "Loading feedback",
+          profile_encoding: "Understanding your interests", deduplication: "Merging repeated items",
+          ranking: "Ranking qualified candidates", summary: "Preparing summaries",
+          publication: "Saving the digest", render: "Preparing the preview"};
+        const name = names[payload.name] || payload.name;
+        if (stage === "stage_done") {
+          completedStage.hidden = false;
+          completedStage.textContent = `Completed: ${name} · ${(Number(payload.duration_ms || 0) / 1000).toFixed(1)} s`;
+        } else {
+          detailEl.textContent = `${name}…`;
+          computeCurrent.hidden = true;
+        }
+        return;
+      }
+      if (stage === "cancelled") {
+        es.close();
+        cancelButton.disabled = true;
+        document.getElementById("brew-preview").hidden = true;
+        showError(payload.message || "Brew stopped before publication. Your saved digest is unchanged.");
+        return;
+      }
       if (stage === "error") {
         es.close();
+        cancelButton.disabled = true;
         document.getElementById("brew-preview").hidden = true;
         showError("Pipeline failed: " + (payload.message || "unknown error"));
         return;
@@ -343,39 +417,47 @@
         setProgress(stage, `Selected ${payload.picked || 0} top entries`);
         markActive("summarize");
       } else if (stage === "summarize_start") {
-        annotateText("summarize", `Summarizing ${payload.items || 0} items via ${payload.backend || "extractive"}…`);
-        setProgress(stage, `Summarizing with ${payload.backend || "extractive"}`);
+        annotateText("summarize", `Preparing short notes for ${payload.items || 0} picks…`);
+        setProgress(stage, "Preparing your reading notes");
         markActive("summarize");
       } else if (stage === "summarize_done") {
         annotateText("summarize", `Summarized ${payload.items || 0} items.`);
         setProgress(stage, `Summarized ${payload.items || 0} entries`);
         markActive("render");
       } else if (stage === "render_done") {
-        annotateText("render", `Rendered ${(payload.html_bytes || 0).toLocaleString()} bytes.`);
-        setProgress(stage, "Rendering the final page");
+        annotateText("render", "Your reading desk is ready.");
+        setProgress(stage, "Setting the table for your reading");
         markActive("done");
       } else if (stage === "done") {
+        whisper.textContent = "Your cup is ready. Enjoy your reading.";
         setProgress(stage, "Ready");
         setStage("done", "done");
         es.close();
+        cancelButton.disabled = true;
         const digestId = encodeURIComponent(payload.digest_id || "");
         const count = payload.total_items || 0;
         setTimeout(() => {
-          window.location.href = `/done?digest_id=${digestId}&n=${count}`;
+          window.location.href = `/done?digest_id=${digestId}&n=${count}&preview_warning=${Boolean(payload.warnings && payload.warnings.length)}`;
         }, 600);
       }
     };
   }
 
+  let startPending = false, stopBeforeStart = false;
   async function startBrew() {
     if (brewButton.disabled) return;
     const readingMode = new FormData(form).get("reading_mode") || "usual";
+    const restart = new URL(RESTART_URL, window.location.href);
+    restart.searchParams.set("reading_mode", readingMode);
+    restartUrl = restart.pathname + restart.search;
+    newBrewLink.href = restartUrl;
     const resumeUrl = new URL(RESUME_URL, window.location.href);
     resumeUrl.searchParams.set("reading_mode", readingMode);
     window.history.replaceState(null, "", resumeUrl.pathname + resumeUrl.search);
     brewButton.disabled = true;
     choicePanel.hidden = true;
     progressPanel.hidden = false;
+    startPending = true;
     try {
       const response = await fetch("/run/start", {
         method: "POST",
@@ -384,16 +466,45 @@
       });
       if (!response.ok) throw new Error("HTTP " + response.status);
       connectStream();
+      startPending = false;
+      if (stopBeforeStart) await stopBrew();
     } catch (error) {
-      showError("Could not start pipeline: " + error.message);
+      startPending = false;
+      showError("Could not confirm the brew start. Reconnect to check its status: " + error.message, true);
     }
   }
   form.addEventListener("submit", (event) => {
     event.preventDefault();
     startBrew();
   });
-  retryButton.addEventListener("click", () => { window.location.href = RESTART_URL; });
-  if (AUTOSTART) startBrew();
+  retryButton.addEventListener("click", () => { window.location.href = restartUrl; });
+  reconnectButton.addEventListener("click", connectStream);
+  async function stopBrew() {
+    cancelButton.disabled = true;
+    if (startPending) {
+      stopBeforeStart = true;
+      detailEl.textContent = 'Stop requested. Waiting for preparation to finish…';
+      return;
+    }
+    try {
+      const response = await fetch(`/run/cancel?run_id=${encodeURIComponent(RUN_ID)}`, {
+        method: "POST", headers: {"X-CSRF-Token": CSRF_TOKEN},
+      });
+      const result = await response.json();
+      if (!response.ok) throw Error(result.detail || `HTTP ${response.status}`);
+      detailEl.textContent = result.message;
+      cancelButton.textContent = "Stop requested";
+    } catch (error) {
+      cancelButton.disabled = false;
+      showError(error.message, true);
+    }
+  }
+  cancelButton.addEventListener("click", stopBrew);
+  if (RESUME) {
+    choicePanel.hidden = true;
+    progressPanel.hidden = false;
+    connectStream();
+  } else if (AUTOSTART) startBrew();
 })();
 </script>
 {% endblock %}

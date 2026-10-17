@@ -1,0 +1,14 @@
+{
+  "name": "DailyDigest",
+  "short_name": "DailyDigest",
+  "description": "A personal research and news reading desk.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f6f7f4",
+  "theme_color": "#256f52",
+  "icons": [
+    {"src": "./app-icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any"},
+    {"src": "./app-icon.svg", "sizes": "512x512", "type": "image/svg+xml", "purpose": "maskable"}
+  ]
+}

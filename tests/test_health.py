@@ -198,3 +198,70 @@ class TestShouldShow:
             {"source": "B", "failures_7d": 2},
         ]
         assert should_show(summary) is True
+
+
+def test_coverage_distinguishes_empty_partial_failed_and_unknown_sources(tmp_path, monkeypatch):
+    from dailydigest.health import coverage_summary
+
+    monkeypatch.setattr('dailydigest.health.get_settings', lambda: type('S', (), {'db_path': str(tmp_path/'digest.db')})())
+    payload = {'updated_at': '2026-10-14T12:00:00+03:00', 'latest': [
+        {'source': 'Direct', 'ok': True, 'items': 3},
+        {'source': 'Empty', 'ok': True, 'items': 0},
+        {'source': 'Partial', 'ok': True, 'items': 2, 'diagnostics': {'queries': [{'failure': 'private-key'}]}},
+        {'source': 'Public', 'ok': True, 'items': 4, 'diagnostics': {'transport': 'public_snapshot', 'snapshot_fetched_at': '2026-10-14T10:00:00+03:00'}},
+        {'source': 'Failed', 'ok': False, 'items': 0, 'error': 'private-token'},
+        {'source': 'Legacy', 'items': 1},
+    ]}
+    (tmp_path/'health.json').write_text(json.dumps(payload))
+    result = coverage_summary()
+    assert (result['total'], result['responded'], result['unavailable'], result['limited'], result['unknown']) == (6, 4, 1, 1, 1)
+    assert result['rows'][1]['status'] == 'No items returned'
+    assert result['rows'][2]['status'] == 'Limited results'
+    assert result['public_oldest_label'] == 'Oct 14, 2026 07:00 UTC'
+    assert result['checked_label'] == 'Oct 14, 2026 09:00 UTC'
+    assert 'private-' not in json.dumps(result)
+
+
+def test_coverage_does_not_invent_feed_freshness_and_reports_old_check(tmp_path, monkeypatch):
+    from dailydigest.health import coverage_summary
+
+    monkeypatch.setattr('dailydigest.health.get_settings', lambda: type('S', (), {'db_path': str(tmp_path/'digest.db')})())
+    payload = {'updated_at': (datetime.now(timezone.utc)-timedelta(days=2)).isoformat(), 'latest': [
+        {'source': 'Public', 'ok': True, 'items': 1, 'diagnostics': {'transport': 'public_snapshot', 'snapshot_fetched_at': 'unknown'}},
+    ]}
+    (tmp_path/'health.json').write_text(json.dumps(payload))
+    result = coverage_summary()
+    assert result['checked_stale'] is True
+    assert result['public_oldest_label'] == ''
+    assert result['rows'][0]['freshness'] == 'Public feed time not recorded'
+
+
+def test_coverage_missing_or_damaged_optional_metadata_does_not_block_reading(tmp_path, monkeypatch):
+    from dailydigest.health import coverage_summary
+
+    monkeypatch.setattr('dailydigest.health.get_settings', lambda: type('S', (), {'db_path': str(tmp_path/'digest.db')})())
+    assert coverage_summary()['total'] == 0
+    (tmp_path/'health.json').write_text('[]')
+    assert coverage_summary()['total'] == 0
+    (tmp_path/'health.json').write_text(json.dumps({'latest': [None]}))
+    assert coverage_summary()['unknown'] == 1
+
+
+def test_coverage_shows_carried_source_failure_and_old_snapshot(tmp_path, monkeypatch):
+    from dailydigest.health import coverage_summary
+
+    monkeypatch.setattr('dailydigest.health.get_settings', lambda: type('S', (), {'db_path': str(tmp_path/'digest.db')})())
+    _write_health_payload(tmp_path/'health.json', [
+        {'source': 'Carried', 'ok': True, 'items': 4, 'diagnostics': {
+            'transport': 'public_snapshot', 'snapshot_fetched_at': _recent_ts(),
+            'snapshot_carried_forward': True, 'snapshot_latest_attempt_failed': True}},
+        {'source': 'Older', 'ok': True, 'items': 2, 'diagnostics': {
+            'transport': 'public_snapshot', 'snapshot_fetched_at': _recent_ts(1.5),
+            'snapshot_stale_warning': True}},
+    ])
+    result = coverage_summary()
+    assert result['limited'] == 2
+    assert 'Latest collection failed' in result['rows'][0]['freshness']
+    assert result['rows'][0]['status'] == 'Earlier snapshot'
+    assert result['rows'][1]['status'] == 'Limited results'
+    assert result['public_stale'] is True

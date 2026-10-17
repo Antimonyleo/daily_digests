@@ -11,9 +11,9 @@ Two backends, both returning L2-normalized float32 ``[N, D]``:
 
 The compute device and the asymmetric retrieval prefixes are configurable via
 :class:`dailydigest.config.Settings`. Device defaults to CPU (the design goal:
-run locally / in a CPU-only CI runner). fastembed's ONNX bge-small matches the
-sentence-transformers output to within ~5e-4 cosine, so the two are ranking-
-equivalent and their cached vectors interoperate.
+run locally / in a CPU-only CI runner). FastEmbed and sentence-transformers
+outputs can be close, but backend vector spaces are kept
+separate: fallback must never silently mix cached documents and query vectors.
 """
 
 from __future__ import annotations
@@ -25,8 +25,10 @@ import importlib.util
 import os
 import sys
 from threading import Lock
+from typing import TYPE_CHECKING
 
-import numpy as np
+if TYPE_CHECKING:
+    import numpy as np
 
 # Backwards-compatible defaults, used when settings cannot be loaded (very early
 # import) and as the historical baseline for A/B tests.
@@ -37,6 +39,7 @@ _DEFAULT_QUERY_PREFIX = "Represent this sentence for searching relevant passages
 _ENCODER = None  # a callable: list[str] -> np.ndarray [N, D]
 _ENCODER_LOCK = Lock()
 _LOADED_KEY: tuple[str, str, str, int, int] | None = None
+_PINNED_BACKEND: tuple[tuple[str, str, str], str] | None = None
 
 
 def _embed_config() -> tuple[str, str, str, str, str]:
@@ -61,20 +64,58 @@ def active_model_name() -> str:
 
 
 def _resolved_backend_name() -> str:
+    pinned = _PINNED_BACKEND
+    if pinned is not None and pinned[0] == _backend_key():
+        return pinned[1]
     preference = _backend_pref()
     if preference != "auto":
         return preference
     if importlib.util.find_spec("fastembed") is not None:
         return "fastembed"
-    return "sentence_transformers"
+    return "st"
+
+
+def _backend_key() -> tuple[str, str, str]:
+    model, device, _qp, _dp, _backend = _embed_config()
+    return _backend_pref(), model, device
+
+
+def pin_cached_embedding_backend() -> None:
+    """Bind later encoding to the backend of a matching cache hit, without load.
+
+    Once vectors have escaped to a caller, switching backend could compare
+    incompatible query/document spaces. A missing pinned backend fails closed;
+    release_encoder starts a new compute lifecycle where fallback can be retried.
+    """
+    global _PINNED_BACKEND
+    with _ENCODER_LOCK:
+        _PINNED_BACKEND = (_backend_key(), _resolved_backend_name())
+
+
+def active_embedding_provenance() -> dict:
+    """Describe resolved vector identity; inspection never loads an encoder."""
+    binding = _PINNED_BACKEND
+    pinned = binding is not None and binding[0] == _backend_key()
+    return {
+        "model": active_model_name(), "requested_backend": _backend_pref(),
+        "actual_backend": _resolved_backend_name() if pinned else None,
+        "status": "resolved" if pinned else "unresolved",
+        "document_signature": active_embedding_signature(),
+        "query_signature": active_embedding_signature(is_query=True),
+    }
 
 
 def active_embedding_signature(*, is_query: bool = False) -> str:
-    """Stable cache key for vector semantics, not just the model name."""
+    """Model-free lookup signature, resolving to the actual backend after use.
+
+    Before encoding or a cache hit this is only the preferred lookup identity.
+    Callers storing fresh vectors must read it again after encoding. Version 3
+    intentionally invalidates older vectors whose fallback backend was unknown.
+    """
     model_name, _device, query_prefix, document_prefix, _backend = _embed_config()
     prefix = query_prefix if is_query else document_prefix
     payload = "\0".join(
-        ("embedding-v2", _resolved_backend_name(), model_name, prefix)
+        ("embedding-v3", _resolved_backend_name(), model_name, prefix)
     )
     return f"{model_name}:{hashlib.sha256(payload.encode('utf-8')).hexdigest()[:16]}"
 
@@ -110,6 +151,7 @@ def _runtime_limits() -> tuple[int, int]:
 def _load_fastembed(
     model_name: str, *, device: str, batch_size: int, threads: int
 ):
+    import numpy as np
     from fastembed import TextEmbedding
 
     model = TextEmbedding(
@@ -140,6 +182,7 @@ def _load_fastembed(
 
 
 def _load_sentence_transformers(model_name: str, device: str, *, batch_size: int):
+    import numpy as np
     from sentence_transformers import SentenceTransformer
 
     try:
@@ -183,13 +226,16 @@ def _build_encoder(
     for backend in order:
         try:
             if backend == "fastembed":
-                return _load_fastembed(
+                encoder = _load_fastembed(
                     model_name,
                     device=device,
                     batch_size=batch_size,
                     threads=threads,
                 )
-            return _load_sentence_transformers(model_name, device, batch_size=batch_size)
+            else:
+                encoder = _load_sentence_transformers(model_name, device, batch_size=batch_size)
+            encoder.embedding_backend = backend
+            return encoder
         except Exception as exc:  # noqa: BLE001 — try the next backend
             errors.append(f"{backend}: {exc}")
     raise RuntimeError(
@@ -199,7 +245,7 @@ def _build_encoder(
 
 
 def _get_encoder():
-    global _ENCODER, _LOADED_KEY
+    global _ENCODER, _LOADED_KEY, _PINNED_BACKEND
     model_name, device, _qp, _dp, _b = _embed_config()
     batch_size, threads = _runtime_limits()
     key = (_backend_pref(), model_name, device, batch_size, threads)
@@ -208,9 +254,10 @@ def _get_encoder():
     with _ENCODER_LOCK:
         if _ENCODER is not None and _LOADED_KEY == key:
             return _ENCODER
-        _ENCODER = _build_encoder(
-            key[0], model_name, device, batch_size, threads
-        )
+        pinned = _PINNED_BACKEND if _PINNED_BACKEND and _PINNED_BACKEND[0] == _backend_key() else None
+        encoder = _build_encoder(pinned[1] if pinned else key[0], model_name, device, batch_size, threads)
+        _ENCODER = encoder
+        _PINNED_BACKEND = (_backend_key(), encoder.embedding_backend)
         _LOADED_KEY = key
         return _ENCODER
 
@@ -232,10 +279,11 @@ def _trim_process_memory() -> None:
 
 def release_encoder() -> None:
     """Drop the loaded model after a long-lived web compute job."""
-    global _ENCODER, _LOADED_KEY
+    global _ENCODER, _LOADED_KEY, _PINNED_BACKEND
     with _ENCODER_LOCK:
         _ENCODER = None
         _LOADED_KEY = None
+        _PINNED_BACKEND = None
     gc.collect()
     # Do not import PyTorch into the lightweight FastEmbed process just for
     # cleanup. If the optional sentence-transformers backend loaded it, release
@@ -259,6 +307,7 @@ def embed_texts(texts: list[str], is_query: bool = False) -> np.ndarray:
     prefix, empty by default. Normalization is applied uniformly here so both
     backends satisfy the same unit-vector (cosine-ready) contract.
     """
+    import numpy as np
     if not texts:
         return np.zeros((0, 0), dtype=np.float32)
     _model, _device, query_prefix, doc_prefix, _b = _embed_config()

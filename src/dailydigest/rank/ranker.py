@@ -26,6 +26,7 @@ from .source_quality import (
     is_low_impact_research,
     is_preprint_source,
     is_published_journal_source,
+    publication_date_is_known,
     quality_adjusted_score,
     should_skip_item,
     source_bucket,
@@ -52,26 +53,61 @@ def _minmax(x: np.ndarray) -> np.ndarray:
 
 
 def _rank_desc(values: np.ndarray) -> np.ndarray:
-    """Return 0-based ranks (0 = highest value), ties broken by original order."""
-    order = np.argsort(-values, kind="stable")
-    ranks = np.empty(len(values), dtype=np.int64)
-    ranks[order] = np.arange(len(values))
-    return ranks
+    """Return zero-based average ranks; equal signals receive equal influence."""
+    values = np.asarray(values)
+    if values.ndim != 1 or not np.isfinite(values).all():
+        raise ValueError("Ranking signals must be finite one-dimensional arrays")
+    _unique, inverse, counts = np.unique(-values, return_inverse=True, return_counts=True)
+    starts = np.cumsum(counts) - counts
+    return (starts + (counts - 1) / 2.0)[inverse]
 
 
-def _fuse_scores(qa: np.ndarray, lr_score: np.ndarray) -> np.ndarray:
-    """Fuse the quality-adjusted topic ranking with the LR ranking via RRF.
+def _fuse_scores(
+    qa: np.ndarray, lr_score: np.ndarray, *, preference_weight: float = 0.5
+) -> np.ndarray:
+    """Fuse quality and preference rankings with tie-aware weighted RRF.
 
-    Reciprocal Rank Fusion combines the two *rankings* (not their raw values), so
-    it is insensitive to score scale/outliers — which matters because the LR
-    margin and the topic score live on different scales. The fused result is
-    min-maxed back to [0, 1] so downstream magnitude thresholds (e.g. the
-    exceptional-preprint cutoff) keep working.
+    No usable preference contrast means no learned ordering: return the original
+    quality scores, preserving their scale. With two active legs the normalized
+    result is an ordering score, never an absolute quality or probability.
+    ``preference_weight`` is an offline experiment control; 1 is a diagnostic
+    preference-only arm that does not retain quality/avoidance ordering priors.
     """
-    r_qa = _rank_desc(np.asarray(qa, dtype=np.float32))
-    r_lr = _rank_desc(np.asarray(lr_score, dtype=np.float32))
-    fused = 1.0 / (RRF_K + r_qa + 1) + 1.0 / (RRF_K + r_lr + 1)
+    qa = np.asarray(qa, dtype=np.float32)
+    preference = np.asarray(lr_score, dtype=np.float32)
+    if qa.ndim != 1 or not np.isfinite(qa).all():
+        raise ValueError("Quality scores must be a finite one-dimensional array")
+    if not np.isfinite(preference_weight) or not 0.0 <= preference_weight <= 1.0:
+        raise ValueError("preference_weight must be finite and between 0 and 1")
+    if (
+        not qa.size
+        or preference_weight == 0.0
+        or preference.shape != qa.shape
+        or not np.isfinite(preference).all()
+        or np.ptp(preference) == 0.0
+    ):
+        return qa.copy()
+    r_qa = _rank_desc(qa)
+    r_preference = _rank_desc(preference)
+    fused = (
+        (1.0 - preference_weight) / (RRF_K + r_qa + 1)
+        + preference_weight / (RRF_K + r_preference + 1)
+    )
     return _minmax(fused.astype(np.float32)).astype(np.float32)
+
+
+def _scored_sort_key(pair: tuple[ItemRow, float]) -> tuple:
+    """Break final score ties by persistent identity, not retrieval order."""
+    row, score = pair
+    row_id = getattr(row, "id", None)
+    if isinstance(row_id, int):
+        identity = (0, row_id)
+    else:
+        identity = (1, *(str(value) if isinstance(value, str) else "" for value in (
+            getattr(row, "external_id", None), getattr(row, "url", None),
+            getattr(row, "source", None), getattr(row, "title", None),
+        )))
+    return (-score, identity)
 
 
 def _lr_weights_path() -> Path:
@@ -92,8 +128,8 @@ def _npz_scalar(data: Any, key: str) -> Any:
     return value.reshape(-1)[0]
 
 
-def _schema_version_from_npz(data: Any) -> str:
-    version = _npz_scalar(data, "feature_schema_version")
+def _schema_version_from_npz(data: Any, key: str = "feature_schema_version") -> str:
+    version = _npz_scalar(data, key)
     if isinstance(version, bytes):
         return version.decode("utf-8")
     return str(version)
@@ -131,7 +167,9 @@ class LRRanker:
 
     def fit(self, X: np.ndarray, y: np.ndarray, *, persist: bool = True) -> None:
         from sklearn.linear_model import LogisticRegression
+        from ..votes import FEEDBACK_SEMANTICS_VERSION, feedback_reasons_signature
 
+        reason_signature = feedback_reasons_signature()
         X = np.asarray(X, dtype=np.float32)
         y = np.asarray(y).astype(np.int32)
         # sklearn requires at least 2 classes.
@@ -190,6 +228,8 @@ class LRRanker:
                 classes=self._classes,
                 feature_dim=np.asarray([feature_dim], dtype=np.int32),
                 feature_schema_version=np.asarray([feature_schema_version]),
+                feedback_semantics_version=np.asarray([FEEDBACK_SEMANTICS_VERSION]),
+                feedback_reasons_signature=np.asarray([reason_signature]),
             )
         tmp.replace(target)
         logger.info("LRRanker: saved weights to %s", target)
@@ -201,6 +241,8 @@ class LRRanker:
         if not path.exists():
             return False
         try:
+            from ..votes import FEEDBACK_SEMANTICS_VERSION, feedback_reasons_signature
+
             feature_schema_version, feature_dim = _current_feature_schema()
             with np.load(path, allow_pickle=False) as data:
                 coef = data["coef"].astype(np.float32, copy=False)
@@ -225,6 +267,22 @@ class LRRanker:
                         saved_schema_version,
                         feature_schema_version,
                     )
+                    return False
+
+                if (
+                    "feedback_semantics_version" not in data.files
+                    or _schema_version_from_npz(data, "feedback_semantics_version")
+                    != FEEDBACK_SEMANTICS_VERSION
+                ):
+                    logger.warning("LRRanker: ignoring weights from an incompatible feedback policy")
+                    return False
+
+                if (
+                    "feedback_reasons_signature" not in data.files
+                    or _schema_version_from_npz(data, "feedback_reasons_signature")
+                    != feedback_reasons_signature()
+                ):
+                    logger.warning("LRRanker: ignoring weights trained before feedback reasons changed")
                     return False
 
                 if "feature_dim" not in data.files:
@@ -390,6 +448,44 @@ def _cosine_sim(vecs: np.ndarray, profile: np.ndarray) -> np.ndarray:
     return _multi_cosine(vecs, profile)
 
 
+def profile_relevance_scores(
+    vecs: np.ndarray,
+    static_mat: np.ndarray,
+    *,
+    learned_vector: np.ndarray | None = None,
+    learned_weight: float = 0.0,
+) -> np.ndarray:
+    """Pure, opt-in bounded Rocchio ablation, with no model or database access.
+
+    Callers supply unit item embeddings and the static profile. A convex score
+    blend bounds the learned contribution by ``learned_weight`` independently
+    of facet count. It changes score scale; replay gates must be checked before
+    considering any serving change. Omitted or unusable learning stays static.
+    """
+    if not np.isfinite(learned_weight) or not 0.0 <= learned_weight <= 1.0:
+        raise ValueError("learned_weight must be finite and between 0 and 1")
+    vecs = np.asarray(vecs, dtype=np.float32)
+    static_mat = np.asarray(static_mat, dtype=np.float32)
+    if vecs.ndim != 2 or not np.isfinite(vecs).all():
+        raise ValueError("Item embeddings must be a finite matrix")
+    if static_mat.ndim not in (1, 2) or not np.isfinite(static_mat).all():
+        raise ValueError("Static profile must be a finite vector or matrix")
+    if static_mat.size and static_mat.shape[-1] != vecs.shape[1]:
+        raise ValueError("Item and profile embedding dimensions must match")
+    base = (_cosine_sim(vecs, static_mat) if static_mat.size
+            else np.zeros(len(vecs), dtype=np.float32))
+    if learned_vector is None or learned_weight == 0.0:
+        return base
+    learned = np.asarray(learned_vector, dtype=np.float32)
+    if learned.shape != (vecs.shape[1],) or not np.isfinite(learned).all():
+        return base
+    norm = float(np.linalg.norm(learned))
+    if not np.isfinite(norm) or norm < 1e-6:
+        return base
+    return ((1.0 - learned_weight) * base
+            + learned_weight * (vecs @ (learned / norm))).astype(np.float32)
+
+
 def _reason_penalty_for(row: ItemRow, reason_penalty_map: Mapping[Any, float] | None) -> float:
     """Return an optional per-item feedback penalty supplied by the caller.
 
@@ -454,6 +550,10 @@ def _feature_payload(
         "final_score": float(final_score),
         "rank_score": float(final_score),
         "confidence_score": float(final_score),
+        "quality_score": float(final_score),
+        "preference_signal": 0.0,
+        "preference_weight": 0.0,
+        "preference_informative": False,
         "reason_penalty": float(reason_penalty),
         "downweight_penalty": float(downweight_penalty),
         "source_bucket": source_bucket(row),
@@ -499,7 +599,7 @@ def _cosine_score_items(
         scoring_mode="cosine",
     )
     scored = list(zip(items, final, strict=True))
-    scored.sort(key=lambda t: t[1], reverse=True)
+    scored.sort(key=_scored_sort_key)
     return scored
 
 
@@ -516,6 +616,8 @@ def _freshness_penalty(row: Any) -> float:
     section = str(getattr(row, "section", "") or "").lower()
 
     if section == "research":
+        if not publication_date_is_known(row):
+            return 0.0
         # Academic papers stay fresh for weeks; bonus for very new papers
         if age_days < 2.0:
             return -0.05  # freshness bonus
@@ -579,7 +681,8 @@ def _apply_quality_adjustments_with_features(
         strict=True,
     )):
         reason_penalty = _reason_penalty_for(row, reason_penalty_map)
-        score = quality_adjusted_score(row, float(base)) - reason_penalty
+        quality_score = quality_adjusted_score(row, float(base))
+        score = quality_score - reason_penalty
         freshness_pen = _freshness_penalty(row)
         score -= freshness_pen  # negative value = bonus (score increases)
         downweight_penalty = (
@@ -611,6 +714,8 @@ def _apply_quality_adjustments_with_features(
             topic_priority=float(getattr(attr, "priority", 0.0)) if attr is not None else 0.0,
             topic_priority_bonus=priority_bonus,
         )
+        features[_row_feature_key(row)]["quality_adjustment"] = float(quality_score - base)
+        features[_row_feature_key(row)]["freshness_penalty"] = float(freshness_pen)
     return result, features
 
 
@@ -620,6 +725,7 @@ def _cosine_score_items_with_features(
     downweight_terms: list[str],
     reason_penalty_map: Mapping[Any, float] | None = None,
     attribution: Any | None = None,
+    prepare_quality=None,
 ) -> tuple[list[tuple[ItemRow, float]], ScoreFeatureMap]:
     items = [item for item in items if not should_skip_item(item)]
     if not items:
@@ -631,6 +737,8 @@ def _cosine_score_items_with_features(
     else:
         sims = _cosine_sim(vecs, profile_vec)
 
+    if prepare_quality is not None:
+        prepare_quality(items, sims)
     facet_attr = _attribute_or_none(vecs, attribution, len(items))
     final, features = _apply_quality_adjustments_with_features(
         items,
@@ -643,7 +751,7 @@ def _cosine_score_items_with_features(
         facet_attr=facet_attr,
     )
     scored = list(zip(items, final, strict=True))
-    scored.sort(key=lambda t: t[1], reverse=True)
+    scored.sort(key=_scored_sort_key)
     return scored, features
 
 
@@ -676,6 +784,9 @@ def score_items_with_features(
     downweight_terms: list[str],
     reason_penalty_map: Mapping[Any, float] | None = None,
     attribution: Any | None = None,
+    *,
+    preference_weight: float = 0.5,
+    prepare_quality=None,
 ) -> tuple[list[tuple[ItemRow, float]], ScoreFeatureMap]:
     """Score items and return per-row feature snapshots keyed by item id/id(row)."""
     items = [item for item in items if not should_skip_item(item)]
@@ -693,6 +804,7 @@ def score_items_with_features(
             downweight_terms,
             reason_penalty_map,
             attribution=attribution,
+            prepare_quality=prepare_quality,
         )
 
     vecs = embed_item_rows(items)
@@ -700,6 +812,9 @@ def score_items_with_features(
         cosine = np.zeros(len(items), dtype=np.float32)
     else:
         cosine = _cosine_sim(vecs, profile_vec)
+
+    if prepare_quality is not None:
+        prepare_quality(items, cosine)
 
     try:
         if mode == "hybrid_lr":
@@ -722,6 +837,15 @@ def score_items_with_features(
             # calibrated probability and its median sits near 0.33, so 0.5 is not
             # a "no signal" midpoint (see the exploration-slot note in pipeline).
             display = ((fusion_signal + 1.0) / 2.0).astype(np.float32)
+        fusion_signal = np.asarray(fusion_signal, dtype=np.float32)
+        display = np.asarray(display, dtype=np.float32)
+        if (
+            fusion_signal.shape != (len(items),)
+            or display.shape != (len(items),)
+            or not np.isfinite(fusion_signal).all()
+            or not np.isfinite(display).all()
+        ):
+            raise ValueError("Preference scorer returned invalid or non-finite signals")
     except Exception as e:  # noqa: BLE001
         logger.warning("%s scoring failed (%s); falling back to cosine", mode, e)
         return _cosine_score_items_with_features(
@@ -749,20 +873,25 @@ def score_items_with_features(
     # with scripts/benchmark_ranker.py, which reports head metrics (nDCG, P@K,
     # must-read recall) for every configuration — full-list pairwise accuracy
     # alone once hid a head-of-list regression.
+    preference_informative = bool(np.ptp(fusion_signal) > 0.0)
     blended_rank = _fuse_scores(
-        np.array(final, dtype=np.float32), fusion_signal
+        np.array(final, dtype=np.float32), fusion_signal,
+        preference_weight=preference_weight,
     ).tolist()
     # Update features to record the hybrid blend
     for i, (row, _) in enumerate(zip(items, blended_rank, strict=True)):
         key = _row_feature_key(row)
         if key in features:
             features[key]["confidence_score"] = float(final[i])
+            features[key]["preference_signal"] = float(fusion_signal[i])
+            features[key]["preference_weight"] = float(preference_weight)
+            features[key]["preference_informative"] = preference_informative
             features[key]["rank_score"] = float(blended_rank[i])
             features[key]["hybrid_score"] = float(blended_rank[i])
             features[key]["final_score"] = float(blended_rank[i])
             features[key]["scoring_mode"] = mode
     scored = list(zip(items, blended_rank, strict=True))
-    scored.sort(key=lambda t: t[1], reverse=True)
+    scored.sort(key=_scored_sort_key)
     return scored, features
 
 
@@ -835,6 +964,7 @@ def pick_top_per_section(
     score_features: ScoreFeatureMap | None = None,
     *,
     settings: Any | None = None,
+    selection_facts: Mapping[int, Mapping[str, Any]] | None = None,
 ) -> list[tuple[ItemRow, float]]:
     """Take up to caps[section] while protecting research source diversity.
 
@@ -845,6 +975,7 @@ def pick_top_per_section(
     backlog (which the date-backfilling preprint/aggregator sources dominate)
     can fill the expanded section. When feature snapshots are available, the
     low-impact gate uses their raw topic score rather than the fused rank.
+    Offline replay may supply frozen settings and per-candidate source facts.
     """
     out: list[tuple[ItemRow, float]] = []
     for section, cap in caps.items():
@@ -852,8 +983,16 @@ def pick_top_per_section(
             continue
         section_scored = [(row, score) for row, score in scored if (row.section or "") == section]
         if section == "research":
-            out.extend(_pick_research_balanced(section_scored, cap, catch_up=catch_up,
-                                        score_features=score_features, settings=settings))
+            out.extend(
+                _pick_research_balanced(
+                    section_scored,
+                    cap,
+                    catch_up=catch_up,
+                    score_features=score_features,
+                    settings=settings,
+                    selection_facts=selection_facts,
+                )
+            )
         else:
             out.extend(_pick_news_balanced(section_scored, cap))
     out.sort(key=lambda t: t[1], reverse=True)
@@ -867,7 +1006,36 @@ def _pick_research_balanced(
     score_features: ScoreFeatureMap | None = None,
     *,
     settings: Any | None = None,
+    selection_facts: Mapping[int, Mapping[str, Any]] | None = None,
 ) -> list[tuple[ItemRow, float]]:
+    def fact(row, key, fallback):
+        if selection_facts is not None:
+            return selection_facts[_row_feature_key(row)][key]
+        return fallback(row)
+
+    def _bucket(row):
+        return fact(row, "source_bucket", source_bucket)
+
+    def _preprint(row):
+        return fact(row, "is_preprint", is_preprint_source)
+
+    def _published(row):
+        return fact(row, "is_published", is_published_journal_source)
+
+    def _high_quality(row):
+        return fact(row, "is_high_quality", is_high_quality_journal_source)
+
+    def _low_impact(row):
+        return fact(row, "is_low_impact", is_low_impact_research)
+
+    def _source_key(row):
+        if selection_facts is not None:
+            # Older captures used raw feed names. Preserve their recorded
+            # policy rather than consulting today's journal alias table.
+            return selection_facts[_row_feature_key(row)].get(
+                "source_diversity_key", str(getattr(row, "source", "") or "").strip().lower())
+        return source_diversity_key(row)
+
     if not scored or cap <= 0:
         return []
 
@@ -900,18 +1068,21 @@ def _pick_research_balanced(
                 max_preprints = 0
         except Exception:  # noqa: BLE001
             pass
-    min_high_quality = min(math.ceil(cap * 0.20), _available(scored, is_high_quality_journal_source))
-    min_published = min(math.ceil(cap * 0.30), _available(scored, is_published_journal_source))
+    min_high_quality = min(math.ceil(cap * 0.20), _available(scored, _high_quality))
+    min_published = min(math.ceil(cap * 0.30), _available(scored, _published))
 
     # Low-impact venues should appear only rarely and only when strongly on-topic.
     try:
         from ..config import get_settings
 
         _s = settings if settings is not None else get_settings()
-        fraction = float(_s.max_low_impact_research_frac)
-        # Positive quotas permit one strong match in small digests; zero is absolute.
-        max_low_impact = min(cap, max(1, int(cap * fraction))) if fraction > 0 else 0
+        _low_impact_frac = float(_s.max_low_impact_research_frac)
+        # A positive allowance permits one exceptional match in small digests.
+        # Zero remains an absolute exclusion; no slot is reserved.
+        max_low_impact = min(cap, max(1, int(cap * _low_impact_frac))) if _low_impact_frac > 0 else 0
         low_impact_floor = float(_s.low_impact_relevance_floor)
+        # The calibrator is trained on final scores, so it is valid only for
+        # legacy callers that do not provide raw topic snapshots.
         if score_features is None and getattr(_s, "adaptive_relevance_floor", False):
             from .calibrate import adaptive_relevance_floor as _adaptive_floor
 
@@ -937,19 +1108,23 @@ def _pick_research_balanced(
         key = int(row_id) if isinstance(row_id, int) else id(row)
         if key in selected_ids or len(selected) >= cap:
             return False
-        if is_preprint_source(row) and (
+        if _preprint(row) and (
             max_preprints == 0 or not allow_preprint_overflow
             and sum(preprint_source_counts.values()) >= max_preprints
         ):
             return False
-        if is_low_impact_research(row) or source_bucket(row) == "unknown_journal":
-            # Distinct bounded budgets share the raw-topic floor, even during fill.
+        if _low_impact(row) or _bucket(row) == "unknown_journal":
+            # The frequency cap and relevance floor remain hard quality gates,
+            # including during last-resort filling.
             feature = (score_features or {}).get(_row_feature_key(row), {})
-            if float(feature.get("topic_score", score)) < low_impact_floor:
+            topic_score = feature.get("topic_score", score)
+            if float(topic_score) < low_impact_floor:
                 return False
-            if bucket_counts.get(source_bucket(row), 0) >= max_low_impact:
+            # Unknown evidence has its own conservative budget; it must not
+            # consume the measured-low budget or become unrestricted fill.
+            if bucket_counts.get(_bucket(row), 0) >= max_low_impact:
                 return False
-        source = source_diversity_key(row)
+        source = _source_key(row)
         if (
             enforce_source_cap
             and max_per_source is not None
@@ -958,7 +1133,7 @@ def _pick_research_balanced(
         ):
             return False
         selected.append((row, score))
-        if is_preprint_source(row):
+        if _preprint(row):
             # NB: use ``source``, never rebind ``key`` — ``key`` is the identity
             # used for de-duplication below. Shadowing it here registered the
             # SOURCE NAME instead of the item id, so every preprint escaped the
@@ -968,15 +1143,15 @@ def _pick_research_balanced(
             # digest_items (digest_id, item_label) unique constraint rejected.
             preprint_source_counts[source] = preprint_source_counts.get(source, 0) + 1
         selected_ids.add(key)
-        bucket = source_bucket(row)
+        bucket = _bucket(row)
         bucket_counts[bucket] = bucket_counts.get(bucket, 0) + 1
         if source:
             source_counts[source] = source_counts.get(source, 0) + 1
         return True
 
     for predicate, target in (
-        (is_high_quality_journal_source, min_high_quality),
-        (is_published_journal_source, min_published),
+        (_high_quality, min_high_quality),
+        (_published, min_published),
     ):
         if target <= 0:
             continue
@@ -996,7 +1171,7 @@ def _pick_research_balanced(
     for row, score in scored:
         if len(selected) >= cap:
             break
-        if not is_preprint_source(row):
+        if not _preprint(row):
             continue
         preprint_count = sum(
             count
@@ -1012,8 +1187,8 @@ def _pick_research_balanced(
     for row, score in scored:
         if len(selected) >= cap:
             break
-        bucket = source_bucket(row)
-        if is_preprint_source(row):
+        bucket = _bucket(row)
+        if _preprint(row):
             preprint_count = sum(
                 count
                 for name, count in bucket_counts.items()
@@ -1027,7 +1202,7 @@ def _pick_research_balanced(
             # work from the other repositories never appeared — measured: their
             # best items scored 0.752/0.753 against the day's best 0.792, all
             # well clear of the relevance floor, and neither was selected.
-            source_name = source_diversity_key(row)
+            source_name = _source_key(row)
             if (
                 max_preprints >= 2
                 and preprint_source_counts.get(source_name, 0)
@@ -1042,14 +1217,14 @@ def _pick_research_balanced(
         for row, score in scored:
             if len(selected) >= cap:
                 break
-            if is_preprint_source(row) or source_bucket(row) == "aggregator":
+            if _preprint(row) or _bucket(row) == "aggregator":
                 continue
             add(row, score)
 
     # Safety valve: only use preprints/aggregators as final fill when the section
     # has no non-preprint items at all (e.g., a purely arXiv research feed).
     all_limited = all(
-        is_preprint_source(row) or source_bucket(row) == "aggregator"
+        _preprint(row) or _bucket(row) == "aggregator"
         for row, _ in scored
     )
     if len(selected) < cap and all_limited:
@@ -1058,7 +1233,9 @@ def _pick_research_balanced(
                 break
             add(row, score, allow_preprint_overflow=True)
 
-    # Last resort preserves frequency and topic gates while relaxing source diversity.
+    # Last resort: fill only up to a small hard minimum while relaxing source
+    # diversity. Quality gates remain absolute; a short section is preferable to
+    # padding it with low-impact work below the configured floor.
     hard_min = min(3, cap)
     if len(selected) < hard_min:
         for row, score in scored:
@@ -1066,11 +1243,13 @@ def _pick_research_balanced(
                 break
             add(row, score, enforce_source_cap=False, allow_preprint_overflow=all_limited)
 
-    return _apply_final_score_cutoff(selected)
+    return _apply_final_score_cutoff(selected, settings=settings)
 
 
 def _apply_final_score_cutoff(
     selected: list[tuple[ItemRow, float]],
+    *,
+    settings: Any | None = None,
 ) -> list[tuple[ItemRow, float]]:
     """Drop research picks the learned model scored near the bottom.
 
@@ -1090,7 +1269,7 @@ def _apply_final_score_cutoff(
     try:
         from ..config import get_settings
 
-        s = get_settings()
+        s = settings if settings is not None else get_settings()
         frac = float(getattr(s, "research_final_score_floor_frac", 0.0))
         min_keep = int(getattr(s, "research_final_score_min_keep", 3))
     except Exception:  # noqa: BLE001
@@ -1123,13 +1302,20 @@ def apply_exploration(
     *,
     slots: int,
     eligible,
+    caps: Mapping[str, int] | None = None,
+    catch_up: bool = False,
+    score_features: ScoreFeatureMap | None = None,
+    settings: Any | None = None,
+    selection_facts: Mapping[int, Mapping[str, Any]] | None = None,
 ) -> list[tuple[ItemRow, float]]:
     """Swap the lowest-scored picked research items for high-uncertainty ones.
 
     Active learning: surfacing the items the learned ranker is least sure about
     (uncertainty near 1.0) yields the most informative votes. Only research items
     are touched, and only ``eligible`` (high-quality) unselected candidates are
-    eligible — exploration never introduces low-impact or preprint work.
+    eligible. Serving callers supply the frozen selection controls so every
+    proposed swap must still satisfy the actual picker, including source caps
+    and final-score floors. Invalid candidates do not consume exploration slots.
     """
     if slots <= 0:
         return picked
@@ -1153,7 +1339,23 @@ def apply_exploration(
     research_idx.sort(key=lambda i: picked[i][1])  # ascending score
 
     out = list(picked)
-    n = min(slots, len(pool), len(research_idx))
-    for j in range(n):
-        out[research_idx[j]] = pool[j]
+    swapped = 0
+    for candidate in pool:
+        if swapped >= min(slots, len(research_idx)):
+            break
+        proposal = list(out)
+        proposal[research_idx[swapped]] = candidate
+        if caps is not None:
+            checked = pick_top_per_section(
+                proposal, dict(caps), catch_up=catch_up, score_features=score_features,
+                settings=settings, selection_facts=selection_facts,
+            )
+            # Reuse the serving constraints instead of maintaining a second
+            # approximation of quality/frequency/source/final-score rules.
+            expected = {_row_feature_key(row) for row, _ in proposal}
+            accepted = {_row_feature_key(row) for row, _ in checked}
+            if len(checked) != len(proposal) or accepted != expected:
+                continue
+        out = proposal
+        swapped += 1
     return out

@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from ..models import Profile
-from .embed import active_embedding_signature, embed_texts
+from .embed import active_embedding_signature, embed_texts, pin_cached_embedding_backend
 
 logger = logging.getLogger(__name__)
 
@@ -150,13 +150,27 @@ def _profile_parts(profile: Profile) -> list[str]:
     return parts
 
 
-def build_profile_matrix(profile: Profile) -> np.ndarray:
+def build_profile_matrix(profile: Profile, *, mode: str = "legacy") -> np.ndarray:
     """Return [N, D] matrix: one L2-normalized query embedding per bio sentence / keyword.
 
     Enables OR-style cosine scoring (top-k-mean) so a user with diverse interests
     (e.g. drug discovery AND climate science) matches either topic well instead of
-    getting a blended centroid that misses both.
+    getting a blended centroid that misses both. ``canonical`` and ``additive``
+    are opt-in offline ablation modes using detailed facet descriptions; the
+    serving default remains ``legacy``. Their gate thresholds require evaluation.
     """
+    if mode not in {"legacy", "canonical", "additive"}:
+        raise ValueError("Profile mode must be legacy, canonical, or additive")
+    if mode != "legacy":
+        anchors, _labels = build_core_facet_matrix(profile)
+        if anchors.size:
+            if mode == "canonical":
+                return anchors.copy()
+            static = build_profile_matrix(profile)
+            # A zero fallback row is not a semantic facet to include in top-k.
+            if not np.any(static):
+                return anchors.copy()
+            return np.vstack([static, anchors]).astype(np.float32)
     parts, weights = _profile_parts_with_weights(profile)
     if not parts:
         logger.warning(
@@ -209,6 +223,59 @@ def query_aware_cosine(vecs: np.ndarray, profile_mat: np.ndarray) -> np.ndarray:
     # Final cosine between item and its attention-weighted profile
     cos = (vecs_n * weighted_profiles).sum(axis=1).astype(np.float32)
     return cos
+
+
+def negative_interest_penalties(
+    item_vectors: np.ndarray,
+    negative_axes: np.ndarray,
+    topic_scores: np.ndarray,
+    weights: np.ndarray,
+    *,
+    margin: float = 0.0,
+    strength: float = 0.8,
+) -> np.ndarray:
+    """Penalize negative matches only to the extent they exceed core relevance.
+
+    Inputs are item [N,D] and negative-interest [M,D] vectors, N topic scores,
+    and M nonnegative weights. Weights scale each axis's excess similarity after
+    comparison with the topic score; scaling cosine before that comparison can
+    silently disable even a strong negative match. Zero vectors provide no
+    evidence, and empty batches or absent negative axes produce zero penalties.
+    """
+    items = np.asarray(item_vectors, dtype=np.float64)
+    axes = np.asarray(negative_axes, dtype=np.float64)
+    topics = np.asarray(topic_scores, dtype=np.float64)
+    axis_weights = np.asarray(weights, dtype=np.float64)
+    if items.ndim != 2 or items.shape[1] == 0:
+        raise ValueError("item vectors must have shape [N,D] with positive D")
+    if axes.ndim == 1 and axes.size == 0:
+        axes = axes.reshape(0, items.shape[1])
+    if axes.ndim != 2 or axes.shape[1] != items.shape[1]:
+        raise ValueError("negative axes must have shape [M,D] matching item vectors")
+    if topics.shape != (len(items),) or axis_weights.shape != (len(axes),):
+        raise ValueError("topic scores and weights must align with items and negative axes")
+    if not all(np.isfinite(array).all() for array in (items, axes, topics, axis_weights)):
+        raise ValueError("negative-interest inputs must be finite")
+    if (axis_weights < 0).any():
+        raise ValueError("negative-interest weights must be nonnegative")
+    if not np.isfinite(margin) or not np.isfinite(strength) or margin < 0 or strength < 0:
+        raise ValueError("margin and strength must be finite and nonnegative")
+    if not len(items) or not len(axes) or strength == 0:
+        return np.zeros(len(items), dtype=np.float64)
+
+    def normalize(rows):
+        # Rescale first so finite large vectors cannot overflow their L2 norm.
+        scale = np.max(np.abs(rows), axis=1, keepdims=True)
+        scaled = np.divide(rows, scale, out=np.zeros_like(rows), where=scale > 0)
+        norm = np.linalg.norm(scaled, axis=1, keepdims=True)
+        return np.divide(scaled, norm, out=np.zeros_like(rows), where=norm > 0), scale[:, 0] > 0
+
+    unit_items, valid_items = normalize(items)
+    unit_axes, valid_axes = normalize(axes)
+    similarities = np.clip(unit_items @ unit_axes.T, -1.0, 1.0)
+    excess = np.maximum(0.0, similarities - topics[:, None] - margin)
+    excess *= valid_items[:, None] & valid_axes[None, :]
+    return strength * np.max(excess * axis_weights[None, :], axis=1)
 
 
 def build_negative_centroid(profile: Profile) -> np.ndarray | None:
@@ -352,9 +419,11 @@ def build_core_facet_matrix(profile: Profile) -> tuple[np.ndarray, list[str]]:
     key = (active_embedding_signature(is_query=True), definitions_key)
     cached = _CORE_FACET_CACHE.get(key)
     if cached is not None:
+        pin_cached_embedding_backend()
         return cached
     flat_texts = [text for _label, texts in definitions for text in texts]
     vecs = embed_texts(flat_texts, is_query=True)
+    key = (active_embedding_signature(is_query=True), definitions_key)
     rows: list[np.ndarray] = []
     offset = 0
     for _label, texts in definitions:
@@ -516,14 +585,37 @@ def attribute_items(
     return out
 
 
-def build_profile_matrix_with_rocchio(profile: Profile, vote_count: int = 0) -> np.ndarray:
-    """Build profile matrix, blending in the Rocchio-learned vector when available.
+def append_learned_profile(
+    static_mat: np.ndarray, learned_vector: np.ndarray | None, vote_count: int
+) -> np.ndarray:
+    """Pure deployment-equivalent Rocchio composition for train-only replay.
 
-    After a user has voted on items, we accumulate a learned direction vector
-    (updated per vote in votes.py). This function blends it into the profile
-    matrix as an additional high-weight row so it naturally influences the
-    top-k cosine scoring.
+    This preserves the historical *row-mass* ramp, not a bounded score influence.
+    In particular, the first vote is suppressed, the second can append a row,
+    and large static matrices can give that row full cosine weight by vote 3.
     """
+    if vote_count <= 0 or learned_vector is None:
+        return static_mat.copy()
+    learned = np.asarray(learned_vector, dtype=np.float32)
+    if (
+        static_mat.ndim != 2
+        or learned.shape != (static_mat.shape[1],)
+        or not np.isfinite(learned).all()
+    ):
+        return static_mat.copy()
+    norm = float(np.linalg.norm(learned))
+    if not np.isfinite(norm) or norm < 1e-6:
+        return static_mat.copy()
+    gamma = min(0.25, vote_count / 60.0)
+    if gamma < 0.02:
+        return static_mat.copy()
+    learned_weight = gamma * static_mat.shape[0] / (1.0 - gamma)
+    learned_row = ((learned / norm) * learned_weight).reshape(1, -1)
+    return np.vstack([static_mat, learned_row]).astype(np.float32)
+
+
+def build_profile_matrix_with_rocchio(profile: Profile, vote_count: int = 0) -> np.ndarray:
+    """Build the default static profile and append the local learned direction."""
     static_mat = build_profile_matrix(profile)
     if vote_count <= 0:
         return static_mat
@@ -531,25 +623,29 @@ def build_profile_matrix_with_rocchio(profile: Profile, vote_count: int = 0) -> 
         from pathlib import Path
 
         from ..config import get_settings
+        from ..votes import FEEDBACK_SEMANTICS_VERSION, feedback_reasons_signature
         learned_path = Path(get_settings().db_path).parent / "learned_profile.npz"
         if not learned_path.exists():
             return static_mat
-        data = np.load(learned_path, allow_pickle=False)
-        learned = data["profile"].astype(np.float32)
-        norm = np.linalg.norm(learned)
-        if norm < 1e-6:
-            return static_mat
-        learned_normalized = learned / norm
-        # gamma ramps linearly from 0 to its 0.25 cap as votes go 0 → 15 (0.25*60)
-        gamma = min(0.25, vote_count / 60.0)
-        if gamma < 0.02:
-            return static_mat
-        # Add learned vector as an extra row scaled to represent gamma fraction
-        # of the total profile mass (equivalent rows = gamma * n_rows / (1-gamma))
-        n = static_mat.shape[0]
-        learned_weight = gamma * n / max(1.0 - gamma, 0.01)
-        learned_row = (learned_normalized * learned_weight).reshape(1, -1).astype(np.float32)
-        return np.vstack([static_mat, learned_row])
+        with np.load(learned_path, allow_pickle=False) as data:
+            if (
+                "feedback_semantics_version" not in data.files
+                or str(np.asarray(data["feedback_semantics_version"]).reshape(-1)[0])
+                != FEEDBACK_SEMANTICS_VERSION
+            ):
+                logger.info("Ignoring learned profile from an incompatible feedback policy")
+                return static_mat
+            if (
+                "feedback_reasons_signature" not in data.files
+                or str(np.asarray(data["feedback_reasons_signature"]).reshape(-1)[0])
+                != feedback_reasons_signature()
+            ):
+                logger.info("Ignoring learned profile built before feedback reasons changed")
+                return static_mat
+            # Practical negatives remain raw ratings but do not increase the
+            # strength of a direction learned from fewer informative ratings.
+            informative_count = int(np.asarray(data["vote_count"]).reshape(-1)[0])
+            return append_learned_profile(static_mat, data["profile"], informative_count)
     except Exception as e:
         logger.warning("build_profile_matrix_with_rocchio: failed: %s", e)
         return static_mat

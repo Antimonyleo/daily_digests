@@ -29,7 +29,9 @@ Routes:
 from __future__ import annotations
 
 import asyncio
+import errno
 import hmac
+import ipaddress
 import json
 import logging
 import os
@@ -39,7 +41,9 @@ import tempfile
 import threading
 import uuid
 from collections import Counter
+from contextlib import contextmanager
 from datetime import date, timedelta
+from functools import wraps
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
@@ -60,6 +64,7 @@ from pydantic import ValidationError
 from sqlalchemy import func, select
 
 from . import health
+from .article_figure import display_figure
 from . import votes as votes_mod
 from .config import SETTINGS, get_settings, reload_settings, section_enabled
 from .email_render import (
@@ -76,8 +81,7 @@ from .opportunities import (
     load_opportunity_profile,
     opportunity_display,
 )
-from .pipeline import _digest_id, normalize_reading_mode, run_all
-from .rank.embed import release_encoder
+from .brew import BrewCancelled, _digest_id, normalize_reading_mode
 from .rank.source_quality import display_breakdown, display_source, source_bucket
 from .store import (
     DigestItemRow,
@@ -87,6 +91,7 @@ from .store import (
     add_carryover_items,
     bookmarked_item_ids,
     carryover_item_ids,
+    count_bookmarks,
     init_db,
     item_metadata,
     known_item_ids,
@@ -101,6 +106,83 @@ from .store import (
 from .tea_break import daily_tea_deck
 
 logger = logging.getLogger(__name__)
+
+
+def run_all(*args, **kwargs):
+    """Load the brew pipeline only when a reader starts a job."""
+    from .pipeline import run_all as run
+    return run(*args, **kwargs)
+
+
+def release_encoder():
+    from .rank.embed import release_encoder as release
+    return release()
+
+
+@contextmanager
+def _compute_write_guard():
+    """Keep settings and selection-sensitive writes out of an active brew."""
+    if not _COMPUTE_LOCK.acquire(blocking=False):
+        raise HTTPException(status_code=409, detail="A brew or ranking job is running. Try again when it finishes.")
+    process_lock = None
+    try:
+        try:
+            process_lock = acquire_compute_lock(get_settings().db_path)
+        except ComputeBusyError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        yield
+    finally:
+        if process_lock is not None:
+            process_lock.release()
+        _COMPUTE_LOCK.release()
+
+
+def _settings_write(action):
+    @wraps(action)
+    async def guarded(*args, **kwargs):
+        with _compute_write_guard():
+            return await action(*args, **kwargs)
+    return guarded
+
+
+def _feedback_mutation(action):
+    @wraps(action)
+    def guarded(*args, **kwargs):
+        try:
+            return action(*args, **kwargs)
+        except votes_mod.FeedbackStateError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return guarded
+
+
+def _feedback_reasons():
+    try:
+        return votes_mod._load_vote_reasons(), ""
+    except votes_mod.FeedbackStateError as exc:
+        return {}, str(exc)
+
+
+def _feedback_status():
+    try:
+        return votes_mod.lr_training_status()
+    except votes_mod.FeedbackStateError as exc:
+        return {"can_train": False, "blocked": True, "message": str(exc)}
+
+
+def _overflow_signature(digest_id: str, audits: list[dict]) -> str:
+    payload = json.dumps([digest_id, audits], sort_keys=True, default=str).encode()
+    return hmac.new(_CSRF_TOKEN.encode(), payload, "sha256").hexdigest()
+
+
+def _validated_overflow(digest_id: str, audit_signature: str) -> list[dict]:
+    if not digest_id or not re.fullmatch(r"[0-9a-f]{64}", audit_signature):
+        raise HTTPException(status_code=409, detail="Refresh the digest before saving these picks.")
+    audits = load_digest_audit(digest_id, "reading_mode_overflow")
+    if not audits:
+        raise HTTPException(status_code=404, detail="This saved digest has no overflow picks.")
+    if not hmac.compare_digest(_overflow_signature(digest_id, audits), audit_signature):
+        raise HTTPException(status_code=409, detail="These picks changed after a rebrew. Refresh the digest.")
+    return audits
 
 _REPO_ROOT = Path(os.environ.get("DD_APP_ROOT") or Path.cwd()).resolve()
 _PACKAGED_TEMPLATE_DIR = Path(__file__).resolve().parent / "templates"
@@ -147,6 +229,8 @@ _SECTION_RANK = {name: idx for idx, name in enumerate(SECTION_ORDER)}
 # another one or racing the old page for queue entries.
 _RUN_QUEUES: dict[str, list[dict[str, Any]]] = {}
 _RUN_STARTED: set[str] = set()
+_RUN_CANCEL: dict[str, threading.Event] = {}
+_RUN_PUBLISHED: set[str] = set()
 _MAX_RETAINED_RUNS = 32
 _RUN_LOCK = threading.Lock()
 _TRAIN_LOCK = threading.Lock()
@@ -210,8 +294,11 @@ def _breakdown_payload(row: ItemRow, persisted: dict | None = None) -> dict:
                 "penalty": _bar_pct(float(persisted.get("penalty") or 0.0)),
             },
         }
-        if isinstance(persisted.get("topic_alignment"), dict):
-            payload["topic_alignment"] = dict(persisted["topic_alignment"])
+        if isinstance(persisted.get("contribution_rerank"), dict):
+            payload["contribution_rerank"] = dict(persisted["contribution_rerank"])
+        for field in ('contribution_claims', 'article_evidence', 'topic_alignment'):
+            if isinstance(persisted.get(field), dict):
+                payload[field] = dict(persisted[field])
         return payload
     breakdown = display_breakdown(row)
     return {
@@ -382,7 +469,7 @@ def _load_today(
                 current_vote[iid] = int(value)
                 current_grade[iid] = int(grade) if grade is not None else votes_mod.value_to_grade(int(value))
         # Load all vote reasons in one read instead of N+1 reads
-        _all_reasons = votes_mod._load_vote_reasons()
+        _all_reasons, _reason_warning = _feedback_reasons()
         current_reasons = {
             int(item_id): _all_reasons.get(str(int(item_id)), [])
             for item_id in item_ids
@@ -390,9 +477,11 @@ def _load_today(
         persisted_features = load_digest_features(digest_id)
         from .reader_insights import match_evidence
         from .config import load_profile
+
         try:
-            facets = load_profile(_get_profile_path()).canonical_facets
-        except Exception:
+            reader_profile = load_profile(_get_profile_path())
+            facets = reader_profile.canonical_facets
+        except Exception:  # Historical digests remain readable without a profile.
             facets = {}
         opportunity_profile = None
         if any((row.section or "") in {"opportunities", "events"} for row in rows):
@@ -459,6 +548,7 @@ def _load_today(
                     "published": _format_date(row),
                     "summary": row.summary or "",
                     "summary_fields": _summary_fields(row.summary or ""),
+                    "figure": display_figure(item_metadata(row)),
                     "score_raw": _slate_score(row),
                     "confidence_score": confidence_score,
                     "ranking": ranking,
@@ -577,15 +667,24 @@ def _summarizer_label(digest_id: str | None = None) -> str:
 
 
 def _host_name(host_header: str | None) -> str:
-    host = (host_header or "").strip()
-    if host.startswith("["):
-        end = host.find("]")
-        return host[1:end].lower() if end != -1 else host.lower()
-    return host.rsplit(":", 1)[0].lower()
+    try:
+        parsed = urlsplit(f"//{host_header or ''}")
+        # Validate the port as well as the hostname; urlsplit defers this check.
+        _ = parsed.port
+        if parsed.username is not None or parsed.path or parsed.query or parsed.fragment:
+            return ""
+        return (parsed.hostname or "").lower()
+    except ValueError:
+        return ""
 
 
 def _is_local_host(host: str) -> bool:
-    return host == "localhost" or host == "testserver" or host == "::1" or host.startswith("127.")
+    if host in {"localhost", "testserver"}:
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 def _require_local_origin(request: Request) -> None:
@@ -596,8 +695,19 @@ def _require_local_origin(request: Request) -> None:
     origin = request.headers.get("origin")
     if not origin:
         return
-    origin_host = _host_name(urlsplit(origin).netloc)
-    if origin_host != host or not _is_local_host(origin_host):
+    try:
+        supplied = urlsplit(origin)
+        expected = urlsplit(str(request.url))
+        default_ports = {"http": 80, "https": 443}
+        same_origin = (
+            supplied.scheme in default_ports
+            and supplied.username is None
+            and (supplied.scheme, supplied.hostname, supplied.port or default_ports[supplied.scheme])
+            == (expected.scheme, expected.hostname, expected.port or default_ports[expected.scheme])
+        )
+    except (ValueError, KeyError):
+        same_origin = False
+    if not same_origin:
         raise HTTPException(status_code=403, detail="cross-origin writes are not allowed")
 
 
@@ -677,7 +787,7 @@ def _require_csrf(request: Request, form: dict[str, str] | None = None) -> None:
     supplied = request.headers.get("x-csrf-token")
     if form is not None:
         supplied = supplied or form.get("_csrf_token")
-    if not supplied or not hmac.compare_digest(str(supplied), _CSRF_TOKEN):
+    if not supplied or not hmac.compare_digest(str(supplied).encode(), _CSRF_TOKEN.encode()):
         raise HTTPException(status_code=403, detail="invalid CSRF token")
 
 
@@ -723,7 +833,10 @@ async def _read_urlencoded_form(request: Request) -> dict[str, str]:
     dependency is unnecessary here.
     """
     raw = await request.body()
-    parsed = parse_qs(raw.decode("utf-8"), keep_blank_values=True)
+    try:
+        parsed = parse_qs(raw.decode("utf-8"), keep_blank_values=True)
+    except UnicodeDecodeError as exc:
+        raise HTTPException(status_code=400, detail="form must use UTF-8") from exc
     return {k: values[-1] if values else "" for k, values in parsed.items()}
 
 
@@ -1034,18 +1147,20 @@ def _atomic_private_write(path: Path, content: str) -> None:
             prefix=f".{path.name}.",
             delete=False,
         ) as handle:
+            temporary = Path(handle.name)
             handle.write(content)
             handle.flush()
             os.fsync(handle.fileno())
-            temporary = Path(handle.name)
         if os.name == "posix":
             temporary.chmod(0o600)
         try:
             os.replace(temporary, path)
             temporary = None
-        except OSError:
+        except OSError as exc:
             # Docker bind-mounted individual files may reject rename(2). Keep
             # that supported, with the smallest possible non-atomic fallback.
+            if exc.errno != errno.EBUSY:
+                raise
             path.write_text(content, encoding="utf-8")
         if os.name == "posix":
             path.chmod(0o600)
@@ -1070,7 +1185,6 @@ def _env_value_has_control_chars(value: str | None) -> bool:
 
 def _parse_advanced_interest_list(value: str) -> list[str]:
     return list(dict.fromkeys(line.strip() for line in value.splitlines() if line.strip()))
-
 
 
 def _saved_api_key_matches(backend: str, base_url: str) -> bool:
@@ -1255,6 +1369,12 @@ def index(request: Request, digest_id: str = "") -> Response:
     available_brew_ids = {str(brew["id"]) for brew in recent_brews}
     if not digest_id or digest_id not in available_brew_ids:
         digest_id = today_id
+    brew_ids = [str(brew["id"]) for brew in recent_brews]
+    current_position = brew_ids.index(digest_id) if digest_id in brew_ids else -1
+    previous_brew = (
+        recent_brews[current_position + 1]
+        if current_position + 1 < len(recent_brews) else None
+    )
     cup_kicker = "Today’s cup"
     for brew in recent_brews:
         brew["active"] = brew["id"] == digest_id
@@ -1314,6 +1434,7 @@ def index(request: Request, digest_id: str = "") -> Response:
     overflow_audit = (
         load_digest_audit(digest_id, "reading_mode_overflow") if brewed else []
     )
+    overflow_signature = _overflow_signature(digest_id, overflow_audit)
     # `load_digest_audit` yields {} for a malformed row, so every field here is
     # normalized before it reaches the template. Without this a single bad row
     # 500s the entire digest page, not just the shelf.
@@ -1333,6 +1454,7 @@ def index(request: Request, digest_id: str = "") -> Response:
     _overflow_ids = {int(audit["item_id"]) for audit in overflow_audit}
     overflow_saved = bool(_overflow_ids) and _overflow_ids <= carryover_item_ids()
     from .reader_insights import usefulness_summary
+
     feedback_summary = usefulness_summary([entry for section in sections for entry in section.get('entries', [])])
     response = templates.TemplateResponse(
         request,
@@ -1344,6 +1466,9 @@ def index(request: Request, digest_id: str = "") -> Response:
             "profile_name": _profile_name(),
             "salutation": "Welcome back",
             "recent_brews": recent_brews,
+            "previous_brew": previous_brew,
+            "overflow_signature": overflow_signature,
+            "feedback_warning": _feedback_reasons()[1],
             "daily_note": tea_notes[0],
             "daily_notes": tea_notes,
             "summarizer_label": _summarizer_label(digest_id),
@@ -1359,7 +1484,7 @@ def index(request: Request, digest_id: str = "") -> Response:
             "catch_up_synthesis": catch_up_synthesis,
             "catch_up_days": catch_up_days,
             "current_vote_per_item": current_vote,
-            "ranking_status": votes_mod.lr_training_status(),
+            "ranking_status": _feedback_status(),
             "feedback_summary": feedback_summary,
             "empty": len(sections) == 0,
             "brewed": brewed,
@@ -1379,39 +1504,47 @@ def reading_study(request: Request) -> Response:
 
 
 @app.get("/saved", response_class=HTMLResponse)
-def saved_items(request: Request, q: str = "") -> Response:
+def saved_items(request: Request, q: str = "", page: int = 1) -> Response:
     if not _profile_exists():
         return RedirectResponse(url="/setup", status_code=302)
     query = str(q or "").strip()[:200]
-    items = [
-        {
-            "id": row.item_id,
-            "title": row.title,
-            "url": safe_url(row.url),
-            "source": row.source,
-            "section": SECTION_META.get(
-                row.section, {"title": row.section.title() or "Other"}
-            )["title"],
-            "summary": row.summary,
-            "published": _saved_date(row.published_at),
-            "saved": _saved_date(row.saved_at),
-        }
-        for row in search_bookmarks(query)
-    ]
-    response = templates.TemplateResponse(
-        request,
-        "saved.html.j2",
-        {
-            "items": items,
-            "query": query,
-            "csrf_token": _CSRF_TOKEN,
-        },
-    )
+    page_size = 50
+    total = count_bookmarks(query)
+    pages = max(1, (total + page_size - 1) // page_size)
+    page = max(1, min(int(page), pages))
+    rows = search_bookmarks(query, limit=page_size, offset=(page - 1) * page_size)
+    reasons, warning = _feedback_reasons()
+    with session_scope() as session:
+        ratings = {}
+        for iid, value, grade in session.execute(
+            select(VoteRow.item_id, VoteRow.value, VoteRow.grade)
+            .where(VoteRow.item_id.in_([row.item_id for row in rows]))
+            .order_by(VoteRow.created_at.desc(), VoteRow.id.desc())
+        ):
+            ratings.setdefault(int(iid), grade if grade is not None else votes_mod.value_to_grade(value))
+    items = [{
+        "id": row.item_id, "label": row.title, "title": row.title, "url": safe_url(row.url),
+        "source": row.source, "figure": display_figure(row.metadata),
+        "section": SECTION_META.get(row.section, {"title": row.section.title() or "Other"})["title"],
+        "summary": row.summary, "published": _saved_date(row.published_at),
+        "saved": _saved_date(row.saved_at), "current_grade": ratings.get(row.item_id),
+        "current_reasons": reasons.get(str(row.item_id), []),
+    } for row in rows]
+    from urllib.parse import urlencode
+    def page_url(number):
+        return "/saved?" + urlencode({"page": number, **({"q": query} if query else {})})
+    response = templates.TemplateResponse(request, "saved.html.j2", {
+        "items": items, "query": query, "csrf_token": _CSRF_TOKEN,
+        "total": total, "page": page, "pages": pages, "feedback_warning": warning,
+        "previous_page": page_url(page - 1) if page > 1 else "",
+        "next_page": page_url(page + 1) if page < pages else "",
+    })
     response.headers["Cache-Control"] = "no-store"
     return response
 
 
 @app.post("/vote/{item_id}/{grade}")
+@_feedback_mutation
 def vote(request: Request, item_id: int, grade: int) -> JSONResponse:
     _require_csrf(request)
     # 4-level preference grades (must-read 100, relevant 70, hmmm 40, not-for-me
@@ -1433,9 +1566,20 @@ def vote(request: Request, item_id: int, grade: int) -> JSONResponse:
             "item_id": item_id,
             "new_value": value,
             "new_grade": eff_grade,
-            "ranking_status": votes_mod.lr_training_status(),
+            "ranking_status": _feedback_status(),
         }
     )
+
+
+@app.delete("/vote/{item_id}")
+@_feedback_mutation
+def vote_clear(request: Request, item_id: int) -> JSONResponse:
+    _require_csrf(request)
+    with _compute_write_guard():
+        if not votes_mod.clear_rating_by_id(item_id):
+            raise HTTPException(status_code=404, detail="Item not found.")
+    return JSONResponse({"ok": True, "item_id": item_id, "new_grade": None,
+                         "ranking_status": _feedback_status()})
 
 
 @app.post("/bookmark/{item_id}")
@@ -1472,49 +1616,31 @@ def known_remove(request: Request, item_id: int) -> JSONResponse:
 
 
 @app.post("/overflow/save")
-def overflow_save(request: Request) -> JSONResponse:
-    """Pin today's reading-mode overflow for one more evaluation at the next brew."""
+def overflow_save(request: Request, digest_id: str = "", audit_signature: str = "") -> JSONResponse:
+    """Pin the displayed overflow for evaluation after the current local day."""
     _require_csrf(request)
-    digest_id = _digest_id()
-    overflow = load_digest_audit(digest_id, "reading_mode_overflow")
-    item_ids = [
-        parsed
-        for audit in overflow
-        if (parsed := _as_int(audit.get("item_id"))) is not None
-    ]
-    if not item_ids:
-        raise HTTPException(status_code=404, detail="no reading-mode overflow today")
-    added = add_carryover_items(item_ids, pinned_digest_id=digest_id)
-    return JSONResponse(
-        {"ok": True, "digest_id": digest_id, "saved": len(item_ids), "added": added}
-    )
+    with _compute_write_guard():
+        audits = _validated_overflow(digest_id, audit_signature)
+        ids = [iid for audit in audits if (iid := _as_int(audit.get("item_id"))) is not None]
+        if not ids:
+            raise HTTPException(status_code=404, detail="No overflow picks in this saved digest.")
+        added = add_carryover_items(ids, pinned_digest_id=_digest_id())
+    return JSONResponse({"ok": True, "digest_id": digest_id, "saved": len(ids), "added": added})
 
 
 @app.post("/overflow/save/{item_id}")
-def overflow_save_one(request: Request, item_id: int) -> JSONResponse:
-    """Pin a single overflow item — used when a near-miss is rated positively.
-
-    A positive grade keeps an item eligible but cannot bring it back on its own:
-    its publication date has usually left the candidate window. Pinning is what
-    actually gives it another pass.
-    """
+def overflow_save_one(request: Request, item_id: int, digest_id: str = "", audit_signature: str = "") -> JSONResponse:
     _require_csrf(request)
-    digest_id = _digest_id()
-    overflow = load_digest_audit(digest_id, "reading_mode_overflow")
-    known_ids = {
-        parsed
-        for audit in overflow
-        if (parsed := _as_int(audit.get("item_id"))) is not None
-    }
-    if item_id not in known_ids:
-        raise HTTPException(
-            status_code=404, detail=f"item {item_id} is not in today's overflow"
-        )
-    added = add_carryover_items([item_id], pinned_digest_id=digest_id)
+    with _compute_write_guard():
+        audits = _validated_overflow(digest_id, audit_signature)
+        if item_id not in {_as_int(audit.get("item_id")) for audit in audits}:
+            raise HTTPException(status_code=404, detail="This item is not in the displayed overflow.")
+        added = add_carryover_items([item_id], pinned_digest_id=_digest_id())
     return JSONResponse({"ok": True, "item_id": item_id, "added": added})
 
 
 @app.post("/vote/{item_id}/reason/{reason}")
+@_feedback_mutation
 def vote_reason(request: Request, item_id: int, reason: str) -> JSONResponse:
     _require_csrf(request)
     ok = votes_mod.record_vote_reason(item_id, reason)
@@ -1534,6 +1660,7 @@ def vote_reason(request: Request, item_id: int, reason: str) -> JSONResponse:
 
 
 @app.delete("/vote/{item_id}/reason/{reason}")
+@_feedback_mutation
 def vote_reason_delete(request: Request, item_id: int, reason: str) -> JSONResponse:
     _require_csrf(request)
     ok = votes_mod.remove_vote_reason(item_id, reason)
@@ -1557,7 +1684,7 @@ def ranking_status(request: Request) -> JSONResponse:
     return JSONResponse(
         {
             "ok": True,
-            "status": votes_mod.lr_training_status(),
+            "status": _feedback_status(),
             "training_job": training_job,
         }
     )
@@ -1566,7 +1693,9 @@ def ranking_status(request: Request) -> JSONResponse:
 @app.post("/ranking/train")
 def ranking_train(request: Request) -> JSONResponse:
     _require_csrf(request)
-    status = votes_mod.lr_training_status()
+    status = _feedback_status()
+    if status.get("blocked"):
+        raise HTTPException(status_code=409, detail=status["message"])
     if not status["can_train"]:
         return JSONResponse(
             {
@@ -1622,7 +1751,7 @@ def ranking_train(request: Request) -> JSONResponse:
         except Exception as e:  # noqa: BLE001
             logger.exception("ranking training failed")
             try:
-                status_after_error = votes_mod.lr_training_status()
+                status_after_error = _feedback_status()
             except Exception:
                 status_after_error = status
             result = {
@@ -1856,7 +1985,6 @@ async def setup_test_connection(request: Request) -> Response:
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
-
 @app.get("/setup", response_class=HTMLResponse)
 def setup_get(request: Request) -> Response:
     form = _load_existing_form_defaults()
@@ -1875,6 +2003,7 @@ def setup_get(request: Request) -> Response:
 
 
 @app.post("/setup")
+@_settings_write
 async def setup_post(request: Request) -> Response:
     raw = await _read_urlencoded_form(request)
     _require_csrf(request, raw)
@@ -2109,12 +2238,13 @@ async def setup_post(request: Request) -> Response:
 
 
 @app.post("/profile/name")
+@_settings_write
 async def profile_name_post(request: Request) -> Response:
     raw = await _read_urlencoded_form(request)
     _require_csrf(request, raw)
     name = str(raw.get("name", "")).strip()
     if name:
-        data = _profile_data()
+        data = _profile_data(strict=True)
         if not data:
             data = {"bio": "General reader.", "keywords": [], "downweight": []}
         data["name"] = name
@@ -2142,6 +2272,8 @@ def _ensure_run(run_id: str) -> list[dict[str, Any]]:
                     break
                 _RUN_QUEUES.pop(stale_id, None)
                 _RUN_STARTED.discard(stale_id)
+                _RUN_CANCEL.pop(stale_id, None)
+                _RUN_PUBLISHED.discard(stale_id)
             events = []
             _RUN_QUEUES[run_id] = events
         return events
@@ -2149,6 +2281,8 @@ def _ensure_run(run_id: str) -> list[dict[str, Any]]:
 
 def _kick_off_run(run_id: str, reading_mode: str) -> None:
     """Run pipeline.run_all in a background thread; always emits a terminal event."""
+    with _RUN_LOCK:
+        cancel_event = _RUN_CANCEL.setdefault(run_id, threading.Event())
 
     def _push(evt: dict[str, Any]) -> None:
         with _RUN_LOCK:
@@ -2186,8 +2320,11 @@ def _kick_off_run(run_id: str, reading_mode: str) -> None:
 
         def cb(stage: str, payload: dict[str, Any]) -> None:
             nonlocal terminal_sent
-            if stage in ("done", "error"):
+            if stage in ("done", "error", "cancelled"):
                 terminal_sent = True
+            if stage == "published":
+                with _RUN_LOCK:
+                    _RUN_PUBLISHED.add(run_id)
             _push({"stage": stage, "payload": payload})
 
         try:
@@ -2196,7 +2333,11 @@ def _kick_off_run(run_id: str, reading_mode: str) -> None:
                 dry_run=True,
                 progress_callback=cb,
                 reading_mode=reading_mode,
+                should_cancel=cancel_event.is_set,
             )
+        except BrewCancelled as e:
+            _push({"stage": "cancelled", "payload": {"message": str(e)}})
+            terminal_sent = True
         except ComputeBusyError as e:
             _push({"stage": "error", "payload": {"message": str(e)}})
             terminal_sent = True
@@ -2227,6 +2368,7 @@ def run_get(
     reading_mode: str = "usual",
     autostart: bool = False,
     run_id: str = "",
+    resume: bool = False,
 ) -> Response:
     if not _profile_exists():
         return RedirectResponse(url="/setup", status_code=302)
@@ -2234,7 +2376,11 @@ def run_get(
         selected_mode = normalize_reading_mode(reading_mode)
     except ValueError:
         selected_mode = "usual"
-    if not _RUN_ID_RE.fullmatch(run_id):
+    retained_identity = bool(_RUN_ID_RE.fullmatch(run_id))
+    # Old refresh URLs used autostart=1 with a run id. They are recovery links,
+    # even after a restart loses the retained in-memory status.
+    resume = bool(resume or (autostart and retained_identity))
+    if not retained_identity:
         run_id = uuid.uuid4().hex[:12]
     response = templates.TemplateResponse(
         request,
@@ -2244,10 +2390,14 @@ def run_get(
             "csrf_token": _CSRF_TOKEN,
             "reading_mode": selected_mode,
             "autostart": bool(autostart),
+            "resume": bool(resume),
             "resume_url": (
-                f"/run?reading_mode={selected_mode}&autostart=1&run_id={run_id}"
+                f"/run?reading_mode={selected_mode}&resume=1&run_id={run_id}"
             ),
             "restart_url": f"/run?reading_mode={selected_mode}&autostart=1",
+            "saved_reading_url": (
+                f"/?digest_id={latest[0]}" if (latest := _recent_digest_ids(_digest_id(), limit=1)) else "/"
+            ),
         },
     )
     response.headers["Cache-Control"] = "no-store"
@@ -2257,11 +2407,12 @@ def run_get(
 @app.post("/run/start")
 async def run_start(request: Request) -> JSONResponse:
     _require_csrf(request)
-    body: dict[str, Any] = {}
     try:
-        body = await request.json()
-    except Exception:  # noqa: BLE001
-        body = {}
+        body = await request.json() if await request.body() else {}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="invalid JSON body") from exc
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="JSON body must be an object")
     run_id = str(body.get("run_id") or uuid.uuid4().hex[:12])
     if not _RUN_ID_RE.fullmatch(run_id):
         raise HTTPException(status_code=400, detail="invalid run id")
@@ -2280,6 +2431,23 @@ async def run_start(request: Request) -> JSONResponse:
     return JSONResponse({"ok": True, "run_id": run_id})
 
 
+@app.post("/run/cancel")
+def run_cancel(request: Request, run_id: str) -> JSONResponse:
+    _require_csrf(request)
+    with _RUN_LOCK:
+        event = _RUN_CANCEL.get(run_id)
+        events = _RUN_QUEUES.get(run_id, [])
+        if event is None:
+            raise HTTPException(status_code=404, detail="Brew run not found. Reconnect to check its status.")
+        if run_id in _RUN_PUBLISHED or any(
+            row.get("stage") in {"published", "done", "error", "cancelled"} for row in events
+        ):
+            raise HTTPException(status_code=409, detail="This brew is already published or finished.")
+        event.set()
+    return JSONResponse({"ok": True, "pending": True,
+                         "message": "Stopping at the next safe point before publication."})
+
+
 @app.get("/run/stream")
 async def run_stream(request: Request, run_id: str) -> StreamingResponse:
     if not _RUN_ID_RE.fullmatch(run_id):
@@ -2294,7 +2462,7 @@ async def run_stream(request: Request, run_id: str) -> StreamingResponse:
 
     async def event_gen():
         yield f"data: {json.dumps({'stage': 'connected', 'run_id': run_id})}\n\n"
-        terminal = {"done", "error"}
+        terminal = {"done", "error", "cancelled"}
         cursor = 0
         while True:
             with _RUN_LOCK:
@@ -2317,7 +2485,7 @@ async def run_stream(request: Request, run_id: str) -> StreamingResponse:
 
 
 @app.get("/done", response_class=HTMLResponse)
-def done(request: Request, digest_id: str = "", n: int = 0) -> Response:
+def done(request: Request, digest_id: str = "", n: int = 0, preview_warning: bool = False) -> Response:
     if not digest_id:
         digest_id = _digest_id()
     if not n:
@@ -2327,7 +2495,7 @@ def done(request: Request, digest_id: str = "", n: int = 0) -> Response:
     response = templates.TemplateResponse(
         request,
         "done.html.j2",
-        {"digest_id": digest_id, "total_items": n},
+        {"digest_id": digest_id, "total_items": n, "preview_warning": preview_warning},
     )
     response.headers["Cache-Control"] = "no-store"
     return response

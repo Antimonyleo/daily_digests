@@ -263,17 +263,17 @@ def prune() -> None:
 @app.command("eval")
 def eval_ranking(
     k: int = typer.Option(10, "--k", help="Cutoff for nDCG@k / precision@k."),
+    section: str = typer.Option("research", "--section", help="Displayed section to evaluate."),
     json_out: bool = typer.Option(False, "--json", help="Emit the full report as JSON."),
 ) -> None:
-    """Score past digests against your votes (nDCG@k, P@k, MAP, pairwise acc).
+    """Diagnose displayed section order against current latest votes.
 
-    Replays the persisted ranking of each historical digest against the thumbs
-    you later cast. Use it to A/B ranker changes: run digests under config A,
-    then config B, and compare. Higher is better for all metrics.
+    Precision is an observed lower bound; unknown feedback is not a dislike.
+    This legacy digest-date view cannot reconstruct historical rebrews or votes.
     """
     from .rank.evaluate import evaluate_history
 
-    report = evaluate_history(k=k)
+    report = evaluate_history(k=k, section=section)
     if json_out:
         import json
 
@@ -290,10 +290,65 @@ def eval_ranking(
     if report.n_digests_scored == 0:
         typer.echo("No voted digests yet — vote on a few items, then re-run.")
         return
+    typer.echo(f"Section: {section}; current latest judgments (not an as-of replay)")
     typer.echo(f"nDCG@{k}:           {_fmt(report.ndcg_at_k)}")
-    typer.echo(f"precision@{k}:      {_fmt(report.precision_at_k)}")
+    typer.echo(f"precision@{k} bounds: {_fmt(report.precision_at_k)} to "
+               f"{_fmt(report.precision_upper_at_k)}")
+    typer.echo(f"judged coverage@{k}: {_fmt(report.judged_coverage_at_k)}")
+    typer.echo(f"unknown items: {report.unknown_items}; zero-positive rated digests: "
+               f"{report.zero_positive_digests}")
+    typer.echo(f"observed gain@{k}: {_fmt(report.graded_utility_at_k)} "
+               "(must-read=3, relevant=1)")
+    typer.echo(f"nDCG denominator: observed positives in displayed section; "
+               f"defined for {report.ndcg_defined_digests} rated digests")
     typer.echo(f"MAP:               {_fmt(report.map_score)}")
     typer.echo(f"pairwise accuracy: {_fmt(report.pairwise_accuracy)}")
+
+
+@app.command("replay-run")
+def replay_run(
+    run_id: str = typer.Argument(..., help="Immutable ranking run ID to verify."),
+    outcome_as_of: str | None = typer.Option(
+        None, "--outcome-as-of", help="Explicit ISO cutoff for optional observed feedback metrics."
+    ),
+) -> None:
+    """Verify frozen selection against a captured run; never fetch or rescore."""
+    import json
+
+    from .rank.replay import evaluate_replay, frozen_selection, validate_replay
+    from .store import load_feedback_events, load_ranking_snapshot
+
+    snapshot = load_ranking_snapshot(run_id)
+    if snapshot is None:
+        typer.echo(json.dumps({"status": "incomplete", "reason": "no immutable snapshot for this run"}))
+        raise typer.Exit(code=2)
+    result = validate_replay(snapshot, frozen_selection)
+    result["run_id"] = run_id
+    result["scope"] = "selection from frozen scores and eligibility; not retrieval or full rescoring"
+    if outcome_as_of is not None:
+        try:
+            result["evaluation"] = evaluate_replay(
+                snapshot, load_feedback_events(), outcome_as_of=outcome_as_of,
+            )
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc), param_hint="--outcome-as-of") from exc
+    typer.echo(json.dumps(result, indent=2))
+    if result["status"] != "matched":
+        raise typer.Exit(code=2)
+
+
+@app.command("ranking-runs")
+def ranking_runs(
+    limit: int = typer.Option(20, "--limit", min=1, max=1000, help="Maximum recent runs."),
+    digest_id: str | None = typer.Option(None, "--digest", help="Filter by digest date."),
+) -> None:
+    """List retained immutable run IDs, newest first, without article/profile data."""
+    import json
+
+    from .store import list_ranking_snapshots
+
+    runs = list_ranking_snapshots(digest_id=digest_id, limit=limit)
+    typer.echo(json.dumps({"count": len(runs), "limit": limit, "runs": runs}, indent=2))
 
 
 @app.command()

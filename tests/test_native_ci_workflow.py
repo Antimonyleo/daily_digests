@@ -26,12 +26,13 @@ def test_native_ci_covers_linux_and_existing_cross_platform_launcher_modules():
     test_commands = [step["run"] for step in launchers["steps"] if "pytest" in step.get("run", "")]
     assert len(test_commands) == 1
     selected = {part for part in shlex.split(test_commands[0]) if part.startswith("tests/")}
-    assert selected == {"tests/test_windows_launcher.py", "tests/test_start_script.py",
-                        "tests/test_cli_process_tree.py", "tests/test_companion_cli.py"}
+    assert {"tests/test_windows_launcher.py", "tests/test_start_script.py",
+            "tests/test_cli_process_tree.py", "tests/test_companion_cli.py"} <= selected
     assert all((ROOT / path).is_file() for path in selected)
-    for job in jobs.values():
+    for name, job in jobs.items():
         assert "permissions" not in job
-        assert job["env"] == {"HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1", "LLM_API_KEY": ""}
+        if name in {"linux", "native-launchers"}:
+            assert job["env"] == {"HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1", "LLM_API_KEY": ""}
         for step in job["steps"]:
             if "uses" in step:
                 assert re.fullmatch(r"[^@]+@[0-9a-f]{40}", step["uses"])

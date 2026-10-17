@@ -122,3 +122,52 @@ def test_evaluate_history_empty_store():
     report = evaluate_history(k=10)
     assert report.n_digests_scored == 0
     assert report.as_dict()["ndcg_at_k"] is None
+
+
+def test_history_uses_section_and_numeric_display_position_not_score():
+    negative = _insert_item("research-first")
+    positive = _insert_item("research-second")
+    news = _insert_item("news-first", section="news")
+    store_mod.write_digest("2026-01-03", [("N1", news, 99), ("R10", positive, 90), ("R2", negative, 0.1)])
+    votes_mod.record_vote_by_id(negative, -1)
+    votes_mod.record_vote_by_id(positive, 1)
+    votes_mod.record_vote_by_id(news, 1)
+    report = evaluate_history(k=1)
+    assert report.n_votes == 2
+    assert report.precision_at_k == 0
+    assert report.pairwise_accuracy == 0
+    assert report.as_dict()["section"] == "research"
+
+
+def test_history_unknown_bounds_and_all_negative_utility():
+    negative = _insert_item("negative")
+    unknown = _insert_item("unknown")
+    store_mod.write_digest("2026-01-04", [("R1", negative, 1), ("R2", unknown, 0)])
+    votes_mod.record_vote_by_id(negative, -1)
+    report = evaluate_history(k=2).as_dict()
+    assert report["precision_at_k"] == 0
+    assert report["precision_upper_at_k"] == 0.5
+    assert report["judged_coverage_at_k"] == 0.5
+    assert report["unknown_items"] == 1
+    assert report["zero_positive_digests"] == 1
+    assert report["graded_utility_at_k"] == 0
+    assert report["ndcg_defined_digests"] == 0
+
+
+def test_completely_unjudged_sections_remain_visible_in_bounds():
+    unknown = _insert_item("all-unknown")
+    store_mod.write_digest("2026-01-05", [("R1", unknown, 1)])
+    report = evaluate_history(k=1)
+    assert report.n_digests_scored == 0
+    assert report.precision_at_k == 0
+    assert report.precision_upper_at_k == 1
+    assert report.judged_coverage_at_k == 0
+    assert report.per_digest[0].n_unknown == 1
+
+
+def test_history_preserves_displayed_section_after_item_reclassification():
+    item_id = _insert_item("reclassified", section="industry")
+    store_mod.write_digest("2026-01-06", [("R1", item_id, 1)])
+    votes_mod.record_vote_by_id(item_id, 1)
+    assert evaluate_history(section="research").n_votes == 1
+    assert evaluate_history(section="industry").n_votes == 0

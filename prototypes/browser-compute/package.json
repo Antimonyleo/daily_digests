@@ -1,0 +1,17 @@
+{
+  "name": "dailydigest-browser-compute-prototype",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "prepare-fixture": "cd ../.. && .venv/bin/python prototypes/browser-compute/prepare.py",
+    "start": "../../.venv/bin/python serve.py",
+    "test": "node --test --test-isolation=none browser.test.mjs"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "3.8.1",
+    "pyodide": "0.28.3"
+  },
+  "devDependencies": {
+    "playwright-core": "1.58.2"
+  }
+}

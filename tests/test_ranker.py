@@ -423,9 +423,8 @@ class TestHybridKnnServing:
         """The preference memory must actually move items in the ranking.
 
         Asserting "loved beats boring" on a two-item fixture proves nothing:
-        `_rank_desc` breaks ties by input position and RRF with two equal-weight
-        legs is symmetric under reversal, so such a test passes even when the
-        preference term is replaced by zeros. Instead run the SAME slate twice,
+        RRF with two equal-weight legs is symmetric under reversal, so such a
+        test can pass even when the preference term is replaced by zeros. Instead run the SAME slate twice,
         changing only the preference vector, and require the item the memory
         likes to climb.
         """
@@ -628,7 +627,10 @@ class TestLRRankerPersistence:
 
         assert _lr_weights_path().exists()
         with np.load(_lr_weights_path()) as data:
+            from dailydigest.votes import FEEDBACK_SEMANTICS_VERSION
+
             assert str(data["feature_schema_version"][0]) == feature_schema_version
+            assert str(data["feedback_semantics_version"][0]) == FEEDBACK_SEMANTICS_VERSION
             assert int(data["feature_dim"][0]) == feature_dim
             # Standardization params must be persisted so serve == train.
             assert data["feature_mean"].shape == (feature_dim,)
@@ -725,6 +727,8 @@ class TestLRRankerPersistence:
         assert LRRanker().load() is False
 
     def test_current_feature_schema_weights_load(self, tmp_path, monkeypatch):
+        from dailydigest.votes import FEEDBACK_SEMANTICS_VERSION, feedback_reasons_signature
+
         monkeypatch.setenv("DB_PATH", str(tmp_path / "digest.db"))
         from dailydigest import config as config_mod
 
@@ -743,6 +747,8 @@ class TestLRRankerPersistence:
             classes=np.asarray([-1, 1], dtype=np.int32),
             feature_dim=np.asarray([feature_dim], dtype=np.int32),
             feature_schema_version=np.asarray([feature_schema_version]),
+            feedback_semantics_version=np.asarray([FEEDBACK_SEMANTICS_VERSION]),
+            feedback_reasons_signature=np.asarray([feedback_reasons_signature()]),
         )
 
         loaded = LRRanker()
@@ -751,6 +757,8 @@ class TestLRRankerPersistence:
         assert scores.shape == (2,)
 
     def test_missing_weight_cache_rechecks_when_weights_appear(self, tmp_path, monkeypatch):
+        from dailydigest.votes import FEEDBACK_SEMANTICS_VERSION, feedback_reasons_signature
+
         monkeypatch.setenv("DB_PATH", str(tmp_path / "digest.db"))
         from dailydigest import config as config_mod
         from dailydigest.rank import ranker as ranker_mod
@@ -771,6 +779,8 @@ class TestLRRankerPersistence:
             classes=np.asarray([-1, 1], dtype=np.int32),
             feature_dim=np.asarray([feature_dim], dtype=np.int32),
             feature_schema_version=np.asarray([feature_schema_version]),
+            feedback_semantics_version=np.asarray([FEEDBACK_SEMANTICS_VERSION]),
+            feedback_reasons_signature=np.asarray([feedback_reasons_signature()]),
         )
 
         try:
@@ -1152,3 +1162,154 @@ class TestNewsPickerDeduplicates:
         picked = _pick_news_balanced(rows, cap=6)
         ids = [int(r.id) for r, _s in picked]
         assert len(ids) == len(set(ids)), f"duplicate rows after backfill: {ids}"
+
+
+@pytest.mark.parametrize("preference", [[0.0, 0.0, 0.0], [0.8, 0.8, 0.8]])
+def test_constant_preference_preserves_quality_scores(preference):
+    from dailydigest.rank.ranker import _fuse_scores
+
+    qa = np.array([0.2, 0.9, 0.6], dtype=np.float32)
+    np.testing.assert_array_equal(_fuse_scores(qa, np.array(preference)), qa)
+
+
+def test_tied_fusion_is_permutation_equivariant():
+    from itertools import permutations
+    from dailydigest.rank.ranker import _fuse_scores, _rank_desc
+
+    qa = np.array([0.2, 0.9, 0.6, 0.6], dtype=np.float32)
+    preference = np.array([0.8, 0.8, 0.1, 0.1], dtype=np.float32)
+    expected = _fuse_scores(qa, preference)
+    assert expected[2] == expected[3]
+    np.testing.assert_array_equal(_rank_desc(qa), [3, 0, 1.5, 1.5])
+    for permutation in permutations(range(len(qa))):
+        indices = list(permutation)
+        np.testing.assert_array_equal(
+            _fuse_scores(qa[indices], preference[indices]), expected[indices]
+        )
+
+
+@pytest.mark.parametrize("preference", [[], [np.nan, 0, 1], [np.inf, 0, 1], [[1, 2, 3]]])
+def test_unusable_preference_falls_back_to_quality(preference):
+    from dailydigest.rank.ranker import _fuse_scores
+
+    qa = np.array([0.2, 0.9, 0.6], dtype=np.float32)
+    np.testing.assert_array_equal(_fuse_scores(qa, np.asarray(preference)), qa)
+
+
+def test_empty_fusion_is_finite():
+    from dailydigest.rank.ranker import _fuse_scores
+
+    result = _fuse_scores(np.array([]), np.array([]))
+    assert result.shape == (0,)
+    assert np.isfinite(result).all()
+
+
+@pytest.mark.parametrize("vote_count", [0, 1, 2, 3, 29, 30, 100])
+def test_public_scorer_no_signal_order_and_cold_start(monkeypatch, vote_count):
+    from itertools import permutations
+    from dailydigest import config, votes
+    from dailydigest.rank import ranker
+
+    items = [_make_row(f"Paper {i}") for i in (3, 1, 2)]
+    for item, item_id in zip(items, (3, 1, 2), strict=True):
+        item.id = item_id
+    monkeypatch.setattr(config, "resolve_scoring_mode", lambda _settings: "hybrid_knn")
+    monkeypatch.setattr(ranker, "_vote_count", lambda: vote_count)
+    monkeypatch.setattr(ranker, "embed_item_rows", lambda rows: np.array([
+        [{1: 0.9, 2: 0.6, 3: 0.2}[row.id]] for row in rows
+    ], dtype=np.float32))
+    monkeypatch.setattr(ranker, "quality_adjusted_score", lambda _row, base: base)
+    monkeypatch.setattr(ranker, "_freshness_penalty", lambda _row: 0.0)
+    calls = []
+    def no_exemplars(rows):
+        calls.append(len(rows))
+        return np.zeros(len(rows), dtype=np.float32)
+    monkeypatch.setattr(votes, "knn_preference_scores", no_exemplars)
+    for permutation in permutations(items):
+        scored, features = ranker.score_items_with_features(list(permutation), np.ones(1), [])
+        assert [row.id for row, _score in scored] == [1, 2, 3]
+        assert [score for _row, score in scored] == pytest.approx([0.9, 0.6, 0.2])
+        assert all(np.isfinite(feature["rank_score"]) for feature in features.values())
+    assert len(calls) == (6 if vote_count >= 30 else 0)
+
+
+def test_public_scorer_true_ties_use_item_id(monkeypatch):
+    from dailydigest import config
+    from dailydigest.rank import ranker
+
+    items = [_make_row("same") for _ in range(3)]
+    for item, item_id in zip(items, (3, 1, 2), strict=True):
+        item.id = item_id
+    monkeypatch.setattr(config, "resolve_scoring_mode", lambda _settings: "cosine")
+    monkeypatch.setattr(ranker, "embed_item_rows", lambda rows: np.ones((len(rows), 3)))
+    scored, _features = ranker.score_items_with_features(items, _profile_vec(), [])
+    assert [row.id for row, _score in scored] == [1, 2, 3]
+
+
+def test_bounded_learned_profile_cannot_dominate_static_intent():
+    from dailydigest.rank.ranker import profile_relevance_scores
+
+    static = np.tile([1.0, 0.0], (3, 1)).astype(np.float32)
+    vecs = np.array([[0.0, 1.0], [1.0, 0.0]], dtype=np.float32)
+    learned = np.array([0.0, 2.0], dtype=np.float32)
+    np.testing.assert_array_equal(profile_relevance_scores(vecs, static), [0.0, 1.0])
+    np.testing.assert_allclose(profile_relevance_scores(
+        vecs, static, learned_vector=learned, learned_weight=0.25
+    ), [0.25, 0.75])
+    for learned in (None, np.array([np.nan, 1.0]), np.zeros(2), np.ones(3)):
+        np.testing.assert_array_equal(profile_relevance_scores(
+            vecs, static, learned_vector=learned, learned_weight=0.25
+        ), [0.0, 1.0])
+    with pytest.raises(ValueError):
+        profile_relevance_scores(vecs, static, learned_weight=1.01)
+
+
+def test_weighted_fusion_endpoints_and_invalid_weight():
+    from dailydigest.rank.ranker import _fuse_scores
+
+    qa = np.array([0.2, 0.9, 0.6])
+    preference = np.array([1.0, -1.0, 0.0])
+    np.testing.assert_allclose(_fuse_scores(qa, preference, preference_weight=0), qa)
+    assert list(np.argsort(-_fuse_scores(qa, preference, preference_weight=1))) == [0, 2, 1]
+    for invalid in (-0.1, 1.1, np.nan, np.inf):
+        with pytest.raises(ValueError):
+            _fuse_scores(qa, preference, preference_weight=invalid)
+
+
+@pytest.mark.parametrize("preference", [np.array([np.nan, 1]), np.ones((2, 1)), np.ones(1)])
+def test_public_scorer_invalid_preference_falls_back(monkeypatch, preference):
+    from dailydigest import config, votes
+    from dailydigest.rank import ranker
+
+    items = [_make_row("lower"), _make_row("higher")]
+    monkeypatch.setattr(config, "resolve_scoring_mode", lambda _settings: "hybrid_knn")
+    monkeypatch.setattr(ranker, "_vote_count", lambda: 30)
+    monkeypatch.setattr(ranker, "embed_item_rows", lambda rows: np.array([[0.2], [0.9]]))
+    monkeypatch.setattr(ranker, "quality_adjusted_score", lambda _row, base: base)
+    monkeypatch.setattr(ranker, "_freshness_penalty", lambda _row: 0.0)
+    monkeypatch.setattr(votes, "knn_preference_scores", lambda rows: preference)
+    scored, features = ranker.score_items_with_features(items, np.ones(1), [])
+    assert [row.title for row, _score in scored] == ["higher", "lower"]
+    assert [score for _row, score in scored] == pytest.approx([0.9, 0.2])
+    assert all(feature["scoring_mode"] == "cosine" for feature in features.values())
+
+
+def test_preference_fusion_preserves_quality_and_explicit_penalties(monkeypatch):
+    from dailydigest import config, votes
+    from dailydigest.rank import ranker
+
+    items = [_make_row("avoided paper"), _make_row("good paper"), _make_row("ordinary paper")]
+    monkeypatch.setattr(config, "resolve_scoring_mode", lambda _settings: "hybrid_knn")
+    monkeypatch.setattr(ranker, "_vote_count", lambda: 30)
+    monkeypatch.setattr(ranker, "embed_item_rows", lambda rows: np.array([[0.9], [0.8], [0.7]]))
+    monkeypatch.setattr(ranker, "quality_adjusted_score", lambda _row, base: base)
+    monkeypatch.setattr(ranker, "_freshness_penalty", lambda _row: 0.0)
+    monkeypatch.setattr(votes, "knn_preference_scores", lambda rows: np.array([0.1, 0.2, 0.9]))
+    _scored, features = ranker.score_items_with_features(items, np.ones(1), ["avoided"])
+    avoided = features[id(items[0])]
+    assert avoided["quality_score"] == pytest.approx(0.7)
+    assert avoided["confidence_score"] == avoided["quality_score"]
+    assert avoided["downweight_penalty"] == pytest.approx(0.2)
+    assert avoided["preference_signal"] == pytest.approx(0.1)
+    assert avoided["final_score"] == avoided["rank_score"]
+    assert avoided["final_score"] != avoided["quality_score"]

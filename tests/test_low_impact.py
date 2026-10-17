@@ -80,8 +80,7 @@ def test_venue_low_impact_flag_never_relabels_a_preprint_server():
         assert source_bucket(row) == expected
         assert is_low_impact_research(row) is False
 
-    # Missing venue evidence is conservative, and the explicit enrichment flag
-    # reaches the same low-impact result.
+    # Missing venue evidence stays distinct from an observed low-impact venue.
     hidden = _row("A targeted therapeutics study", "PubMed (your topics)")
     assert source_bucket(hidden) == "unknown_journal"
     hidden.venue_low_impact = True
@@ -232,19 +231,18 @@ def test_low_impact_journals_are_frequency_capped():
     assert low <= 1
 
 
-def test_low_impact_fraction_is_a_maximum_not_a_reserved_slot():
-    # Ten percent of a five-item serving rounds down to zero. A maximum must not
-    # manufacture a low-impact slot that the reader did not ask for.
+def test_positive_low_impact_allowance_permits_one_strong_match_in_small_digest():
+    # A positive quota admits at most one strong match when the digest is small.
     scored = _hq_pool(12)
     scored += [
-        (_row(f"Minor paper {i}", f"Journal of Minor Results {i}"), 0.90 - i * 0.005)
+        (_low_row(f"Minor paper {i}", f"Journal of Minor Results {i}"), 0.90 - i * 0.005)
         for i in range(4)
     ]
     scored.sort(key=lambda pair: pair[1], reverse=True)
     result = pick_top_per_section(scored, {"research": 5})
     low = sum(1 for row, _ in result if source_bucket(row) == "low_impact_journal")
     assert len(result) == 5
-    assert low == 0
+    assert low == 1
 
 
 def test_low_impact_below_floor_is_excluded():

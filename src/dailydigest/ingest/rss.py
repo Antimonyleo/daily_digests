@@ -17,6 +17,7 @@ from tenacity import (
 )
 
 from ..models import Item, SourceSpec
+from ..article_figure import feed_figure
 from ._retry import transient_http_error
 
 logger = logging.getLogger(__name__)
@@ -114,6 +115,64 @@ def _external_id(entry, url: str) -> str:
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
 
 
+def _entry_metadata(entry) -> dict:
+    """Preserve explicit work identifiers and distinguish updates from publication."""
+    from ..rank.enrich import derive_doi
+    from types import SimpleNamespace
+
+    metadata = {}
+    figure = feed_figure(entry)
+    if figure:
+        metadata['article_figure'] = figure
+    # Only exact values in record-level genre fields carry publication identity.
+    # Feed categories/subjects and relation links may instead describe a topic
+    # or another work; they must never exclude this record.
+    publication_types = {
+        "editorial": "Editorial", "news": "News", "news and views": "News",
+        "news & views": "News", "comment": "Comment", "commentary": "Commentary",
+        "correction": "Correction", "erratum": "Erratum", "published erratum": "Published Erratum",
+        "retraction": "Retraction", "retraction notice": "Retraction Notice",
+        "retracted publication": "Retracted Publication", "expression of concern": "Expression of Concern",
+        "review": "Review", "systematic review": "Systematic Review", "perspective": "Perspective",
+        "primer": "Primer", "letter": "Letter", "article": "Journal Article",
+        "journal article": "Journal Article", "research article": "Research Article", "protocol": "Protocol",
+    }
+    evidence, types = [], []
+    for field in ("dc_type", "prism_genre", "prism_section"):
+        raw = entry.get(field)
+        values = raw if isinstance(raw, (list, tuple)) else [raw]
+        for value in values:
+            if not isinstance(value, str):
+                continue
+            normalized = publication_types.get(" ".join(value.casefold().split()))
+            if normalized:
+                evidence.append({"field": field, "value": value})
+                if normalized not in types:
+                    types.append(normalized)
+    if types:
+        metadata["publication_types"] = types
+        metadata["publication_type_evidence"] = evidence
+    values = [entry.get(key) for key in ("prism_doi", "dc_identifier", "doi", "id", "guid", "link")]
+    values.extend(link.get("href") for link in entry.get("links", [])
+                  if isinstance(link, dict) and link.get("rel", "alternate") in {"alternate", "self"})
+    for value in values:
+        if isinstance(value, str):
+            doi = derive_doi(SimpleNamespace(url=value))
+            if doi:
+                metadata["doi"] = doi
+                break
+    for key, source in (("published_parsed", "published"), ("updated_parsed", "updated")):
+        value = entry.get(key)
+        if value:
+            try:
+                datetime(*value[:6], tzinfo=timezone.utc)
+            except (TypeError, ValueError):
+                continue
+            metadata["publication_date_source"] = source
+            break
+    return metadata
+
+
 def _extract_abstract(entry) -> str:
     """Extract abstract text, preferring content:encoded (CDATA) over summary.
 
@@ -184,58 +243,3 @@ class RSSSource:
                 )
             )
         return out
-
-
-def _entry_metadata(entry) -> dict:
-    """Preserve explicit work identifiers and distinguish updates from publication."""
-    from ..rank.enrich import derive_doi
-    from types import SimpleNamespace
-
-    metadata = {}
-    # Only exact values in record-level genre fields carry publication identity.
-    # Feed categories/subjects and relation links may instead describe a topic
-    # or another work; they must never exclude this record.
-    publication_types = {
-        "editorial": "Editorial", "news": "News", "news and views": "News",
-        "news & views": "News", "comment": "Comment", "commentary": "Commentary",
-        "correction": "Correction", "erratum": "Erratum", "published erratum": "Published Erratum",
-        "retraction": "Retraction", "retraction notice": "Retraction Notice",
-        "retracted publication": "Retracted Publication", "expression of concern": "Expression of Concern",
-        "review": "Review", "systematic review": "Systematic Review", "perspective": "Perspective",
-        "primer": "Primer", "letter": "Letter", "article": "Journal Article",
-        "journal article": "Journal Article", "research article": "Research Article", "protocol": "Protocol",
-    }
-    evidence, types = [], []
-    for field in ("dc_type", "prism_genre", "prism_section"):
-        raw = entry.get(field)
-        values = raw if isinstance(raw, (list, tuple)) else [raw]
-        for value in values:
-            if not isinstance(value, str):
-                continue
-            normalized = publication_types.get(" ".join(value.casefold().split()))
-            if normalized:
-                evidence.append({"field": field, "value": value})
-                if normalized not in types:
-                    types.append(normalized)
-    if types:
-        metadata["publication_types"] = types
-        metadata["publication_type_evidence"] = evidence
-    values = [entry.get(key) for key in ("prism_doi", "dc_identifier", "doi", "id", "guid", "link")]
-    values.extend(link.get("href") for link in entry.get("links", [])
-                  if isinstance(link, dict) and link.get("rel", "alternate") in {"alternate", "self"})
-    for value in values:
-        if isinstance(value, str):
-            doi = derive_doi(SimpleNamespace(url=value))
-            if doi:
-                metadata["doi"] = doi
-                break
-    for key, source in (("published_parsed", "published"), ("updated_parsed", "updated")):
-        value = entry.get(key)
-        if value:
-            try:
-                datetime(*value[:6], tzinfo=timezone.utc)
-            except (TypeError, ValueError):
-                continue
-            metadata["publication_date_source"] = source
-            break
-    return metadata

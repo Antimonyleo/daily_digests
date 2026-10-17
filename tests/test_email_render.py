@@ -72,6 +72,16 @@ def test_safe_url_allows_only_http_and_https_links():
     assert safe_url("/relative") == "#"
 
 
+@pytest.mark.parametrize("url", ["https://[", "https://[bad]/paper", "https://example.com:bad/paper"])
+def test_bad_feed_url_does_not_break_digest_rendering(url):
+    row = _research_row(url=url)
+
+    html = render_digest("2026-09-11", {"research": [(row, 0.9, "Summary")]})
+
+    assert row.title in html
+    assert safe_url(url) == "#"
+
+
 def test_content_type_label_only_tags_non_research_types():
     assert content_type_label("review") == "Review"
     assert content_type_label("method") == "Method"

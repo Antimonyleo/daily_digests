@@ -180,7 +180,7 @@ def _lr_margin(X: np.ndarray, coef, intercept, mean, scale) -> np.ndarray:
 def eval_deployed(
     rows, labels, timestamps, grades, profile_mat, train_frac=0.75
 ) -> dict:
-    """CURRENT DEPLOYED v6 ranker: 8-feature pairwise LR fused with topic via RRF.
+    """Historical v6 comparator: 8-feature pairwise LR fused with topic via RRF.
 
     This is exactly ``benchmark_ranker.run_production_benchmark`` inlined so the
     train/test split (and thus the held-out set) is IDENTICAL to the per-facet
@@ -190,7 +190,7 @@ def eval_deployed(
     from dailydigest.rank.ranker import LRRanker, _fuse_scores
 
     n = len(rows)
-    train_idx, test_idx = _split_chronological(n, timestamps, train_frac)
+    train_idx, test_idx = _split_chronological(n, timestamps, train_frac, rows=rows)
     pos_ex, neg_ex = _build_train_exemplars(rows, labels, grades, train_idx)
     train_exemplar_ids = np.concatenate([pos_ex[0], neg_ex[0]]).tolist()
     test_ids = [
@@ -202,9 +202,12 @@ def eval_deployed(
     train_labels = [labels[i] for i in train_idx]
     test_labels = np.array([labels[i] for i in test_idx], dtype=np.int32)
 
-    X_train = _build_features_train_only(train_rows, train_labels, profile_mat, pos_ex, neg_ex)
+    reference_time = min(timestamps[i] for i in test_idx)
+    X_train = _build_features_train_only(
+        train_rows, train_labels, profile_mat, pos_ex, neg_ex, reference_time=reference_time,
+    )
     X_test = _build_features_train_only(
-        test_rows, test_labels.tolist(), profile_mat, pos_ex, neg_ex
+        test_rows, test_labels.tolist(), profile_mat, pos_ex, neg_ex, reference_time=reference_time,
     )
     y_train = np.array(train_labels, dtype=np.int32)
     if np.unique(y_train).size < 2:
@@ -260,7 +263,7 @@ def eval_perfacet(
     from dailydigest.rank.embedding_cache import embed_item_rows
 
     n = len(rows)
-    train_idx, test_idx = _split_chronological(n, timestamps, train_frac)
+    train_idx, test_idx = _split_chronological(n, timestamps, train_frac, rows=rows)
     pos_ex, neg_ex = _build_train_exemplars(rows, labels, grades, train_idx)
     train_exemplar_ids = np.concatenate([pos_ex[0], neg_ex[0]]).tolist()
     test_ids = [
@@ -406,7 +409,7 @@ def main() -> int:
         delta = pv - dv
         ok = delta >= GATE_DELTA
         passes += 1 if ok else 0
-        _, test_idx_f = _split_chronological(len(rows), timestamps, frac)
+        _, test_idx_f = _split_chronological(len(rows), timestamps, frac, rows=rows)
         npos_f = sum(1 for i in test_idx_f if labels[i] > 0)
         print(f"    frac {frac:.2f}  n_test={d_f['n_test']:>3} (+{npos_f:>2})  "
               f"deployed={_fmt(dv)}  per-facet={_fmt(pv)}  "
@@ -449,7 +452,7 @@ def main() -> int:
     print("=" * 70)
     print(f"  CAVEAT: test slice = {dep['n_test']} research items, "
           f"{dep['n_test_pairs']} pairs, positive-sparse "
-          f"(only {sum(1 for i in _split_chronological(len(rows), timestamps, 0.75)[1] if labels[i] > 0)} "
+          f"(only {sum(1 for i in _split_chronological(len(rows), timestamps, 0.75, rows=rows)[1] if labels[i] > 0)} "
           f"positives in the 75/25 test set).")
     print("  nDCG@10 is unstable on a slice this small; pairwise accuracy (483 pairs) is")
     print("  the more reliable held-out metric here. Treat the decision as directional.")

@@ -149,6 +149,11 @@
   </nav>{% endif %}
   <h1>{{ 'DailyDigest settings' if form.topics else 'Welcome to DailyDigest' }}</h1>
   <p class="lede">Start with a few research interests or choose an editable example. Priorities are optional. No account is needed.</p>
+  <aside id="browser-storage-note" class="browser-storage-note" aria-label="Your data on this device" hidden>
+    <strong>Your reading desk is saved in this browser</strong>
+    <p>Your interests, ratings and saved papers are saved automatically. No DailyDigest account is needed, and there is no automatic sync between devices.</p>
+    <p>Clearing browser data can remove your reading desk. Use <strong>Backup</strong> in the bottom bar to export or restore it. People sharing this browser profile share the same reading desk.</p>
+  </aside>
 
   {% if errors %}
 	  <div class="errors" role="alert" aria-live="assertive" tabindex="-1">

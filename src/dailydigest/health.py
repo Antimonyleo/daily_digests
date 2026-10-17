@@ -4,7 +4,7 @@ Persisted as JSON at ``data/health.json`` next to the SQLite db. Schema::
 
     {
         "updated_at": "<ISO8601>",
-        "latest": [ {source, items, ok, error, duration_ms, recorded_at}, ... ],
+        "latest": [ {source, items, ok, error, duration_ms, diagnostics}, ... ],
         "history": [
             {"recorded_at": "<ISO8601>", "stats": [ ... same shape as latest ... ]},
             ...  # capped at 7 entries (one per run-day)
@@ -32,6 +32,8 @@ class IngestStats(BaseModel):
     ok: bool = True
     error: str | None = None
     duration_ms: int = 0
+    # Adapter-specific query coverage, including valid emptiness and saturation.
+    # Old records omit this field; no historical coverage is inferred for them.
     diagnostics: dict = Field(default_factory=dict)
 
 
@@ -190,7 +192,6 @@ def coverage_summary() -> dict:
         summary["public_oldest_label"] = min(public_times).strftime("%b %d, %Y %H:%M UTC")
         summary["public_stale"] = min(public_times) < cutoff
     return summary
-
 
 
 def should_show(summary: list[dict]) -> bool:

@@ -1,0 +1,41 @@
+{% macro feedback_controls(item) %}
+          <div class="vote-title">Your read</div>
+          <div class="vote-row" role="group" aria-label="Evaluate {{ item.label }}">
+            <button class="vote-btn must{% if item.current_grade == 100 %} active{% endif %}"
+                    data-grade="100" type="button" aria-pressed="{{ 'true' if item.current_grade == 100 else 'false' }}">
+              <span class="vote-label">Must read</span>
+            </button>
+            <button class="vote-btn good{% if item.current_grade == 70 %} active{% endif %}"
+                    data-grade="70" type="button" aria-pressed="{{ 'true' if item.current_grade == 70 else 'false' }}">
+              <span class="vote-label">Relevant</span>
+            </button>
+            <button class="vote-btn neutral{% if item.current_grade == 40 %} active{% endif %}"
+                    data-grade="40" type="button" title="Lower relevance; teaches a negative preference" aria-pressed="{{ 'true' if item.current_grade == 40 else 'false' }}">
+              <span class="vote-label">Hmmm</span>
+            </button>
+            <button class="vote-btn bad{% if item.current_grade == 10 %} active{% endif %}"
+                    data-grade="10" type="button" aria-pressed="{{ 'true' if item.current_grade == 10 else 'false' }}">
+              <span class="vote-label">Not for me</span>
+            </button>
+          </div>
+          <p class="rating-help">Hmmm and Not for me lower future recommendations. Reasons are optional.</p>
+          <div class="reason-block"{% if not (item.current_grade in [40, 10]) %} hidden{% endif %}>
+          <div class="reason-prompt">Why? (optional)</div>
+          <div class="reason-chip-row" role="group" aria-label="Feedback reason for {{ item.label }}">
+            <button class="reason-chip{% if 'off_topic' in item.current_reasons %} active{% endif %}" data-reason="off_topic" type="button" aria-pressed="{{ 'true' if 'off_topic' in item.current_reasons else 'false' }}">Off topic</button>
+            <button class="reason-chip{% if 'too_contextual' in item.current_reasons %} active{% endif %}" data-reason="too_contextual" type="button" aria-pressed="{{ 'true' if 'too_contextual' in item.current_reasons else 'false' }}">Too contextual</button>
+            <button class="reason-chip{% if 'low_quality' in item.current_reasons %} active{% endif %}" data-reason="low_quality" type="button" aria-pressed="{{ 'true' if 'low_quality' in item.current_reasons else 'false' }}">Low quality</button>
+            <button class="reason-chip{% if 'low_impact' in item.current_reasons %} active{% endif %}" data-reason="low_impact" type="button" aria-pressed="{{ 'true' if 'low_impact' in item.current_reasons else 'false' }}">Low impact</button>
+            <button class="reason-chip{% if 'promotional' in item.current_reasons %} active{% endif %}" data-reason="promotional" type="button" aria-pressed="{{ 'true' if 'promotional' in item.current_reasons else 'false' }}">Too promotional</button>
+            <button class="reason-chip{% if 'access_friction' in item.current_reasons %} active{% endif %}" data-reason="access_friction" type="button" aria-pressed="{{ 'true' if 'access_friction' in item.current_reasons else 'false' }}">Hard to access</button>
+            <button class="reason-chip{% if 'duplicate' in item.current_reasons %} active{% endif %}" data-reason="duplicate" type="button" aria-pressed="{{ 'true' if 'duplicate' in item.current_reasons else 'false' }}">Duplicate</button>
+            <button class="reason-chip{% if 'already_known' in item.current_reasons %} active{% endif %}" data-reason="already_known" type="button" aria-pressed="{{ 'true' if 'already_known' in item.current_reasons else 'false' }}">Already known</button>
+            <button class="reason-chip{% if 'not_urgent' in item.current_reasons %} active{% endif %}" data-reason="not_urgent" type="button" aria-pressed="{{ 'true' if 'not_urgent' in item.current_reasons else 'false' }}">Not urgent</button>
+          </div>
+          </div>
+
+          <div class="feedback-actions">
+            <button class="btn clear-rating" type="button"{% if item.current_grade is none %} hidden{% endif %}>Clear rating</button>
+            <button class="btn feedback-done" type="button" hidden>Done</button>
+          </div>
+{% endmacro %}

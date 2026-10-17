@@ -117,7 +117,8 @@ research:
   - name: PubMed (your topics)
     kind: pubmed
     profile_driven: true
-    # profile keywords are OR'd over title/abstract; `query` is an extra fallback.
+    # Profile keywords are OR'd over title/abstract. This query is used ONLY
+    # when the profile has no search terms; it is never OR'd into topical search.
     query: clinical trial[pt]
   # ACS native RSS endpoints return publisher-side 403 responses in common
   # server environments. Pull ACS journals through OpenAlex by venue id instead.

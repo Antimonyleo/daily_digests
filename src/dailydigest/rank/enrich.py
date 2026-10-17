@@ -21,6 +21,9 @@ import re
 from datetime import datetime, timedelta, timezone
 
 from ..store import ItemRow
+from .source_quality import (
+    is_high_quality_journal_source, publication_date_is_known, source_bucket,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +78,15 @@ def _get_json_bounded(client, url: str, params: dict) -> dict:
         return json.loads(buf) if buf else {}
 
 
+def _results(data):
+    if not isinstance(data, dict) or not isinstance(data.get("results"), list):
+        raise ValueError("OpenAlex response lacks a results list")
+    rows = data["results"]
+    if any(not isinstance(row, dict) for row in rows):
+        raise ValueError("OpenAlex results must be objects")
+    return rows[:_MAX_RESULTS_PER_PAGE]
+
+
 def derive_doi(row: object) -> str | None:
     """Best-effort DOI extraction from an item's url / external_id."""
     for attr in ("url", "external_id"):
@@ -110,8 +122,10 @@ def citation_score(
     if isinstance(published_at, datetime):
         ref = published_at if published_at.tzinfo else published_at.replace(tzinfo=timezone.utc)
         age_days = max(1.0, (now - ref).total_seconds() / 86400)
+        if ref > now:
+            return 0.0
     else:
-        age_days = 30.0  # unknown age — assume ~1 month
+        return 0.0  # No publication age means no defensible velocity estimate.
     age_months = max(age_days / 30.0, 0.5)
     velocity = cited_by_count / age_months
     return min(1.0, math.log1p(velocity) / math.log1p(_VELOCITY_SCALE))
@@ -140,9 +154,8 @@ def _normalize_entry(value: object) -> dict:
 def fetch_openalex(dois: list[str], email: str = "") -> dict[str, dict]:
     """Return ``{doi: {cited_by_count, venue_impact, venue}}`` from OpenAlex.
 
-    Two best-effort calls: works (citation counts + host venue) then sources
-    (per-venue 2yr_mean_citedness). Returns an empty dict on error so callers can
-    treat enrichment as optional.
+    Per-DOI status distinguishes healthy absence from works/source outages.
+    Partial observations must not refresh a previously complete cache row.
     """
     if not dois:
         return {}
@@ -150,6 +163,7 @@ def fetch_openalex(dois: list[str], email: str = "") -> dict[str, dict]:
 
     out: dict[str, dict] = {}
     source_ids: set[str] = set()
+    failed_sources: set[str] = set()
     with httpx.Client(timeout=20.0) as client:
         # 1. Works: citation counts + host venue id/name.
         for i in range(0, len(dois), 50):
@@ -162,16 +176,29 @@ def fetch_openalex(dois: list[str], email: str = "") -> dict[str, dict]:
             if email:
                 params["mailto"] = email
             try:
-                data = _get_json_bounded(client, _OPENALEX_URL, params)
+                works = _results(_get_json_bounded(client, _OPENALEX_URL, params))
+                if any(not isinstance(work.get("doi"), str) for work in works):
+                    raise ValueError("OpenAlex work lacks a DOI")
             except Exception as e:  # noqa: BLE001
                 logger.warning("OpenAlex works fetch failed: %s", _redact(str(e)))
+                out.update({doi: {"status": "works_failed"} for doi in batch})
                 continue
-            for work in (data.get("results") or [])[:_MAX_RESULTS_PER_PAGE]:
+            observed_at = datetime.now(timezone.utc).isoformat()
+            out.update({doi: {"status": "missing", "observed_at": observed_at} for doi in batch})
+            for work in works:
                 doi = (work.get("doi") or "").lower().replace("https://doi.org/", "")
-                if not doi:
+                if doi not in batch:
                     continue
-                source = ((work.get("primary_location") or {}).get("source") or {})
+                location = work.get("primary_location") or {}
+                source = location.get("source") or {} if isinstance(location, dict) else None
+                count = work.get("cited_by_count")
+                if not isinstance(source, dict) or type(count) is not int or count < 0:
+                    out[doi] = {"status": "works_failed"}
+                    continue
                 source_id = source.get("id")
+                if source_id is not None and not isinstance(source_id, str):
+                    out[doi] = {"status": "works_failed"}
+                    continue
                 if source_id:
                     source_ids.add(source_id)
                 out[doi] = {
@@ -179,6 +206,7 @@ def fetch_openalex(dois: list[str], email: str = "") -> dict[str, dict]:
                     "venue": source.get("display_name"),
                     "venue_source_id": source_id,
                     "venue_impact": None,
+                    "status": "fresh" if source_id else "venue_missing", "observed_at": observed_at,
                 }
 
         # 2. Sources: 2yr_mean_citedness per venue.
@@ -194,11 +222,15 @@ def fetch_openalex(dois: list[str], email: str = "") -> dict[str, dict]:
             if email:
                 params["mailto"] = email
             try:
-                data = _get_json_bounded(client, _OPENALEX_SOURCES_URL, params)
+                sources = _results(_get_json_bounded(client, _OPENALEX_SOURCES_URL, params))
+                if any(not isinstance(src.get("id"), str)
+                       or not isinstance(src.get("summary_stats") or {}, dict) for src in sources):
+                    raise ValueError("OpenAlex source has malformed summary statistics")
             except Exception as e:  # noqa: BLE001
                 logger.warning("OpenAlex sources fetch failed: %s", _redact(str(e)))
+                failed_sources.update(ids[i : i + 50])
                 continue
-            for src in (data.get("results") or [])[:_MAX_RESULTS_PER_PAGE]:
+            for src in sources:
                 sid = src.get("id")
                 mc = (src.get("summary_stats") or {}).get("2yr_mean_citedness")
                 # Clamp the untrusted upstream value: reject non-finite and bound
@@ -211,24 +243,33 @@ def fetch_openalex(dois: list[str], email: str = "") -> dict[str, dict]:
         sid = entry.get("venue_source_id")
         if sid and sid in impact_by_source:
             entry["venue_impact"] = impact_by_source[sid]
+        if sid in failed_sources:
+            entry["status"] = "sources_failed"
+        elif sid and sid not in impact_by_source:
+            entry["status"] = "sources_missing"
     return out
 
 
 # Persisted enrichment older than this is considered stale and re-fetched.
 _ENRICHMENT_TTL_DAYS = 14
+_ENRICHMENT_STALE_MAX_DAYS = 30
 
 
 def load_cached_enrichment(
-    item_ids: list[int], max_age_days: int = _ENRICHMENT_TTL_DAYS
+    item_ids: list[int], max_age_days: int = _ENRICHMENT_STALE_MAX_DAYS
 ) -> dict[int, dict]:
-    """Return ``{item_id: {cited_by_count, venue_impact, venue}}`` for fresh rows."""
+    """Return original observations; only <=max_age_days can be fresh/stale.
+
+    Older rows remain explicit expired evidence and cannot affect serving.
+    """
     if not item_ids:
         return {}
     from sqlalchemy import select
 
     from ..store import ItemEnrichmentRow, init_db, session_scope
 
-    cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(days=max_age_days)
     init_db()
     out: dict[int, dict] = {}
     with session_scope() as s:
@@ -241,14 +282,18 @@ def load_cached_enrichment(
         )
         for r in rows:
             fetched_at = r.fetched_at
-            if fetched_at is not None:
-                ref = fetched_at if fetched_at.tzinfo else fetched_at.replace(tzinfo=timezone.utc)
-                if ref < cutoff:
-                    continue  # stale
+            if fetched_at is None:
+                continue  # Unknown age cannot establish freshness or a bounded veto.
+            ref = fetched_at if fetched_at.tzinfo else fetched_at.replace(tzinfo=timezone.utc)
+            if ref > now:
+                continue
             out[int(r.item_id)] = {
                 "cited_by_count": r.cited_by_count,
                 "venue_impact": r.venue_impact,
                 "venue": r.venue,
+                "observed_at": ref.isoformat(),
+                "status": ("expired" if ref < cutoff else "stale"
+                           if ref < now - timedelta(days=_ENRICHMENT_TTL_DAYS) else "fresh"),
             }
     return out
 
@@ -263,6 +308,8 @@ def save_enrichment(entries: dict[int, dict]) -> None:
     now = datetime.now(timezone.utc)
     with session_scope() as s:
         for item_id, entry in entries.items():
+            if entry.get("status", "fresh") != "fresh":
+                continue
             row = s.get(ItemEnrichmentRow, int(item_id))
             if row is None:
                 row = ItemEnrichmentRow(item_id=int(item_id))
@@ -270,7 +317,131 @@ def save_enrichment(entries: dict[int, dict]) -> None:
             row.cited_by_count = entry.get("cited_by_count")
             row.venue_impact = entry.get("venue_impact")
             row.venue = entry.get("venue")
-            row.fetched_at = now
+            observed_at = entry.get("observed_at")
+            row.fetched_at = datetime.fromisoformat(observed_at) if observed_at else now
+
+
+def _load_enrichment(rows, *, settings, fetcher=None) -> dict[int, dict]:
+    """Resolve one batch by row position, reusing fresh cache entries first."""
+    doi_by_idx: dict[int, str] = {}
+    iid_by_idx: dict[int, int] = {}
+    for idx, row in enumerate(rows):
+        doi = derive_doi(row)
+        if doi:
+            doi_by_idx[idx] = doi
+        iid = getattr(row, "id", None)
+        if isinstance(iid, int):
+            iid_by_idx[idx] = iid
+    if not doi_by_idx and not iid_by_idx:
+        return {}
+
+    # Reuse persisted enrichment so we don't re-hit OpenAlex for known papers and
+    # still have data on a day the fetch fails.
+    cached = load_cached_enrichment(list(set(iid_by_idx.values())))
+    needed = {
+        doi_by_idx[idx]
+        for idx in doi_by_idx
+        if cached.get(iid_by_idx.get(idx), {}).get("status", "fresh") != "fresh"
+        or iid_by_idx.get(idx) not in cached
+    }
+    fetched: dict[str, dict] = {}
+    if needed:
+        fetch = fetcher or fetch_openalex
+        try:
+            raw = fetch(sorted(needed), getattr(settings, "citation_polite_email", "") or "")
+            fetched = {doi: _normalize_entry(value) for doi, value in raw.items()}
+            for doi in needed:
+                entry = fetched.setdefault(doi, {"status": "missing"})
+                entry.setdefault("status", "fresh")
+                if entry["status"] in {"fresh", "missing"}:
+                    entry.setdefault("observed_at", datetime.now(timezone.utc).isoformat())
+        except Exception as e:  # noqa: BLE001
+            logger.warning("citation enrichment fetch failed (%s); using cache only", e)
+            fetched = {doi: {"status": "works_failed"} for doi in needed}
+        if fetched:
+            # Legacy injected fetchers may omit status or fields. They remain
+            # supported, but a partial refresh cannot erase known observations.
+            for idx, doi in doi_by_idx.items():
+                prior = cached.get(iid_by_idx.get(idx))
+                update = fetched.get(doi)
+                if not prior or not update or update.get("status") != "fresh":
+                    continue
+                for field in ("cited_by_count", "venue_impact", "venue"):
+                    if prior.get(field) not in (None, "") and update.get(field) in (None, ""):
+                        update["status"] = "works_failed" if field == "cited_by_count" else "sources_missing"
+                        break
+            to_save = {
+                iid_by_idx[idx]: fetched[doi_by_idx[idx]]
+                for idx in doi_by_idx
+                if idx in iid_by_idx and doi_by_idx[idx] in fetched
+                and fetched[doi_by_idx[idx]].get("status") == "fresh"
+            }
+            if to_save:
+                try:
+                    save_enrichment(to_save)
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("could not persist enrichment: %s", e)
+
+    resolved = {}
+    for idx in range(len(rows)):
+        prior = cached.get(iid_by_idx.get(idx))
+        update = fetched.get(doi_by_idx.get(idx))
+        if update and update.get("status") == "fresh":
+            resolved[idx] = update
+        elif prior:
+            resolved[idx] = dict(prior)
+            if update:
+                resolved[idx]["refresh_status"] = update["status"]
+        elif update:
+            resolved[idx] = update
+    return resolved
+
+
+def _apply_venue_evidence(row, entry) -> None:
+    # These transient attributes are owned by enrichment. Reused row objects
+    # must not retain an earlier high-venue admission after its evidence expires.
+    row.venue_name = ""
+    row.venue_high_impact = False
+    row.venue_low_impact = False
+    status = entry.get("status", "fresh")
+    if status != "fresh":
+        # A bounded stale low observation may conservatively veto promotion;
+        # stale venue names themselves must not create a curated-journal prior.
+        quality = venue_quality_score(entry.get("venue_impact"))
+        if status == "stale" and quality is not None and quality < _LOW_VENUE_QUALITY:
+            row.venue_low_impact = True
+            row.venue_high_impact = False
+        return
+    venue = str(entry.get("venue") or "").strip()
+    if venue:
+        row.venue_name = venue
+    vq = venue_quality_score(entry.get("venue_impact"))
+    if vq is not None:
+        row.venue_low_impact = vq < _LOW_VENUE_QUALITY
+        row.venue_high_impact = vq >= _HIGH_VENUE_QUALITY
+
+
+def prepare_enrichment(rows, *, settings=None, fetcher=None) -> None:
+    """Attach resolved venue evidence before quality scoring and preference fusion.
+
+    The pipeline bounds this batch using raw topic scores. Citation adjustments
+    remain separate and consume this exact evidence after eligibility filtering.
+    """
+    if settings is None:
+        from ..config import get_settings
+        settings = get_settings()
+    if not rows or not getattr(settings, "citation_enrichment", False):
+        return
+    entries = _load_enrichment(rows, settings=settings, fetcher=fetcher)
+    for idx, entry in entries.items():
+        row = rows[idx]
+        row.enrichment_evidence = {
+            key: entry.get(key) for key in ("cited_by_count", "venue_impact", "venue", "status", "observed_at", "refresh_status")
+        }
+        row.enrichment_evidence["status"] = entry.get("status", "fresh")
+        row.enrichment_evidence["doi"] = derive_doi(row)
+        row.enrichment_evidence["quality_resolved_before_scoring"] = True
+        _apply_venue_evidence(row, entry)
 
 
 def enrich_scored(
@@ -279,13 +450,13 @@ def enrich_scored(
     settings: object | None = None,
     fetcher=None,
     now: datetime | None = None,
+    prepared_only: bool = False,
 ) -> list[tuple[ItemRow, float]]:
     """Apply citation-velocity and venue-impact adjustments when enabled.
 
-    Citation velocity boosts fast-rising work; venue impact rewards high-impact
-    journals and penalizes low-impact ones — which is the only quality signal
-    available for aggregator (OpenAlex/PubMed) items whose configured source name
-    hides the real publication venue.
+    Citation velocity boosts fast-rising work. Venue impact supplies missing
+    journal evidence and penalizes low-impact venues; already-curated journals
+    retain their existing source prior without a second positive venue bonus.
     """
     if not scored:
         return scored
@@ -296,80 +467,61 @@ def enrich_scored(
     if not getattr(settings, "citation_enrichment", False):
         return scored
 
-    doi_by_idx: dict[int, str] = {}
-    iid_by_idx: dict[int, int] = {}
-    for idx, (row, _score) in enumerate(scored):
-        doi = derive_doi(row)
-        if doi:
-            doi_by_idx[idx] = doi
-        iid = getattr(row, "id", None)
-        if isinstance(iid, int):
-            iid_by_idx[idx] = iid
-    if not doi_by_idx:
+    rows = [row for row, _score in scored]
+    if prepared_only:
+        entries = {idx: row.enrichment_evidence for idx, row in enumerate(rows)
+                   if isinstance(getattr(row, "enrichment_evidence", None), dict)}
+    else:
+        entries = _load_enrichment(rows, settings=settings, fetcher=fetcher)
+    if not entries:
         return scored
-
-    # Reuse persisted enrichment so we don't re-hit OpenAlex for known papers and
-    # still have data on a day the fetch fails.
-    cached = load_cached_enrichment(list(set(iid_by_idx.values())))
-    needed = {
-        doi_by_idx[idx]
-        for idx in doi_by_idx
-        if iid_by_idx.get(idx) not in cached  # uncached (or item has no id)
-    }
-    fetched: dict[str, dict] = {}
-    if needed:
-        fetch = fetcher or fetch_openalex
-        try:
-            raw = fetch(sorted(needed), getattr(settings, "citation_polite_email", "") or "")
-            fetched = {doi: _normalize_entry(value) for doi, value in raw.items()}
-        except Exception as e:  # noqa: BLE001
-            logger.warning("citation enrichment fetch failed (%s); using cache only", e)
-        if fetched:
-            to_save = {
-                iid_by_idx[idx]: fetched[doi_by_idx[idx]]
-                for idx in doi_by_idx
-                if idx in iid_by_idx and doi_by_idx[idx] in fetched
-            }
-            if to_save:
-                try:
-                    save_enrichment(to_save)
-                except Exception as e:  # noqa: BLE001
-                    logger.warning("could not persist enrichment: %s", e)
-
-    if not cached and not fetched:
-        return scored
-
-    def _entry_for(idx: int) -> dict | None:
-        iid = iid_by_idx.get(idx)
-        if iid is not None and iid in cached:
-            return cached[iid]
-        doi = doi_by_idx.get(idx)
-        return fetched.get(doi) if doi else None
 
     venue_w = float(getattr(settings, "venue_quality_weight", 0.18))
     boosted: list[tuple[ItemRow, float]] = []
     for idx, (row, score) in enumerate(scored):
-        entry = _entry_for(idx)
+        entry = entries.get(idx)
+        if entry and entry.get("status", "fresh") != "fresh":
+            _apply_venue_evidence(row, entry)
+            row.enrichment_evidence = dict(entry) | {
+                "doi": derive_doi(row), "citation_boost": 0.0, "venue_adjustment": 0.0,
+                "quality_resolved_before_scoring": prepared_only,
+            }
+            boosted.append((row, score))
+            continue
         if entry:
             score = float(score)
-            venue = str(entry.get("venue") or "").strip()
-            if venue:
-                row.venue_name = venue
+            # Check before enrichment reveals a venue or changes impact flags:
+            # a newly identified venue may not have received the original prior.
+            has_venue_prior = is_high_quality_journal_source(row)
+            _apply_venue_evidence(row, entry)
             cs = citation_score(
-                entry.get("cited_by_count"), getattr(row, "published_at", None), now=now
+                entry.get("cited_by_count"),
+                getattr(row, "published_at", None) if publication_date_is_known(row) else None,
+                now=now
             )
-            score += CITATION_BOOST * cs
+            citation_boost = CITATION_BOOST * cs
+            score += citation_boost
+            applied_venue_adjustment = 0.0
             vq = venue_quality_score(entry.get("venue_impact"))
             if vq is not None:
-                # Center at 0.5: high-impact venues gain, low-impact venues lose.
-                score += venue_w * (vq - 0.5)
-                # Flag genuinely low-impact venues so the selection-stage
-                # frequency cap treats them as low_impact_journal even when the
-                # ingest record carries no venue name to classify by.
-                # Only a materially high verified impact lifts an unlisted venue
-                # out of that gate; the middle band keeps the name-based policy.
-                row.venue_low_impact = vq < _LOW_VENUE_QUALITY
-                row.venue_high_impact = vq >= _HIGH_VENUE_QUALITY
+                # Metadata availability must not give curated journals a second
+                # positive quality bonus. Contrary low-impact evidence still counts.
+                venue_adjustment = venue_w * (vq - 0.5)
+                low_penalty_already_applied = (
+                    prepared_only and source_bucket(row) == "low_impact_journal"
+                    and venue_adjustment < 0
+                )
+                # Prepared low-impact evidence already changed the quality leg;
+                # do not penalize the same venue again after preference fusion.
+                if not low_penalty_already_applied and (venue_adjustment <= 0 or not has_venue_prior):
+                    score += venue_adjustment
+                    applied_venue_adjustment = venue_adjustment
+            row.enrichment_evidence = {
+                key: entry.get(key) for key in ("cited_by_count", "venue_impact", "venue", "observed_at", "refresh_status")
+            } | {"doi": derive_doi(row), "citation_boost": citation_boost,
+                 "status": entry.get("status", "fresh"),
+                 "venue_adjustment": applied_venue_adjustment,
+                 "quality_resolved_before_scoring": prepared_only}
             score = max(0.0, min(1.0, score))
         boosted.append((row, score))
     boosted.sort(key=lambda t: t[1], reverse=True)

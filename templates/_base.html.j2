@@ -13,12 +13,19 @@
     document.documentElement.dataset.theme = savedTheme || (prefersDark ? "dark" : "light");
     const savedDisplay = localStorage.getItem("dailydigest-display");
     document.documentElement.dataset.display = savedDisplay === "compact" ? "compact" : "comfortable";
+    document.documentElement.dataset.pip = localStorage.getItem("dailydigest-pip") === "hidden" ? "hidden" : "visible";
   } catch (_) {}
 </script>
 <title>{% block title %}DailyDigest{% endblock %}</title>
 <style>
 {% include "_design_tokens.css.j2" %}
   * { box-sizing: border-box; }
+  .article-figure { margin-top: 12px; font-size: 14px; }
+  .article-figure summary { cursor: pointer; min-height: 44px; padding: 10px 0; }
+  .article-figure figure { margin: 8px 0; }
+  .article-figure img { display: block; width: 100%; max-width: 480px; height: 220px; object-fit: contain; }
+  .article-figure figcaption, .figure-hint { color: var(--muted); font-size: 12px; }
+  @media print { .article-figure { display: none; } }
   body {
     position: relative; min-height: 100vh; margin: 0; overflow-x: hidden;
     background:
@@ -61,6 +68,9 @@
   .footer { padding: 14px 24px; border-top: 1px solid var(--border-soft); font-size: 12px; color: var(--muted); }
   code { background: var(--surface-muted); padding: 1px 4px; border-radius: 3px; font-size: 12px; }
   a { color: var(--accent); }
+  :where(a, button, input, textarea, select, summary):focus-visible {
+    outline: 2px solid var(--accent); outline-offset: 3px;
+  }
   .skip-link {
     position: absolute; top: 8px; left: 14px; z-index: 80;
     padding: 10px 14px; border-radius: 8px; background: var(--card);
@@ -71,7 +81,7 @@
   .btn {
     display: inline-flex; align-items: center; justify-content: center; gap: 8px;
     min-height: 38px; padding: 8px 13px;
-    border: 1px solid var(--border); border-radius: 8px;
+    border: 1px solid var(--control-border); border-radius: 8px;
     background: var(--card); color: var(--text); text-decoration: none;
     cursor: pointer; font-weight: 650; font-size: 13px;
   }
@@ -83,15 +93,37 @@
   html[data-theme="dark"] .btn.primary { color: #0e1a13; }
   .app-utilities {
     position: fixed; right: 14px; bottom: 14px; z-index: 40;
-    display: flex; flex-direction: column; gap: 6px; align-items: flex-end;
   }
   .app-utility {
-    min-height: 34px; padding: 6px 9px; border: 1px solid var(--border);
+    min-height: 38px; padding: 8px 13px; border: 1px solid var(--border);
     border-radius: 999px; background: var(--card); color: var(--muted);
     box-shadow: 0 8px 24px rgba(0,0,0,0.12); cursor: pointer;
     font-size: 12px; font-weight: 740;
   }
   .app-utility:hover { color: var(--text); border-color: var(--accent); }
+  .app-utilities > summary { display: flex; align-items: center; gap: 9px; list-style: none; }
+  .app-utilities > summary::-webkit-details-marker { display: none; }
+  .app-utilities > summary::after { content: "+"; color: var(--accent); }
+  .app-utilities[open] > summary::after { content: "−"; }
+  .app-display-options {
+    position: absolute; bottom: calc(100% + 8px); right: 0;
+    display: flex; flex-direction: column; gap: 4px;
+    width: 240px; max-width: calc(100vw - 32px); padding: 8px;
+    max-height: calc(100dvh - 100px); overflow-y: auto;
+    border: 1px solid var(--border); border-radius: 12px;
+    background: var(--card); box-shadow: var(--shadow);
+  }
+  .app-display-options .app-utility {
+    display: flex; justify-content: space-between; align-items: center; gap: 16px;
+    min-height: 40px; border: 0; border-radius: 6px; box-shadow: none;
+    background: transparent; color: var(--text); text-align: left;
+  }
+  .app-display-options .app-utility:hover { background: var(--surface-hover); }
+  .app-display-options [aria-pressed]::after {
+    content: "Off"; color: var(--muted); font-size: 12px; font-weight: 500;
+  }
+  .app-display-options [aria-pressed="true"]::after { content: "On"; color: var(--accent); }
+  html[data-pip="hidden"] .tea-break { display: none; }
   .sr-only {
     position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
     overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
@@ -106,9 +138,13 @@
   }
   @media (max-width: 680px) {
     .app-utilities {
-      position: static; flex-direction: row; justify-content: center; align-items: center;
-      margin: -58px 0 16px; padding: 0 16px;
+      position: relative; right: auto; bottom: auto; width: max-content;
+      margin: -54px auto 16px;
     }
+    .app-display-options { right: 50%; transform: translateX(50%); }
+  }
+  @media (pointer: coarse) {
+    .btn, .app-utility, .app-display-options .app-utility { min-height: 44px; }
   }
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after {
@@ -131,6 +167,7 @@
   {% block extra_styles %}{% endblock %}
   button:not(.active):not([aria-pressed="true"]), input, select, textarea { border-color: var(--control-border); }
   button, summary, input:not([type="checkbox"]):not([type="radio"]), select { min-height: 44px; }
+
 </style>
 </head>
 <body>
@@ -138,12 +175,16 @@
 <main class="wrap" id="page-content" tabindex="-1">
   {% block body %}{% endblock %}
 </main>
-<div class="app-utilities" aria-label="Display and installation controls">
-  <button class="app-utility" id="install-app" type="button" aria-describedby="install-app-help" title="Add a desktop shortcut. DailyDigest must still be running on this computer." hidden>Add to desktop</button>
-  <span class="sr-only" id="install-app-help">Adds a standalone app shortcut. It does not install or start the DailyDigest server.</span>
-  <button class="app-utility" id="display-toggle" type="button" aria-pressed="false" hidden>Compact view</button>
-  <button class="app-utility" id="theme-toggle" type="button" aria-pressed="false">Night theme</button>
-</div>
+<details class="app-utilities" id="display-menu">
+  <summary class="app-utility" aria-label="Display" id="display-menu-toggle" aria-controls="display-options">Display</summary>
+  <div class="app-display-options" id="display-options" role="group" aria-label="Display preferences">
+    <button class="app-utility" id="theme-toggle" type="button" aria-label="Night theme" aria-pressed="false">Night theme</button>
+    <button class="app-utility" id="display-toggle" type="button" aria-label="Compact view" aria-pressed="false" hidden>Compact view</button>
+    <button class="app-utility" id="pip-toggle" type="button" aria-label="Show Pip" aria-pressed="true" hidden>Show Pip</button>
+    <button class="app-utility" id="install-app" type="button" aria-describedby="install-app-help" title="Add a desktop shortcut. DailyDigest must still be running on this computer." hidden>Add to desktop</button>
+    <span id="install-app-help" hidden>Adds a standalone app shortcut. It does not install or start the DailyDigest server.</span>
+  </div>
+</details>
 <script>
 {% include "_rating_queue.js.j2" %}
 (function () {
@@ -151,6 +192,18 @@
   const themeButton = document.getElementById("theme-toggle");
   const displayButton = document.getElementById("display-toggle");
   const themeColor = document.getElementById("theme-color");
+  const displayMenu = document.getElementById("display-menu");
+  displayMenu.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape" || !displayMenu.open) return;
+    event.preventDefault();
+    displayMenu.open = false;
+    document.getElementById("display-menu-toggle").focus();
+  });
+  function dismissDisplayMenu(event) {
+    if (!displayMenu.contains(event.target)) displayMenu.open = false;
+  }
+  document.addEventListener("pointerdown", dismissDisplayMenu);
+  document.addEventListener("focusin", dismissDisplayMenu);
   function applyTheme(theme) {
     const dark = theme === "dark";
     root.dataset.theme = dark ? "dark" : "light";
@@ -168,14 +221,29 @@
     const compact = display === "compact";
     root.dataset.display = compact ? "compact" : "comfortable";
     displayButton.setAttribute("aria-pressed", compact ? "true" : "false");
-    displayButton.textContent = compact ? "Comfortable view" : "Compact view";
-    displayButton.title = compact ? "Show the full reading layout" : "Fit more recommendations on screen";
+    displayButton.textContent = "Compact view";
+    displayButton.title = "Fit more recommendations on screen";
   }
   applyDisplay(root.dataset.display || "comfortable");
   displayButton.addEventListener("click", () => {
     const next = root.dataset.display === "compact" ? "comfortable" : "compact";
     try { localStorage.setItem("dailydigest-display", next); } catch (_) {}
     applyDisplay(next);
+  });
+
+  const pipButton = document.getElementById("pip-toggle");
+  function applyPip(visibility) {
+    const visible = visibility !== "hidden";
+    root.dataset.pip = visible ? "visible" : "hidden";
+    pipButton.setAttribute("aria-pressed", visible ? "true" : "false");
+  }
+  pipButton.hidden = !document.querySelector(".tea-break");
+  applyPip(root.dataset.pip);
+  pipButton.addEventListener("click", () => {
+    const next = root.dataset.pip === "hidden" ? "visible" : "hidden";
+    try { localStorage.setItem("dailydigest-pip", next); } catch (_) {}
+    applyPip(next);
+    document.dispatchEvent(new Event("pipvisibilitychange"));
   });
 
   let installPrompt = null;
@@ -199,6 +267,20 @@
     });
   }
 })();
+</script>
+<script>
+  document.querySelectorAll('.article-figure').forEach(preview => {
+    preview.addEventListener('toggle', () => {
+      const image = preview.querySelector('img[data-src]');
+      if (!preview.open || !image) return;
+      image.addEventListener('error', () => {
+        image.hidden = true;
+        preview.querySelector('.figure-unavailable').hidden = false;
+      }, {once: true});
+      image.src = image.dataset.src;
+      image.removeAttribute('data-src');
+    });
+  });
 </script>
 {% block scripts %}{% endblock %}
 </body>

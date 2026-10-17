@@ -78,7 +78,8 @@ def _make_synthetic_votes(n_per_class: int = 12, seed: int = 7):
                 )
             )
             labels.append(label)
-            timestamps.append(base + timedelta(hours=item_id))
+            # Whole-day splits must contain both classes on each synthetic day.
+            timestamps.append(base + timedelta(days=(item_id - 1) // 2, hours=item_id % 2))
             grades.append(grade)
             vec_by_id[item_id] = vec
             item_id += 1

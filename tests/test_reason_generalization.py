@@ -7,7 +7,7 @@ publisher and buried an on-topic Nature paper the user actually wanted.
 
 The fix (in votes.py, owned by another agent) narrows publisher/source/content
 generalization to PUBLISHER-INTRINSIC reasons only:
-``{low_impact, promotional, access_friction, duplicate}``. Topic/timing reasons
+``{low_impact, promotional, access_friction}``. Topic/timing/repetition reasons
 (``off_topic``, ``already_known``, ``not_urgent``) apply only their EXACT
 per-item penalty and must NOT transfer to other papers from the same publisher.
 
@@ -114,24 +114,11 @@ def test_promotional_negative_does_generalize_by_source(tmp_path, monkeypatch):
     assert penalties[str(future_id)] < votes_mod.REASON_PENALTIES["promotional"]
 
 
-def test_duplicate_currently_generalizes_by_publisher_debatable(tmp_path, monkeypatch):
-    """DOCUMENTS current behavior: `duplicate` generalizes by publisher/source.
-
-    NOTE (debatable): `duplicate` is arguably ITEM-SPECIFIC — one
-    paper appearing twice says nothing about the *next* paper from the same
-    publisher, so it is questionable that it lives in votes.py's `generalizable`
-    set {low_impact, promotional, access_friction, duplicate}. This test pins the
-    CURRENT behavior only; it is intentionally a characterization test, not an
-    endorsement. If votes.py later removes `duplicate` from that set, flip the
-    assertion below to `== 0.0`. (This test does not modify votes.py — another
-    agent owns it.)
-    """
+def test_duplicate_reason_only_penalizes_the_repeated_item(tmp_path, monkeypatch):
+    """A repeated paper says nothing about a fresh paper from the publisher."""
     store_mod = _reset_store_for_tmp_db(monkeypatch, tmp_path)
     from dailydigest import votes as votes_mod
 
-    # Guard: if `duplicate` is ever dropped from the generalizable set, this test
-    # is expected to be updated. Assert current membership explicitly so the
-    # failure message is self-explaining.
     disliked_id = _add_nature_item(
         store_mod, "nature-dup", "Duplicated Nature research report"
     )
@@ -145,6 +132,5 @@ def test_duplicate_currently_generalizes_by_publisher_debatable(tmp_path, monkey
     future = _detached(store_mod, future_id)
     penalties = votes_mod.reason_penalty_map([future])
 
-    # CURRENT behavior: duplicate DOES transfer by publisher (debatable — see
-    # docstring). Documented, not endorsed.
-    assert penalties.get(str(future_id), 0.0) > 0.0
+    assert penalties[str(disliked_id)] == votes_mod.REASON_PENALTIES["duplicate"]
+    assert penalties.get(str(future_id), 0.0) == 0.0
