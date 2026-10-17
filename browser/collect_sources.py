@@ -14,6 +14,7 @@ import json
 import math
 import os
 from pathlib import Path
+import sys
 import tempfile
 import time
 
@@ -278,7 +279,16 @@ def main():
         return 1
     failures = {name: source["error"] for name, source in report["sources"].items()
                 if source["status"] != "ok"}
+    freshness_warning = None
+    if summary["fresh_ok"] / summary["sources"] < 0.8:
+        freshness_warning = (
+            f'Fresh public source coverage is {summary["fresh_ok"]}/{summary["sources"]}, '
+            'below 80%. Publication passed the minimum coverage gate; '
+            'inspect failed sources and retained snapshot ages.'
+        )
+        print(f"::warning::{freshness_warning}", file=sys.stderr)
     print(json.dumps({"output": str(output), **summary, "failures": failures,
+                      "freshness_warning": freshness_warning,
                       "publication": report.get("publication")}))
     return 0
 

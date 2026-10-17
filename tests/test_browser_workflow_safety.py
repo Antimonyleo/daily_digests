@@ -58,3 +58,38 @@ def test_public_comparison_cache_is_restored_before_static_build():
     restore = next(i for i, step in enumerate(steps) if 'fetch_public_embeddings.py' in step.get('run', ''))
     build = next(i for i, step in enumerate(steps) if 'python browser/build.py' in step.get('run', ''))
     assert restore < build
+
+
+def test_every_ci_job_has_a_bounded_timeout():
+    root = Path(__file__).resolve().parents[1]
+    for name in ('browser-pages.yml', 'ci.yml'):
+        workflow = yaml.load((root / '.github/workflows' / name).read_text(), Loader=yaml.BaseLoader)
+        for job in workflow['jobs'].values():
+            assert 1 <= int(job['timeout-minutes']) <= 60
+
+
+def test_pages_uses_event_commit_and_checks_browser_tree_before_bootstrap():
+    workflow = yaml.load((Path(__file__).resolve().parents[1] / '.github/workflows/browser-pages.yml').read_text(), Loader=yaml.BaseLoader)
+    assert {'push', 'schedule', 'workflow_dispatch'} <= workflow['on'].keys()
+    assert 'pull_request' not in workflow['on']
+    steps = workflow['jobs']['build']['steps']
+    checkout = next(i for i, step in enumerate(steps) if step.get('uses', '').startswith('actions/checkout@'))
+    assert steps[checkout]['with']['ref'] == '${{ github.sha }}'
+    guard = next(i for i, step in enumerate(steps) if 'test -f browser/build.py' in step.get('run', ''))
+    bootstrap = next(i for i, step in enumerate(steps) if 'uv sync' in step.get('run', ''))
+    assert checkout < guard < bootstrap
+    assert any('verify-guide-backup.mjs' in step.get('run', '') for step in steps)
+
+
+def test_pull_requests_run_browser_unit_checks_without_publishing():
+    workflow = yaml.load((Path(__file__).resolve().parents[1] / '.github/workflows/ci.yml').read_text(), Loader=yaml.BaseLoader)
+    assert 'pull_request' in workflow['on']
+    job = workflow['jobs']['browser-unit']
+    assert 'if' not in job
+    assert not job.get('permissions', {}).get('pages')
+    steps = job['steps']
+    assert any(step.get('with', {}).get('node-version') == '24' for step in steps)
+    runs = '\n'.join(step.get('run', '') for step in steps)
+    assert 'node --test --test-isolation=none browser/*.test.mjs' in runs
+    assert 'prototypes/browser-compute/browser.test.mjs' in runs
+    assert 'collect_sources.py' not in runs

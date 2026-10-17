@@ -331,7 +331,7 @@ def build(output: Path) -> dict:
     cache = HERE / ".build-cache"
     wheels = list(pure_package_files(cache / "wheels"))
     manifest = source_archive(assets / "app.zip", wheels)
-    for name in ("index.html", "app.mjs", "reading-view.mjs", "tab-handoff.mjs", "compute.mjs", "public-embeddings.mjs", "semantic.mjs", "http.mjs", "storage.mjs", "style.css", "worker.mjs", "manifest.webmanifest",
+    for name in ("index.html", "app.mjs", "guide.mjs", "linked-backup.mjs", "reading-view.mjs", "tab-handoff.mjs", "compute.mjs", "public-embeddings.mjs", "semantic.mjs", "http.mjs", "storage.mjs", "style.css", "worker.mjs", "manifest.webmanifest",
                  "app-icon.svg", "sw.js"):
         shutil.copyfile(HERE / name, output / name)
     shutil.copyfile(ROOT / "templates/_design_tokens.css.j2", output / "design-tokens.css")

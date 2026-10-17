@@ -18,11 +18,14 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       # The event commit is authoritative; scheduled/manual runs use their selected branch.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ github.sha }}
+      - name: Require browser sources at the event commit
+        run: test -f browser/build.py
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
         with:
           enable-cache: true
@@ -70,6 +73,11 @@ jobs:
         run: node browser/verify-storage-startup.mjs
       - name: Prepare isolated browser acceptance fixtures
         run: uv run python browser/make_test_fixture.py --output .full-review/browser-launch-2026-10-13
+      - name: Quick guide and optional local backup copies
+        env:
+          DAILYDIGEST_GUIDE_SITE: browser/dist
+          DAILYDIGEST_GUIDE_REPORT: .full-review/guide-backup-ci
+        run: node browser/verify-guide-backup.mjs
       - name: Instant saved reading view and on-demand controls
         env:
           DAILYDIGEST_READING_SITE: browser/dist
@@ -97,6 +105,7 @@ jobs:
   deploy:
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       pages: write
       id-token: write
@@ -112,6 +121,7 @@ jobs:
     needs: [build, deploy]
     if: ${{ always() && (needs.build.result == 'failure' || needs.deploy.result == 'failure') }}
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -125,6 +135,7 @@ jobs:
     needs: [build, deploy]
     if: ${{ always() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && (needs.build.result == 'failure' || needs.deploy.result == 'failure' || needs.deploy.result == 'success') }}
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
       contents: read
       issues: write

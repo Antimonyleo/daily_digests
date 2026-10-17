@@ -10,6 +10,7 @@ permissions:
 jobs:
   linux:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     env:
       HF_HUB_OFFLINE: "1"
       TRANSFORMERS_OFFLINE: "1"
@@ -25,7 +26,28 @@ jobs:
       - name: Unit tests and packaged asset paths
         run: uv run --no-sync pytest -rs
 
+  browser-unit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24'
+      - name: Browser bridge and compute unit checks
+        run: |
+          node --test --test-isolation=none browser/*.test.mjs
+          node --test --test-isolation=none prototypes/browser-compute/browser.test.mjs
+
+      - name: Report installed Node dependency advisories
+        working-directory: prototypes/browser-compute
+        continue-on-error: true
+        # Includes native Node packages excluded by the static build allowlist.
+        # Report them for review; do not auto-upgrade the inference engine.
+        run: npm audit --package-lock-only --omit=dev --audit-level=high
+
   native-launchers:
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:

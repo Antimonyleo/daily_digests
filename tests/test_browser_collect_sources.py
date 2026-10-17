@@ -250,3 +250,39 @@ def test_malformed_previous_publication_metadata_is_rejected_cleanly():
     previous['publication'] = 'not an object'
     with pytest.raises(ValueError, match='previous.*invalid'):
         collector.prepare_publication(current, previous, event='push', now=NOW)
+
+
+@pytest.mark.parametrize('degraded', [True, False])
+def test_cli_warns_below_eighty_percent_fresh_without_rejecting_valid_coverage(
+    tmp_path, monkeypatch, capsys, degraded
+):
+    from contextlib import nullcontext
+    import json
+    import sys
+
+    current = report()
+    now = datetime.now(timezone.utc).isoformat()
+    current['generated_at'] = now
+    for row in current['sources'].values():
+        row['fetched_at'] = now
+    if degraded:
+        fail(current, ['d'])  # Three of four fresh; both kinds and all sections remain.
+    output = tmp_path / 'public.json'
+    monkeypatch.setattr(collector, 'collect', lambda *_args: current)
+    monkeypatch.setattr(collector, 'public_specs', lambda *_args: [])
+    monkeypatch.setattr(collector, 'isolated_settings', lambda *_args: nullcontext())
+    monkeypatch.setattr(collector.tempfile, 'mkdtemp', lambda **_kwargs: str(tmp_path))
+    monkeypatch.setattr(sys, 'argv', ['collect_sources', '--output', str(output), '--event', 'schedule'])
+
+    assert collector.main() == 0
+    captured = capsys.readouterr()
+    logged = json.loads(captured.out)
+    assert logged['fresh_ok'] == (3 if degraded else 4)
+    assert output.is_file()
+    if degraded:
+        assert '::warning::' in captured.err
+        assert '3/4' in captured.err and '80%' in captured.err
+        assert logged['freshness_warning']
+    else:
+        assert not captured.err
+        assert logged['freshness_warning'] is None
