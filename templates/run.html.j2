@@ -146,19 +146,19 @@
 <div class="card brew-card">
   <section id="choice-panel">
     <div class="eyebrow">Your daily reading ritual</div>
-    <h1>How are we feeling today?</h1>
+    <h1>Choose your digest size</h1>
     <p class="lede">Choose the size of today’s digest. We still scan and rank every enabled source, then serve only the amount you want.</p>
 
     <form id="brew-form">
       <fieldset class="mode-fieldset">
-        <legend>Choose today’s reading depth</legend>
+        <legend>Digest size</legend>
         <div class="mode-grid">
           <div class="mode-option">
             <input id="mode-full" name="reading_mode" type="radio" value="full"{% if reading_mode == "full" %} checked{% endif %}>
             <label class="mode-card" for="mode-full">
               <span class="mode-icon" aria-hidden="true">☀️</span>
-              <span class="mode-title">Energetic</span>
-              <span class="mode-voice">I want to read more!</span>
+              <span class="mode-title">Full</span>
+              <span class="mode-voice">Browse every qualified pick.</span>
               <span class="mode-count">All qualified picks</span>
             </label>
           </div>
@@ -166,8 +166,8 @@
             <input id="mode-usual" name="reading_mode" type="radio" value="usual"{% if reading_mode == "usual" %} checked{% endif %}>
             <label class="mode-card" for="mode-usual">
               <span class="mode-icon" aria-hidden="true">🍵</span>
-              <span class="mode-title">Usual</span>
-              <span class="mode-voice">Same usual day—what’s new today?</span>
+              <span class="mode-title">Standard</span>
+              <span class="mode-voice">A regular daily selection.</span>
               <span class="mode-count">Up to 15 best matches</span>
             </label>
           </div>
@@ -175,14 +175,14 @@
             <input id="mode-minimal" name="reading_mode" type="radio" value="minimal"{% if reading_mode == "minimal" %} checked{% endif %}>
             <label class="mode-card" for="mode-minimal">
               <span class="mode-icon" aria-hidden="true">🌙</span>
-              <span class="mode-title">Tired</span>
-              <span class="mode-voice">Just show me the essentials.</span>
+              <span class="mode-title">Short</span>
+              <span class="mode-voice">Read the essentials.</span>
               <span class="mode-count">5 research picks + 1 per other section</span>
             </label>
           </div>
         </div>
       </fieldset>
-      <p class="serving-note">Serving size changes only the final slate—not source coverage, quality checks, or your recommendation profile.</p>
+      <p class="serving-note">Digest size controls how many picks you receive. Every size uses the same source coverage, quality checks and recommendation profile.</p>
       <p class="serving-note" id="browser-compute-notice">Brewing uses processor and memory and may increase heat, fan noise and battery use. Keep this tab open. A large first browser brew can take 20 minutes or more; cached comparisons reduce later work.</p>
       <button class="btn primary brew-button" id="brew-button" type="submit">Brew today’s digest</button>
     </form>

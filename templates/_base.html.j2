@@ -92,7 +92,8 @@
   .btn.primary:hover { background: var(--accent-strong); border-color: var(--accent-strong); }
   html[data-theme="dark"] .btn.primary { color: #0e1a13; }
   .app-utilities {
-    position: fixed; right: 14px; bottom: 14px; z-index: 40;
+    position: relative; z-index: 40; width: max-content;
+    margin: -54px auto 16px;
   }
   .app-utility {
     min-height: 38px; padding: 8px 13px; border: 1px solid var(--border);
@@ -137,10 +138,6 @@
     body::before { animation: ambient-arrive 2.8s ease-out 1 both; }
   }
   @media (max-width: 680px) {
-    .app-utilities {
-      position: relative; right: auto; bottom: auto; width: max-content;
-      margin: -54px auto 16px;
-    }
     .app-display-options { right: 50%; transform: translateX(50%); }
   }
   @media (pointer: coarse) {

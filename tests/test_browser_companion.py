@@ -215,7 +215,7 @@ def test_inbound_reads_browser_votes_and_acknowledges_only_after_commit(settings
     calls = []
     replies = [{"from": "configured@example.test", "message_id": "mail-fixture",
                 "subject": "DailyDigest 2026-10-13", "body": "+R3 -R5",
-                "date": "fixture", "digest_id": "2026-10-13"},
+                "date": "fixture", "digest_id": "2026-10-13", "run_id": "a" * 32},
                {"from": "other@example.test", "body": "+R1", "digest_id": "2026-10-13"},
                {"from": "configured@example.test", "body": "+R1", "digest_id": None}]
     acknowledged = []
@@ -244,6 +244,7 @@ def test_inbound_reads_browser_votes_and_acknowledges_only_after_commit(settings
         vote = result["votes"][0]
         assert vote["line"] == "+R3 -R5"
         assert vote["digest_id"] == "2026-10-13"
+        assert vote["run_id"] == "a" * 32
         again = request(http, "POST", "/inbound", json={}).json()["votes"][0]
         assert again == vote  # read-only retry remains available after a browser failure
         ack = request(http, "POST", "/inbound/ack", json={"mail_ids": [vote["mail_id"]]})
@@ -368,6 +369,78 @@ def test_scheduler_failed_job_preserves_published_snapshot(settings, tmp_path, m
     assert status["last_status"] == "failed"
     assert "previous snapshot preserved" in status["error"]
     assert (store / "snapshot.json").read_text() == original
+
+
+@pytest.mark.parametrize("metadata", [
+    {"credentialsIncluded": False, "omittedCredentialKeys": ["LLM_API_KEY", "IMAP_PASSWORD"]},
+    {"credentialsIncluded": True},
+    {},
+])
+def test_scheduler_preserves_snapshot_credential_metadata(settings, tmp_path, monkeypatch, metadata):
+    from datetime import datetime, timezone
+
+    store = companion._state_store(tmp_path / "scheduler-state")
+    uploaded = {**json.loads(scheduler_snapshot()), **metadata}
+    companion._write_private(store / "snapshot.json", json.dumps(uploaded))
+    monkeypatch.setattr(companion.subprocess, "run",
+                        lambda *args, **kwargs: companion.SimpleNamespace(returncode=0))
+    status = {}
+    companion._schedule_once(store, settings, companion.RLock(), status, tmp_path / "sources.yaml",
+                             now=datetime(2026, 10, 13, 8, tzinfo=timezone.utc))
+    assert status["last_status"] == "success"
+    updated = json.loads((store / "snapshot.json").read_text())
+    for name in ("credentialsIncluded", "omittedCredentialKeys"):
+        assert (name in updated) == (name in metadata)
+        if name in metadata:
+            assert updated[name] == metadata[name]
+
+
+@pytest.mark.parametrize("outcome", ["success", "failure", "timeout", "interrupted"])
+def test_scheduler_cleans_only_its_current_workspace(settings, tmp_path, monkeypatch, outcome):
+    from datetime import datetime, timezone
+
+    store = companion._state_store(tmp_path / "scheduler-state")
+    original = scheduler_snapshot()
+    companion._write_private(store / "snapshot.json", original)
+    retained = store / "native-reader-existing"
+    retained.mkdir()
+    (retained / "recovery.txt").write_text("Previous work requiring preservation audit")
+    cache = store / "model-cache"
+    cache.mkdir()
+    (cache / "model.bin").write_bytes(b"cached model")
+    workspaces = []
+
+    def native_cli(command, *, cwd, **kwargs):
+        root = Path(cwd)
+        workspaces.append(root)
+        assert root.is_dir()
+        (root / "data/digest.html").write_text("Completed digest")
+        if outcome == "timeout":
+            raise companion.subprocess.TimeoutExpired(command, 1800)
+        if outcome == "interrupted":
+            raise KeyboardInterrupt
+        return companion.SimpleNamespace(returncode=0 if outcome == "success" else 1)
+
+    monkeypatch.setattr(companion.subprocess, "run", native_cli)
+    status = {}
+    if outcome == "interrupted":
+        with pytest.raises(KeyboardInterrupt):
+            companion._schedule_once(store, settings, companion.RLock(), status,
+                                     tmp_path / "sources.yaml",
+                                     now=datetime(2026, 10, 13, 8, tzinfo=timezone.utc))
+    else:
+        companion._schedule_once(store, settings, companion.RLock(), status,
+                                 tmp_path / "sources.yaml",
+                                 now=datetime(2026, 10, 13, 8, tzinfo=timezone.utc))
+    assert len(workspaces) == 1
+    assert not workspaces[0].exists()
+    assert (retained / "recovery.txt").read_text() == "Previous work requiring preservation audit"
+    assert (cache / "model.bin").read_bytes() == b"cached model"
+    if outcome == "success":
+        updated = json.loads((store / "snapshot.json").read_text())
+        assert base64.b64decode(updated["files"]["data/digest.html"]) == b"Completed digest"
+    else:
+        assert (store / "snapshot.json").read_text() == original
 
 
 def test_scheduler_waits_for_upload_and_reader_time_gate(settings, tmp_path, monkeypatch):

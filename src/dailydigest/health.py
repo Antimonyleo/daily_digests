@@ -7,7 +7,7 @@ Persisted as JSON at ``data/health.json`` next to the SQLite db. Schema::
         "latest": [ {source, items, ok, error, duration_ms, diagnostics}, ... ],
         "history": [
             {"recorded_at": "<ISO8601>", "stats": [ ... same shape as latest ... ]},
-            ...  # capped at 7 entries (one per run-day)
+            ...  # every check within the last 7 UTC calendar days
         ]
     }
 """
@@ -52,7 +52,7 @@ def _load_existing(path: Path) -> dict:
 
 
 def record(stats: list[IngestStats]) -> None:
-    """Idempotent JSON write. Keeps a rolling 7-entry history (one per run)."""
+    """Keep seven days of checks, including their original query diagnostics."""
     ensure_data_dir()
     path = _health_path()
     data = _load_existing(path)
@@ -61,13 +61,9 @@ def record(stats: list[IngestStats]) -> None:
 
     history: list[dict] = list(data.get("history") or [])
     history.append({"recorded_at": now.isoformat(), "stats": snapshot})
-    # Drop entries older than 7 days, then cap at 7 most recent.
-    cutoff = now - timedelta(days=7)
-    history = [
-        h for h in history
-        if _parse_iso(h.get("recorded_at")) and _parse_iso(h["recorded_at"]) >= cutoff
-    ]
-    history = history[-7:]
+    cutoff = now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=6)
+    history = [entry for entry in history
+               if (ts := _parse_iso(entry.get('recorded_at'))) is not None and cutoff <= ts <= now]
 
     payload = {
         "updated_at": now.isoformat(),
@@ -106,7 +102,7 @@ def weekly_summary() -> list[dict]:
     if not history:
         return []
 
-    cutoff = datetime.now(timezone.utc) - timedelta(days=7)
+    cutoff = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=6)
     agg: dict[str, dict] = {}
     for entry in history:
         ts = _parse_iso(entry.get("recorded_at"))

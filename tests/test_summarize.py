@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -18,6 +19,14 @@ def _row(title: str, abstract: str, source: str = "Nature") -> ItemRow:
         title=title,
         abstract=abstract,
     )
+
+
+def _summary(finding):
+    return f"Key finding: {finding}.\nWhy read: It concerns RNA delivery.\nCaveat: A pilot study."
+
+
+def _provider_output(finding):
+    return json.dumps({"1": _summary(finding)})
 
 
 def test_extractive_summary_prefers_informative_sentences_over_title_paraphrase():
@@ -92,7 +101,7 @@ def test_anthropic_backend_uses_native_messages_api(monkeypatch):
             return None
 
         def json(self):
-            return {"content": [{"type": "text", "text": '{"1":"Native Claude summary"}'}]}
+            return {"content": [{"type": "text", "text": _provider_output("Native Claude summary")}]}
 
     class FakeClient:
         def __init__(self, **kwargs):
@@ -122,7 +131,7 @@ def test_anthropic_backend_uses_native_messages_api(monkeypatch):
 
     summaries = sm.summarize_items([item])
 
-    assert summaries == {1: "Native Claude summary"}
+    assert summaries == {1: _summary("Native Claude summary")}
     url, headers, body = calls[0]
     assert url == "https://api.anthropic.com/v1/messages"
     assert headers["x-api-key"] == "anthropic-key"
@@ -182,11 +191,11 @@ def test_claude_cli_backend_disables_tools_and_session_persistence(monkeypatch):
         ),
     )
     monkeypatch.setattr(sm.shutil, "which", lambda name: f"/tools/{name}")
-    calls = _patch_popen(monkeypatch, '{"1":"Claude CLI summary"}')
+    calls = _patch_popen(monkeypatch, _provider_output("Claude CLI summary"))
 
     summaries = sm.summarize_items([item])
 
-    assert summaries == {1: "Claude CLI summary"}
+    assert summaries == {1: _summary("Claude CLI summary")}
     command, kwargs, comm = calls[0]
     assert command[0] == "/tools/claude"
     assert "--safe-mode" in command
@@ -250,12 +259,12 @@ def test_cli_output_wrapped_in_a_markdown_fence_still_parses(monkeypatch):
     monkeypatch.setattr(sm.shutil, "which", lambda name: f"/tools/{name}")
     _patch_popen(
         monkeypatch,
-        'Here you go:\n```json\n{"1": "Fenced CLI summary"}\n```\n',
+        'Here you go:\n```json\n' + _provider_output("Fenced CLI summary") + '\n```\n',
     )
 
     summaries = sm.summarize_items([_row("DNA origami", "A new method.")])
 
-    assert summaries == {1: "Fenced CLI summary"}
+    assert summaries == {1: _summary("Fenced CLI summary")}
 
 
 def test_cli_total_budget_limits_the_last_batch_timeout(monkeypatch):
@@ -304,11 +313,11 @@ def test_codex_cli_backend_is_ephemeral_read_only_and_disables_agent_tools(monke
         ),
     )
     monkeypatch.setattr(sm.shutil, "which", lambda name: f"/tools/{name}")
-    calls = _patch_popen(monkeypatch, '{"1":"Codex CLI summary"}')
+    calls = _patch_popen(monkeypatch, _provider_output("Codex CLI summary"))
 
     summaries = sm.summarize_items([item])
 
-    assert summaries == {1: "Codex CLI summary"}
+    assert summaries == {1: _summary("Codex CLI summary")}
     command, kwargs, _comm = calls[0]
     assert command[:2] == ["/tools/codex", "exec"]
     assert command[command.index("--sandbox") + 1] == "read-only"

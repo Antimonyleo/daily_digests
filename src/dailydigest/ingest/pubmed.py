@@ -11,12 +11,13 @@ import httpx
 from defusedxml.ElementTree import fromstring as ET_fromstring
 from tenacity import (
     retry,
-    retry_if_exception_type,
+    retry_if_exception,
     stop_after_attempt,
     wait_exponential,
 )
 
 from ..models import Item, SourceSpec
+from ._retry import transient_http_error
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +29,7 @@ _MONTH_ABBR = {
 _RETRY = retry(
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=1, min=2, max=10),
-    retry=retry_if_exception_type((httpx.HTTPError, httpx.TimeoutException)),
+    retry=retry_if_exception(transient_http_error),
     reraise=False,
 )
 
@@ -56,6 +57,30 @@ def _profile_fallback_query(term: str, precise_query: str) -> str | None:
     return "(" + " AND ".join(clauses) + ") NOT " + precise_query
 
 
+def _publication_date(art: ET.Element) -> datetime | None:
+    """Use actual publication events, never invented days or indexing dates."""
+    candidates = [
+        *art.findall('./MedlineCitation/Article/ArticleDate[@DateType="Electronic"]'),
+        *art.findall('./PubmedData/History/PubMedPubDate[@PubStatus="epublish"]'),
+        *art.findall('./PubmedData/History/PubMedPubDate[@PubStatus="aheadofprint"]'),
+        *art.findall('./MedlineCitation/Article/Journal/JournalIssue/PubDate'),
+        *art.findall('./PubmedData/History/PubMedPubDate[@PubStatus="ppublish"]'),
+    ]
+    today = datetime.now(timezone.utc).date()
+    for element in candidates:
+        year, month, day = (element.findtext(field) or '' for field in ('Year', 'Month', 'Day'))
+        if not year or not month or not day:
+            continue
+        try:
+            month_number = int(month) if month.isdigit() else _MONTH_ABBR[month.lower()[:3]]
+            value = datetime(int(year), month_number, int(day), 12, tzinfo=timezone.utc)
+        except (KeyError, TypeError, ValueError):
+            continue
+        if value.date() <= today:
+            return value
+    return None
+
+
 class PubMedSource:
     """Two-step PubMed ingest: esearch -> efetch (XML).
 
@@ -64,7 +89,7 @@ class PubMedSource:
     """
 
     BASE = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
-    HEADERS = {"User-Agent": "dailydigest/0.1 (mailto:noreply@example.com)"}
+    HEADERS = {"User-Agent": "dailydigest/0.1"}
     SLEEP = 0.34
     RETMAX = 200
     MAX_ITEMS = 100
@@ -74,6 +99,7 @@ class PubMedSource:
         self.last_fetch_diagnostics: dict[str, Any] = {"queries": []}
 
     def fetch(self, spec: SourceSpec, days: int = 2) -> list[Item]:
+        self._polite_email = spec.polite_email
         if spec.profile_driven:
             from ..config import load_profile
             from ._terms import profile_search_term_groups
@@ -81,10 +107,7 @@ class PubMedSource:
             core, context = profile_search_term_groups(
                 12, canonical_order=True, include_aliases=False
             )
-            try:
-                profile = load_profile()
-            except Exception:  # profile_search_term_groups already logs failure
-                profile = None
+            profile = load_profile()
             canonical = getattr(profile, "canonical_facets", None) or {}
             # Search each primary interest separately, reserving a bounded share
             # before broad topics or context can exhaust the result pool.
@@ -260,6 +283,7 @@ class PubMedSource:
     @_RETRY
     def _esearch(self, client: httpx.Client, query: str) -> list[str]:
         params = {
+            "tool": "dailydigest",
             "db": "pubmed",
             "term": query,
             "retmode": "json",
@@ -268,6 +292,8 @@ class PubMedSource:
             "retmax": str(self.RETMAX),
             "sort": "pub date",
         }
+        if getattr(self, '_polite_email', None):
+            params['email'] = self._polite_email
         resp = client.get(f"{self.BASE}/esearch.fcgi", params=params)
         resp.raise_for_status()
         data = resp.json()
@@ -300,11 +326,14 @@ class PubMedSource:
     @_RETRY
     def _efetch(self, client: httpx.Client, ids: list[str]) -> str:
         params = {
+            "tool": "dailydigest",
             "db": "pubmed",
             "id": ",".join(ids),
             "rettype": "abstract",
             "retmode": "xml",
         }
+        if getattr(self, '_polite_email', None):
+            params['email'] = self._polite_email
         resp = client.get(f"{self.BASE}/efetch.fcgi", params=params)
         resp.raise_for_status()
         return resp.text
@@ -370,24 +399,12 @@ class PubMedSource:
                     if doi:
                         break
 
-        pub_dt: datetime | None = None
-        pubdate = art.find(".//PubDate")
-        if pubdate is not None:
-            year = pubdate.findtext("Year")
-            month = pubdate.findtext("Month") or "1"
-            day = pubdate.findtext("Day") or "1"
-            if year is None:
-                medline = pubdate.findtext("MedlineDate") or ""
-                m_year = re.search(r"(\d{4})", medline)
-                if m_year:
-                    year = m_year.group(1)
-            if year:
-                try:
-                    m = int(month) if month.isdigit() else _MONTH_ABBR.get(month.lower()[:3], 1)
-                    d = int(day) if day.isdigit() else 1
-                    pub_dt = datetime(int(year), m, d, 12, 0, 0, tzinfo=timezone.utc)
-                except Exception:
-                    pub_dt = None
+        pub_dt = _publication_date(art)
+        if pub_dt is not None:
+            # The normal enrichment path can replace a previously guessed
+            # print date when this record is next explicitly retrieved.
+            publication_metadata['publication_date_source'] = 'published'
+            publication_metadata['publication_date_precision'] = 'day'
 
         url = f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/"
         return Item(

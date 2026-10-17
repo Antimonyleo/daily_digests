@@ -522,8 +522,9 @@ def _row_feature_key(row: ItemRow) -> int:
 
 
 def _downweight_hit(row: ItemRow, downweight_terms: list[str]) -> bool:
-    txt = _item_text(row).lower()
-    return any(term.lower() in txt for term in downweight_terms if term and term.strip())
+    from ..text_matching import contains_term
+
+    return any(contains_term(_item_text(row), term) for term in downweight_terms if term)
 
 
 def _feature_payload(
@@ -672,7 +673,7 @@ def _apply_quality_adjustments_with_features(
     terms_lc = [t.lower() for t in downweight_terms if t and t.strip()]
     result: list[float] = []
     features: ScoreFeatureMap = {}
-    for idx, (row, base, learned, hybrid, txt) in enumerate(zip(
+    for idx, (row, base, learned, hybrid, _txt) in enumerate(zip(
         items,
         base_scores,
         learned_scores,
@@ -687,7 +688,7 @@ def _apply_quality_adjustments_with_features(
         score -= freshness_pen  # negative value = bonus (score increases)
         downweight_penalty = (
             DOWNWEIGHT_PENALTY
-            if terms_lc and any(term in txt.lower() for term in terms_lc)
+            if terms_lc and _downweight_hit(row, terms_lc)
             else 0.0
         )
         if downweight_penalty:

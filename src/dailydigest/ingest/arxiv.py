@@ -5,8 +5,9 @@ import logging
 import math
 import re
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from threading import Lock
+from typing import Any
 
 import feedparser
 import httpx
@@ -67,35 +68,99 @@ class ArxivSource:
 
     BASE = "https://export.arxiv.org/api/query"
     MAX_RESULTS = 50
+    MAX_ITEMS = 400
+    MAX_PAGES = 8
+
+    def __init__(self) -> None:
+        self.last_fetch_diagnostics: dict[str, Any] = {'queries': []}
 
     def fetch(self, spec: SourceSpec, days: int = 2) -> list[Item]:
         category = spec.category or "q-bio.QM"
-        # arXiv has no server-side date filter here; it returns the newest N by
-        # submittedDate. To cover a longer gap, request proportionally more so
-        # older-but-still-in-window papers are retrieved (the ranking recency
-        # window then trims by published date). Bounded to keep the fetch sane.
-        max_results = min(self.MAX_RESULTS * max(1, math.ceil(max(1, days) / 2)), 400)
+        # SourceSpec categories historically used URL-style +OR+ separators.
+        # HTTPX encodes parameter values, so provide real spaces and scope each
+        # category separately instead of double-encoding literal plus signs.
+        parts = re.split(r'\s+(OR|AND|ANDNOT)\s+', category.replace('+', ' ').strip())
+        query_parts = []
+        for index, part in enumerate(parts):
+            if index % 2:
+                query_parts.append(part)
+                continue
+            value = part.removeprefix('cat:')
+            if not re.fullmatch(r'[A-Za-z][A-Za-z0-9.-]*', value):
+                raise ValueError(f'Invalid arXiv category expression: {category}')
+            query_parts.append(f'cat:{value}')
+        query = ' '.join(query_parts)
+        page_size = min(self.MAX_RESULTS * max(1, math.ceil(max(1, days) / 2)), self.MAX_ITEMS)
         params = {
-            "search_query": f"cat:{category}",
+            "search_query": query,
             "sortBy": "submittedDate",
             "sortOrder": "descending",
-            "max_results": str(max_results),
         }
-        out: list[Item] = []
-        try:
-            body = _http_get_text(self.BASE, params)
-        except Exception as e:
-            name = getattr(spec, "name", "ArxivSource")
-            raise RuntimeError(
-                f"{name} fetch failed: {type(e).__name__}: {str(e)[:200]}"
-            ) from e
-        if not body:
-            return out
+        diagnostic: dict[str, Any] = {
+            'query': query, 'attempted': True, 'request_count': 0,
+            'request_count_includes_retries': False, 'fetched_count': 0,
+            'returned_count': 0, 'total_available': None, 'exhausted': False,
+            'truncated': False, 'stop_reason': None, 'failure': None,
+            'item_cap': self.MAX_ITEMS, 'page_budget': self.MAX_PAGES,
+        }
+        self.last_fetch_diagnostics = {'queries': [diagnostic], 'returned_count': 0}
+        cutoff = datetime.now(timezone.utc) - timedelta(days=max(1, days))
+        entries = []
+        seen_ids = set()
+        while diagnostic['fetched_count'] < self.MAX_ITEMS and diagnostic['request_count'] < self.MAX_PAGES:
+            remaining = self.MAX_ITEMS - diagnostic['fetched_count']
+            requested = min(page_size, remaining)
+            params.update(start=str(diagnostic['fetched_count']), max_results=str(requested))
+            diagnostic['request_count'] += 1
+            try:
+                body = _http_get_text(self.BASE, params)
+                feed = feedparser.parse(body)
+                if feed.bozo or not feed.version:
+                    raise ValueError('Invalid arXiv Atom response')
+            except Exception as e:
+                diagnostic.update(stop_reason='failure', failure=type(e).__name__, truncated=True)
+                raise RuntimeError(
+                    f'{spec.name} fetch failed: {type(e).__name__}: {str(e)[:200]}'
+                ) from e
+            total = feed.feed.get('opensearch_totalresults')
+            if total is not None:
+                try:
+                    diagnostic['total_available'] = int(total)
+                except (TypeError, ValueError):
+                    pass
+            page = feed.entries
+            diagnostic['fetched_count'] += len(page)
+            if not page:
+                if diagnostic['total_available'] is not None and diagnostic['total_available'] > len(entries):
+                    diagnostic.update(truncated=True, stop_reason='inconsistent_empty_page')
+                else:
+                    diagnostic.update(exhausted=True, stop_reason='exhausted')
+                break
+            new_entries = [entry for entry in page if entry.get('id') not in seen_ids]
+            if not new_entries:
+                diagnostic.update(truncated=True, stop_reason='repeated_page')
+                break
+            entries.extend(new_entries)
+            seen_ids.update(entry.get('id') for entry in new_entries)
+            # Results are sorted by original submission date. Keep the boundary
+            # page for the common downstream candidate-window filter to trim.
+            dates = [datetime(*entry.published_parsed[:6], tzinfo=timezone.utc)
+                     for entry in page if entry.get('published_parsed')]
+            if dates and min(dates) < cutoff:
+                diagnostic.update(exhausted=True, stop_reason='window_exhausted')
+                break
+            if diagnostic['total_available'] is not None and diagnostic['fetched_count'] >= diagnostic['total_available']:
+                diagnostic.update(exhausted=True, stop_reason='exhausted')
+                break
+            if len(page) < requested and diagnostic['total_available'] is None:
+                diagnostic.update(exhausted=True, stop_reason='exhausted')
+                break
+        if diagnostic['stop_reason'] is None:
+            diagnostic.update(truncated=True, stop_reason=(
+                'item_cap' if diagnostic['fetched_count'] >= self.MAX_ITEMS else 'request_budget'))
 
-        feed = feedparser.parse(body)
-        if len(feed.entries) >= self.MAX_RESULTS:
-            logger.debug("%s: received %d entries (at cap); some papers may be missed", getattr(spec, "name", "ArxivSource"), len(feed.entries))
-        for entry in feed.entries:
+        out: list[Item] = []
+        for entry in entries:
             raw_id = entry.get("id", "") or ""
             # arXiv IDs come back as the abs URL; keep only the trailing arxiv id.
             arxiv_id = raw_id.rsplit("/abs/", 1)[-1] if "/abs/" in raw_id else raw_id
@@ -152,4 +217,9 @@ class ArxivSource:
                     metadata=metadata,
                 )
             )
+        diagnostic['returned_count'] = len(out)
+        diagnostic['skipped_invalid'] = len(entries) - len(out)
+        if diagnostic['skipped_invalid']:
+            diagnostic.update(truncated=True, exhausted=False)
+        self.last_fetch_diagnostics['returned_count'] = len(out)
         return out

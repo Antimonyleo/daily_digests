@@ -12,7 +12,7 @@ from typing import Any
 import httpx
 from tenacity import (
     retry,
-    retry_if_exception_type,
+    retry_if_exception,
     stop_after_attempt,
     wait_exponential,
 )
@@ -20,6 +20,7 @@ from tenacity import (
 from ..dedupe import _canonical_doi
 from ..models import Item, SourceSpec
 from ._terms import profile_search_term_groups, watched_author_names
+from ._retry import transient_http_error
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +31,7 @@ _HTML_TAG_RE = re.compile(r"<[^>]+>")
 @retry(
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=1, min=2, max=10),
-    retry=retry_if_exception_type((httpx.HTTPError, httpx.TimeoutException)),
+    retry=retry_if_exception(transient_http_error),
     reraise=False,
 )
 def _get_json(
@@ -162,10 +163,7 @@ class OpenAlexSource:
                 self.PROFILE_MAX_TERMS, canonical_order=True, include_aliases=False
             )
             from ..config import load_profile
-            try:
-                canonical = getattr(load_profile(), "canonical_facets", None) or {}
-            except Exception:  # query helper already logs unreadable profiles
-                canonical = {}
+            canonical = getattr(load_profile(), "canonical_facets", None) or {}
             aliases = {name.casefold(): list(facet.aliases[:3]) for name, facet in canonical.items()}
             if not core and not context and spec.query:
                 core = [spec.query]
@@ -189,6 +187,7 @@ class OpenAlexSource:
             out: list[Item] = []
             seen: set[str] = set()
             remaining = self.PROFILE_MAX_ITEMS
+            attempted = failures = core_attempted = core_failures = 0
             for index, term in enumerate(terms):
                 group_remaining = (len(core) if index < len(core) else len(terms)) - index
                 cap = min(self.PROFILE_PER_TERM, remaining // group_remaining)
@@ -212,10 +211,17 @@ class OpenAlexSource:
                     "((" + term + ") OR "
                     + " OR ".join(json.dumps(phrase, ensure_ascii=False) for phrase in phrases[1:]) + ")"
                 )
-                fetched = self._fetch_works(
-                    spec, days, headers, cap=cap, query=query,
-                    upgrade_venue=True, max_pages=1,
-                )
+                attempted += 1
+                core_attempted += int(index < len(core))
+                try:
+                    fetched = self._fetch_works(
+                        spec, days, headers, cap=cap, query=query,
+                        upgrade_venue=True, max_pages=1,
+                    )
+                except RuntimeError:
+                    failures += 1
+                    core_failures += int(index < len(core))
+                    fetched = []
                 diagnostic = self.last_fetch_diagnostics["queries"][-1]
                 diagnostic["interest"] = term
                 # Count raw rows, including duplicates/invalid records.
@@ -227,6 +233,10 @@ class OpenAlexSource:
                         out.append(item)
                 diagnostic["unique_yield"] = len(out) - before
                 self.last_fetch_diagnostics["returned_count"] = len(out)
+            if core_attempted and core_failures == core_attempted:
+                raise RuntimeError(f"{spec.name}: all core profile searches failed")
+            if attempted and failures == attempted:
+                raise RuntimeError(f"{spec.name}: all profile searches failed")
             logger.debug("%s: profile-driven fetched %d items over %d terms", spec.name, len(out), len(terms))
             return out
         out = self._fetch_works(spec, days, headers, cap=self.MAX_ITEMS, query=spec.query or "")
@@ -287,6 +297,10 @@ class OpenAlexSource:
             parameter = "search.title_abstract_keywords" if spec.profile_driven else "search"
             base_params[parameter] = query
             diagnostic["search_scope"] = search_scope
+            if spec.profile_driven:
+                # Within the date window, reserve topic slots for the most
+                # relevant papers rather than the newest incidental matches.
+                base_params['sort'] = 'relevance_score:desc'
 
         out: list[Item] = []
         params = dict(base_params)
@@ -465,7 +479,7 @@ class OpenAlexAuthorsSource:
     ``authors_of_interest`` is otherwise only a ranking boost applied to items
     that already arrived via some feed; this makes it a *retrieval* channel, so a
     watched lab's new paper surfaces even from a journal not in the feed list.
-    Author names are resolved to OpenAlex author ids (top match), then their
+    Author names are resolved only when a unique exact-name match exists, then their
     works in the window are fetched in a single filtered query.
     """
 
@@ -490,8 +504,12 @@ class OpenAlexAuthorsSource:
             if aid:
                 author_ids.append(aid)
         failed = any(query["failure"] for query in self.last_fetch_diagnostics.get("author_queries", []))
+        incomplete = failed or any(
+            query['stop_reason'] in {'ambiguous', 'unverified'}
+            for query in self.last_fetch_diagnostics.get('author_queries', [])
+        )
         self.last_fetch_diagnostics.update(
-            author_resolution_complete=not failed, truncated=failed,
+            author_resolution_complete=not incomplete, truncated=incomplete,
         )
         if not author_ids:
             if failed:
@@ -504,7 +522,7 @@ class OpenAlexAuthorsSource:
                 spec, days, headers, cap=self.MAX_ITEMS, extra_filter=extra_filter
             )
         finally:
-            self.last_fetch_diagnostics["truncated"] = failed or any(
+            self.last_fetch_diagnostics["truncated"] = incomplete or any(
                 query["truncated"] for query in self.last_fetch_diagnostics["queries"]
             )
         self.last_fetch_diagnostics["returned_count"] = len(out)
@@ -519,7 +537,7 @@ class OpenAlexAuthorsSource:
         self.last_fetch_diagnostics.setdefault("author_queries", []).append(diagnostic)
         try:
             payload = _get_json(
-                self.AUTHORS_URL, {"search": name, "per-page": "1"}, headers
+                self.AUTHORS_URL, {"search": name, "per-page": "5"}, headers
             )
             if not isinstance(payload, dict) or not isinstance(payload.get("results"), list):
                 raise RuntimeError("Invalid OpenAlex author response")
@@ -527,7 +545,19 @@ class OpenAlexAuthorsSource:
             if not results:
                 diagnostic["stop_reason"] = "no_match"
                 return None
-            raw_id = str(results[0].get("id") or "")
+            normalized_name = re.sub(r'[\W_]+', ' ', name.casefold()).strip()
+            matches = [result for result in results if isinstance(result, dict)
+                       and re.sub(r'[\W_]+', ' ', str(result.get('display_name') or '').casefold()).strip() == normalized_name]
+            diagnostic['candidate_count'] = len(results)
+            # A bounded search cannot rule out homonyms beyond its first page.
+            total = (payload.get('meta') or {}).get('count')
+            if len(matches) > 1 or len(results) >= 5 or isinstance(total, int) and total > len(results):
+                diagnostic['stop_reason'] = 'ambiguous'
+                return None
+            if not matches:
+                diagnostic['stop_reason'] = 'unverified'
+                return None
+            raw_id = str(matches[0].get("id") or "")
             # id is a URL like https://openalex.org/A5023888391 → keep the bare id.
             author_id = raw_id.rstrip("/").rsplit("/", 1)[-1] or None
             if not author_id:

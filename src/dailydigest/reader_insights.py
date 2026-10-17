@@ -4,13 +4,15 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from .text_matching import term_pattern
+
 
 def match_evidence(row: Any, topic: str, aliases=()) -> dict[str, str] | None:
     """Quote a literal whole-phrase occurrence; semantic fit alone is not a quote."""
     for term in [topic, *list(aliases)[:3]]:
         if not isinstance(term, str) or not term.strip() or len(term) > 160:
             continue
-        pattern = r'(?<!\w)' + r'\s+'.join(re.escape(word) for word in term.split()) + r'(?!\w)'
+        pattern = term_pattern(term)
         for text in (getattr(row, 'title', '') or '', getattr(row, 'abstract', '') or ''):
             match = re.search(pattern, text, re.I)
             if match:

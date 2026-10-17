@@ -66,6 +66,7 @@ _REPLY_MARKER_RE = re.compile(r"^\s*On .+ wrote:\s*$", re.IGNORECASE)
 _FROM_HEADER_RE = re.compile(r"^\s*From:\s.+", re.IGNORECASE)
 # Trailing YYYY-MM-DD in subject.
 _DATE_IN_SUBJECT_RE = re.compile(r"(\d{4}-\d{2}-\d{2})")
+_RUN_IN_SUBJECT_RE = re.compile(r'\[run:([0-9a-f]{32})\]', re.IGNORECASE)
 
 
 def _decode_header(value: str | None) -> str:
@@ -261,6 +262,7 @@ def fetch_replies(
                 message_id = _decode_header(msg.get("Message-ID"))
                 body = _strip_quoted(_get_body(msg))
                 digest_id = _parse_digest_id(subject)
+                run_match = _RUN_IN_SUBJECT_RE.search(subject)
 
                 reply = {
                     "message_id": message_id,
@@ -269,6 +271,7 @@ def fetch_replies(
                     "date": date_hdr,
                     "body": body,
                     "digest_id": digest_id,
+                    "run_id": run_match.group(1).lower() if run_match else None,
                 }
                 results.append(reply)
 
@@ -342,10 +345,18 @@ def process_replies() -> dict[str, Any]:
                     reply.get("subject"),
                 )
                 return True
-            counts = votes_mod.record_votes(line, digest_id=reply.get("digest_id"))
+            counts = votes_mod.record_votes(
+                line, digest_id=reply.get("digest_id"),
+                run_id=reply.get('run_id'), sent_only=True,
+            )
             summary["votes_up"] += int(counts.get("up", 0))
             summary["votes_down"] += int(counts.get("down", 0))
             summary["votes_unknown"] += int(counts.get("unknown", 0))
+            if counts.get('unknown', 0):
+                summary['errors'].append(
+                    'Reply has unresolved sent email vote labels; mailbox message left unread.'
+                )
+                return False
             return True
         except Exception as e:  # noqa: BLE001
             logger.warning(

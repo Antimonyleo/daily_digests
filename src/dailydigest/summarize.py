@@ -6,8 +6,8 @@ Backends, selected by ``SETTINGS.llm_backend``:
 * ``anthropic``: Anthropic's native Messages API. Requires ``LLM_API_KEY``;
 * ``claude_cli``: a signed-in Claude Code command with tools disabled;
 * ``codex_cli``: a signed-in Codex command in an isolated, read-only session;
-* ``extractive`` (default): no LLM. Returns the first 1-2 sentences of each
-  abstract. Also the per-batch fallback whenever any other backend fails.
+* ``extractive`` (default): no LLM. Selects informative abstract sentences.
+  Also the per-batch fallback whenever any other backend fails.
 """
 
 from __future__ import annotations
@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 _READER_CONTEXT: str = ""
 _READER_KEYWORDS: list[str] = []
 _READER_FACETS: dict = {}
-_SUMMARY_VERSION = "summary-v6"
+_SUMMARY_VERSION = "summary-v7"
 
 
 def _set_reader_context(profile: object | None) -> None:
@@ -66,11 +66,18 @@ def _matched_interests(row: ItemRow) -> list[str]:
     """Profile keywords that appear in the item's title/abstract."""
     if not _READER_KEYWORDS:
         return []
-    text = f"{row.title or ''} {row.abstract or ''}".lower()
-    return [kw for kw in _READER_KEYWORDS if kw.lower() in text][:3]
+    from .text_matching import contains_term
+
+    text = f"{row.title or ''} {row.abstract or ''}"
+    return [kw for kw in _READER_KEYWORDS if contains_term(text, kw)][:3]
 
 
-_SENT_SPLIT = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9])")
+_SENT_SPLIT = re.compile(r"(?<!\bFig\.)(?<!\bFigs\.)(?<!\bEq\.)(?<!\bEqs\.)(?<=[.!?])\s+(?=[A-Z0-9])")
+_SECTION_LABEL = re.compile(
+    r"\b(background|objectives?|aims?|methods?|materials(?: and methods)?|"
+    r"results?(?: and discussion)?|findings|discussion|conclusions?|interpretation)\s*:\s*",
+    re.IGNORECASE,
+)
 _BATCH_SIZE = 6
 _TIMEOUT = 60.0
 _CLI_TIMEOUT = 180.0
@@ -177,9 +184,21 @@ def _caveat(row: ItemRow, key_point: str) -> str:
 def _extractive(row: ItemRow) -> str:
     abstract = (row.abstract or "").strip()
     title = (row.title or "").strip()
-    if not abstract:
-        return title
-    sents = _SENT_SPLIT.split(abstract)
+    if not _SECTION_LABEL.sub("", abstract).strip():
+        return (
+            "Key finding: No abstract is available.\n"
+            "Why read: Open the linked article to assess its relevance.\n"
+            "Caveat: The findings and limitations cannot be assessed from the title alone."
+        )
+    # Keep section roles while removing their labels from extracted prose.
+    parts = _SECTION_LABEL.split(abstract)
+    sents = _SENT_SPLIT.split(parts[0])
+    outcomes = set()
+    for label, text in zip(parts[1::2], parts[2::2], strict=True):
+        sentences = _SENT_SPLIT.split(text)
+        sents.extend(sentences)
+        if label.lower().startswith(("result", "finding", "conclusion", "interpretation")):
+            outcomes.update(sentence.strip() for sentence in sentences)
     candidates = [
         sent.strip()
         for sent in sents
@@ -187,23 +206,28 @@ def _extractive(row: ItemRow) -> str:
     ]
     if not candidates:
         candidates = [sent.strip() for sent in sents if sent.strip()]
-    ranked = sorted(candidates, key=_sentence_score, reverse=True)
+    ranked = sorted(candidates, key=lambda sentence: (sentence in outcomes, _sentence_score(sentence)),
+                    reverse=True)
     selected = sorted(ranked[:2], key=lambda sent: candidates.index(sent))
-    if (row.section or "").lower() == "research" and _READER_FACETS:
+    if (row.section or "").lower() == "research" and _READER_FACETS and not outcomes:
         from .rank.contribution import analyze_contribution
 
-        evidence = analyze_contribution(title, abstract, _READER_FACETS)["evidence"]
+        clean_abstract = " ".join(sentence.strip() for sentence in sents)
+        evidence = analyze_contribution(title, clean_abstract, _READER_FACETS)["evidence"]
         if not evidence:
             from .rank.contribution_claims import contribution_claims
 
-            claims = contribution_claims(abstract)['claims']
+            claims = contribution_claims(clean_abstract)['claims']
             preferred = [c for c in claims if c['role'] in ('introduced_method', 'engineered_system')]
             evidence = [c['quote'] for c in (preferred or claims)[:1]]
         if evidence:
             selected = [evidence[0], *[sent for sent in selected if sent != evidence[0]]][:2]
     key_point = " ".join(selected).strip()
-    if not key_point:
-        return title
+    if len(key_point) > 400:
+        excerpt = key_point[:399]
+        if " " in excerpt:
+            excerpt = excerpt.rsplit(" ", 1)[0]
+        key_point = excerpt.rstrip() + "…"
     return (
         f"Key finding: {key_point}\n"
         f"Why read: {_why_read(row)}\n"
@@ -224,6 +248,7 @@ def _build_prompt(batch: list[ItemRow]) -> tuple[str, str]:
             "section": (row.section or "").strip(),
             "published_at": row.published_at.isoformat() if row.published_at else "",
             "abstract": (row.abstract or "").strip()[:1500],
+            "abstract_available": bool(_SECTION_LABEL.sub("", row.abstract or "").strip()),
             "contribution_evidence": analyze_contribution(
                 row.title, (row.abstract or "").strip()[:1500], _READER_FACETS,
             ) if row.section == "research" else None,
@@ -243,6 +268,9 @@ def _build_prompt(batch: list[ItemRow]) -> tuple[str, str]:
         "Key finding: state the concrete result, method, dataset, trial, approval, or "
         "company/regulatory move — include specific numbers/entities from the abstract; do "
         "not paraphrase the title.\n"
+        "When abstract_available is false, use 'Key finding: No abstract is available.'; "
+        "do not infer findings or numbers from the title. Explain that relevance and limitations "
+        "need the linked article in the other two fields. Never invent absent evidence.\n"
         "Why read: explicitly BRIDGE the item to the reader's own interests — name the "
         "specific interest it touches and identify supporting evidence in the abstract. "
         "Use contribution_evidence as a tentative text signal, checking its supporting passage. "
@@ -299,10 +327,17 @@ def _parse_id_summary_map(raw: str) -> dict[int, str]:
         raise ValueError("LLM output was not a JSON object")
     out: dict[int, str] = {}
     for k, v in parsed.items():
+        if not isinstance(v, str):
+            continue
+        lines = v.strip().splitlines()
+        labels = ("Key finding:", "Why read:", "Caveat:")
+        if len(lines) != len(labels) or any(
+            not line.startswith(label) or not line[len(label):].strip()
+            for line, label in zip(lines, labels, strict=True)
+        ):
+            continue
         try:
-            val = str(v).strip()
-            if val:
-                out[int(k)] = val
+            out[int(k)] = "\n".join(line.strip() for line in lines)
         except (TypeError, ValueError):
             continue
     return out

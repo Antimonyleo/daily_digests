@@ -56,6 +56,7 @@
   .time-machine-link.active {
     border-color: var(--accent); background: var(--accent-soft); color: var(--accent-strong);
   }
+  .time-machine-link.active time { color: var(--accent-strong); }
   .compact-brew-form { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0; }
   .compact-brew {
     display: flex; align-items: center; gap: 7px; min-height: 38px; padding: 5px 6px 5px 10px;
@@ -299,6 +300,7 @@
     border-color: var(--accent); background: var(--accent-soft);
     box-shadow: 0 0 0 1px var(--accent);
   }
+  .density-option input:checked + .density-card span { color: var(--accent-strong); }
   .density-option input:focus-visible + .density-card { outline: 2px solid var(--accent); outline-offset: 2px; }
   .name-prompt {
     display: grid; grid-template-columns: 1fr auto; gap: 10px;
@@ -763,18 +765,18 @@
       <p class="subhead">Fresh research and the signals you chose, ranked against your profile.</p>
     </div>
     <div class="actions">
-      <a class="btn" href="/" aria-label="Open current brew"{% if viewing_today %} aria-current="page"{% endif %}>Current brew</a>
+      <a class="btn" href="/" aria-label="Open today’s digest"{% if viewing_today %} aria-current="page"{% endif %}>Today’s digest</a>
       {% if previous_brew %}
-      <a class="btn" href="{{ previous_brew.href }}" rel="prev" title="{{ previous_brew.date_label }}">Previous brew</a>
+      <a class="btn" href="{{ previous_brew.href }}" rel="prev" title="{{ previous_brew.date_label }}">Previous digest</a>
       {% endif %}
       {% if not empty and viewing_today %}
       <form class="compact-brew-form" action="/run" method="get">
             <label class="compact-brew" for="reading-mode-select">
-          <span>Today’s serving</span>
-          <select id="reading-mode-select" name="reading_mode" aria-label="Choose serving size">
-            <option value="full">Energetic</option>
-            <option value="usual" selected>Usual</option>
-            <option value="minimal">Tired</option>
+          <span>Digest size</span>
+          <select id="reading-mode-select" name="reading_mode" aria-label="Choose digest size">
+            <option value="full">Full</option>
+            <option value="usual" selected>Standard</option>
+            <option value="minimal">Short</option>
           </select>
         </label>
         <button class="btn primary" type="submit">Brew again</button>
@@ -785,15 +787,23 @@
     </div>
   </header>
 
+  {% if viewing_today and not brewed and latest_saved_brew %}
+  <section class="source-coverage" aria-label="Latest saved digest">
+    <p>No digest has been brewed today.</p>
+    <a class="btn" href="{{ latest_saved_brew.href }}">Open latest saved digest · {{ latest_saved_brew.date_label }}</a>
+  </section>
+  {% endif %}
+
+  {% set has_helpful_ratings = (ranking_status.vote_counts | default({})).signed | default(0) %}
   <aside class="learning-summary source-coverage" aria-label="Your reading feedback">
-    <p id="learning-summary-message">{{ ranking_status.learning_message | default(ranking_status.message) }}</p>
-    <p id="usefulness-summary">{{ feedback_summary.useful }} useful of {{ feedback_summary.rated }} rated picks in this digest · {{ feedback_summary.unrated }} unrated.</p>
+    <p id="learning-summary-message">{% if ranking_status.blocked | default(false) or has_helpful_ratings %}{{ ranking_status.learning_message | default(ranking_status.message) }}{% else %}Rate a paper to help shape future digests.{% endif %}</p>
+    <p id="usefulness-summary"{% if not feedback_summary.rated %} hidden{% endif %}>{% if feedback_summary.rated %}{{ feedback_summary.useful }} useful of {{ feedback_summary.rated }} rated picks in this digest · {{ feedback_summary.unrated }} unrated.{% endif %}</p>
     <a href="/reading/study">Review useful picks per digest</a>
     <details><summary>What the feedback means</summary><p>Useful means marked Relevant or Must read. Ratings help future brews; this saved list does not reshuffle. Unrated papers are unknown, not unsuccessful recommendations.</p></details>
   </aside>
   {% if recent_brews %}
   <nav class="time-machine" aria-label="Browse recent digests">
-    <span class="time-machine-label">Time Machine</span>
+    <span class="time-machine-label">Recent digests</span>
     {% for brew in recent_brews %}
     <a class="time-machine-link{% if brew.active %} active{% endif %}" href="{{ brew.href }}"{% if brew.active %} aria-current="page"{% endif %}>
       <span>{{ brew.label }}</span><time datetime="{{ brew.id }}">{{ brew.date_label }}</time>
@@ -805,21 +815,21 @@
   {% if empty %}
   <form class="brew-choice" action="/run" method="get" aria-labelledby="brew-choice-title">
     <div>
-      <div class="brew-choice-title" id="brew-choice-title">How are we feeling today?</div>
-      <div class="brew-choice-hint">Choose today’s serving size. Source collection stays the same.<br>Summaries: {{ summarizer_label }}</div>
+      <div class="brew-choice-title" id="brew-choice-title">Choose your digest size</div>
+      <div class="brew-choice-hint">Source collection stays the same for every size.<br>Summaries: {{ summarizer_label }}</div>
     </div>
-    <div class="density-options" role="radiogroup" aria-label="Serving size">
+    <div class="density-options" role="radiogroup" aria-label="Digest size">
       <label class="density-option">
         <input name="reading_mode" type="radio" value="full">
-        <span class="density-card"><strong>Energetic</strong><span>All qualified entries</span></span>
+        <span class="density-card"><strong>Full</strong><span>All qualified entries</span></span>
       </label>
       <label class="density-option">
         <input name="reading_mode" type="radio" value="usual" checked>
-        <span class="density-card"><strong>Usual</strong><span>Up to 15 entries</span></span>
+        <span class="density-card"><strong>Standard</strong><span>Up to 15 entries</span></span>
       </label>
       <label class="density-option">
         <input name="reading_mode" type="radio" value="minimal">
-        <span class="density-card"><strong>Tired</strong><span>5 research + 1 per other section</span></span>
+        <span class="density-card"><strong>Short</strong><span>5 research + 1 per other section</span></span>
       </label>
     </div>
     <button class="btn primary" type="submit">Brew today’s digest</button>
@@ -1108,7 +1118,7 @@
     {% endif %}
 
     <div class="footer">
-      Your reading history and ratings stay on this computer.
+      Your reading history and ratings are saved locally.
     </div>
   </section>
   {% if interest_coverage %}
@@ -1178,7 +1188,7 @@
     <div class="about-body">
     <section class="ranking-panel" aria-live="polite">
       <div class="ranking-kicker">Personalization</div>
-      <div class="ranking-counts">
+      <div class="ranking-counts" id="ranking-counts"{% if not has_helpful_ratings %} hidden{% endif %}>
         <span class="count-pill good">Relevant <span id="vote-good">{{ ranking_status.vote_counts.good }}</span></span>
         <span class="count-pill bad">Not for me <span id="vote-bad">{{ ranking_status.vote_counts.bad }}</span></span>
         <span class="count-pill">Helpful ratings <span id="vote-signed">{{ ranking_status.vote_counts.signed }}</span>/<span id="vote-threshold">{{ ranking_status.min_votes_for_lr }}</span></span>
@@ -1724,6 +1734,8 @@
     }
     if (!status || !status.vote_counts) return;
     const counts = status.vote_counts;
+    const rankingCounts = document.getElementById('ranking-counts');
+    if (rankingCounts) rankingCounts.hidden = !counts.signed;
     const goodEl = document.getElementById("vote-good");
     const badEl = document.getElementById("vote-bad");
     const signedEl = document.getElementById("vote-signed");
@@ -1736,12 +1748,15 @@
     if (trainBtn) trainBtn.disabled = !status.can_train;
     if (!msgEl) return;
     const learning = document.getElementById('learning-summary-message');
-    if (learning) learning.textContent = status.learning_message || status.message;
+    if (learning) learning.textContent = counts.signed ? status.learning_message || status.message : 'Rate a paper to help shape future digests.';
     const cards = [...document.querySelectorAll('.item')];
     const rated = cards.filter(card => card.dataset.currentGrade !== '');
     const useful = rated.filter(card => Number(card.dataset.currentGrade) >= 70);
     const summary = document.getElementById('usefulness-summary');
-    if (summary) summary.textContent = `${useful.length} useful of ${rated.length} rated picks in this digest · ${cards.length - rated.length} unrated.`;
+    if (summary) {
+      summary.hidden = !rated.length;
+      summary.textContent = rated.length ? `${useful.length} useful of ${rated.length} rated picks in this digest · ${cards.length - rated.length} unrated.` : '';
+    }
     msgEl.textContent = status.message || `${status.remaining_votes_for_lr} more ratings unlock personal ranking.`;
   }
 

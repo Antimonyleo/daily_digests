@@ -8,7 +8,7 @@ import sys
 import uuid
 import zlib
 from collections.abc import Iterable
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -359,6 +359,18 @@ class DigestItemRow(Base):
     )
 
 
+class EmailDigestItemRow(Base):
+    """Immutable vote-label mapping for the slate of a confirmed email send."""
+
+    __tablename__ = "email_digest_items"
+
+    run_id = Column(String, primary_key=True)
+    item_label = Column(String, primary_key=True)
+    digest_id = Column(String, ForeignKey("digests.id", ondelete="CASCADE"), nullable=False, index=True)
+    item_id = Column(Integer, ForeignKey("items.id", ondelete="CASCADE"), nullable=False, index=True)
+    sent_at = Column(DateTime(timezone=True), nullable=False)
+
+
 class ImpressionRow(Base):
     """Immutable, append-only log of what was shown in each brew RUN.
 
@@ -537,9 +549,15 @@ def _migrate_sqlite_schema(eng) -> None:
         backup_file = db_file.parent / "backups" / "digest-pre-v1.db"
         if db_file.exists() and not backup_file.exists():
             backup_file.parent.mkdir(parents=True, exist_ok=True)
-            with sqlite3.connect(db_file) as source, sqlite3.connect(backup_file) as target:
-                source.backup(target)
-            mark_private_state_changed(backup_file)
+            try:
+                with closing(sqlite3.connect(db_file)) as source, closing(sqlite3.connect(backup_file)) as target:
+                    source.backup(target)
+            finally:
+                # Closing native SQLite handles can checkpoint the source WAL
+                # as well as writing the backup, outside SQLAlchemy's hooks.
+                for database in (db_file, backup_file):
+                    for suffix in ("", "-wal", "-journal"):
+                        mark_private_state_changed(str(database) + suffix)
 
     with eng.begin() as conn:
         for table_name, columns in required_columns.items():
@@ -1139,8 +1157,8 @@ def exclude_previously_shown(
     the web UI and never marked ``sent_at``; nothing was ever suppressed, so
     yesterday's items reappeared today.
 
-    We now suppress on membership in ANY current digest or a viewed, selected
-    browser impression within ``days_lookback`` (matching the 30-day item
+    We now suppress on membership in ANY current digest, a confirmed email,
+    or a viewed, selected browser impression within ``days_lookback`` (matching the 30-day item
     retention). Funding calls and events are standing, deadline-bound shortlists:
     prior display alone never hides an otherwise active call. Their actionability,
     topic, explicit feedback, and ``known`` gates still run on every brew.
@@ -1176,6 +1194,13 @@ def exclude_previously_shown(
         shown_ids.update(
             int(item_id) for item_id in s.execute(impression_stmt).scalars()
         )
+        email_stmt = select(EmailDigestItemRow.item_id).where(
+            EmailDigestItemRow.sent_at >= cutoff,
+            EmailDigestItemRow.item_id.in_(ids),
+        )
+        if exclude_digest_id is not None:
+            email_stmt = email_stmt.where(EmailDigestItemRow.digest_id != exclude_digest_id)
+        shown_ids.update(int(item_id) for item_id in s.execute(email_stmt).scalars())
         deadline_ids = {
             int(row.id)
             for row in rows
@@ -1210,6 +1235,7 @@ def prune(days: int) -> int:
             select(CarryoverItemRow.item_id).distinct().scalar_subquery()
         )
         digest_item_subq = select(DigestItemRow.item_id).distinct().scalar_subquery()
+        email_item_subq = select(EmailDigestItemRow.item_id).distinct().scalar_subquery()
         impression_item_subq = select(ImpressionRow.item_id).distinct().scalar_subquery()
         stmt = delete(ItemRow).where(
             ItemRow.fetched_at < cutoff,
@@ -1219,6 +1245,7 @@ def prune(days: int) -> int:
             ItemRow.id.not_in(known_subq),
             ItemRow.id.not_in(carryover_subq),
             ItemRow.id.not_in(digest_item_subq),
+            ItemRow.id.not_in(email_item_subq),
             ItemRow.id.not_in(impression_item_subq),
         )
         result = s.execute(stmt)
@@ -1887,12 +1914,51 @@ def write_summaries(
                     row.summary_backend = backends.get(int(item_id))
 
 
-def mark_sent(digest_id: str) -> None:
+def mark_sent(
+    digest_id: str, *, run_id: str | None = None,
+    labeled_items: list[tuple] | None = None,
+) -> None:
+    """Freeze the labels actually emailed after delivery has been confirmed.
+
+    Explicit labels protect a send while another preview replaces the mutable
+    slate. Repeated confirmation of the same run cannot change its mapping.
+    Legacy callers can freeze the current slate on its first confirmed send.
+    """
     init_db()
     with session_scope() as s:
         d = s.get(DigestRow, digest_id)
-        if d is not None:
-            d.sent_at = datetime.now(timezone.utc)
+        if d is None:
+            return
+        if run_id is None and d.sent_at is not None:
+            # A legacy confirmation cannot establish which of several previews
+            # was sent. Preserve any earlier snapshot instead of guessing.
+            return
+        run_id = run_id or uuid.uuid4().hex
+        if labeled_items is None:
+            labeled_items = list(s.execute(select(
+                DigestItemRow.item_label, DigestItemRow.item_id,
+            ).where(DigestItemRow.digest_id == digest_id)).all())
+            if not labeled_items:
+                labeled_items = list(s.execute(select(
+                    ItemRow.item_label, ItemRow.id,
+                ).where(ItemRow.digest_id == digest_id, ItemRow.item_label.isnot(None))).all())
+        mapping = {str(item[0]): int(item[1]) for item in labeled_items}
+        if len(mapping) != len(labeled_items):
+            raise ValueError('Sent email labels must be unique')
+        existing = s.execute(select(EmailDigestItemRow).where(
+            EmailDigestItemRow.run_id == run_id,
+        )).scalars().all()
+        if existing:
+            if any(row.digest_id != digest_id for row in existing) or {
+                row.item_label: row.item_id for row in existing
+            } != mapping:
+                raise ValueError('Sent email vote-label mapping is immutable')
+            return
+        now = datetime.now(timezone.utc)
+        for label, item_id in mapping.items():
+            s.add(EmailDigestItemRow(run_id=run_id, digest_id=digest_id,
+                                    item_label=label, item_id=item_id, sent_at=now))
+        d.sent_at = now
 
 
 def digest_was_sent(digest_id: str) -> bool:

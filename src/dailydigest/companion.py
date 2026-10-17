@@ -170,6 +170,7 @@ def _schedule_once(store, settings, lock, status, source_path, *, now=None):
             status.update(last_status="pending_uploaded_state", error=None, error_type=None)
             return
         status.update(last_status="running", last_attempt=instant.isoformat(), error=None, error_type=None)
+        root = None
         try:
             original = path.read_text()
             snapshot = validate_snapshot(original)
@@ -242,7 +243,9 @@ def _schedule_once(store, settings, lock, status, source_path, *, now=None):
                         if file.is_file() and not file.is_symlink() and file.name != ".compute.lock"}
             if ".env" in snapshot["files"]:
                 exported[".env"] = snapshot["files"][".env"]
-            updated = json.dumps({"format": "dailydigest-browser-v1", "files": exported})
+            # Portable uploads deliberately omit credentials. Preserve that
+            # metadata so a browser restore retains its own matching secrets.
+            updated = json.dumps({**snapshot, "files": exported})
             validate_snapshot(updated)
             _write_private(path, updated)
             status.update(last_status="success", last_success=instant.isoformat(), error=None)
@@ -251,6 +254,11 @@ def _schedule_once(store, settings, lock, status, source_path, *, now=None):
             # provider URLs, credentials, reader content, or subprocess output.
             status.update(last_status="failed", error="Scheduled brew failed; previous snapshot preserved",
                           error_type=type(exc).__name__)
+        finally:
+            if root is not None:
+                # Only this invocation's extracted state is disposable. Older
+                # workspaces may contain recovery data and need a separate audit.
+                shutil.rmtree(root)
 
 
 def _schedule_loop(stop, job):
@@ -487,7 +495,8 @@ def create_app(*, token, allowed_origin="https://antimonyleo.github.io", setting
             if not digest_id:
                 missing_digest += 1
                 continue
-            votes.append({"mail_id": reply_id(reply), "line": line, "digest_id": digest_id})
+            votes.append({"mail_id": reply_id(reply), "line": line, "digest_id": digest_id,
+                          "run_id": reply.get("run_id")})
         return {"ok": True, "scope": "browser", "votes": votes, "errors": [],
                 "messages": len(replies), "skipped_unauthorized": unauthorized,
                 "skipped_missing_digest": missing_digest}

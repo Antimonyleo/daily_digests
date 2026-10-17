@@ -1467,6 +1467,9 @@ def index(request: Request, digest_id: str = "") -> Response:
             "salutation": "Welcome back",
             "recent_brews": recent_brews,
             "previous_brew": previous_brew,
+            "latest_saved_brew": next(
+                (brew for brew in recent_brews if brew["id"] != today_id), None
+            ),
             "overflow_signature": overflow_signature,
             "feedback_warning": _feedback_reasons()[1],
             "daily_note": tea_notes[0],

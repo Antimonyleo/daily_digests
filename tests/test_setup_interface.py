@@ -61,6 +61,27 @@ def test_settings_starts_with_interests_and_discloses_optional_fields(monkeypatc
     assert html.index('id="top_research"') < html.index('id="summary-options"')
 
 
+def test_setup_keeps_first_interest_ahead_of_examples_and_storage_help(monkeypatch, tmp_path):
+    html = _render_settings(monkeypatch, tmp_path, topics="")
+
+    assert html.index('id="interest-rows"') < html.index('id="priority-options"')
+    assert html.index('id="topics"') < html.index('id="example-discipline"')
+    assert html.index('id="topics"') < html.index('id="browser-storage-note"')
+    assert '>Load example</button>' in html
+    assert 'data-browser-action="open-guide"' in html
+    assert 'data-browser-action="open-backup"' in html
+
+
+def test_returning_settings_does_not_repeat_first_visit_instructions(monkeypatch, tmp_path):
+    html = _render_settings(monkeypatch, tmp_path, topics="RNA delivery | 100")
+
+    assert 'DailyDigest settings' in html
+    assert 'Update your research interests and reading preferences.' in html
+    assert 'No account is needed' not in html
+    assert 'Loading an example is available only' not in html
+    assert 'id="example-discipline"' not in html
+
+
 @pytest.mark.parametrize("backend", ["extractive", "api", "anthropic", "claude_cli", "codex_cli"])
 def test_collapsed_provider_settings_keep_configured_values(monkeypatch, tmp_path, backend):
     html = _render_settings(

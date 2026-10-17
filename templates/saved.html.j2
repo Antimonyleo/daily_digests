@@ -75,7 +75,7 @@
 
   <p class="archive-meta" id="archive-count">{{ total }} saved item{{ '' if total == 1 else 's' }}{% if query %} matching “{{ query }}”{% endif %}</p>
   {% if items %}
-  <main class="saved-list" id="saved-list">
+  <div class="saved-list" id="saved-list">
     {% for item in items %}
     <article class="saved-card" data-item-id="{{ item.id }}" data-current-grade="{{ item.current_grade if item.current_grade is not none else '' }}">
       <div>
@@ -91,7 +91,7 @@
       <button class="btn remove-saved" type="button">Remove</button>
     </article>
     {% endfor %}
-  </main>
+  </div>
   {% else %}
   <div class="empty-archive">
     {% if query %}No saved items match “{{ query }}”.{% else %}Nothing saved yet. Use “Save for later” on any digest item.{% endif %}

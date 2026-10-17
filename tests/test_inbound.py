@@ -92,8 +92,9 @@ def test_inbound_accepts_digest_recipient_and_marks_seen_after_vote_save(reply_m
 
     votes = []
 
-    def record(line, digest_id):
+    def record(line, digest_id, *, run_id, sent_only):
         assert reply_mailbox.stored == []
+        assert run_id is None and sent_only
         votes.append((line, digest_id))
         return {"up": 1}
 

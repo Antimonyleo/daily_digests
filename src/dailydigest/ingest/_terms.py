@@ -39,7 +39,7 @@ def profile_search_term_groups(
         prof = load_profile()
     except Exception as e:  # noqa: BLE001
         logger.warning("profile_search_terms: could not load profile: %s", e)
-        return [], []
+        raise RuntimeError("Could not load profile for personalized retrieval") from e
     # Search synonyms only when explicitly supplied by the reader. Canonical
     # names remain included even for profiles with different legacy keywords.
     canonical = getattr(prof, "canonical_facets", None) or {}
@@ -78,7 +78,7 @@ def watched_author_names(max_authors: int = 25) -> list[str]:
         prof = load_profile()
     except Exception as e:  # noqa: BLE001
         logger.warning("watched_author_names: could not load profile: %s", e)
-        return []
+        raise RuntimeError("Could not load profile for watched-author retrieval") from e
     configured = [
         str(a).strip() for a in getattr(prof, "authors_of_interest", []) or []
     ]

@@ -534,6 +534,13 @@ def ingest_all(
             )
     deduped = dedupe_by_url(all_items)
     en_only = filter_english(deduped)
+    retained = {id(item) for item in en_only}
+    for stat in stats:
+        source_rows = [item for item in deduped if getattr(item, 'source', None) == stat.source]
+        stat.diagnostics['language_filter'] = {
+            'input': len(source_rows),
+            'dropped': sum(id(item) not in retained for item in source_rows),
+        }
     logger.info(
         "ingest aggregate: %d raw -> %d deduped -> %d english",
         len(all_items),
@@ -547,6 +554,7 @@ def ingest_all(
             "raw_items": len(all_items),
             "deduped": len(deduped),
             "english": len(en_only),
+            "language_dropped": len(deduped) - len(en_only),
         },
     )
     if not en_only:
@@ -1453,6 +1461,9 @@ def run_all(
     check_cancel()
     funnel_audit = {
         "ranker_version": RANKER_VERSION,
+        "language_filter_drops": sum(
+            int(stat.diagnostics.get('language_filter', {}).get('dropped', 0)) for stat in ingest_stats
+        ),
         "window_days": days,
         "recent_items": len(recent_raw),
         "recent_research_items": sum(
@@ -2088,10 +2099,11 @@ def run_all(
             "render_done",
             {"digest_id": digest_id, "html_bytes": len(html)},
         )
-        subject = f"DailyDigest {digest_id}"
+        subject = f"DailyDigest {digest_id} [run:{run_id}]"
         sent = send_digest(html, subject, dry_run=dry_run)
         if sent and not dry_run and section_settings.resend_api_key and section_settings.digest_to:
-            mark_sent(digest_id)
+            mark_sent(digest_id, run_id=run_id,
+                      labeled_items=[(label, int(row.id)) for row, _score, label in labeled])
         elif (not sent and not dry_run and section_settings.resend_api_key
               and section_settings.digest_to):
             warnings.append("The digest is saved locally, but email delivery was not confirmed.")

@@ -2,23 +2,24 @@
 {% block title %}Set up DailyDigest{% endblock %}
 {% block extra_styles %}
   .wrap { max-width: 860px; }
-  .card { padding: 28px; overflow: visible; }
+  .card { padding: clamp(16px, 4vw, 28px); overflow: visible; }
   .settings-nav { display: flex; justify-content: flex-start; margin-bottom: 18px; }
   h1 { font-size: 30px; line-height: 1.1; margin: 0 0 8px 0; letter-spacing: 0; }
   .lede { color: var(--muted); margin: 0 0 24px 0; font-size: 14px; line-height: 1.5; }
-  .browser-storage-note { margin: 0 0 24px; padding: 14px 16px; border: 1px solid var(--control-border); border-radius: 8px; background: var(--panel); font-size: 13px; line-height: 1.5; }
-  .browser-storage-note p { margin: 6px 0 0; }
+  .browser-storage-note { margin: 14px 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+  .browser-storage-note p { margin: 0; }
   .step { margin-bottom: 30px; padding-top: 4px; }
   .step h2 { font-size: 14px; letter-spacing: 0.06em; text-transform: uppercase;
              color: var(--muted); margin: 0 0 8px 0; }
   label { display: block; font-size: 13px; font-weight: 600; margin: 12px 0 4px; }
+  #interests-label { font-size: 13px; font-weight: 600; margin: 12px 0 4px; }
   textarea, input[type="text"], input[type="url"], input[type="password"], input[type="number"], select {
     width: 100%; padding: 8px 10px; border: 1px solid var(--control-border); border-radius: 6px;
     font-size: 13px; font-family: inherit; background: var(--card); color: var(--text);
   }
   textarea { min-height: 110px; resize: vertical; line-height: 1.5; }
   .hint { font-size: 12px; color: var(--muted); margin-top: 4px; }
-  .settings-actions { position: sticky; bottom: 0; z-index: 2; padding: 10px 0; background: var(--card); border-top: 1px solid var(--border); }
+  .settings-actions { padding: 10px 0; background: var(--card); border-top: 1px solid var(--border); }
   .settings-actions .hint { margin: 4px 0; }
   .interest-row details { margin-top: 6px; }
   .interest-row summary { cursor: pointer; color: var(--muted); font-size: 12px; }
@@ -34,6 +35,10 @@
   #topics { min-height: 245px; font-size: 15px; }
   textarea::placeholder, input::placeholder { color: var(--muted); opacity: 1; }
   .example-note { color: var(--muted); font-size: 12px; line-height: 1.5; margin: 8px 0; }
+  .example-start { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 8px; align-items: center; }
+  .example-start label { grid-column: 1 / -1; margin-bottom: 0; }
+  .example-start select { min-width: 0; }
+  .example-start .btn { white-space: nowrap; padding-inline: 9px; }
   .settings-disclosure {
     border-top: 1px solid var(--border); margin-top: 20px; padding-top: 16px;
   }
@@ -147,13 +152,8 @@
   {% if not (first_run | default(not form.topics)) %}<nav class="settings-nav" aria-label="Settings navigation">
     <a class="btn" href="/">← Back to today’s digest</a>
   </nav>{% endif %}
-  <h1>{{ 'DailyDigest settings' if form.topics else 'Welcome to DailyDigest' }}</h1>
-  <p class="lede">Start with a few research interests or choose an editable example. Priorities are optional. No account is needed.</p>
-  <aside id="browser-storage-note" class="browser-storage-note" aria-label="Your data on this device" hidden>
-    <strong>Your reading desk is saved in this browser</strong>
-    <p>Your interests, ratings and saved papers are saved automatically. No DailyDigest account is needed, and there is no automatic sync between devices.</p>
-    <p>Clearing browser data can remove your reading desk. Use <strong>Backup</strong> in the bottom bar to export or restore it. People sharing this browser profile share the same reading desk.</p>
-  </aside>
+  <h1>{{ 'Welcome to DailyDigest' if first_run | default(not form.topics) else 'DailyDigest settings' }}</h1>
+  <p class="lede">{% if first_run | default(not form.topics) %}Add a few research interests below. Examples and priorities are optional.{% else %}Update your research interests and reading preferences.{% endif %}</p>
 
   {% if errors %}
 	  <div class="errors" role="alert" aria-live="assertive" tabindex="-1">
@@ -166,9 +166,20 @@
       <input type="hidden" id="user-timezone" name="user_tz" value="{{ form.user_tz }}">
     <div class="step">
       <h2>Your research interests</h2>
+      <div id="interests-label">What would you like to read about?</div>
+      <div id="interest-editor" hidden>
+        <div id="interest-rows"></div>
+        <details id="priority-options" class="settings-disclosure"{% if form.topics %} open{% endif %}><summary>Set topic priorities (optional)</summary><p class="hint">Topics start with equal shares. Adjust individual percentages above when useful; the total must be 100%.</p></details>
+        <div class="interest-actions"><button type="button" class="btn" id="add-interest">Add interest</button><button type="button" class="btn priority-control" id="even-interests">Distribute evenly</button><button type="button" class="btn priority-control" id="normalize-interests">Normalize to 100%</button><output class="priority-control" id="interest-total" aria-live="polite"></output></div>
+        <p class="hint priority-control">Give each topic a percentage. The total must be 100%. Use Distribute evenly or Normalize to 100% to adjust the shares.</p>
+      </div>
+      <textarea id="topic-details" name="topic_details" hidden disabled>{{ form.topic_details | default('') }}</textarea>
+      <input id="topic-weight-mode" name="topic_weight_mode" type="hidden" value="percentage" disabled>
+      <textarea id="topics" name="topics" required aria-labelledby="interests-label" aria-describedby="topics-hint example-profile-note" placeholder="DNA nanotechnology&#10;RNA nanotechnology&#10;nucleic acid delivery&#10;mRNA therapeutics&#10;gene therapy&#10;protein engineering&#10;protein structure prediction&#10;colloidal self-assembly&#10;superlattice materials&#10;machine learning for biomolecular design">{{ form.topics }}</textarea>
+      <div class="hint" id="topics-hint">Add 1–10 specific research topics. The examples above are suggestions, not your saved profile.<noscript> Use one topic per line with an optional relative weight, such as <code>RNA delivery | 3</code>. Any positive relative weights work.</noscript></div>
       {% if not form.topics %}
       <div class="example-start">
-        <label for="example-discipline">Start with an example (optional)</label>
+        <label for="example-discipline">Or start with an example (optional)</label>
         <select id="example-discipline">
           <option value="biomolecular">Biomolecular research</option>
           <option value="engineering">Materials &amp; engineering</option>
@@ -176,21 +187,14 @@
           <option value="ecology">Ecology &amp; environment</option>
           <option value="astronomy">Physics &amp; astronomy</option>
         </select>
-        <button class="btn" id="use-example-profile" type="button">Load selected example</button>
+        <button class="btn" id="use-example-profile" type="button">Load example</button>
       </div>
       {% endif %}
-      <p class="example-note" id="example-profile-note">Examples are optional, editable starting points. Nothing is saved until you save your settings. Loading an example is available only while your interests are empty.</p>
-      <label for="topics">What would you like to read about?</label>
-      <div id="interest-editor" hidden>
-        <details id="priority-options" class="settings-disclosure"{% if form.topics %} open{% endif %}><summary>Set topic priorities (optional)</summary><p class="hint">Topics start with equal shares. Adjust individual percentages below when useful; the total must be 100%.</p></details>
-        <div id="interest-rows"></div>
-        <div class="interest-actions"><button type="button" class="btn" id="add-interest">Add interest</button><button type="button" class="btn priority-control" id="even-interests">Distribute evenly</button><button type="button" class="btn priority-control" id="normalize-interests">Normalize to 100%</button><output class="priority-control" id="interest-total" aria-live="polite"></output></div>
-        <p class="hint priority-control">Give each topic a percentage. The total must be 100%. Use Distribute evenly or Normalize to 100% to adjust the shares.</p>
-      </div>
-      <textarea id="topic-details" name="topic_details" hidden disabled>{{ form.topic_details | default('') }}</textarea>
-      <input id="topic-weight-mode" name="topic_weight_mode" type="hidden" value="percentage" disabled>
-      <textarea id="topics" name="topics" required aria-describedby="topics-hint example-profile-note" placeholder="DNA nanotechnology&#10;RNA nanotechnology&#10;nucleic acid delivery&#10;mRNA therapeutics&#10;gene therapy&#10;protein engineering&#10;protein structure prediction&#10;colloidal self-assembly&#10;superlattice materials&#10;machine learning for biomolecular design">{{ form.topics }}</textarea>
-      <div class="hint" id="topics-hint">Add 1–10 specific research topics. The examples above are suggestions, not your saved profile.<noscript> Use one topic per line with an optional relative weight, such as <code>RNA delivery | 3</code>. Any positive relative weights work.</noscript></div>
+      <p class="example-note" id="example-profile-note">{% if not form.topics %}Examples are editable starting points. {% endif %}Nothing is saved until you save your settings.</p>
+      <aside id="browser-storage-note" class="browser-storage-note" aria-label="Your data in this browser" hidden>
+        <p>Saved in this browser. Other browsers and profiles have separate data.
+        <button type="button" data-browser-action="open-backup">Backup &amp; transfer</button><button type="button" data-browser-action="open-guide">Quick guide</button></p>
+      </aside>
       <details class="settings-disclosure" id="search-tips">
         <summary>Search tips and wording checks (optional)</summary>
         <p class="hint">Priorities guide relative emphasis, not guaranteed digest slots. Adding or removing a topic adjusts the shares; old relative weights are converted to percentages when saved. Search details let you add alternative terms or describe useful papers.</p>

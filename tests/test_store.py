@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 from datetime import UTC, datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 
@@ -559,7 +560,25 @@ def test_legacy_vote_migration_keeps_latest_and_creates_backup(monkeypatch, tmp_
     store_mod._ENGINE = None
     store_mod._SessionLocal = None
     store_mod._INITIALIZED = False
+    backup_connections, notifications = [], []
+    original_connect = sqlite3.connect
+
+    def track_backup_connection(database, *args, **kwargs):
+        connection = original_connect(database, *args, **kwargs)
+        if isinstance(database, Path):
+            backup_connections.append(connection)
+        return connection
+
+    monkeypatch.setattr(store_mod.sqlite3, "connect", track_backup_connection)
+    monkeypatch.setattr(store_mod, "mark_private_state_changed", lambda path: notifications.append(str(path)))
     store_mod.init_db()
+    assert len(backup_connections) == 2
+    for connection in backup_connections:
+        with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+            connection.execute("SELECT 1")
+    backup_file = tmp_path / "backups" / "digest-pre-v1.db"
+    assert set(notifications) == {str(path) + suffix for path in (db_path, backup_file)
+                                  for suffix in ("", "-wal", "-journal")}
 
     with sqlite3.connect(db_path) as conn:
         assert conn.execute("SELECT value FROM votes").fetchall() == [(-1,)]

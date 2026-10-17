@@ -1035,13 +1035,13 @@ def test_explicit_current_and_previous_brew_navigation(tmp_path, monkeypatch, vi
     monkeypatch.setattr(web, '_load_today', lambda *_args, **_kwargs: ([], {}))
     response = web.index(_request('GET', '/'), digest_id=viewed)
     page = _text_payload(response)
-    assert 'href="/" aria-label="Open current brew"' in page
-    assert '>Current brew</a>' in page
+    assert 'href="/" aria-label="Open today’s digest"' in page
+    assert '>Today’s digest</a>' in page
     if previous is None:
-        assert '>Previous brew</a>' not in page
+        assert '>Previous digest</a>' not in page
     else:
         assert f'href="/?digest_id={previous}" rel="prev"' in page
-        assert '>Previous brew</a>' in page
+        assert '>Previous digest</a>' in page
 
 
 def test_index_falls_back_to_today_outside_the_time_machine_window(
@@ -1074,6 +1074,69 @@ def test_index_falls_back_to_today_outside_the_time_machine_window(
     assert response.status_code == 200
     assert loaded == ["2026-05-05"]
     assert "2026-05-01" not in _text_payload(response)
+
+
+@pytest.mark.parametrize("today_brewed", [False, True])
+def test_empty_today_prominently_links_latest_saved_digest_without_switching_dates(
+    tmp_path, monkeypatch, today_brewed
+):
+    from dailydigest import web
+
+    profile_path = tmp_path / "profile.yaml"
+    profile_path.write_text("name: Ada\nkeywords: [RNA]\ndownweight: []\n")
+    monkeypatch.setattr(web, "_get_profile_path", lambda: profile_path)
+    monkeypatch.setattr(web, "_digest_id", lambda: "2026-05-05")
+    monkeypatch.setattr(web, "_recent_digest_ids", lambda *_args, **_kwargs: ["2026-05-03"])
+    monkeypatch.setattr(web, "_digest_exists", lambda value: today_brewed if value == "2026-05-05" else True)
+    _stub_index_dependencies(web, monkeypatch)
+    loaded = []
+
+    def load(day, **_kwargs):
+        loaded.append(day)
+        return [], {}
+
+    monkeypatch.setattr(web, "_load_today", load)
+    response = web.index(_request("GET", "/"))
+    html = _text_payload(response)
+
+    assert loaded == ["2026-05-05"]
+    assert 'action="/run"' in html
+    if today_brewed:
+        assert 'Open latest saved digest' not in html
+    else:
+        assert 'No digest has been brewed today.' in html
+        assert re.search(r'href="/\?digest_id=2026-05-03"[^>]*>Open latest saved digest', html)
+
+
+@pytest.mark.parametrize("rated", [0, 1])
+def test_digest_feedback_shows_statistics_only_after_ratings(tmp_path, monkeypatch, rated):
+    from dailydigest import web
+
+    profile_path = tmp_path / "profile.yaml"
+    profile_path.write_text("name: Ada\nkeywords: [RNA]\ndownweight: []\n")
+    monkeypatch.setattr(web, "_get_profile_path", lambda: profile_path)
+    monkeypatch.setattr(web, "_recent_digest_ids", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(web, "_digest_exists", lambda _day: False)
+    monkeypatch.setattr(web, "_load_today", lambda *_args, **_kwargs: ([], {}))
+    _stub_index_dependencies(web, monkeypatch)
+    response = web.index(_request("GET", "/"))
+    context = dict(response.context)
+    context["feedback_summary"] = {"rated": rated, "useful": rated, "unrated": 3 - rated}
+    context["ranking_status"] = {
+        **context["ranking_status"],
+        "vote_counts": {"good": rated, "bad": 0, "signed": rated},
+        "learning_message": f"{rated} helpful ratings",
+    }
+    html = _text_payload(web.templates.TemplateResponse(
+        _request("GET", "/"), "digest_web.html.j2", context,
+    ))
+
+    if rated:
+        assert '1 useful of 1 rated picks in this digest' in html
+        assert '<p id="learning-summary-message">1 helpful ratings</p>' in html
+    else:
+        assert '0 useful of 0 rated picks' not in html
+        assert '<p id="learning-summary-message">Rate a paper to help shape future digests.</p>' in html
 
 
 @pytest.mark.parametrize("digest_exists", [True, False])
@@ -1610,6 +1673,7 @@ def test_saved_archive_is_searchable_and_escapes_item_content(tmp_path, monkeypa
     assert "&lt;script&gt;" not in text
     assert 'name="q"' in text
     assert "1 saved item" in text
+    assert len(re.findall(r"<main(?:\s|>)", text)) == 1
 
     all_items = _text_payload(web.saved_items(_request("GET", "/saved"), q=""))
     assert "&lt;script&gt;alert(1)&lt;/script&gt;" in all_items
@@ -2623,13 +2687,13 @@ def test_run_page_asks_for_reading_depth_before_brewing(monkeypatch, tmp_path):
     response = web.run_get(_request("GET", "/run"))
     body = _text_payload(response)
 
-    assert "How are we feeling today?" in body
+    assert "Choose your digest size" in body
     assert 'name="reading_mode"' in body
     assert 'value="full"' in body
     assert 'value="usual"' in body
     assert 'value="minimal"' in body
     assert "5 research picks + 1 per other section" in body
-    assert body.index("How are we feeling today?") < body.index("Brew today’s digest")
+    assert body.index("Choose your digest size") < body.index("Brew today’s digest")
     assert "morning tea" not in body.lower()
 
 
@@ -2686,7 +2750,9 @@ def test_main_page_exposes_one_click_reading_modes_and_settings_can_return(
 
     assert "Welcome back, Ada" in main
     assert "new Date().getHours()" in main
-    assert "How are we feeling today?" in main
+    assert "Choose your digest size" in main
+    for label in ("Short", "Standard", "Full"):
+        assert f'<strong>{label}</strong>' in main
     assert 'name="reading_mode"' in main
     assert 'value="full"' in main
     assert 'value="usual"' in main
@@ -2773,6 +2839,9 @@ def test_main_page_choice_arrives_at_run_page_and_starts_once(monkeypatch, tmp_p
     assert 'value="minimal" checked' in body
     assert "const AUTOSTART = true;" in body
     assert "if (AUTOSTART) startBrew();" in body
+    assert 'Choose your digest size' in body
+    for label in ("Short", "Standard", "Full"):
+        assert f'<span class="mode-title">{label}</span>' in body
 
 
 def test_settings_offer_native_api_and_signed_in_cli_summarizers(monkeypatch, tmp_path):
@@ -2861,7 +2930,9 @@ def test_theme_controls_and_safe_pwa_assets_are_exposed(monkeypatch, tmp_path):
     assert "@media (max-width: 680px)" in page
     assert ".app-utilities {" in page
     assert "display: flex; flex-direction: column" in page
-    assert "position: relative; right: auto; bottom: auto; width: max-content" in page
+    utilities = re.search(r"\.app-utilities \{([^}]+)\}", page).group(1)
+    assert "position: relative" in utilities
+    assert "position: fixed" not in utilities
     assert "navigator.serviceWorker.register" in page
     assert 'data-theme="light"' in page
     assert "@media (prefers-reduced-motion: no-preference)" in page
@@ -2971,13 +3042,13 @@ def test_setup_research_examples_are_placeholders_and_keep_saved_values(monkeypa
     assert 'id="use-example-profile"' not in rendered
 
 
-def test_first_visit_puts_optional_examples_before_blank_interests(monkeypatch, tmp_path):
+def test_first_visit_puts_blank_interests_before_optional_examples(monkeypatch, tmp_path):
     from dailydigest import web
 
     monkeypatch.setattr(web, '_get_profile_path', lambda: tmp_path / 'missing-profile.yaml')
     rendered = web.setup_get(_request('GET', '/setup')).body.decode()
     assert 'Welcome to DailyDigest' in rendered
-    assert rendered.index('id="example-discipline"') < rendered.index('id="interest-rows"')
+    assert rendered.index('id="interest-rows"') < rendered.index('id="example-discipline"')
     assert 'value="chemistry"' in rendered and 'value="astronomy"' in rendered
     assert '<details class="settings-disclosure" id="search-tips">' in rendered
     assert 'Nothing is saved until' in rendered

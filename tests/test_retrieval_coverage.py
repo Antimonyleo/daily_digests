@@ -503,7 +503,7 @@ def test_openalex_author_resolution_partial_failure_is_explicit(monkeypatch):
         if url == openalex.OpenAlexAuthorsSource.AUTHORS_URL:
             if params["search"] == "B":
                 raise RuntimeError("failed")
-            return {"results": [{"id": "https://openalex.org/A123"}]}
+            return {"results": [{"id": "https://openalex.org/A123", "display_name": "A"}]}
         return {"results": [_work("one")], "meta": {"count": 1}}
 
     monkeypatch.setattr(openalex, "_get_json", get_json)

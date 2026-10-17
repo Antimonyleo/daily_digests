@@ -577,9 +577,9 @@ def _normalized_title_key(title: str) -> str:
 
 
 def filter_english(items: list[Item]) -> list[Item]:
-    """Best-effort English filter using langdetect on title+abstract."""
+    """Drop only confident non-English long text; technical titles are ambiguous."""
     try:
-        from langdetect import DetectorFactory, detect
+        from langdetect import DetectorFactory, detect_langs
 
         DetectorFactory.seed = 0
     except Exception:
@@ -588,11 +588,12 @@ def filter_english(items: list[Item]) -> list[Item]:
     out: list[Item] = []
     for it in items:
         sample = (it.title + " " + it.abstract).strip()
-        if len(sample) < 20:
+        if len(sample) < 200:
             out.append(it)
             continue
         try:
-            if detect(sample) == "en":
+            languages = detect_langs(sample)
+            if not languages or languages[0].lang == 'en' or languages[0].prob < 0.95:
                 out.append(it)
         except Exception:
             out.append(it)

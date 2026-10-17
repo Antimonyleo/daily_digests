@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, Iterable
 from sqlalchemy import func, select
 
 from .store import (
-    DigestItemRow, DigestRow, FeedbackEventRow, ItemRow, VoteRow, init_db, session_scope,
+    DigestItemRow, DigestRow, EmailDigestItemRow, FeedbackEventRow, ItemRow, VoteRow, init_db, session_scope,
 )
 
 if TYPE_CHECKING:
@@ -691,11 +691,32 @@ def latest_digest_id() -> str | None:
 
 
 def _resolve_labels(
-    s, labels: Iterable[str], digest_id: str
+    s, labels: Iterable[str], digest_id: str, *, sent_only: bool = False,
+    run_id: str | None = None,
 ) -> tuple[list[int], list[str]]:
     """Resolve labels to item ids within a digest. Returns (ids, missing)."""
     found_ids: list[int] = []
     missing: list[str] = []
+    if sent_only:
+        sent_runs = s.execute(select(EmailDigestItemRow.run_id).where(
+            EmailDigestItemRow.digest_id == digest_id,
+        ).distinct()).scalars().all()
+        if run_id is None or run_id not in sent_runs:
+            logger.warning(
+                'Email votes require an identified sent email snapshot for digest %s; '
+                'current preview labels were not used', digest_id,
+            )
+            return [], list(labels)
+        mapping = dict(s.execute(select(
+            EmailDigestItemRow.item_label, EmailDigestItemRow.item_id,
+        ).where(EmailDigestItemRow.digest_id == digest_id,
+                EmailDigestItemRow.run_id == run_id)).all())
+        for label in labels:
+            if label in mapping:
+                found_ids.append(int(mapping[label]))
+            else:
+                missing.append(label)
+        return found_ids, missing
     for label in labels:
         item_id = s.execute(
             select(DigestItemRow.item_id).where(
@@ -717,7 +738,10 @@ def _resolve_labels(
     return found_ids, missing
 
 
-def record_votes(line: str, digest_id: str | None = None) -> dict[str, int]:
+def record_votes(
+    line: str, digest_id: str | None = None, *, run_id: str | None = None,
+    sent_only: bool = False,
+) -> dict[str, int]:
     """Persist votes parsed from ``line`` against the named (or latest) digest.
 
     Unknown labels are logged and skipped. Returns a count dict
@@ -727,7 +751,8 @@ def record_votes(line: str, digest_id: str | None = None) -> dict[str, int]:
     up_labels, down_labels = parse_vote_line(line)
     counts = {"up": 0, "down": 0, "unknown": 0}
 
-    target_digest = digest_id or latest_digest_id()
+    sent_only = sent_only or run_id is not None
+    target_digest = digest_id or (None if sent_only else latest_digest_id())
     if target_digest is None:
         logger.warning("vote: no digest available to resolve labels against")
         counts["unknown"] = len(up_labels) + len(down_labels)
@@ -735,8 +760,8 @@ def record_votes(line: str, digest_id: str | None = None) -> dict[str, int]:
 
     with _FEEDBACK_MUTATION_LOCK:
         with _feedback_transaction() as (s, reasons):
-            up_ids, up_missing = _resolve_labels(s, up_labels, target_digest)
-            down_ids, down_missing = _resolve_labels(s, down_labels, target_digest)
+            up_ids, up_missing = _resolve_labels(s, up_labels, target_digest, sent_only=sent_only, run_id=run_id)
+            down_ids, down_missing = _resolve_labels(s, down_labels, target_digest, sent_only=sent_only, run_id=run_id)
             for label in up_missing + down_missing:
                 logger.warning("vote: unknown label %r in digest %s", label, target_digest)
             for item_id in up_ids:
