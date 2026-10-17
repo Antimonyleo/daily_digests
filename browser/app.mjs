@@ -2,12 +2,19 @@ const LOCAL_ORIGIN = 'http://127.0.0.1:8765';
 import { formatComputeProgress } from './compute.mjs';
 import { DeferredWorker, extractReadingView, readReadingView, readingViewDocument, hasSavedDesk } from './reading-view.mjs';
 import { createTabHandoff } from './tab-handoff.mjs';
+import { initializeQuickGuide } from './guide.mjs';
+import { createLinkedBackup, linkedBackupStore, createBackupScheduler } from './linked-backup.mjs';
 
 export function backupReminderDue({lastExport, firstOpen, now = Date.now()}) {
   const exported = lastExport ? new Date(lastExport).getTime() : NaN;
   const first = firstOpen ? Number(firstOpen) : NaN;
   const last = Number.isFinite(exported) ? exported : first;
   return Number.isFinite(last) && now - last >= 7 * 86400000;
+}
+
+export async function backupFileText(file) {
+  if (file.size > 128 * 1024 * 1024) throw new Error('Backup exceeds the 128 MB restore limit.');
+  return file.text();
 }
 
 export function computeStatusText(result) {
@@ -179,7 +186,8 @@ export class WorkerClient {
 function frameBridge(token, path, origin, publicBase) {
   let sequence = 0;
   const pending = new Map();
-  const notify = (payload) => parent.postMessage({ ...payload, token }, '*');
+  const parentOrigin = publicBase ? new URL(publicBase).origin : window.location.origin;
+  const notify = (payload) => parent.postMessage({ ...payload, token }, parentOrigin);
   const route = (value) => {
     if (publicBase && String(value).startsWith(publicBase + '#/')) value = String(value).slice(publicBase.length + 1);
     const url = new URL(value, origin + path);
@@ -194,8 +202,8 @@ function frameBridge(token, path, origin, publicBase) {
     window.ddLocation = origin + path;
     notify({ type: 'replace-route', path });
   };
-  window.addEventListener('message', ({ source, data }) => {
-    if (source !== parent || data?.token !== token) return;
+  window.addEventListener('message', ({ source, origin: senderOrigin, data }) => {
+    if (source !== parent || senderOrigin !== parentOrigin || data?.token !== token) return;
     if (data.type === 'storage-committed') { window.dispatchEvent(new Event('dd-storage-committed')); return; }
     if (data.type === 'compute-progress') {
       window.dispatchEvent(new CustomEvent('dd-compute-progress', { detail: data.compute }));
@@ -264,6 +272,9 @@ function frameBridge(token, path, origin, publicBase) {
   document.addEventListener('DOMContentLoaded', () => {
     const storageNote = document.getElementById('browser-storage-note');
     if (storageNote) storageNote.hidden = false;
+    for (const button of document.querySelectorAll('[data-browser-action]')) {
+      button.addEventListener('click', () => notify({type:button.dataset.browserAction}));
+    }
     const field = document.getElementById('llm_api_key');
     if (field) {
       const notice = document.createElement('p');
@@ -331,7 +342,13 @@ export function renderedDocument(html, token, path, publicURL) {
   // Route focus announces the new page without outlining its non-interactive
   // heading/container. Interactive controls retain their keyboard focus rings.
   const routeFocusStyle = '<style>:is(h1, main, [role="main"])[tabindex="-1"]:focus { outline: none; }</style>';
-  const bridge = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src https: data: blob:; connect-src 'none'; form-action 'none'; base-uri 'none'">${routeFocusStyle}<script>(${frameBridge.toString()})(${args});</script>`;
+  const nonce = crypto.randomUUID().replaceAll('-', '');
+  const imageOrigins = new Set();
+  for (const match of html.matchAll(/<img\b[^>]*\bdata-src=["']([^"']+)["']/gi)) {
+    try { const url = new URL(match[1]); if (url.protocol === 'https:') imageOrigins.add(url.origin); } catch { /* invalid figures remain blocked */ }
+  }
+  html = html.replace(/<script\b/gi, `<script nonce="${nonce}"`);
+  const bridge = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-${nonce}'; style-src 'unsafe-inline'; img-src 'self' data: blob: ${[...imageOrigins].join(' ')}; connect-src 'none'; form-action 'none'; base-uri 'none'">${routeFocusStyle}<script nonce="${nonce}">(${frameBridge.toString()})(${args});</script>`;
   return html.replace(/<head[^>]*>/i, match => match + bridge);
 }
 
@@ -377,22 +394,29 @@ async function boot() {
   const announcement = document.getElementById('announcements');
   const importNoticeKey = `dailydigest:import-notice:${location.pathname}`;
   const backupKey = `dailydigest:last-backup:${location.pathname}`;
+  const backupSnoozeKey = `dailydigest:backup-snooze:${location.pathname}`;
+  let firstBrewBackupDue = false;
   const remindBackup = value => {
     try {
       const firstKey = `dailydigest:first-open:${location.pathname}`;
       let first = localStorage.getItem(firstKey);
       if (!first) { first = String(Date.now()); localStorage.setItem(firstKey, first); }
-      const stale = backupReminderDue({lastExport:value, firstOpen:first});
+      const snoozed = Number(localStorage.getItem(backupSnoozeKey)) > Date.now();
+      const stale = !snoozed && (backupReminderDue({lastExport:value, firstOpen:first}) || firstBrewBackupDue && !value);
       document.getElementById('backup-reminder').hidden = !stale;
       document.getElementById('backup-reminder-text').textContent = value
         ? 'Your last backup export started over a week ago. Keep a recent copy outside this browser.'
-        : 'Your reading desk stays in this browser. No backup export is recorded; keep a copy for device changes or data clearing.';
+        : 'Keep a copy of your reading desk before switching browsers or profiles. Download a backup or link a backup file.';
     } catch { /* Optional reminder cannot block startup. */ }
   };
   const showLastBackup = value => {
     remindBackup(value);
     const timestamp = new Date(value);
-    if (Number.isFinite(timestamp.getTime())) document.getElementById('backup-status').textContent = `Last backup export started: ${timestamp.toLocaleString()}. Keep the downloaded file private.`;
+    if (Number.isFinite(timestamp.getTime())) document.getElementById('backup-status').textContent = `Last file copy saved or backup download started: ${timestamp.toLocaleString()}. Keep the file private.`;
+  };
+  document.getElementById('backup-reminder-dismiss').onclick = () => {
+    document.getElementById('backup-reminder').hidden = true;
+    try { localStorage.setItem(backupSnoozeKey, String(Date.now() + 86400000)); } catch { /* optional reminder */ }
   };
   try { const value = localStorage.getItem(backupKey); remindBackup(value); if (value) showLastBackup(value); } catch { /* optional history */ }
   navigator.storage?.estimate?.().then(({ usage, quota }) => {
@@ -411,7 +435,7 @@ async function boot() {
   document.getElementById('dismiss-transfer').onclick = () => { transferNotice.hidden = true; };
   let storageWarning = '';
   const setStatus = (message, announce = true) => {
-    if (storageWarning && message.includes('saved in this browser')) message = 'Your reading desk · changes need a backup';
+    if (storageWarning && (message.includes('saved in this browser') || message.startsWith('Saved in this profile'))) message = 'Your reading desk · changes need a backup';
     status.textContent = message; status.title = message;
     if (!startup.hidden) startupStatus.textContent = message;
     status.setAttribute('aria-label', message);
@@ -448,7 +472,7 @@ async function boot() {
   const worker = new DeferredWorker(() => new Worker(new URL('./worker.mjs?compute=v1', import.meta.url), { type: 'module' }));
   const client = new WorkerClient(worker);
   const streams = new Map();
-  let ready = false, companionBackends = [], themeObserver;
+  let ready = false, companionBackends = [], themeObserver, restoringBackup = false;
   let runtimeStarted = false, frameGeneration = null, cacheTimer;
   const scrollPositions = new Map();
   let tabMoved = false, dirtySetup = false, hasUnflushedEdits = false, handoff;
@@ -513,13 +537,13 @@ async function boot() {
   setInterval(checkRelease, 300000);
   document.getElementById('interruption-dismiss').onclick = () => { document.getElementById('interruption-notice').hidden = true; };
 
-  const sendCompanionCapabilities = () => frame.contentWindow.postMessage({ type: 'companion-capabilities', token, backends: companionBackends }, '*');
+  const sendCompanionCapabilities = () => frame.contentWindow.postMessage({ type: 'companion-capabilities', token, backends: companionBackends }, location.origin);
   let navigation = 0;
   let activePath = '/';
   let computeTimer, latestCompute, computeReceivedAt, lastAnnouncement;
   const computeNotice = 'Brewing uses this device’s processor and memory, and can increase heat, fan noise and battery use. Thousands of new articles may take 20 minutes or more on one CPU core. Choose optional acceleration in Data & compute. Keep this tab open until the brew finishes to save its calculations.';
   frame.addEventListener('load', () => {
-    frame.contentWindow.postMessage({ type: 'compute-config', token, message: computeNotice }, '*');
+    frame.contentWindow.postMessage({ type: 'compute-config', token, message: computeNotice }, location.origin);
     sendCompanionCapabilities();
     themeObserver?.disconnect();
     const root = frame.contentDocument?.documentElement;
@@ -563,7 +587,7 @@ async function boot() {
     const milestone = announcementKey(info);
     setStatus(info.message, milestone !== lastAnnouncement);
     lastAnnouncement = milestone;
-    frame.contentWindow.postMessage({ type: 'compute-progress', token, compute: info }, '*');
+    frame.contentWindow.postMessage({ type: 'compute-progress', token, compute: info }, location.origin);
   };
   const errorPanel = document.getElementById('app-error');
   let errorFocus, errorSettingsOpen = false;
@@ -609,9 +633,109 @@ async function boot() {
   const companionEndpoint = document.getElementById('companion-endpoint');
   const companionToken = document.getElementById('companion-token');
   const dataSettings = document.getElementById('data-settings');
+  function openDataSection(section) {
+    if (!dataSettings.open) dataSettings.showModal();
+    const menu = document.getElementById(section === 'backup' ? 'browser-data-menu' : `${section}-menu`);
+    menu.open = true;
+    menu.scrollIntoView({block:'nearest'});
+  }
+  const guideKey = `dailydigest:guide:${location.pathname}`;
+  const guide = initializeQuickGuide({document,
+    hasSeen: () => { try { return localStorage.getItem(guideKey) === 'seen'; } catch { return false; } },
+    remember: () => { try { localStorage.setItem(guideKey, 'seen'); } catch { /* optional guide history */ } },
+    openSection:openDataSection, restore:() => document.getElementById('import').click()});
   document.getElementById('open-data-settings').onclick = () => { dataSettings.showModal(); };
   document.getElementById('close-data-settings').onclick = () => dataSettings.close();
-  document.getElementById('backup-reminder-open').onclick = () => { dataSettings.showModal(); document.getElementById('browser-data-menu').open = true; };
+  document.getElementById('open-backup').onclick = () => openDataSection('backup');
+  document.getElementById('backup-reminder-open').onclick = () => openDataSection('backup');
+  const linkedBackup = createLinkedBackup(linkedBackupStore(indexedDB, `dailydigest:backup-file:${new URL('.', import.meta.url).pathname}`));
+  const linkedStatus = document.getElementById('linked-backup-status');
+  const automaticBackup = document.getElementById('automatic-backup');
+  let linkedAuto = false;
+  async function refreshLinkedBackup() {
+    const info = await linkedBackup.inspect();
+    const granted = info.permission === 'granted';
+    linkedAuto = Boolean(info.auto);
+    automaticBackup.checked = linkedAuto;
+    document.getElementById('automatic-backup-label').hidden = !info.linked || !info.writable;
+    automaticBackup.disabled = !granted || info.missing;
+    document.getElementById('reconnect-backup').hidden = !info.linked || granted;
+    document.getElementById('write-linked-backup').hidden = !info.writable || !granted || info.missing;
+    document.getElementById('write-linked-backup').disabled = !ready || computeBusy;
+    document.getElementById('restore-linked-backup').hidden = !info.exists || !granted;
+    document.getElementById('forget-linked-backup').hidden = !info.linked;
+    linkedStatus.textContent = !info.linked ? 'No backup file linked.'
+      : !granted ? `${info.name}: allow file access to check your backup.`
+      : info.missing ? `${info.name} could not be found. Choose the file again or restore another backup.`
+      : !info.writable && info.exists ? `${info.name}: backup found, last modified ${new Date(info.modified).toLocaleString()}. Restore it to use this reading desk, or choose a new file for a separate copy.`
+      : info.updatedAt ? `${info.name}: last copy saved ${new Date(info.updatedAt).toLocaleString()}. ${info.auto ? 'Automatic copies are on while this tab is open.' : 'Automatic copies are off.'}`
+      : `${info.name} is linked. Save a copy now, or turn on automatic copies.`;
+    return info;
+  }
+  async function saveLinkedBackup() {
+    await settleRenderedEdits(frame);
+    const response = await client.call({type:'export',includeCredentials:false});
+    if (response.status >= 400) throw new Error(response.body);
+    // A backup that cannot be restored should not replace the last usable file.
+    if (response.body.length > 128 * 1024 * 1024) throw new Error('This reading desk exceeds the 128 MB restore limit. Download a backup and keep it; automatic copies are paused.');
+    const result = await linkedBackup.write(response.body);
+    try { localStorage.setItem(backupKey,result.updatedAt); } catch { /* copy is already on disk */ }
+    showLastBackup(result.updatedAt);
+    await refreshLinkedBackup();
+  }
+  const backupScheduler = createBackupScheduler({save:saveLinkedBackup,
+    canSave:() => ready && linkedAuto && !computeBusy && !tabMoved && !client.paused && !restoringBackup,
+    onError:error => {
+      linkedAuto = false; automaticBackup.checked = false;
+      // Preserve the reader's opt-in across a temporary permission failure.
+      // The scheduler stays paused until they reconnect or explicitly retry.
+      linkedStatus.textContent = `Automatic copies paused: ${error.message}`;
+      document.getElementById('backup-reminder-text').textContent = 'Your folder backup needs attention. Your working reading desk is still in this browser profile.';
+      document.getElementById('backup-reminder').hidden = false;
+    }});
+  const scheduleLinkedBackup = () => { if (linkedAuto && !tabMoved) backupScheduler.changed(); };
+  const linkedSupported = typeof window.showSaveFilePicker === 'function';
+  document.getElementById('link-backup').hidden = !linkedSupported;
+  if (!linkedSupported) {
+    linkedStatus.textContent = 'This browser cannot keep a link to a backup file. Use Download backup and Restore backup instead.';
+    document.getElementById('linked-backup-help').textContent = 'You can save a downloaded backup in any folder and restore it in another browser.';
+  } else {
+    void linkedBackup.open().then(refreshLinkedBackup).catch(() => {
+      linkedStatus.textContent = 'Could not reopen the linked backup file. Choose it again, or download a backup.';
+    });
+  }
+  document.getElementById('link-backup').onclick = async () => {
+    try {
+      const handle = await window.showSaveFilePicker({id:'dailydigest-backup',startIn:'documents',
+        suggestedName:'dailydigest-browser-backup.json',types:[{description:'DailyDigest backup',accept:{'application/json':['.json']}}]});
+      backupScheduler.cancel();
+      await linkedBackup.connect(handle);
+      const info = await refreshLinkedBackup();
+      if (!info.exists && ready && !computeBusy) await saveLinkedBackup();
+    } catch (error) { if (error.name !== 'AbortError') linkedStatus.textContent = error.message; }
+  };
+  document.getElementById('reconnect-backup').onclick = async () => {
+    try { await linkedBackup.requestAccess(); await refreshLinkedBackup(); scheduleLinkedBackup(); }
+    catch (error) { linkedStatus.textContent = error.message; }
+  };
+  document.getElementById('write-linked-backup').onclick = async event => {
+    event.currentTarget.disabled = true;
+    try { await saveLinkedBackup(); }
+    catch (error) { linkedStatus.textContent = error.message; }
+    finally { document.getElementById('write-linked-backup').disabled = !ready || computeBusy; }
+  };
+  automaticBackup.onchange = async () => {
+    try {
+      await linkedBackup.setAutomatic(automaticBackup.checked);
+      linkedAuto = automaticBackup.checked;
+      if (linkedAuto) scheduleLinkedBackup(); else backupScheduler.cancel();
+      await refreshLinkedBackup();
+    } catch (error) { linkedStatus.textContent = error.message; }
+  };
+  document.getElementById('forget-linked-backup').onclick = async () => {
+    try { backupScheduler.cancel(); await linkedBackup.disconnect(); await refreshLinkedBackup(); }
+    catch (error) { linkedStatus.textContent = error.message; }
+  };
   const browserMenus = [...document.querySelectorAll('.device-sections > details')];
   document.addEventListener('click', event => {
     if (event.target === dataSettings) dataSettings.close();
@@ -769,6 +893,10 @@ async function boot() {
       }
       if (!(headers.get('content-type') || '').includes('text/html')) throw new Error('Expected a DailyDigest page.');
       activePath = path;
+      if (path.split('?')[0] === '/done') {
+        firstBrewBackupDue = true;
+        try { remindBackup(localStorage.getItem(backupKey)); } catch { /* optional reminder */ }
+      }
       dirtySetup = path.split('?')[0] === '/setup' && options.method?.toUpperCase() === 'POST';
       const generation = headers.get('x-dailydigest-generation');
       frameGeneration = generation === null ? null : Number(generation);
@@ -781,7 +909,8 @@ async function boot() {
       previewNotice.hidden = true;
       document.getElementById('backup-runtime-notice').hidden = true;
       startup.dataset.state = 'ready';
-      setStatus(headers.get('x-dailydigest-storage') === 'pending' ? 'Your reading desk · saving recent changes…' : 'Your reading desk · saved in this browser');
+      setStatus(headers.get('x-dailydigest-storage') === 'pending' ? 'Saving recent changes…' : 'Saved in this profile · Backup');
+      if (options.method && options.method.toUpperCase() !== 'GET') scheduleLinkedBackup();
     } catch (error) { if (version === navigation) report(error); }
     finally { if (version === navigation) { frame.inert = false; frame.removeAttribute('aria-busy'); } }
   }
@@ -808,7 +937,8 @@ async function boot() {
       if (!topicDraftForm.hidden && topicDraft.value.trim() && !draftSubmitted) {
         document.getElementById('startup-topics-message').textContent = 'Ready. Continue to review your topics before saving.';
         document.getElementById('startup-title').textContent = 'Your reading desk is ready';
-      } else navigate(draftSubmitted ? '/setup' : routeFromHash(location.hash));
+      } else if (!restoringBackup) navigate(draftSubmitted ? '/setup' : routeFromHash(location.hash));
+      if (linkedSupported) void refreshLinkedBackup().catch(() => {});
     } else if (data.type === 'storage-waiting') {
       showTabWait();
     } else if (data.type === 'brew-interrupted') {
@@ -820,6 +950,8 @@ async function boot() {
     } else if (data.type === 'compute-state') {
       computeBusy = data.busy; setReleaseState();
       if (data.busy) document.getElementById('compute-apply').disabled = true;
+      else scheduleLinkedBackup();
+      document.getElementById('write-linked-backup').disabled = !ready || computeBusy;
       refreshCompute({ keepSelection: true });
     } else if (data.type === 'progress') {
       if (!ready) updateStartupStages(data.stage);
@@ -853,18 +985,18 @@ async function boot() {
     hasUnflushedEdits = false;
     void cacheReadingView();
     if (data.generation === frameGeneration) {
-      setStatus('Your reading desk · saved in this browser');
-      frame.contentWindow?.postMessage({type:'storage-committed', token}, '*');
+      setStatus('Saved in this profile · Backup');
+      frame.contentWindow?.postMessage({type:'storage-committed', token}, location.origin);
     }
   } });
   window.addEventListener('hashchange', () => {
     if (ready) navigate(routeFromHash(location.hash));
     else startRuntime();
   });
-  window.addEventListener('message', async ({ source, data }) => {
-    if (source !== frame.contentWindow || data?.token !== token) return;
+  window.addEventListener('message', async ({ source, origin: senderOrigin, data }) => {
+    if (source !== frame.contentWindow || senderOrigin !== location.origin || data?.token !== token) return;
     if (data.type === 'compute-stop') { clearInterval(computeTimer); latestCompute = null; setStatus('Brew needs attention'); return; }
-    const reply = (payload) => source.postMessage({ ...payload, token: data.token, id: data.id }, '*');
+    const reply = (payload) => source.postMessage({ ...payload, token: data.token, id: data.id }, location.origin);
     try {
       if (data.type === 'navigate') {
         const path = localPath(data.path, activePath);
@@ -872,6 +1004,8 @@ async function boot() {
         else location.hash = path;
       }
       else if (data.type === 'replace-route') history.replaceState(null, '', '#' + localPath(data.path));
+      else if (data.type === 'open-guide') guide.open();
+      else if (data.type === 'open-backup') openDataSection('backup');
       else if (data.type === 'submit') await navigate(data.path, { method: data.method, body: data.body, headers: data.headers });
       else if (data.type === 'cancel') { streams.get(data.id)?.cancel(); streams.delete(data.id); }
       else if (data.type === 'request') {
@@ -882,6 +1016,7 @@ async function boot() {
           const generation = new Headers(response.headers).get('x-dailydigest-generation');
           if (generation !== null) frameGeneration = Number(generation);
           reply(response);
+          if (response.status < 400 && data.method && data.method.toUpperCase() !== 'GET') scheduleLinkedBackup();
           clearTimeout(cacheTimer); cacheTimer = setTimeout(() => { void cacheReadingView(); }, 100);
         } finally { streams.delete(data.id); }
       }
@@ -891,6 +1026,44 @@ async function boot() {
     }
   });
   document.getElementById('retry').onclick = () => location.reload();
+  async function confirmRestore(message, {fresh = false} = {}) {
+    const dialog = document.getElementById('restore-confirmation');
+    if (dialog.open) return false;
+    document.getElementById('restore-title').textContent = fresh ? 'Start fresh?' : 'Restore saved data?';
+    document.getElementById('restore-proceed').textContent = fresh ? 'Start fresh' : 'Restore';
+    document.getElementById('restore-description').textContent = message;
+    return new Promise(resolve => {
+      let accepted = false;
+      document.getElementById('restore-proceed').onclick = () => { accepted = true; dialog.close(); };
+      document.getElementById('restore-cancel').onclick = () => dialog.close();
+      dialog.addEventListener('close', () => resolve(accepted), {once:true});
+      dialog.showModal();
+      document.getElementById('restore-cancel').focus();
+    });
+  }
+  function restoreProgress(message) {
+    for (const id of ['restore-progress','backup-restore-progress']) {
+      const progress = document.getElementById(id);
+      progress.textContent = message; progress.hidden = !message;
+    }
+  }
+  async function pauseLinkedCopies() {
+    const info = await linkedBackup.inspect();
+    if (info.linked && info.auto) await linkedBackup.setAutomatic(false);
+    linkedAuto = false; automaticBackup.checked = false; backupScheduler.cancel();
+  }
+  async function replaceWithCopiesPaused(action) {
+    const previous = await linkedBackup.inspect();
+    await pauseLinkedCopies();
+    try { return await action(); }
+    catch (error) {
+      if (previous.auto) {
+        try { await linkedBackup.setAutomatic(true); await refreshLinkedBackup(); scheduleLinkedBackup(); }
+        catch { linkedStatus.textContent = 'Restore failed. Check your automatic-copy preference before continuing.'; }
+      }
+      throw error;
+    }
+  }
   document.getElementById('recovery-export').onclick = async () => {
     try {
       const response = await client.call({ type: 'recovery-export' });
@@ -909,17 +1082,19 @@ async function boot() {
   document.getElementById('recovery-import').onchange = async event => {
     const file = event.target.files[0]; if (!file) return;
     try {
-      if (!confirm('Restore this backup? Your current stored state will be retained for recovery.')) return;
-      const body = await file.text();
-      await companionCall({ type: 'recovery-import', body, overwrite: true });
+      if (file.size > 128 * 1024 * 1024) throw new Error('Backup exceeds the 128 MB restore limit.');
+      if (!await confirmRestore('Restore this backup? It replaces this browser’s current data.')) return;
+      restoreProgress('Checking and restoring your backup… Keep this tab open.');
+      const body = await backupFileText(file);
+      await replaceWithCopiesPaused(() => companionCall({ type: 'recovery-import', body, overwrite: true }));
       rememberImportNotice({ credentialsOmitted: JSON.parse(body).credentialsIncluded === false });
       location.reload();
-    } catch (error) { report(new Error(`Recovery import failed: ${error.message}`)); }
+    } catch (error) { restoreProgress(''); report(new Error(`Recovery import failed: ${error.message}`)); }
     finally { event.target.value = ''; }
   };
   document.getElementById('recovery-reset').onclick = async () => {
-    if (!confirm('Start a fresh reading desk? Your original stored state will be retained for recovery. Download it first if you need a separate copy.')) return;
-    try { await companionCall({ type: 'recovery-reset', overwrite: true }); location.reload(); }
+    if (!await confirmRestore('Start with empty browser data? Download your original data first if you need a separate copy.', {fresh:true})) return;
+    try { await replaceWithCopiesPaused(() => companionCall({ type: 'recovery-reset', overwrite: true })); location.reload(); }
     catch (error) { report(error); }
   };
   const storagePromptKey = `dailydigest:storage-prompt:${location.pathname}`;
@@ -968,15 +1143,35 @@ async function boot() {
       setStatus('Browser backup exported.');
     } catch (error) { report(error); }
   };
+  async function restoreBackup(body, revision) {
+    if (restoringBackup) throw new Error('Wait for the current restore to finish.');
+    JSON.parse(body);
+    if (!await confirmRestore('Replace this browser’s interests, ratings, saved papers and reading history with this backup? Changes from different browsers are not merged.')) return;
+    restoringBackup = true; backupScheduler.cancel();
+    try {
+      restoreProgress('Checking and restoring your backup… Keep this tab open.');
+      const recovery = startup.dataset.state === 'error' && !ready;
+      if (!recovery) startRuntime();
+      const apply = async () => {
+        const response = await client.call({type:recovery ? 'recovery-import' : 'import',body,overwrite:true});
+        if (response.status >= 400) throw new Error(response.body);
+        return response;
+      };
+      const response = await (revision ? apply() : replaceWithCopiesPaused(apply));
+      if (revision) await linkedBackup.accept(revision).catch(() => {});
+      rememberImportNotice(recovery ? {credentialsOmitted:JSON.parse(body).credentialsIncluded === false} : JSON.parse(response.body));
+      location.reload();
+    } catch (error) { restoringBackup = false; restoreProgress(''); throw error; }
+  }
+  document.getElementById('restore-linked-backup').onclick = async () => {
+    try { const copy = await linkedBackup.read(); await restoreBackup(copy.body,copy.revision); }
+    catch (error) { linkedStatus.textContent = `Could not restore this copy: ${error.message}`; }
+  };
   document.getElementById('import').onchange = async (event) => {
     const file = event.target.files[0]; if (!file) return;
     try {
-      const body = await file.text(); JSON.parse(body);
-      if (!confirm('Replace this browser’s DailyDigest profile, votes and saved reading with this backup? Export your current data first if you need to keep it.')) return;
-      const response = await client.call({ type: 'import', body, overwrite: true });
-      if (response.status >= 400) throw new Error(response.body);
-      rememberImportNotice(JSON.parse(response.body));
-      location.reload();
+      if (file.size > 128 * 1024 * 1024) throw new Error('Backup exceeds the 128 MB restore limit.');
+      await restoreBackup(await backupFileText(file));
     } catch (error) { report(new Error(`Backup import failed: ${error.message}`)); }
     finally { event.target.value = ''; }
   };
@@ -989,6 +1184,12 @@ async function boot() {
       await refreshCompanion();
     } catch (error) { companionStatus.textContent = error.message; }
   };
+  document.getElementById('copy-companion-command').onclick = async () => {
+    try { await navigator.clipboard.writeText(document.querySelector('.companion-command').textContent); companionStatus.textContent = 'Command copied. Run it in a terminal on your computer.'; }
+    catch { companionStatus.textContent = 'Select and copy the command above, then run it in a terminal.'; }
+  };
+  document.querySelector('.companion-command').textContent = `dd companion --allowed-origin ${location.origin}`;
+  document.getElementById('shared-origin-warning').hidden = !location.hostname.endsWith('.github.io');
   document.getElementById('companion-disconnect').onclick = async () => {
     try { await companionCall({ type: 'configure-companion', endpoint: '', token: '' }); companionToken.value = ''; await refreshCompanion(); }
     catch (error) { companionStatus.textContent = error.message; }
@@ -999,11 +1200,13 @@ async function boot() {
       if (action === 'email' && !confirm('Send your latest saved digest to the recipient configured on your companion?')) return;
       const includeCredentials = action === 'push' && document.getElementById('sync-credentials').checked;
       if (action === 'push' && !confirm(`Send this browser’s profile, feedback and reading history to your companion? ${includeCredentials ? 'This also sends saved API keys and credentials.' : 'Saved API keys and credentials are excluded.'}`)) return;
-      if (action === 'pull' && !confirm('Replace this browser’s DailyDigest profile, feedback and reading history with companion state? Export a browser backup first if you need to keep it.')) return;
+      if (action === 'pull' && !await confirmRestore('Replace this browser’s data with Companion state? Changes are not merged.')) return;
       button.disabled = true;
       companionStatus.textContent = 'Running requested companion action…';
       try {
-        const result = await companionCall({ type: `companion-${action}`, ...(action === 'pull' ? { overwrite: true } : {}), ...(action === 'push' ? { includeCredentials } : {}) });
+        if (action === 'pull') restoreProgress('Restoring Companion data… Keep this tab open.');
+        const apply = () => companionCall({ type: `companion-${action}`, ...(action === 'pull' ? { overwrite: true } : {}), ...(action === 'push' ? { includeCredentials } : {}) });
+        const result = await (action === 'pull' ? replaceWithCopiesPaused(apply) : apply());
         if (action === 'pull' && result.reload) { rememberImportNotice(result); location.reload(); return; }
         if (action === 'inbound') {
           const up = Number(result.votes_up || 0);
@@ -1012,7 +1215,7 @@ async function boot() {
           companionStatus.textContent = `Email feedback processed: ${up} upvotes, ${down} downvotes.${unresolved ? ` ${unresolved} messages need review.` : ''}${result.errors?.length ? ' ' + result.errors.join(' ') : ''}`;
           if (up + down > 0) await navigate(activePath);
         } else companionStatus.textContent = action === 'email' ? 'Latest digest sent.' : action === 'push' ? 'Browser state sent.' : 'Companion state restored. Reload to open it.';
-      } catch (error) { companionStatus.textContent = error.message; }
+      } catch (error) { restoreProgress(''); companionStatus.textContent = error.message; }
       finally { button.disabled = false; }
     };
   }
@@ -1037,7 +1240,7 @@ async function boot() {
           setStatus('This reading desk stays open. ' + error.message);
           throw error;
         }
-        tabMoved = true; ready = false; clearTimeout(cacheTimer);
+        tabMoved = true; ready = false; clearTimeout(cacheTimer); backupScheduler.cancel();
         worker.terminate();
         client.fail(new Error('Reading desk moved to another tab.'));
         for (const menu of browserMenus) menu.open = false;
@@ -1078,6 +1281,7 @@ async function boot() {
     ]);
   }
   if (preview && !runtimeStarted) {
+    guide.showWelcome(true);
     frame.setAttribute('sandbox', 'allow-popups allow-popups-to-escape-sandbox');
     document.title = `Saved DailyDigest ${preview.date}`;
     frame.srcdoc = readingViewDocument(preview, document.documentElement.dataset.theme);
@@ -1094,6 +1298,7 @@ async function boot() {
   } else {
     // Check only key presence, never deserialize the full private snapshot.
     hasSavedDesk(indexedDB, `dailydigest:${new URL('.', import.meta.url).pathname}`).then(present => {
+      guide.showWelcome(present);
       if (!present && !ready && !startupFailedForDraft()) topicDraftForm.hidden = false;
     }).catch(() => {});
     startRuntime();

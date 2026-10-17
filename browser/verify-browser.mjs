@@ -155,8 +155,10 @@ store.write_impressions(digest_id, [('research', item_id, 0, 0.9)], model_versio
     if (path === '/text') result = { text: 'Mocked acceptance overview.' };
     if (path === '/email') result = { ok: true, sent: true };
     if (path === '/inbound') {
-      const email = companionRequests.find(row => row.path === '/email');
-      result = { ok: true, votes: [{ mail_id: 'fictional-mail-1', line: '+R1', digest_id: JSON.parse(email.body).digest_id }], errors: [] };
+      const email = JSON.parse(companionRequests.findLast(row => row.path === '/email').body);
+      const run = email.subject.match(/\[run:([0-9a-f]{32})\]/i);
+      assert.ok(run, 'Mock replies must identify the actual sent email edition.');
+      result = { ok: true, votes: [{ mail_id: 'fictional-mail-1', line: '+R1', digest_id: email.digest_id, run_id: run[1].toLowerCase() }], errors: [] };
     }
     if (path === '/state' && request.method() === 'PUT') companionSnapshot = JSON.parse(request.postData()).snapshot;
     if (path === '/state' && request.method() === 'GET') result = { snapshot: companionSnapshot };
@@ -321,12 +323,17 @@ try {
     const evidence = await startup();
     await frame().locator('#interest-editor').waitFor();
     await frame().locator('#browser-storage-note').waitFor({ state: 'visible' });
-    assert.match(await page.locator('.storage-location').textContent(), /On this device/);
+    assert.match(await page.locator('#data-settings > .storage-location').textContent(), /Saved in this browser/);
     assert.ok((await page.locator('.browser-bar').boundingBox()).height <= 60);
     return evidence;
   }));
   if (!initialReady) throw new Error('Startup failed; dependent acceptance checks cannot run.');
-  await check('first-run-has-equal-topics-research-only-and-sticky-save', async () => {
+  await check('first-run-has-visible-interests-equal-topics-and-reachable-save', async () => {
+    const interest = await frame().locator('[data-interest-name]').first().evaluate(node => {
+      const box = node.getBoundingClientRect();
+      return {top:box.top,bottom:box.bottom,viewport:innerHeight};
+    });
+    assert.ok(interest.top >= 0 && interest.bottom <= interest.viewport, JSON.stringify(interest));
     assert.equal(await frame().locator('[data-interest-weight]').first().isHidden(), true);
     assert.equal(await frame().getByText('Back to today’s digest', {exact:true}).count(), 0);
     assert.equal(await frame().locator('input[id^="include_"]:checked').count(), 0);
@@ -336,7 +343,9 @@ try {
     assert.equal(await frame().locator('#normalize-interests').isHidden(),true);
     const names=await frame().locator('[data-interest-name],[data-interest-weight],[data-interest-aliases],[data-interest-description]').evaluateAll(nodes=>nodes.map(node=>node.getAttribute('aria-label')));
     assert.equal(new Set(names).size,names.length);
-    const save=await frame().locator('.settings-actions').evaluate(node=>{const box=node.getBoundingClientRect();return {top:box.top,bottom:box.bottom,viewport:innerHeight};});
+    assert.equal(await frame().locator('.settings-actions').evaluate(node=>getComputedStyle(node).position), 'static');
+    await frame().locator('.settings-actions button[type="submit"]').scrollIntoViewIfNeeded();
+    const save=await frame().locator('.settings-actions button[type="submit"]').evaluate(node=>{const box=node.getBoundingClientRect();return {top:box.top,bottom:box.bottom,viewport:innerHeight};});
     assert.ok(save.top>=0 && save.bottom<=save.viewport+1,JSON.stringify(save));
     assert.equal(await frame().locator('main').count(),1);
     assert.match(await page.title(), /Set up DailyDigest/);
@@ -345,7 +354,7 @@ try {
     assert.equal(page.url(),beforeSkip);
     assert.equal(await frame().locator('main').evaluate(node=>node===document.activeElement),true);
     await setTopics('');
-    return {equalShares:true,researchOnly:true,optionalPercentages:true,uniqueFieldNames:true,saveVisible:save};
+    return {firstInterestVisible:interest,equalShares:true,researchOnly:true,optionalPercentages:true,uniqueFieldNames:true,saveReachable:save};
   });
   await check('fresh-profile-reuses-covered-public-vectors-or-encodes-locally', async () => {
     const response = await page.request.get(base+'assets/public-sources.json');
@@ -1103,6 +1112,9 @@ try {
   await check('real-browser-brew-and-local-model-inference', async () => {
     assert.ok(feed, 'Missing research-feed.xml fixture');
     await route('/run?reading_mode=full', '#brew-button');
+    assert.equal(await frame().locator('#mode-minimal + label .mode-title').textContent(), 'Short');
+    assert.equal(await frame().locator('#mode-usual + label .mode-title').textContent(), 'Standard');
+    assert.equal(await frame().locator('#mode-full + label .mode-title').textContent(), 'Full');
     await page.evaluate(()=>{
       window.__qualifiedPreview=[];
       const doc=document.querySelector('#app').contentDocument, preview=doc.querySelector('#brew-preview');
@@ -1178,15 +1190,13 @@ try {
     const download = await downloadEvent; await download.saveAs(`${output}/downloaded-backup.json`);
     const downloaded = JSON.parse(await readFile(`${output}/downloaded-backup.json`, 'utf8'));
     assert.equal(downloaded.format, 'dailydigest-browser-v1');
-    const dismissal = page.waitForEvent('dialog');
     await page.locator('#import').setInputFiles(`${output}/downloaded-backup.json`);
-    await (await dismissal).dismiss();
+    await page.locator('#restore-cancel').click();
     await page.waitForFunction(() => document.getElementById('import').value === '');
     assert.equal(await page.evaluate(() => Boolean(window.__workerReady)), true);
     const reload = page.waitForEvent('framenavigated', { predicate: changedFrame => changedFrame === page.mainFrame() });
-    const confirmation = page.waitForEvent('dialog');
     await page.locator('#import').setInputFiles(`${output}/downloaded-backup.json`);
-    await (await confirmation).accept();
+    await page.locator('#restore-proceed').click();
     await reload; await startup();
     await page.locator('#transfer-notice').waitFor({ state: 'visible' });
     assert.match(await page.locator('#transfer-message').textContent(), /excluded credentials/);
@@ -1223,15 +1233,15 @@ try {
     }
     const email = companionRequests.find(row => row.path === '/email');
     assert.ok(JSON.parse(email.body).html.includes('<html'), 'Email must use actual rendered digest HTML.');
+    assert.match(JSON.parse(email.body).subject, /\[run:[0-9a-f]{32}\]/i, 'Sent emails must retain their vote-label edition.');
     assert.equal(JSON.parse(companionSnapshot).format, 'dailydigest-browser-v1');
     await page.locator('#companion-inbound').click();
     await page.waitForFunction(() => document.getElementById('companion-status').textContent.includes('Email feedback processed'));
     assert.match(await page.locator('#companion-status').textContent(), /1 upvotes, 0 downvotes/);
     await frame().locator('.item[data-section="research"]').first().locator('.vote-btn[data-grade="70"][aria-pressed="true"]').waitFor();
     assert.ok(companionRequests.some(row => row.path === '/inbound/ack'), 'Mailbox ACK must follow committed native browser feedback.');
-    const confirmation = page.waitForEvent('dialog').then(dialog => dialog.accept());
     const reload = page.waitForEvent('framenavigated', { predicate: changedFrame => changedFrame === page.mainFrame() });
-    await page.locator('#companion-pull').click(); await confirmation;
+    await page.locator('#companion-pull').click(); await page.locator('#restore-proceed').click();
     await reload; await startup();
     await openCompanionMenu();
     await page.locator('#companion-disconnect').click();
@@ -1243,6 +1253,7 @@ try {
     return { mockedCompanion: true, requests: companionRequests.map(({ path, method }) => ({ path, method })), nativeEmailFeedbackApplied: true, nativeEmailFeedbackGrade: 70, mailboxAcknowledged: true, stateRestored: true, disconnected: true };
   });
   await check('pwa-project-subpath-and-install-control', async () => {
+    await page.evaluate(() => document.getElementById('data-settings')?.close());
     const evidence = await page.evaluate(async () => {
       const manifest = new URL(document.querySelector('link[rel="manifest"]').getAttribute('href'), location.href).href;
       const registration = await navigator.serviceWorker.ready;
@@ -1477,8 +1488,8 @@ try {
       const downloaded = await downloadEvent;
       await downloaded.saveAs(`${output}/corrupt-raw-recovery.json`);
       assert.equal(await readFile(`${output}/corrupt-raw-recovery.json`, 'utf8'), corrupt);
-      testPage.once('dialog', dialog => dialog.accept());
       await testPage.locator('#recovery-reset').click();
+      await testPage.locator('#restore-proceed').click();
       await testPage.locator('#app').waitFor({ state: 'visible', timeout: 300000 });
       const retained = await testPage.evaluate(async scope => {
         const database = await new Promise(resolve => { const request = indexedDB.open(`dailydigest:${scope}`, 1); request.onsuccess = () => resolve(request.result); });

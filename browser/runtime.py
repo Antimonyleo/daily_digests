@@ -10,6 +10,7 @@ import base64
 import inspect
 import hashlib
 import json
+import re
 import sqlite3
 import tempfile
 import weakref
@@ -158,6 +159,39 @@ def install_state_tracking():
     from sqlalchemy.engine import Engine
 
     sys.addaudithook(private_write_audit)
+    # A physical SQLite connection can recover/checkpoint a cold WAL without
+    # executing logical writes through SQLAlchemy. Track those lifecycle edges,
+    # while ordinary reads that reuse a pooled connection remain clean.
+    def invalidate_databases(paths):
+        for path in paths:
+            _mark_state_changed(path, str(path) + '-wal', str(path) + '-journal')
+
+    def sqlite_connected(dbapi_connection, connection_record):
+        if not isinstance(dbapi_connection, sqlite3.Connection):
+            return
+        cursor = dbapi_connection.execute('PRAGMA database_list')
+        try:
+            paths = []
+            for _sequence, _name, filename in cursor.fetchall():
+                if not filename:
+                    continue
+                path = Path(filename).absolute()
+                try:
+                    relative = path.relative_to(ROOT.absolute())
+                except ValueError:
+                    continue
+                if relative.parts and relative.parts[0] == 'data':
+                    paths.append(path)
+        finally:
+            cursor.close()
+        connection_record.info['_browser_private_databases'] = paths
+        invalidate_databases(paths)
+
+    def sqlite_closed(_dbapi_connection, connection_record):
+        invalidate_databases(connection_record.info.get('_browser_private_databases', ()))
+
+    event.listen(Engine, 'connect', sqlite_connected)
+    event.listen(Engine, 'close', sqlite_closed)
     # SQL writes bypass Python's open audit event. Read-only transactions must
     # not dirty state just because SQLAlchemy rolls them back on close.
     def before_cursor(connection, cursor, statement, parameters, context, executemany):
@@ -449,6 +483,11 @@ async def transactional_inbound(payload, commit, *, record_vote=None, root=ROOT)
                 or not isinstance(record.get('digest_id'), str)):
             raise ValueError('Inbound reply requires a stable mail ID, vote line and digest date')
         date.fromisoformat(record['digest_id'])
+        if record.get('run_id') is not None and (
+            not isinstance(record['run_id'], str)
+            or re.fullmatch(r'[0-9a-f]{32}', record['run_id']) is None
+        ):
+            raise ValueError('Inbound reply has an invalid sent run identity')
     ledger_path = root / 'data/companion-inbound.json'
     ledger = json.loads(ledger_path.read_text()) if ledger_path.exists() else {'version': 1, 'seen': {}}
     if (not isinstance(ledger, dict) or ledger.get('version') != 1
@@ -470,7 +509,8 @@ async def transactional_inbound(payload, commit, *, record_vote=None, root=ROOT)
             if mail_id in ledger['seen']:
                 result['already_seen'] += 1
             else:
-                counts = record_vote(record['line'], digest_id=record['digest_id'])
+                counts = record_vote(record['line'], digest_id=record['digest_id'],
+                                     run_id=record.get('run_id'), sent_only=True)
                 result['votes_up'] += int(counts.get('up', 0))
                 result['votes_down'] += int(counts.get('down', 0))
                 result['votes_unknown'] += int(counts.get('unknown', 0))
@@ -544,25 +584,40 @@ def selected_browser_backend():
 
 
 def companion_email_payload():
-    from dailydigest.config import get_settings
-    from dailydigest.store import DigestRow, session_scope
+    import uuid
+    from dailydigest.email_render import SECTION_ORDER, render_digest
+    from dailydigest.store import DigestItemRow, DigestRow, ItemRow, session_scope
     from sqlalchemy import select
 
-    previews = sorted(Path(get_settings().db_path).parent.glob('digest-*.html'))
-    if not previews:
-        raise ValueError('Brew a digest before sending it through the companion')
     with session_scope() as session:
         digest_id = session.scalar(select(DigestRow.id).order_by(DigestRow.created_at.desc()))
+        entries = session.execute(select(ItemRow, DigestItemRow.item_label, DigestItemRow.score)
+            .join(DigestItemRow, DigestItemRow.item_id == ItemRow.id)
+            .where(DigestItemRow.digest_id == digest_id).order_by(DigestItemRow.id)).all()
+        sections = {section: [] for section in SECTION_ORDER}
+        labels = []
+        for row, label, score in entries:
+            if row.section not in sections:
+                continue
+            session.expunge(row)
+            row.item_label = label
+            sections[row.section].append((row, score, row.summary or ''))
+            labels.append((label, int(row.id)))
     if not digest_id:
         raise ValueError('There is no published digest to email')
-    return json.dumps({'html': previews[-1].read_text(),
-                       'subject': f'DailyDigest {digest_id}', 'digest_id': digest_id})
+    # Render and capture labels together. A stale preview file or later brew
+    # cannot change the identity of the slate already handed to the companion.
+    run_id = uuid.uuid4().hex
+    return json.dumps({'html': render_digest(digest_id, sections),
+                       'subject': f'DailyDigest {digest_id} [run:{run_id}]',
+                       'digest_id': digest_id, 'run_id': run_id, 'labeled_items': labels})
 
 
-def companion_email_sent(digest_id):
+def companion_email_sent(payload):
     from dailydigest.store import mark_sent
 
-    mark_sent(digest_id)
+    sent = json.loads(payload)
+    mark_sent(sent['digest_id'], run_id=sent['run_id'], labeled_items=sent['labeled_items'])
 
 
 def validate_companion_setup(validate, form, supports):

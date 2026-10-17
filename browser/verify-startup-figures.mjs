@@ -93,10 +93,19 @@ try {
   if(!baseline){
     for(const isolated of [false,true]) {
     const context=await browser.newContext({serviceWorkers:'block'});const page=await context.newPage();
+    await context.addInitScript(() => {
+      const Native = Worker;
+      window.Worker = class extends Native {
+        constructor(...args) { super(...args); window.__figureWorkerStarted = true; }
+      };
+    });
     // Exercise the renderer without a background startup replacing its fixture.
     await page.route('**/worker.mjs*',route=>route.fulfill({contentType:'text/javascript',body:'self.onmessage=()=>{};'}));
     console.log('Testing publisher figure',isolated?'isolated':'normal');
     await page.goto(base+(isolated?'?isolate=1':'index.html'));
+    // Finish the shell's asynchronous storage decision before replacing its
+    // frame; otherwise a late startup continuation can hide this fixture.
+    await page.waitForFunction(() => window.__figureWorkerStarted === true);
     assert.equal(await page.evaluate(()=>crossOriginIsolated),isolated);
     // Use the actual renderer and shared template script without brewing.
     const fixture=spawnSync(new URL('../.venv/bin/python',import.meta.url).pathname,['-c', `

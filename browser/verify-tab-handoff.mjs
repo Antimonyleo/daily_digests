@@ -76,7 +76,9 @@ try{
   await config(first,{hold:true});await card.locator('.vote-btn[data-grade="70"]').click();await first.waitForFunction(()=>window.__held);
   await card.locator('.vote-btn[data-grade="100"]').click();
   await first.evaluate(()=>{window.__old=document.querySelector('#app').contentDocument;document.querySelector('#app').contentWindow.ddNavigate('/setup');});
-  await first.waitForTimeout(100);assert.equal(await first.locator('#app').evaluate(node=>node.inert),true);
+  await first.waitForFunction(()=>document.querySelector('#app')?.inert);
+  assert.equal(await first.locator('#app').evaluate(node=>node.inert),true);
+  assert.equal(await first.evaluate(()=>document.querySelector('#app').contentDocument===window.__old),true);
   await config(first,{hold:false,release:true});
   await first.waitForFunction(()=>!document.querySelector('#app').contentWindow.ddHasPendingRatings?.());
   // A bounded refusal is safe; retry after the committed queue drains.
@@ -91,7 +93,8 @@ try{
   await config(first,{hold:true});await card.locator('.vote-btn[data-grade="70"]').click();await first.waitForFunction(()=>window.__held);
   await card.locator('.vote-btn[data-grade="100"]').click();
   assert.equal(await card.locator('.vote-btn[data-grade="100"]').getAttribute('aria-pressed'),'true');
-  await second.locator('#use-this-tab').click();await first.waitForTimeout(300);
+  await second.locator('#use-this-tab').click();
+  await first.locator('#status').filter({hasText:'Saving changes before switching tabs…'}).waitFor();
   assert.notEqual(await first.locator('#startup').getAttribute('data-state'),'moved');await oneOwner(first);
   await config(first,{hold:false,release:true});
   // A cold model on a real network can legitimately outlast the bounded drain.

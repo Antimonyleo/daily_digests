@@ -44,6 +44,40 @@ function saveSnapshot(snapshot, key = 'snapshot') {
     transaction.onabort = () => reject(transaction.error || new Error('Browser storage transaction aborted'));
   });
 }
+function replaceSnapshot(snapshot) {
+  // Retain the previous committed desk and replace it atomically. Bound copies
+  // because they can contain credentials and may be large.
+  return new Promise((resolve, reject) => {
+    const transaction = database.transaction('state', 'readwrite');
+    const store = transaction.objectStore('state');
+    let retainedKey = null;
+    const keys = store.getAllKeys();
+    keys.onsuccess = () => {
+      const previous = store.get('snapshot');
+      previous.onsuccess = () => {
+        if (previous.result != null) {
+          const latest = keys.result.reduce((time, key) => {
+            const value = typeof key === 'string' && key.startsWith('recovery:') ? Number(key.split(':')[1]) : 0;
+            return Number.isSafeInteger(value) ? Math.max(time, value) : time;
+          }, Date.now());
+          retainedKey = `recovery:${latest + 1}:${Math.random().toString(36).slice(2)}`;
+          store.put(previous.result, retainedKey);
+        }
+        const copies = keys.result.filter(key => typeof key === 'string' && key.startsWith('recovery:'));
+        if (retainedKey) copies.push(retainedKey);
+        copies.sort((a,b) => Number(a.split(':')[1]) - Number(b.split(':')[1]) || a.localeCompare(b));
+        for (const key of copies.slice(0, Math.max(0, copies.length - 3))) {
+          if (key !== retainedKey) store.delete(key);
+        }
+        if (snapshot === null) store.delete('snapshot'); else store.put(snapshot, 'snapshot');
+        store.delete('reading-view');
+      };
+    };
+    transaction.oncomplete = () => resolve(retainedKey);
+    transaction.onerror = () => reject(transaction.error);
+    transaction.onabort = () => reject(transaction.error || new Error('Restore was not saved; original data is unchanged.'));
+  });
+}
 async function ownStorage({ timeoutMs = 60000 } = {}) {
   if (ownership) return ownership;
   if (!navigator.locks) throw new Error('This browser does not provide Web Locks required to protect saved reading state.');
@@ -108,11 +142,15 @@ function companionEndpoint(value) {
 }
 async function companionCall(path, payload = null, method = 'POST', timeout = 180, configuration = companion) {
   if (!configuration?.endpoint) throw new Error('Configure the optional local companion explicitly before using this action.');
-  const result = await fetch(configuration.endpoint + path, {
+  let result;
+  try { result = await fetch(configuration.endpoint + path, {
     method, credentials: 'omit', mode: 'cors', signal: AbortSignal.timeout(Math.ceil(timeout * 1000)),
     headers: { 'X-DailyDigest-Token': configuration.token, ...(payload !== null ? { 'Content-Type': 'application/json' } : {}) },
     ...(payload !== null ? { body: payload } : {}),
-  });
+  }); } catch (error) {
+    if (error.name === 'TypeError') throw new Error('Could not reach Companion. Check that the helper is running, the URL is correct and its allowed origin matches this site. If Chrome asks for local-network access, allow it in this site’s permissions, then try again.', {cause:error});
+    throw error;
+  }
   const body = await result.text();
   if (!result.ok) throw new Error(`Companion request failed (HTTP ${result.status}): ${body}`);
   return body;
@@ -133,8 +171,8 @@ async function replaceState(payload) {
   }
   stateReplacing = true;
   try {
-    await persist({ force: true });
-    await state.py.globals.get('handle_import').callPromising(payload, saveSnapshot);
+    if (!await persist({ force: true })) throw new Error('Could not save your current data. Download a backup before restoring another reading desk.');
+    await state.py.globals.get('handle_import').callPromising(payload, replaceSnapshot);
   } catch (error) {
     stateReplacing = false;
     throw error;
@@ -144,7 +182,8 @@ async function replaceState(payload) {
 function recoveryKeys() {
   return new Promise((resolve, reject) => {
     const request = database.transaction('state').objectStore('state').getAllKeys();
-    request.onsuccess = () => resolve(request.result.filter(key => typeof key === 'string' && key.startsWith('recovery:')).sort());
+    request.onsuccess = () => resolve(request.result.filter(key => typeof key === 'string' && key.startsWith('recovery:'))
+      .sort((a,b) => Number(a.split(':')[1]) - Number(b.split(':')[1]) || a.localeCompare(b)));
     request.onerror = () => reject(request.error);
   });
 }
@@ -172,19 +211,8 @@ async function recoveryRequest(data) {
       await recoveryPy.runPythonAsync('validate_snapshot_sqlite(decode_snapshot(recovery_payload))');
     }
   }
-  const previous = await readSnapshot();
-  const key = `recovery:${Date.now()}:${Math.random().toString(36).slice(2)}`;
-  await new Promise((resolve, reject) => {
-    const transaction = database.transaction('state', 'readwrite');
-    const store = transaction.objectStore('state');
-    if (previous != null) store.put(previous, key);
-    if (next === null) store.delete('snapshot'); else store.put(next, 'snapshot');
-    store.delete('reading-view');
-    transaction.oncomplete = resolve;
-    transaction.onerror = () => reject(transaction.error);
-    transaction.onabort = () => reject(transaction.error || new Error('Recovery was not saved; original state is unchanged.'));
-  });
-  return { ok: true, reload: true, quarantined: previous != null, recoveryKey: previous != null ? key : null,
+  const key = await replaceSnapshot(next);
+  return { ok: true, reload: true, quarantined: key !== null, recoveryKey: key,
     credentialsOmitted: next !== null && JSON.parse(next).credentialsIncluded === false };
 }
 
@@ -316,7 +344,7 @@ async function initialize() {
     if (snapshotLimitWarning) self.postMessage({ type: 'storage-warning', message: snapshotLimitWarning });
     const interruptedBrew = await readSnapshot('brew-in-progress');
     if (interruptedBrew) {
-      self.postMessage({ type: 'brew-interrupted', message: 'The previous brew was interrupted when its tab closed or reloaded. Your last saved digest and feedback are kept. Start a new brew when ready; it will reuse saved calculations.' });
+      self.postMessage({ type: 'brew-interrupted', message: 'The previous brew was interrupted when its tab closed or reloaded. Your last saved digest and feedback are kept. Start a new brew when ready. Unsaved calculations may need to run again.' });
       await saveSnapshot(null, 'brew-in-progress');
     }
     stage('ready', 'Ready', 'Your reading desk is ready.');
@@ -493,9 +521,14 @@ self.onmessage = async ({ data }) => {
       const payload = data.type === 'companion-email' ? state.py.globals.get('companion_email_payload')()
         : data.type === 'companion-push' ? JSON.stringify({ snapshot: state.py.globals.get('export_portable_snapshot')(data.includeCredentials === true) }) : '{}';
       const path = data.type === 'companion-email' ? '/email' : data.type === 'companion-push' ? '/state' : '/inbound';
-      const body = await companionCall(path, payload, data.type === 'companion-push' ? 'PUT' : 'POST');
+      let requestPayload = payload;
+      if (data.type === 'companion-email') {
+        const {html, subject, digest_id} = JSON.parse(payload);
+        requestPayload = JSON.stringify({html, subject, digest_id});
+      }
+      const body = await companionCall(path, requestPayload, data.type === 'companion-push' ? 'PUT' : 'POST');
       if (data.type === 'companion-email' && JSON.parse(body).sent === true) {
-        state.py.globals.get('companion_email_sent')(JSON.parse(payload).digest_id);
+        state.py.globals.get('companion_email_sent')(payload);
         if (!await persist({ force: true })) throw new Error('The companion sent the email, but saving the browser delivery confirmation failed. Keep this tab open and export a backup.');
       }
       self.postMessage(response(data.id, body)); return;

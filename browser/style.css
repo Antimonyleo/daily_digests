@@ -121,3 +121,19 @@ input, select, textarea { background: var(--card); color: var(--text); }
 #startup-topics-form label { display: block; font-weight: 600; margin-bottom: 8px; }
 #startup-topics { display: block; width: 100%; max-width: 560px; min-height: 100px; padding: 12px; background: var(--card); color: var(--text); border: 1px solid var(--control-border); border-radius: 8px; font: inherit; }
 #startup-topics-hint { font-size: 13px; }
+
+.welcome-guide { flex-shrink: 0; padding: 10px 16px; border-bottom: 1px solid var(--control-border); background: var(--accent-soft); font-size: 13px; line-height: 1.5; }
+.welcome-guide p { margin: 0 0 4px; }
+.welcome-guide button { padding: 6px 9px; min-height: 40px; }
+.browser-bar > .browser-status { flex-shrink: 1; justify-content: flex-start; text-align: left; border: 0; background: transparent; color: var(--muted); overflow: hidden; }
+.browser-status:hover #status { text-decoration: underline; }
+#quick-guide { width: min(600px, calc(100vw - 24px)); max-height: calc(100dvh - 24px); padding: 24px; border: 1px solid var(--control-border); border-radius: 12px; background: var(--card); color: var(--text); line-height: 1.6; }
+#quick-guide::backdrop { background: #0007; }
+#quick-guide h1 { font-size: 26px; line-height: 1.25; outline: none; }
+#quick-guide p { font-size: 14px; }
+.guide-navigation { display: flex; gap: 8px; margin-top: 16px; }
+#linked-backup-tools { margin-block: 16px; padding-block: 12px; border-block: 1px solid var(--control-border); }
+#linked-backup-tools h2 { font-size: 16px; margin: 0; }
+#linked-backup-status, #linked-backup-help { overflow-wrap: anywhere; }
+#automatic-backup-label { display: block; margin-block: 12px; }
+@media print { .welcome-guide, #quick-guide { display: none !important; } }

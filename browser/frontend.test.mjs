@@ -3,7 +3,37 @@ import assert from 'node:assert/strict';
 import { runInNewContext } from 'node:vm';
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { localPath, routeFromHash, renderedDocument, WorkerClient, browserSupportError, friendlyLoadingStatus, publicRoute, announcementKey, computeStatusText, requestStorageProtection, publicSourceFreshness, settleRenderedEdits, skipToReadingDesk } from './app.mjs';
+import { localPath, routeFromHash, renderedDocument, WorkerClient, browserSupportError, friendlyLoadingStatus, publicRoute, announcementKey, computeStatusText, requestStorageProtection, publicSourceFreshness, settleRenderedEdits, skipToReadingDesk, backupFileText } from './app.mjs';
+
+test('an oversized backup is rejected before reading its contents', async () => {
+  await assert.rejects(backupFileText({size:128*1024*1024+1,text:()=>assert.fail('must not allocate the file contents')}), /128 MB/);
+  assert.equal(await backupFileText({size:4,text:async()=> 'test'}),'test');
+});
+
+test('recovery confirmation names the selected action and defaults to cancellation', async () => {
+  const source = readFileSync(new URL('./app.mjs', import.meta.url), 'utf8');
+  const start = source.indexOf('  async function confirmRestore(');
+  const handler = source.slice(start, source.indexOf('  function restoreProgress(', start));
+  const nodes = {'restore-title':{}, 'restore-description':{}, 'restore-proceed':{},
+    'restore-cancel':{focus(){this.focused = true;}}};
+  const dialog = nodes['restore-confirmation'] = {
+    open:false, showModal(){this.open = true;},
+    addEventListener(_name, callback){this.onclose = callback;},
+    close(){this.open = false;this.onclose();},
+  };
+  const confirm = runInNewContext(handler + '\nconfirmRestore', {document:{getElementById:id => nodes[id]}});
+  const reset = confirm('Create empty data?', {fresh:true});
+  assert.equal(nodes['restore-title'].textContent, 'Start fresh?');
+  assert.equal(nodes['restore-proceed'].textContent, 'Start fresh');
+  assert.equal(nodes['restore-cancel'].focused, true);
+  nodes['restore-cancel'].onclick();
+  assert.equal(await reset, false);
+  const restore = confirm('Replace current data?');
+  assert.equal(nodes['restore-title'].textContent, 'Restore saved data?');
+  assert.equal(nodes['restore-proceed'].textContent, 'Restore');
+  nodes['restore-proceed'].onclick();
+  assert.equal(await restore, true);
+});
 
 test('acceptance probes covered public texts when an optional cache is partial', () => {
   const source = readFileSync(new URL('./verify-browser.mjs', import.meta.url), 'utf8');
@@ -78,15 +108,30 @@ class FakeWorker extends EventTarget {
 function bridgedFrame() {
   const messages = [];
   const listeners = {};
-  const parent = { postMessage: data => messages.push(data) };
+  const parent = { postMessage: (data, origin) => { assert.equal(origin, 'https://reader.example'); messages.push(data); } };
   const events = [];
   const window = { addEventListener: (name, handler) => { listeners[name] = handler; }, dispatchEvent: event => events.push(event) };
   const document = { addEventListener() {}, getElementById() {} };
-  const html = renderedDocument('<html><head></head></html>', 'token', '/run');
-  const script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
+  const html = renderedDocument('<html><head></head></html>', 'token', '/run', 'https://reader.example/daily_digests/');
+  const script = html.match(/<script\b[^>]*>([\s\S]*?)<\/script>/)[1];
   runInNewContext(script, { parent, window, document, URL, URLSearchParams, FormData, Headers, Request, Response, EventTarget, Event, MessageEvent, CustomEvent });
-  return { window, messages, events, deliver: data => listeners.message({ source: parent, data: { ...data, token: 'token' } }) };
+  return { window, messages, events, deliver: (data, origin='https://reader.example') => listeners.message({ source: parent, origin, data: { ...data, token: 'token' } }) };
 }
+
+test('frame ignores authenticated-looking messages from a different origin', () => {
+  const frame = bridgedFrame();
+  frame.deliver({type:'compute-progress',compute:{completed:4}}, 'https://another.example');
+  assert.equal(frame.events.length,0);
+});
+
+test('rendered scripts need a per-document nonce and figures permit only listed origins', () => {
+  const render=()=>renderedDocument('<html><head></head><body><script>window.example=true;</script><img data-src="https://publisher.example/figure.png"></body></html>', 'token', '/', 'https://reader.example/');
+  const first=render(), second=render();
+  assert.doesNotMatch(first, /script-src 'unsafe-inline'/);
+  assert.match(first, /img-src 'self' data: blob: https:\/\/publisher.example;/);
+  assert.notEqual(first.match(/nonce="([^"]+)"/)[1],second.match(/nonce="([^"]+)"/)[1]);
+  assert.equal([...first.matchAll(/<script nonce=/g)].length,2);
+});
 
 test('live compute progress reaches the brew panel independently of stream polling', () => {
   const frame = bridgedFrame();

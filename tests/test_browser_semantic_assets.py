@@ -108,7 +108,7 @@ def test_full_build_manifest_identifies_lazy_semantic_assets_and_ships_engine(tm
     browser.mkdir()
     cache.rename(browser / '.build-cache')
     original = builder.HERE
-    for name in ('index.html', 'app.mjs', 'reading-view.mjs', 'tab-handoff.mjs', 'compute.mjs', 'public-embeddings.mjs', 'semantic.mjs', 'http.mjs', 'storage.mjs',
+    for name in ('index.html', 'app.mjs', 'guide.mjs', 'linked-backup.mjs', 'reading-view.mjs', 'tab-handoff.mjs', 'compute.mjs', 'public-embeddings.mjs', 'semantic.mjs', 'http.mjs', 'storage.mjs',
                  'style.css', 'worker.mjs', 'manifest.webmanifest', 'app-icon.svg', 'sw.js', 'runtime.py',
                  'requirements-browser.txt'):
         (browser / name).write_bytes((original / name).read_bytes())
@@ -147,5 +147,8 @@ def test_full_build_manifest_identifies_lazy_semantic_assets_and_ships_engine(tm
     assert (output / 'semantic.mjs').is_file()
     assert (output / 'public-embeddings.mjs').is_file()
     assert (output / 'reading-view.mjs').is_file()
+    for name in ('guide.mjs', 'linked-backup.mjs'):
+        assert (output / name).is_file()
+        assert f'./{name}?build=' + report['build_id'] in (output / 'app.mjs').read_text()
     assert './reading-view.mjs?build=' + report['build_id'] in (output / 'app.mjs').read_text()
     assert './reading-view.mjs?build=' + report['build_id'] in (output / 'worker.mjs').read_text()

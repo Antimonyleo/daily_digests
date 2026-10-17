@@ -22,6 +22,7 @@ function harness(overrides = {}) {
     } } : () => false } } },
     companionEndpoint: value => value, companionCall: async () => JSON.stringify({ ok: true }),
     saveSnapshot: async (value, key) => writes.push({ value, key }),
+    replaceSnapshot: async value => writes.push({value, recovery:true}),
     computeCapabilities: () => ({}), computeSelection: () => ({}), save: () => {},
     response: (id, body, status = 200) => ({ id, body, status }), emit: () => {},
     globalThis: { browserCompanionSupports: () => false }, JSON, setTimeout: () => {}, ...overrides });
@@ -156,6 +157,18 @@ test('oversized import is rejected before checkpoint or private state replacemen
   assert.equal(checkpoints, 0);
   assert.equal(imports, 0);
   assert.equal(h.context.stateReplacing, false);
+});
+
+test('restore cannot replace a desk whose latest changes failed to checkpoint', async () => {
+  let imports = 0;
+  const h = harness({persist:async()=>false});
+  h.context.state.py.globals.get = key => key === 'handle_import'
+    ? {callPromising:async()=>{imports++;}} : ()=>false;
+  await h.send({id:50,type:'import',overwrite:true,body:JSON.stringify({format:'dailydigest-browser-v1',files:{}})});
+  assert.equal(h.replies[0].status,500);
+  assert.match(h.replies[0].body,/save.*current/i);
+  assert.equal(imports,0);
+  assert.equal(h.context.stateReplacing,false);
 });
 
 

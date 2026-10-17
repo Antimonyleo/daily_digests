@@ -12,6 +12,10 @@
 </head>
 <body>
   <a class="skip-link" href="#app">Skip to reading desk</a>
+  <aside id="welcome-guide" class="welcome-guide" aria-label="Getting started" hidden>
+    <p>New here? Add a few topics or restore a reading desk. Your data stays in this browser profile.</p>
+    <div><button id="welcome-guide-open" type="button">Quick guide</button><button id="welcome-restore" type="button">Restore existing reading desk</button><button id="welcome-dismiss" type="button">Got it</button></div>
+  </aside>
   <main id="startup" aria-labelledby="startup-title">
     <p class="eyebrow">DailyDigest in your browser</p>
     <div id="tab-wait-actions" hidden>
@@ -20,7 +24,7 @@
     </div>
     <div class="tea-cup" aria-hidden="true"><span class="steam s1"></span><span class="steam s2"></span><span class="steam s3"></span><span class="cup-bowl"></span><span class="cup-handle"></span></div>
     <h1 id="startup-title">Putting the kettle on…</h1>
-    <p>Your research reading desk runs on this device. Your profile, ratings and saved papers are saved in this browser. No account or automatic device sync.</p>
+    <p>Your research reading desk runs on this device. This browser profile keeps your interests, ratings and saved papers. Switching profiles or browsers opens a separate reading desk.</p>
     <form id="startup-topics-form" hidden>
       <label for="startup-topics">What would you like to read about?</label>
       <textarea id="startup-topics" rows="3" maxlength="1800" placeholder="Induced proximity&#10;Asymmetric catalysis&#10;RNA delivery" aria-describedby="startup-topics-hint"></textarea>
@@ -44,7 +48,7 @@
     <p id="reading-view-status"></p>
     <div><button id="reading-view-open" type="button">Open full reading desk</button><button id="reading-view-brew" type="button">Brew a new digest</button></div>
   </aside>
-  <aside id="backup-reminder" class="backup-reminder" role="status" hidden><span id="backup-reminder-text"></span> <button id="backup-reminder-open" type="button">Backup options</button></aside>
+  <aside id="backup-reminder" class="backup-reminder" role="status" hidden><span id="backup-reminder-text"></span> <button id="backup-reminder-open" type="button">Backup &amp; transfer</button><button id="backup-reminder-dismiss" type="button">Later</button></aside>
   <iframe id="app" title="DailyDigest reading desk" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-downloads" hidden></iframe>
   <aside id="app-error" class="app-error" role="alert" hidden>
     <p id="app-error-message"></p>
@@ -60,15 +64,45 @@
   <aside id="interruption-notice" class="storage-consent" role="status" hidden><p id="interruption-message"></p><button id="interruption-dismiss" type="button">Dismiss</button></aside>
   <footer class="browser-bar">
     <span id="storage-warning" class="storage-warning" role="alert" hidden></span>
-    <div class="browser-status"><span id="status">Opening your reading desk…</span></div>
+    <button id="open-backup" class="browser-status" type="button" aria-label="Backup and transfer. Your data stays in this browser profile."><span id="status">Opening your reading desk…</span></button>
     <span id="announcements" class="visually-hidden" role="status" aria-live="polite" aria-atomic="true"></span>
     <button id="install" type="button" hidden title="Install a DailyDigest browser app shortcut">Install</button>
+    <button id="open-guide" type="button">Guide</button>
     <button id="open-data-settings" type="button">Data &amp; compute</button>
   </footer>
+  <dialog id="quick-guide" aria-labelledby="quick-guide-title">
+    <button id="close-guide" type="button">Back to reading</button>
+    <p id="guide-position" class="eyebrow"></p>
+    <section data-guide-step>
+      <h1 id="quick-guide-title" tabindex="-1">Start with your interests</h1>
+      <p>Add a few research topics or load an example and edit it. Use alternative terms for abbreviations and other names for the same topic. Percentages are optional; when you use them, they must add up to 100%.</p>
+      <p>Choose Standard for up to 15 papers, or Short for fewer. Brewing runs on your device, so keep the tab open. The first brew can take 20 minutes or more on one CPU core.</p>
+    </section>
+    <section data-guide-step hidden>
+      <h1 tabindex="-1">Make the digest yours</h1>
+      <p>Rate papers to tell DailyDigest what helps. Save papers to revisit them, or mark a paper as known. Each pick shows the topic it matched.</p>
+      <p>Saved papers and earlier digests stay in your reading desk. Check source coverage to see which sources responded and how old their data is.</p>
+    </section>
+    <section data-guide-step hidden>
+      <h1 tabindex="-1">Keep a copy you can restore</h1>
+      <p>This browser profile saves your data automatically. Other browsers, profiles and devices have separate storage. DailyDigest has no account sync.</p>
+      <p>Download a backup, then restore it in the other browser. Restoring replaces its reading desk; it does not merge changes. Backups exclude saved API keys and passwords unless you include them.</p>
+      <p>You can also link a backup file in a folder you choose, where supported. This profile remembers the file and checks access on startup. Another browser must link it separately. Automatic copies work while the tab is open; they are not live sync.</p>
+      <button type="button" data-guide-action="backup">Backup &amp; transfer</button>
+    </section>
+    <section data-guide-step hidden>
+      <h1 tabindex="-1">Optional tools</h1>
+      <p>Data &amp; compute has GPU and multiple-core options. Availability depends on your browser and drivers. The app shows which mode it actually uses.</p>
+      <p>Companion lets you use a supported Claude or Codex login, email, or scheduled brews. Install and run the helper on your computer, then connect it under Data &amp; compute. Browser reading works without it. Companion data transfers are manual and replace the destination reading desk.</p>
+      <p>If startup fails, download the original data before restoring a backup or starting fresh. Recovery files may contain credentials.</p>
+      <button type="button" data-guide-action="compute">Compute options</button><button type="button" data-guide-action="companion">Companion setup</button>
+    </section>
+    <nav class="guide-navigation" aria-label="Quick guide"><button id="guide-previous" type="button">Previous</button><button id="guide-next" type="button">Next</button><button id="guide-finish" type="button" hidden>Done</button></nav>
+  </dialog>
   <dialog id="data-settings" aria-labelledby="data-settings-title">
     <button id="close-data-settings" type="button">Back to reading</button>
     <h1 id="data-settings-title">Data &amp; compute</h1>
-    <p class="storage-location">On this device · No auto-sync. Your browser stores your reading desk; no account is required.</p>
+    <p class="storage-location">Saved in this browser profile. Other profiles and browsers have separate data. DailyDigest has no account sync.</p>
     <div class="device-sections">
     <details id="compute-menu">
       <summary>Compute</summary>
@@ -96,16 +130,20 @@
       <summary>Companion <span class="optional-label">(optional)</span></summary>
       <div class="data-tools">
         <p>An optional helper on your computer connects this page to your Claude or Codex login, email and scheduled brews. Skip it to read in the browser.</p>
-        <details><summary>Install the helper</summary>
-        <p>Install DailyDigest on the companion computer, then run:</p>
-        <code class="companion-command">dd companion --allowed-origin https://antimonyleo.github.io</code>
-        <p>The command prints the location of your reusable private token. Your Claude or Codex login must be on that computer. Connect only to a helper you trust.</p></details>
+        <ol class="companion-steps">
+          <li>Install the local DailyDigest app on your computer. For Claude or Codex summaries, sign in to its CLI there.</li>
+          <li>Start the helper and leave it running: <code class="companion-command">dd companion --allowed-origin https://antimonyleo.github.io</code><button id="copy-companion-command" type="button">Copy command</button></li>
+          <li>Copy the server URL and token from its startup message into the fields below. The message also gives the token file location for later use.</li>
+        </ol>
+        <p>The helper receives selected paper metadata and a short research profile for summaries. Send browser state separately for scheduled brews; this transfers your profile, feedback and history. Credentials are excluded unless you choose to include them.</p>
+        <p>Connect only to a helper you trust.</p>
+        <p id="shared-origin-warning">Other project sites under this GitHub Pages account share access to saved browser credentials. A separate app domain would keep that storage separate.</p>
         <form id="companion-form">
           <label for="companion-endpoint">Local server URL</label>
           <input id="companion-endpoint" type="url" required placeholder="http://127.0.0.1:8768" autocomplete="url">
           <label for="companion-token">Access token</label>
           <input id="companion-token" type="password" required autocomplete="off">
-          <button id="companion-connect" disabled type="submit">Connect</button>
+          <button id="companion-connect" disabled type="submit">Connect and test</button>
           <button id="companion-disconnect" disabled type="button">Disconnect</button>
         </form>
         <p id="companion-status" role="status">No companion configured.</p>
@@ -121,13 +159,23 @@
       </div>
     </details>
     <details id="browser-data-menu">
-      <summary>Backup</summary>
+      <summary>Backup &amp; transfer</summary>
       <div class="data-tools">
-        <p>Your interests, ratings and saved papers are saved automatically in this browser. There is no automatic sync between devices. Export a backup before clearing browser data or switching computers.</p>
-        <p id="backup-runtime-notice" hidden>Open the full reading desk to export or import a backup.</p>
-        <button id="export" disabled type="button">Export backup</button>
-        <label class="file-button">Import backup<input id="import" type="file" accept="application/json,.json" disabled></label>
-        <p>Importing replaces this reading desk. People sharing this browser profile see the same reading desk.</p>
+        <p>This browser profile saves your interests, ratings, saved papers and reading history. Download a backup before changing browsers, profiles or devices, or clearing browser data.</p>
+        <p id="backup-runtime-notice" hidden>Open the full reading desk to download a backup. Restoring a backup opens it automatically.</p>
+        <button id="export" disabled type="button">Download backup</button>
+        <label class="file-button">Restore backup<input id="import" type="file" accept="application/json,.json"></label>
+        <p id="backup-restore-progress" role="status" hidden></p>
+        <p>Restoring replaces this reading desk. It does not merge changes from different browsers. Keep the backup file private.</p>
+        <section id="linked-backup-tools" aria-labelledby="linked-backup-title">
+          <h2 id="linked-backup-title">A copy in your own folder</h2>
+          <p>Choose a backup file in a folder you control. DailyDigest keeps working in browser storage and updates this extra copy only with your permission.</p>
+          <p id="linked-backup-status" role="status">No backup file linked.</p>
+          <button id="link-backup" type="button">Choose backup file</button><button id="reconnect-backup" type="button" hidden>Allow file access</button>
+          <button id="write-linked-backup" type="button" hidden>Save copy now</button><button id="restore-linked-backup" type="button" hidden>Restore this copy</button><button id="forget-linked-backup" type="button" hidden>Disconnect file</button>
+          <label id="automatic-backup-label" hidden><input id="automatic-backup" type="checkbox"> Update this copy automatically while this tab is open</label>
+          <p id="linked-backup-help">Copies run about a minute after changes, when no brew is running. Credentials are excluded. Another browser must link the file separately and restore it. If that file changes elsewhere, automatic copying stops so it cannot overwrite those changes.</p>
+        </section>
         <details><summary>More about storage</summary><p>Other project sites on this hostname share its security origin. Use separate browser profiles for separate readers.</p>
         <p id="storage-status" role="status">Checking storage protection…</p>
         <p>Your browser manages the local storage directory on macOS, Windows and Linux. Protect storage to reduce automatic clearing; export a backup to keep a copy in a folder you choose. No account is required.</p>
@@ -142,11 +190,19 @@
       </div>
     </details>
   <aside id="storage-consent" class="storage-consent" aria-label="Keep your reading desk" hidden>
-    <p>Your reading desk is saved in this browser. Protect it from automatic clearing? Your browser chooses the storage location. Keep backups for device changes, loss or manual clearing.</p>
+    <p>Ask your browser to keep this profile's data from automatic clearing. This does not create a backup or share data with another browser.</p>
     <div><button id="consent-protect-storage" type="button">Protect local data</button><button id="dismiss-storage-consent" type="button">Not now</button></div>
   </aside>
     </div>
   </dialog>
+  <dialog id="restore-confirmation" aria-labelledby="restore-title" aria-describedby="restore-description">
+    <h2 id="restore-title">Restore saved data?</h2>
+    <p id="restore-description"></p>
+    <p>Your current data will be kept as a recovery copy in this browser. Up to three copies are retained. Raw recovery downloads may contain credentials.</p>
+    <button id="restore-cancel" type="button">Cancel</button>
+    <button id="restore-proceed" type="button">Restore</button>
+  </dialog>
+  <p id="restore-progress" class="storage-consent" role="status" hidden></p>
   <script type="module" src="./app.mjs?compute=v1"></script>
 </body>
 </html>

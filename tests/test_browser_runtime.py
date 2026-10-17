@@ -370,13 +370,15 @@ def test_inbound_resolves_reply_against_browser_named_digest_and_deduplicates(
         session.add_all([old, recent])
         session.flush()
         old_id, recent_id = old.id, recent.id
+    store.write_digest('2026-10-12', [('R1', old_id)])
+    store.mark_sent('2026-10-12', run_id='a' * 32, labeled_items=[('R1', old_id)])
     commits = []
 
     async def commit(snapshot):
         commits.append(snapshot)
 
     payload = {'ok': True, 'votes': [{'mail_id': 'stable-mail', 'line': '+R1 -R99',
-                                      'digest_id': '2026-10-12'}]}
+                                      'digest_id': '2026-10-12', 'run_id': 'a' * 32}]}
     result = asyncio.run(runtime.transactional_inbound(payload, commit, root=tmp_path))
     assert result['messages_applied'] == result['votes_up'] == 1
     assert result['votes_down'] == 0
@@ -398,8 +400,9 @@ def test_inbound_storage_failure_restores_votes_and_dedup_state(runtime, tmp_pat
     state.write_text('{"existing":1}')
     before = json.loads(runtime.export_snapshot(tmp_path))
 
-    def record_vote(line, digest_id):
+    def record_vote(line, digest_id, *, run_id, sent_only):
         assert (line, digest_id) == ('+R1', '2026-10-13')
+        assert run_id is None and sent_only
         state.write_text('{"existing":1,"new":1}')
         return {'up': 1, 'down': 0, 'unknown': 0}
 
@@ -478,6 +481,65 @@ vm.runInContext(`
   assert.equal(posted[1].status, 500);
   assert.match(posted[1].body, /IndexedDB failed/);
 })().catch(error => {console.error(error); process.exitCode = 1;});
+'''
+    result = subprocess.run(['node', '-e', script, str(worker)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
+def test_companion_email_captures_rendered_labels_before_preview_changes(runtime, monkeypatch):
+    from dailydigest import store, votes
+
+    store.init_db()
+    with store.session_scope() as session:
+        original = store.ItemRow(source='fixture', section='research', external_id='email-original',
+                                 title='Original emailed paper', url='https://example.test/original')
+        preview = store.ItemRow(source='fixture', section='research', external_id='email-preview',
+                                title='Later preview paper', url='https://example.test/preview')
+        session.add_all([original, preview])
+        session.flush()
+        original_id, preview_id = int(original.id), int(preview.id)
+    store.write_digest('2026-10-16', [('R3', original_id)])
+    payload = runtime.companion_email_payload()
+    captured = json.loads(payload)
+    assert 'Original emailed paper' in captured['html']
+    assert 'Later preview paper' not in captured['html']
+    assert captured['labeled_items'] == [['R3', original_id]]
+    assert f"[run:{captured['run_id']}]" in captured['subject']
+    store.write_digest('2026-10-16', [('R3', preview_id)])
+    runtime.companion_email_sent(payload)
+    monkeypatch.setattr(votes, '_update_rocchio', lambda: None)
+    assert votes.record_votes('+R3', '2026-10-16', run_id=captured['run_id'], sent_only=True)['up'] == 1
+    assert votes.get_vote_value(original_id) == 1
+    assert votes.get_vote_value(preview_id) is None
+
+
+def test_worker_confirms_the_captured_email_payload_after_delivery():
+    import shutil
+    import subprocess
+
+    if not shutil.which('node'):
+        pytest.skip('Node is required to exercise the worker host adapter')
+    worker = Path(__file__).parents[1] / 'browser/worker.mjs'
+    script = r'''
+const fs = require('node:fs'), vm = require('node:vm'), assert = require('node:assert/strict');
+const posted = [], confirmed = [];
+const payload = JSON.stringify({html:'<p>Original R3</p>',subject:'DailyDigest 2026-10-16 [run:abc]',
+  digest_id:'2026-10-16',run_id:'abc',labeled_items:[['R3',1]]});
+const context = vm.createContext({URL,setTimeout,clearTimeout,AbortSignal,
+  self:{postMessage:message=>posted.push(message)},
+  fetch:async (_url, options)=>{
+    const sent=JSON.parse(options.body);
+    assert.deepEqual(Object.keys(sent).sort(),['digest_id','html','subject']);
+    return {ok:true,text:async()=>JSON.stringify({ok:true,sent:true})};
+  },payload,confirmed});
+vm.runInContext(fs.readFileSync(process.argv[1], 'utf8').replace(/^import .*$/gm,''),context);
+vm.runInContext(`boot=Promise.resolve({});companion={endpoint:'https://companion.example',token:'explicit'};
+state={py:{globals:{get:name=>name==='companion_email_payload'?()=>payload:
+  name==='companion_email_sent'?value=>confirmed.push(value):()=>false}}};
+storageWriter={flush:async()=>true};`,context);
+(async()=>{await context.self.onmessage({data:{id:1,type:'companion-email'}});
+  assert.deepEqual(confirmed,[payload]);assert.equal(posted[0].status,200);
+})().catch(error=>{console.error(error);process.exitCode=1;});
 '''
     result = subprocess.run(['node', '-e', script, str(worker)], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
@@ -825,6 +887,77 @@ assert runtime.state_generation() == before
     assert result.returncode == 0, result.stderr
 
 
+def test_cold_wal_connection_lifecycle_invalidates_cached_browser_database(tmp_path):
+    import shutil
+    import sqlite3
+    import subprocess
+    import sys
+
+    node = shutil.which('node')
+    if not node:
+        pytest.skip('Node is required for the actual cached browser checkpoint encoder')
+    source = tmp_path / 'source.db'
+    root = tmp_path / 'restored'
+    (root / 'data').mkdir(parents=True)
+    database = root / 'data/digest.db'
+    connection = sqlite3.connect(source)
+    try:
+        connection.execute('PRAGMA journal_mode=WAL')
+        connection.execute('CREATE TABLE fixture (value TEXT)')
+        connection.execute("INSERT INTO fixture VALUES ('committed WAL data')")
+        connection.commit()
+        shutil.copyfile(source, database)
+        shutil.copyfile(str(source) + '-wal', str(database) + '-wal')
+    finally:
+        connection.close()
+    script = r'''
+import importlib.util, json, subprocess, sys
+from pathlib import Path
+from sqlalchemy import create_engine, text
+spec = importlib.util.spec_from_file_location('runtime_wal_tracking_test', sys.argv[1])
+runtime = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(runtime)
+root = Path(sys.argv[2])
+runtime.ROOT = root
+runtime.install_state_tracking()
+before = json.loads(runtime.export_snapshot(root))
+versions = json.loads(runtime.snapshot_file_versions(root))
+cache = {name: {'version':versions[name], 'encoded':encoded} for name, encoded in before['files'].items()}
+engine = create_engine('sqlite:///' + str(root / 'data/digest.db'))
+with engine.connect() as connection:
+    assert connection.execute(text('SELECT value FROM fixture')).scalar() == 'committed WAL data'
+read_generation = runtime.state_generation()
+with engine.connect() as connection:
+    assert connection.execute(text('SELECT value FROM fixture')).scalar() == 'committed WAL data'
+assert runtime.state_generation() == read_generation, 'Reused read-only connections must stay clean'
+engine.dispose()
+after = json.loads(runtime.export_snapshot(root))
+assert before['files']['data/digest.db'] != after['files']['data/digest.db']
+assert 'data/digest.db-wal' not in after['files'], 'The last close must checkpoint the cold WAL'
+encoder = r"""import {readFileSync} from 'node:fs';
+import {capturePrivateSnapshot} from './browser/storage.mjs';
+const [root,names,versions,previous]=process.argv.slice(1);
+const result=capturePrivateSnapshot(JSON.parse(names),name=>new Uint8Array(readFileSync(root+'/'+name)),
+  {cache:new Map(Object.entries(JSON.parse(previous))),versions:JSON.parse(versions)});
+process.stdout.write(result.payload);"""
+encoded = subprocess.run([sys.argv[3], '--input-type=module', '-e', encoder, str(root),
+    runtime.snapshot_file_names(root), runtime.snapshot_file_versions(root), json.dumps(cache)],
+    check=True, text=True, capture_output=True).stdout
+assert encoded == runtime.export_snapshot(root), 'Cached checkpoint lost committed WAL data after last close'
+assert runtime.state_generation() > read_generation, 'Closing private SQLite connections must invalidate file versions'
+public = create_engine('sqlite:///' + str(root.parent / 'unrelated.db'))
+generation = runtime.state_generation()
+with public.connect() as connection:
+    connection.execute(text('SELECT 1'))
+public.dispose()
+assert runtime.state_generation() == generation, 'Unrelated SQLite files are not browser private state'
+'''
+    runtime_path = Path(__file__).parents[1] / 'browser/runtime.py'
+    result = subprocess.run([sys.executable, '-c', script, str(runtime_path), str(root), node],
+                            cwd=Path(__file__).parents[1], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
 def test_failed_startup_recovery_quarantines_original_atomically():
     import shutil
     import subprocess
@@ -837,15 +970,24 @@ const fs = require('node:fs'), vm = require('node:vm'), assert = require('node:a
 const saved = new Map([['snapshot', 'damaged original']]); let fail = false;
 const database = {transaction: (_store, mode) => {
   const staged = new Map(saved);
-  const transaction = {objectStore: () => ({
-    get(key) { const request = {}; setTimeout(() => {request.result = saved.get(key); request.onsuccess();}, 0); return request; },
-    getAllKeys() { const request = {}; setTimeout(() => {request.result = [...saved.keys()]; request.onsuccess();}, 0); return request; },
-    put(value, key) { staged.set(key, value); }, delete(key) { staged.delete(key); }
-  })};
-  if (mode === 'readwrite') setTimeout(() => {
+  let pending = 0, ended = false;
+  const finish = () => {
+    if (mode !== 'readwrite' || pending || ended) return;
+    ended = true;
     if (fail) {transaction.error = new Error('quota exceeded'); transaction.onabort();}
     else {saved.clear(); for (const [key, value] of staged) saved.set(key, value); transaction.oncomplete();}
-  }, 0);
+  };
+  const read = value => {
+    const request = {}; pending++;
+    setTimeout(() => {request.result=value();request.onsuccess();pending--;setTimeout(finish,0);},0);
+    return request;
+  };
+  const transaction = {objectStore: () => ({
+    get(key) { return read(() => staged.get(key)); },
+    getAllKeys() { return read(() => [...staged.keys()]); },
+    put(value, key) { staged.set(key, value); }, delete(key) { staged.delete(key); }
+  })};
+  setTimeout(finish,0);
   return transaction;
 }};
 const context = vm.createContext({URL, setTimeout, clearTimeout, databaseFixture: database, self: {postMessage() {}}});
@@ -867,6 +1009,19 @@ vm.runInContext('startupFailed = true; ownership = Promise.resolve(); database =
   const status = await context.recoveryRequest({type: 'recovery-status'});
   assert.equal(status.available, true);
   assert.equal(status.quarantined.length, 1);
+  // Ordinary successful imports retain the previous committed snapshot too,
+  // and bounded recovery history does not evict it before older copies.
+  // Historical timestamps ahead of the current clock must not evict the new
+  // original or make recovery-export pick an older desk (also crosses width).
+  for (let i=0;i<4;i++) saved.set(`recovery:${9999999999996+i}:fixture`,'older desk');
+  saved.set('snapshot','working desk');
+  const key = await context.replaceSnapshot('restored desk');
+  assert.equal(saved.get('snapshot'),'restored desk');
+  assert.equal(saved.get(key),'working desk');
+  assert.equal([...saved.keys()].filter(key=>key.startsWith('recovery:')).length,3);
+  assert.equal(await context.recoveryRequest({type:'recovery-export',key}),'working desk');
+  const current = await context.recoveryRequest({type:'recovery-status'});
+  assert.equal(current.quarantined.at(-1),key);
   await assert.rejects(context.recoveryRequest({type: 'recovery-export', key: 'companion'}), /Invalid/);
 })().catch(error => {console.error(error); process.exitCode = 1;});
 '''

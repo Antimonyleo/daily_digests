@@ -295,7 +295,11 @@ def test_actual_legacy_migration_marks_c_level_backup_write(tracked_app, monkeyp
     monkeypatch.setattr(app.store, 'mark_private_state_changed', record_backup_mark)
     app.store.init_db()
     backup = app.root / 'data/backups/digest-pre-v1.db'
-    assert [(path, after > before) for path, before, after in notifications] == [(backup, True)]
+    expected = {Path(str(database) + suffix) for database in (legacy, backup)
+                for suffix in ('', '-wal', '-journal')}
+    assert len(notifications) == len(expected)
+    assert {path for path, _before, _after in notifications} == expected
+    assert all(after > before for _path, before, after in notifications)
     with sqlite3.connect(backup) as connection:
         assert connection.execute('SELECT value FROM votes ORDER BY id').fetchall() == [(1,), (-1,)]
     checkpoint = {'label': 'C-level migration backup', 'generation': app.runtime.state_generation(),

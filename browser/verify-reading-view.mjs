@@ -130,8 +130,14 @@ try{
   const responseStart=Date.now();
   const fast=await Promise.race([page.evaluate(()=>window.__readingRPC({type:'request',method:'GET',path:'/setup'})),new Promise((_r,reject)=>setTimeout(()=>reject(Error('Route waited for a held checkpoint')),2000))]);
   assert.equal(fast.status,200);report.routeDuringHeldSaveMs=Date.now()-responseStart;
-  await page.waitForTimeout(500);
-  const held=JSON.parse((await page.evaluate(()=>window.__readingRPC({type:'reader-save-config'}))).body);
+  const heldDeadline=Date.now()+30000;
+  let held;
+  do {
+    held=JSON.parse((await page.evaluate(()=>window.__readingRPC({type:'reader-save-config'}))).body);
+    if(held.status.saving)break;
+    await page.waitForTimeout(50);
+  } while(Date.now()<heldDeadline);
+  assert.equal(held.status.saving,true,'The checkpoint writer must reach the held save before release.');
   assert.equal(held.status.durable,false);
   const final=JSON.parse((await page.evaluate(()=>window.__readingRPC({type:'reader-save-config',hold:false,release:true,checkpoint:true}))).body);
   assert.equal(final.equal,true,'Incremental checkpoint must equal a full export byte-for-byte');assert.equal(final.status.durable,true);
