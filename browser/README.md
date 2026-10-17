@@ -320,6 +320,56 @@ Other project sites
 on the same hostname share a security origin; a dedicated hostname provides
 actual isolation.
 
+### Reading desk, transfers and the quick guide
+
+The Guide button opens a short walkthrough of setup, brewing, feedback, storage,
+recovery, compute and Companion. New readers see a small introduction with a
+restore option. They can dismiss it and reopen the guide at any time. The footer
+storage button opens Backup & transfer. Setup also links to the guide and backups.
+
+Each browser profile has its own working reading desk. Signing into Chrome or
+installing the browser shortcut does not connect it to another profile or device.
+DailyDigest has no account sync. Download a backup and restore it elsewhere to
+transfer a reading desk. Restoring replaces the destination; it does not merge
+independent edits. Companion transfers are also manual replacements.
+
+Browsers with `showSaveFilePicker` can link one backup file in a folder the reader
+chooses. The picker starts in Documents where supported; the app cannot scan a
+default folder. File access and automatic updates require explicit permission.
+The handle is remembered in a separate, project-scoped IndexedDB record. Startup
+checks permission and file metadata without reading the whole file, showing a
+picker, or starting Python just for the backup. If permission expired, the reader
+can reconnect with Allow file access. Another browser profile must choose the file
+separately. Browsers without this API use download and restore instead.
+
+Automatic copies are off by default. When enabled, they run about a minute after
+changes to saved settings, feedback or a completed brew, while the tab is open and
+no brew is running. They reuse one file and exclude credentials. Reading a page
+does not trigger a file copy. A copy may still be pending when the tab closes;
+Save copy now writes the latest state explicitly. Full backups include local
+caches and can be large, so copying does not run on each click. Copies beyond the
+128 MB portable restore limit do not replace the last usable backup.
+
+An existing file must be restored before automatic writing is allowed. Every
+write takes an exclusive file lock and checks the previous content's SHA-256.
+Changes made in another browser stop copying instead of being overwritten. A
+failed write aborts the temporary stream, keeping the last committed file.
+Disconnect forgets the handle and leaves the file untouched. Automatic copies
+are backups, not synchronization, and the browser database remains authoritative.
+Keep separate downloaded copies if you need older versions.
+
+Run the guide and backup integration check against a built site:
+
+```bash
+DAILYDIGEST_GUIDE_SITE=browser/dist node browser/verify-guide-backup.mjs
+```
+
+It uses the fictional backup from `browser/make_test_fixture.py`. File selection
+is replaced with an isolated browser file handle; the test never opens a reader's
+folders. It checks a real rating, a matching full export, reload persistence and
+restore in a separate profile. Native OS picker dialogs and permission prompts
+still need manual checks on each supported platform.
+
 ## Release identity and research interests
 
 Application assets carry one release identity, and Python bundles are checked
