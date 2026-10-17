@@ -1,5 +1,5 @@
 # Pure Python packages; compiled dependencies come from Pyodide's pinned lock.
-fastapi==0.136.1
+fastapi==0.143.0
 starlette==1.3.1
 pydantic-settings==2.8.1
 feedparser==6.0.12
