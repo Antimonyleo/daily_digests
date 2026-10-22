@@ -9,7 +9,7 @@
   },
   "dependencies": {
     "@huggingface/transformers": "3.8.1",
-    "pyodide": "0.28.3"
+    "pyodide": "314.0.7"
   },
   "devDependencies": {
     "playwright-core": "1.58.2"
