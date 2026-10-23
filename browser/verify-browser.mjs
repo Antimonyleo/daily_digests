@@ -326,7 +326,8 @@ async function chooseDigest(value) {
   await page.waitForFunction(()=>document.querySelector('#app')?.contentDocument!==window.__priorEditionDocument);
   await frame().locator('#digest-date').waitFor();
 }
-async function setTopics(value) {
+async function setTopics(value, metadata) {
+  if (metadata) await frame().locator('#topic-details').evaluate((node, value) => {node.value = JSON.stringify(value);}, metadata);
   await frame().locator('#topics').evaluate((node, text) => { node.value = text; node.dispatchEvent(new Event('input', { bubbles: true })); }, value);
 }
 async function snapshot() {
@@ -498,7 +499,7 @@ try {
     await frame().locator('#add-interest').click();
     assert.deepEqual(await frame().locator('[data-interest-weight]').evaluateAll(nodes=>nodes.map(node=>node.value)), ['50','50']);
     assert.equal(await frame().locator('#normalize-interests').isHidden(),true);
-    const names=await frame().locator('[data-interest-name],[data-interest-weight],[data-interest-aliases],[data-interest-description]').evaluateAll(nodes=>nodes.map(node=>node.getAttribute('aria-label')));
+    const names=await frame().locator('[data-interest-name],[data-interest-weight],[data-interest-aliases]').evaluateAll(nodes=>nodes.map(node=>node.getAttribute('aria-label')));
     assert.equal(new Set(names).size,names.length);
     assert.equal(await frame().locator('.settings-actions').evaluate(node=>getComputedStyle(node).position), 'static');
     await frame().locator('.settings-actions button[type="submit"]').scrollIntoViewIfNeeded();
@@ -694,112 +695,89 @@ try {
     await route('/setup', '#interest-editor');
     return {editableForm:true, draftPreserved:true, keyNotReflected:true, stateUnchanged:true, controlledReloadBlocked:true};
   });
-  await check('local-wording-variants-are-explicit-and-do-not-autosave', async () => {
+  await check('other-topic-names-are-optional-and-do-not-autosave', async () => {
     await setTopics('quantum error correction (QEC) | 100');
     const row = frame().locator('.interest-row').first();
-    const before=await snapshot(), spellingBefore=spellingRequests.length, externalBefore=report.requests.length;
-    await editInterest(row, true);
-    assert.equal(await row.locator('[data-interest-aliases]').inputValue(),'');
-    await row.getByRole('button',{name:'Suggest wording variants',exact:true}).click();
-    assert.equal(await row.locator('[data-interest-aliases]').inputValue(),'');
-    await row.getByRole('button',{name:'Add “QEC”',exact:true}).click();
-    assert.equal(await row.locator('[data-interest-aliases]').inputValue(),'QEC');
-    assert.equal(await row.locator('[data-interest-name]').inputValue(),'quantum error correction (QEC)');
+    const before = await snapshot(), spellingBefore = spellingRequests.length;
+    await editInterest(row);
+    assert.equal(await row.locator('[data-interest-aliases]').isHidden(), true);
+    assert.equal(await row.locator('[data-interest-description]').isHidden(), true);
+    assert.equal(await row.getByRole('button', {name:'Suggest wording variants',exact:true}).count(),0);
+    await row.getByText('Other names (optional)', {exact:true}).click();
+    await row.locator('[data-interest-aliases]').fill('quantum error correction\nQEC');
+    assert.equal(await row.locator('[data-interest-name]').inputValue(), 'quantum error correction (QEC)');
     await assertPercentagesReady();
-    assert.deepEqual((await snapshot()).files,before.files,'Local suggestions change only the unsaved form');
-    assert.equal(spellingRequests.length,spellingBefore);
-    assert.equal(report.requests.length,externalBefore);
-    await row.locator('[data-interest-name]').fill('Drug development');
-    await row.locator('[data-interest-aliases]').fill('');
-    await row.getByRole('button',{name:'Suggest wording variants',exact:true}).click();
-    await row.locator('.hint').filter({hasText:'No additional wording variants found locally'}).waitFor();
-    assert.equal(await row.locator('[data-interest-aliases]').inputValue(),'');
-    assert.equal(spellingRequests.length,spellingBefore);
-    assert.deepEqual((await snapshot()).files,before.files);
+    assert.deepEqual((await snapshot()).files, before.files, 'Optional other names change only the unsaved form');
+    assert.equal(spellingRequests.length, spellingBefore);
+    await row.locator('[data-interest-cancel]').click();
+    assert.equal(await row.locator('[data-interest-aliases]').inputValue(), '');
     await route('/setup','#interest-editor');
-    return {noExternalRequest:true,noAutosave:true,explicitAcronym:true,topicAndPercentagePreserved:true,honestMissingVariants:true};
+    return {optionalOtherNames:true,noAutosave:true,noManualVariantControls:true,topicAndPercentagePreserved:true,cancelRestores:true};
   });
-  await check('interest-spelling-is-explicit-and-preserves-reader-control', async () => {
-    await setTopics('induced provimity | 75\nassymetric catalysis | 25');
+  await check('interest-spelling-is-automatic-and-preserves-reader-control', async () => {
     const first = frame().locator('.interest-row').nth(0), second = frame().locator('.interest-row').nth(1);
-    const firstStatus = first.locator('.interest-spelling .hint');
-    assert.equal(spellingRequests.length, 0, 'Typing must not send an interest to the spelling provider.');
-    assert.equal(await first.getByRole('button', {name:'Check spelling in PubMed', exact:true}).isHidden(), true);
-    await editInterest(first, true);
-    await editInterest(second, true);
-    await openSettingsGroup('author-settings');
-    await frame().locator('#authors_of_interest').fill('Fictional author');
+    const autoCheck = async (row, value) => {
+      await editInterest(row);
+      await row.locator('[data-interest-name]').fill(value);
+      await row.locator('[data-interest-weight]').focus();
+    };
+    const settled = row => row.locator('.interest-spelling[aria-busy="false"]').waitFor({state:'attached'});
+    await setTopics('induced provimity | 75\nassymetric catalysis | 25');
+    const before = await snapshot();
+    await autoCheck(first, 'induced provimity');
+    await first.getByRole('button', {name:'Use suggestion',exact:true}).waitFor();
+    assert.equal(await first.locator('[data-interest-name]').inputValue(), 'induced provimity');
+    assert.deepEqual((await snapshot()).files, before.files, 'Automatic checks must not save the reading desk');
+    await first.getByRole('button', {name:'Use suggestion',exact:true}).click();
+    assert.equal(await first.locator('[data-interest-name]').inputValue(), 'induced proximity');
+    assert.equal(await first.locator('[data-interest-weight]').inputValue(), '75');
+    await autoCheck(second, 'assymetric catalysis');
+    await second.getByRole('button', {name:'Keep wording',exact:true}).click();
+    assert.equal(await second.locator('[data-interest-name]').inputValue(), 'assymetric catalysis');
+    await autoCheck(first, 'RNA delivery'); await settled(first);
+    assert.equal(await first.getByRole('button', {name:'Use suggestion',exact:true}).isHidden(), true);
+    spellingMode = 'failure';
+    await autoCheck(first, 'Fresh specialist wording');
+    await first.getByRole('button', {name:'Retry',exact:true}).waitFor();
+    assert.equal(await first.locator('[data-interest-name]').inputValue(), 'Fresh specialist wording');
+    spellingMode = 'success';
+    await first.getByRole('button', {name:'Retry',exact:true}).click(); await settled(first);
+    await route('/setup','#interest-editor');
+    await setTopics('induced provimity | 75\nassymetric catalysis | 25');
+    spellingMode = 'slow';
+    const started = new Promise(resolve => {spellingStarted = resolve;});
+    try {
+      await autoCheck(first, 'induced provimity'); await started;
+      await first.locator('[data-interest-name]').fill('assymetric catalysis');
+      await first.locator('.interest-spelling').evaluate(node => {
+        const win = node.ownerDocument.defaultView; win.__staleSuggestions = [];
+        new win.MutationObserver(() => win.__staleSuggestions.push(node.textContent)).observe(node, {subtree:true,childList:true,characterData:true});
+      });
+      spellingMode = 'success'; releaseSpelling(); spellingStarted = null;
+      await first.locator('[data-interest-weight]').focus();
+      await first.locator('.interest-spelling .hint').filter({hasText:'asymmetric catalysis'}).waitFor();
+      assert.equal(await first.locator('[data-interest-name]').inputValue(), 'assymetric catalysis');
+      assert.equal(await first.evaluate(node => node.ownerDocument.defaultView.__staleSuggestions.some(text => text.includes('induced proximity'))), false);
+    } finally {releaseSpelling?.(); spellingStarted = null; spellingMode = 'success';}
+    await autoCheck(first, 'KRAS G12D inhibtor'); await settled(first);
+    assert.equal(await first.getByRole('button', {name:'Use suggestion',exact:true}).isHidden(), true);
+    assert.equal(await first.locator('[data-interest-name]').inputValue(), 'KRAS G12D inhibtor');
+    await autoCheck(first, 'induced provimity');
+    await editInterest(second); await second.locator('[data-interest-name]').fill('induced proximity');
+    await first.getByRole('button', {name:'Use suggestion',exact:true}).click();
+    await first.locator('.interest-spelling .hint').filter({hasText:'Another topic already uses'}).waitFor();
+    assert.equal(await first.locator('[data-interest-name]').inputValue(), 'induced provimity');
+    await setTopics('induced provimity | 75\nassymetric catalysis | 25', {
+      'induced provimity': {aliases:['molecular glue'],description:'Validated proximity-inducing design methods.'},
+    });
+    for (const [row, value] of [[first,'induced provimity'],[second,'assymetric catalysis']]) {
+      await autoCheck(row, value);
+      await row.getByRole('button', {name:'Use suggestion',exact:true}).click();
+    }
+    await openSettingsGroup('author-settings'); await frame().locator('#authors_of_interest').fill('Fictional author');
     await openSettingsGroup('advanced-interests');
     await frame().locator('#seed_works').fill('Fictional representative paper');
     await frame().locator('#context_keywords').fill('Fictional background topic');
-    const before = await snapshot();
-    await editInterest(first, true);
-    await first.getByRole('button', {name:'Check spelling in PubMed', exact:true}).click();
-    await first.getByRole('button', {name:'Use suggestion', exact:true}).waitFor();
-    assert.equal(await first.locator('[data-interest-name]').inputValue(), 'induced provimity');
-    assert.deepEqual((await snapshot()).files, before.files, 'Checking wording must not save private state.');
-    await first.getByRole('button', {name:'Use suggestion', exact:true}).click();
-    assert.equal(await first.locator('[data-interest-name]').inputValue(), 'induced proximity');
-    assert.equal(await first.locator('[data-interest-weight]').inputValue(), '75');
-    await editInterest(second, true);
-    await second.getByRole('button', {name:'Check spelling in PubMed', exact:true}).click();
-    await second.getByRole('button', {name:'Keep wording', exact:true}).waitFor();
-    await second.getByRole('button', {name:'Keep wording', exact:true}).click();
-    assert.equal(await second.locator('[data-interest-name]').inputValue(), 'assymetric catalysis');
-    await editInterest(first, true);
-    await first.locator('[data-interest-name]').fill('RNA delivery');
-    await editInterest(first, true);
-    await first.getByRole('button', {name:'Check spelling in PubMed', exact:true}).click();
-    await firstStatus.filter({hasText:'No spelling suggestion found'}).waitFor();
-    assert.equal(await first.getByRole('button', {name:'Use suggestion', exact:true}).isHidden(), true);
-    spellingMode = 'failure';
-    await editInterest(first, true);
-    await first.getByRole('button', {name:'Check spelling in PubMed', exact:true}).click();
-    await firstStatus.filter({hasText:'Couldn’t check wording'}).waitFor();
-    assert.equal(await first.locator('[data-interest-name]').inputValue(), 'RNA delivery');
-    spellingMode = 'slow';
-    await editInterest(first, true);
-    await first.locator('[data-interest-name]').fill('induced provimity');
-    const started = new Promise(resolve => { spellingStarted = resolve; });
-    await editInterest(first, true);
-    try {
-      await first.getByRole('button', {name:'Check spelling in PubMed', exact:true}).click(); await started;
-      assert.equal(await second.locator('[data-check-wording]').isDisabled(), true);
-      await editInterest(first, true);
-      await first.locator('[data-interest-name]').fill('New specialist topic');
-      releaseSpelling(); spellingStarted = null;
-      await first.getByRole('button', {name:'Check spelling in PubMed', exact:true}).waitFor({state:'visible'});
-      await page.waitForFunction(() => !document.querySelector('#app').contentDocument.querySelector('[data-check-wording]').disabled);
-      assert.equal(await first.getByRole('button', {name:'Use suggestion', exact:true}).isHidden(), true);
-      assert.equal(await first.locator('[data-interest-name]').inputValue(), 'New specialist topic');
-    } finally {
-      releaseSpelling?.(); spellingStarted = null; spellingMode = 'success';
-    }
-    spellingMode = 'success';
-    await editInterest(first, true);
-    await first.locator('[data-interest-name]').fill('KRAS G12D inhibtor');
-    await editInterest(first, true);
-    await first.getByRole('button', {name:'Check spelling in PubMed', exact:true}).click();
-    await firstStatus.filter({hasText:'No spelling suggestion found'}).waitFor();
-    assert.equal(await first.locator('[data-interest-name]').inputValue(), 'KRAS G12D inhibtor');
-    await editInterest(first, true);
-    await first.locator('[data-interest-name]').fill('induced provimity');
-    await editInterest(second, true);
-    await second.locator('[data-interest-name]').fill('induced proximity');
-    await editInterest(first, true);
-    await first.getByRole('button', {name:'Check spelling in PubMed', exact:true}).click();
-    await first.getByRole('button', {name:'Use suggestion', exact:true}).click();
-    await firstStatus.filter({hasText:'Another interest already uses'}).waitFor();
-    assert.equal(await first.locator('[data-interest-name]').inputValue(), 'induced provimity');
-    await setTopics('induced provimity | 75\nassymetric catalysis | 25');
-    for (const row of [first, second]) {
-      await editInterest(row, true);
-      await row.getByRole('button', {name:'Check spelling in PubMed', exact:true}).click();
-      await row.getByRole('button', {name:'Use suggestion', exact:true}).click();
-    }
-    await editInterest(first, true);
-    await first.locator('[data-interest-aliases]').fill('molecular glue');
-    await first.locator('[data-interest-description]').fill('Validated proximity-inducing design methods.');
     await frame().locator('form[action="/setup"] button[type="submit"]').click();
     await page.waitForFunction(() => location.hash.startsWith('#/run'));
     const saved = await snapshot();
@@ -820,16 +798,15 @@ try {
     assert.equal(await frame().locator('#authors_of_interest').inputValue(), 'Fictional author');
     assert.equal(await frame().locator('#seed_works').inputValue(), 'Fictional representative paper');
     assert.equal(await frame().locator('#context_keywords').inputValue(), 'Fictional background topic');
-    return {advancedInterestsPreserved:true, explicitOnly:true,acceptAndDismiss:true,unavailable:true,staleReplyIgnored:true,identifiersPreserved:true,
+    return {automatic:true,acceptAndDismiss:true,unavailable:true,retry:true,staleReplyIgnored:true,identifiersPreserved:true,
       duplicatePrevented:true,correctedNamesSaved:true,weightsAndDetailsPreserved:true,providerRequests:spellingRequests.length};
   });
   await check('setup-native-form', async () => {
-    await setTopics('DNA nanotechnology | 5\nRNA nanotechnology | 5\nnucleic acid delivery | 15\nmRNA therapeutics | 10\ngene therapy | 10\nnucleic acid therapeutics | 15\nTarget protein degradation | 15\nInduce proximity | 15\nDrug development | 10');
+    await setTopics('DNA nanotechnology | 5\nRNA nanotechnology | 5\nnucleic acid delivery | 15\nmRNA therapeutics | 10\ngene therapy | 10\nnucleic acid therapeutics | 15\nTarget protein degradation | 15\nInduce proximity | 15\nDrug development | 10', {'Target protein degradation': {description:'New degrader designs and transferable methods.'}});
     await assertPercentagesReady();
     const degradation = frame().locator('.interest-row').nth(6);
     await editInterest(degradation, true);
     await degradation.locator('[data-interest-aliases]').fill('targeted protein degradation; PROTAC');
-    await degradation.locator('[data-interest-description]').fill('New degrader designs and transferable methods.');
     const proximity = frame().locator('.interest-row').nth(7);
     await editInterest(proximity, true);
     await proximity.locator('[data-interest-aliases]').fill('induced proximity; molecular glue');

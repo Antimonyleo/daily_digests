@@ -288,9 +288,9 @@
         <button type="button" data-browser-action="open-backup">Backup &amp; transfer</button><button type="button" data-browser-action="open-guide">Quick guide</button></p>
       </aside>
       <details class="settings-disclosure" id="search-tips">
-        <summary>Search tips and wording checks (optional)</summary>
-        <p class="hint">Priorities guide relative emphasis, not guaranteed digest slots. Adding or removing a topic adjusts the shares. Unchanged priorities retain their original precision. Matching &amp; terminology lets you describe useful papers and add alternative search terms.</p>
-        <p class="hint">Suggest wording variants works locally from your supplied acronym or hyphenated wording. Check spelling in PubMed sends only the chosen interest to PubMed for spelling suggestions. PubMed is focused on biomedical literature; it may not recognize terms from other fields. Both are optional, and nothing is checked automatically. Accepting a suggestion changes searches and ranking only after saving. Specialist terms may have no suggestion.</p>
+        <summary>Search tips</summary>
+        <p class="hint">Priorities set relative emphasis. Other names can add established abbreviations or synonyms to searches.</p>
+        <p class="hint">After you finish typing, only the topic name is checked with PubMed. Suggestions appear beside the topic; your wording changes only if you accept one. PubMed may not recognize specialist terms from every field.</p>
       </details>
 
       <details class="settings-disclosure" id="advanced-interests"{% if errors %} open{% endif %}>
@@ -613,30 +613,30 @@
   const details = document.getElementById("topic-details");
   const rows = document.getElementById("interest-rows");
   const editor = document.getElementById("interest-editor");
-  let checkingWording = false;
   let metadata = {};
   try { metadata = JSON.parse(details.value || "{}"); } catch (_) {}
-  // Suggestions use only wording the reader supplied, without a network call.
-  function wordingVariants(topic) {
-    topic = topic.trim().replace(/\s+/g, ' ');
-    if (!topic || topic.length > 160) return [];
-    const variants = [];
-    const explicit = topic.match(/^(.+?)\s*\(([^()]+)\)$/);
-    if (explicit) {
-      const left = explicit[1].trim(), right = explicit[2].trim();
-      const acronym = /^[A-Z][A-Z0-9]{1,15}$/;
-      if ((acronym.test(left) && right.split(' ').length >= 2)
-          || (acronym.test(right) && left.split(' ').length >= 2)) variants.push(left, right);
-    }
-    // Preserve chemical bonds/identifiers such as C-H and KRAS-G12D.
-    const spaced = topic.replace(/\b([a-z]{3,})[-‐‑]([a-z]{3,})\b/g, '$1 $2');
-    if (spaced !== topic) variants.push(spaced);
-    const seen = new Set([topic.toLowerCase()]);
-    return variants.filter(term => {
-      const key = term.toLowerCase();
-      if (term.length > 160 || seen.has(key)) return false;
-      seen.add(key); return true;
-    }).slice(0, 3);
+  const spellingCache = new Map();
+  let spellingQueue = Promise.resolve(), lastSpellingStart = 0;
+  function lookupSpelling(topic, signal) {
+    const task = spellingQueue.then(async () => {
+      if (signal.aborted) throw new DOMException('Cancelled', 'AbortError');
+      if (spellingCache.has(topic)) return spellingCache.get(topic);
+      const delay = Math.max(0, 350 - (Date.now() - lastSpellingStart));
+      if (delay) await new Promise(resolve => setTimeout(resolve, delay));
+      if (signal.aborted) throw new DOMException('Cancelled', 'AbortError');
+      lastSpellingStart = Date.now();
+      const response = await fetch('/setup/check-wording?' + new URLSearchParams({topic}), {
+        method: 'POST', signal,
+        headers: {'X-CSRF-Token': topics.form.querySelector('[name="_csrf_token"]').value},
+      });
+      if (!response.ok) throw new Error('Spelling unavailable');
+      const result = await response.json();
+      if (result.topic !== topic) throw new Error('Unexpected spelling response');
+      spellingCache.set(topic, result.suggestion || null);
+      return result.suggestion || null;
+    });
+    spellingQueue = task.catch(() => {});
+    return task;
   }
   function percentages(weights, total = 100) {
     const count = weights.length;
@@ -670,7 +670,7 @@
       if (title) title.textContent = name || 'New topic';
       if (name) {
         result.push(`${name} | ${weight}`);
-        data[name] = {aliases: row.querySelector('[data-interest-aliases]').value.split(';').map(term => term.trim()).filter(Boolean), description: row.querySelector('[data-interest-description]').value.trim()};
+        data[name] = {aliases: row.querySelector('[data-interest-aliases]').value.split(/[;\r\n]+/).map(term => term.trim()).filter(Boolean), description: row.querySelector('[data-interest-description]').value.trim()};
         if (row.dataset.correctedFrom) data[name].previous_name = row.dataset.correctedFrom;
       }
     }
@@ -691,6 +691,7 @@
     if (!row) return true;
     const name = row.querySelector('[data-interest-name]');
     if (keep && !name.checkValidity()) { name.reportValidity(); return false; }
+    if (!keep) row.cancelSpelling?.();
     if (!keep && row.creationSnapshot) {
       const snapshot = row.creationSnapshot; row.remove(); activeRow = null;
       for (const [existing, weight] of snapshot.weights) if (existing.isConnected) existing.querySelector('[data-interest-weight]').value = weight;
@@ -702,7 +703,9 @@
       if (row.editSnapshot.previousName) row.dataset.correctedFrom = row.editSnapshot.previousName;
       else delete row.dataset.correctedFrom;
       name.dispatchEvent(new Event('input', {bubbles: true}));
+      row.cancelSpelling?.();
     }
+    if (keep) row.checkSpelling?.();
     row.querySelector('.interest-name-field').hidden = true;
     row.querySelector('[data-interest-title]').hidden = false;
     row.querySelector('.interest-edit-panel').hidden = true;
@@ -732,9 +735,9 @@
     const originalFacetName = detail.previous_name || name;
     if (detail.previous_name) row.dataset.correctedFrom = detail.previous_name;
     // This markup is constant; reader text is assigned through .value only.
-    row.innerHTML = '<div class="interest-heading"><div><span class="interest-title" data-interest-title></span><label class="interest-name-field" hidden>Topic<input data-interest-name type="text" required maxlength="160" placeholder="e.g. battery materials or galaxy formation"></label></div><label class="interest-weight-label"><span class="sr-only">Priority percentage</span><span class="interest-weight-wrap"><input data-interest-weight type="number" min="1" max="100" step="1" required><span aria-hidden="true">%</span></span></label><button class="interest-edit-button" data-interest-edit type="button" aria-expanded="false">Edit</button></div><div class="interest-edit-panel" hidden><details><summary>Matching &amp; terminology</summary><label>What would make a paper useful?<textarea data-interest-description maxlength="600" placeholder="e.g. Explain mechanisms and compare methods; include introductory reviews for concepts I am learning."></textarea></label><p class="hint">Describe useful methods, applications or background. Topic names and alternative terms guide searches.</p><label>Alternative search terms, separated by semicolons<input data-interest-aliases type="text" placeholder="Other names or established abbreviations for this topic"></label></details><div class="interest-edit-actions"><button class="btn" data-interest-done type="button">Done</button><button class="btn" data-interest-cancel type="button">Cancel</button><button class="btn" data-interest-remove type="button">Remove</button></div></div>';
+    row.innerHTML = '<div class="interest-heading"><div><span class="interest-title" data-interest-title></span><label class="interest-name-field" hidden>Topic<input data-interest-name type="text" required maxlength="160" placeholder="e.g. battery materials or galaxy formation"></label></div><label class="interest-weight-label"><span class="sr-only">Priority percentage</span><span class="interest-weight-wrap"><input data-interest-weight type="number" min="1" max="100" step="1" required><span aria-hidden="true">%</span></span></label><button class="interest-edit-button" data-interest-edit type="button" aria-expanded="false">Edit</button></div><div class="interest-edit-panel" hidden><details class="topic-aliases"><summary>Other names (optional)</summary><label><span class="sr-only">Other names, one per line</span><textarea data-interest-aliases rows="2" maxlength="500" placeholder="e.g. quantum error correction&#10;QEC"></textarea></label><label class="saved-topic-focus" hidden>Saved focus<textarea data-interest-description maxlength="600"></textarea></label></details><div class="interest-edit-actions"><button class="btn" data-interest-done type="button">Done</button><button class="btn" data-interest-cancel type="button">Cancel</button><button class="btn" data-interest-remove type="button">Remove</button></div></div>';
     const number = ++rowSequence;
-    for (const [selector, label] of [['[data-interest-name]', 'Research topic'], ['[data-interest-weight]', 'Priority percentage'], ['[data-interest-aliases]', 'Alternative terms'], ['[data-interest-description]', 'Useful paper description']]) {
+    for (const [selector, label] of [['[data-interest-name]', 'Research topic'], ['[data-interest-weight]', 'Priority percentage'], ['[data-interest-aliases]', 'Other names']]) {
       row.querySelector(selector).setAttribute('aria-label', `${label} ${number}`);
     }
     const editButton = row.querySelector('[data-interest-edit]');
@@ -755,96 +758,81 @@
     weightInput.addEventListener('keydown', event => { if (event.key === 'Enter') { event.preventDefault(); commitPriority(weightInput); } });
     row.querySelector('[data-interest-name]').value = name;
     row.querySelector('[data-interest-weight]').value = weight;
-    row.querySelector('[data-interest-aliases]').value = (detail.aliases || []).join('; ');
+    row.querySelector('[data-interest-aliases]').value = (detail.aliases || []).join('\n');
     row.querySelector('[data-interest-description]').value = detail.description || '';
+    if (detail.description) {
+      row.querySelector('.saved-topic-focus').hidden = false;
+      row.querySelector('.topic-aliases > summary').textContent = 'More about this topic';
+    }
     row.querySelector('[data-interest-remove]').addEventListener('click', () => {
       const next = row.nextElementSibling || row.previousElementSibling;
       removedTopic = {row, next: row.nextElementSibling, weights: [...rows.children].map(item => [item, item.querySelector('[data-interest-weight]').value]), touched: weightsTouched, edited: weightsEdited};
-      row.remove(); activeRow = null; weightsTouched = true;
+      row.cancelSpelling(); row.remove(); activeRow = null; weightsTouched = true;
       document.getElementById('topic-undo').hidden = false;
       if (!rows.children.length) { weightsEdited = false; addRow(); removedTopic.placeholder = rows.lastElementChild; }
       distribute(!weightsEdited);
       removedTopic.afterWeights = [...rows.children].map(item => [item, item.querySelector('[data-interest-weight]').value]);
       (next || rows.firstElementChild).querySelector('[data-interest-edit]').focus();
     });
-    const aliasInput = row.querySelector('[data-interest-aliases]');
-    const variantActions = document.createElement('div'); variantActions.className = 'interest-actions';
-    const variantStatus = document.createElement('p'); variantStatus.className = 'hint'; variantStatus.setAttribute('aria-live', 'polite');
-    const suggest = document.createElement('button'); suggest.type = 'button'; suggest.className = 'btn'; suggest.textContent = 'Suggest wording variants';
-    const clearVariants = () => { variantActions.replaceChildren(suggest); variantStatus.textContent = ''; };
-    suggest.addEventListener('click', () => {
-      clearVariants();
-      const aliases = aliasInput.value.split(';').map(term => term.trim().toLowerCase()).filter(Boolean);
-      const variants = wordingVariants(row.querySelector('[data-interest-name]').value).filter(term => !aliases.includes(term.toLowerCase()));
-      variantStatus.textContent = variants.length
-        ? 'Local wording variants only. Add one if it means the same thing in your field; save settings to use it. No synonym search was performed.'
-        : 'No additional wording variants found locally. Add field-specific synonyms or established acronyms yourself; this does not mean no papers exist.';
-      for (const term of variants) {
-        const add = document.createElement('button'); add.type = 'button'; add.className = 'btn'; add.textContent = `Add “${term}”`;
-        add.addEventListener('click', () => {
-          const current = aliasInput.value.split(';').map(value => value.trim()).filter(Boolean);
-          if (current.some(value => value.toLowerCase() === term.toLowerCase())) { add.disabled = true; return; }
-          if (current.length >= 3) { variantStatus.textContent = 'Keep up to 3 alternative terms. Remove one before adding another.'; return; }
-          aliasInput.value = [...current, term].join('; '); add.disabled = true; serialize();
-          variantStatus.textContent = 'Variant added to the form. Save settings to use it for searches and ranking.';
-        });
-        variantActions.append(add);
-      }
-    });
-    clearVariants();
-    row.querySelector('details').append(variantActions, variantStatus);
     const nameInput = row.querySelector('[data-interest-name]');
-    const spelling = document.createElement('div'); spelling.className = 'interest-spelling';
-    const spellingActions = document.createElement('div'); spellingActions.className = 'interest-actions';
+    const spelling = document.createElement('div'); spelling.className = 'interest-spelling'; spelling.hidden = true;
     const spellingStatus = document.createElement('p'); spellingStatus.className = 'hint'; spellingStatus.setAttribute('aria-live', 'polite');
-    const check = document.createElement('button'); check.type = 'button'; check.className = 'btn'; check.dataset.checkWording = ''; check.textContent = 'Check spelling in PubMed'; check.disabled = checkingWording;
+    const spellingActions = document.createElement('div'); spellingActions.className = 'interest-actions';
     const accept = document.createElement('button'); accept.type = 'button'; accept.className = 'btn'; accept.textContent = 'Use suggestion'; accept.hidden = true;
     const dismiss = document.createElement('button'); dismiss.type = 'button'; dismiss.className = 'btn'; dismiss.textContent = 'Keep wording'; dismiss.hidden = true;
-    spellingActions.append(check, accept, dismiss); spelling.append(spellingActions, spellingStatus); row.querySelector('details').append(spelling);
-    let wordingVersion = 0, suggestion = null;
-    const clearSuggestion = () => { suggestion = null; accept.hidden = dismiss.hidden = true; spellingStatus.textContent = ''; };
-    nameInput.addEventListener('input', () => { wordingVersion++; delete row.dataset.correctedFrom; clearSuggestion(); clearVariants(); });
-    check.addEventListener('click', async () => {
-      if (checkingWording) return;
-      const original = nameInput.value.trim(), version = wordingVersion;
+    const retry = document.createElement('button'); retry.type = 'button'; retry.className = 'btn'; retry.textContent = 'Retry'; retry.hidden = true;
+    spellingActions.append(accept, dismiss, retry); spelling.append(spellingStatus, spellingActions);
+    row.append(spelling);
+    let wordingVersion = 0, checkedVersion = 0, suggestion = null, timer, controller, composing = false, applying = false;
+    const clearSuggestion = () => { suggestion = null; accept.hidden = dismiss.hidden = retry.hidden = true; spellingStatus.textContent = ''; spelling.hidden = true; spelling.setAttribute('aria-busy', 'false'); };
+    const invalidate = () => { wordingVersion++; clearTimeout(timer); controller?.abort(); clearSuggestion(); };
+    row.cancelSpelling = () => { invalidate(); checkedVersion = wordingVersion; };
+    row.checkSpelling = async (force = false) => {
+      clearTimeout(timer);
+      const original = nameInput.value.trim().replace(/\s+/g, ' '), version = wordingVersion;
+      if (!row.isConnected || composing || !original || !nameInput.checkValidity() || (!force && version === checkedVersion)) return;
+      checkedVersion = version; controller?.abort(); controller = new AbortController();
+      const signal = controller.signal;
       clearSuggestion();
-      if (!original) { spellingStatus.textContent = 'Enter an interest first.'; nameInput.focus(); return; }
-      checkingWording = true;
-      rows.querySelectorAll('[data-check-wording]').forEach(button => { button.disabled = true; });
-      spellingStatus.textContent = 'Checking this interest’s spelling in PubMed…';
+      spelling.setAttribute('aria-busy', 'true');
       try {
-        const response = await fetch('/setup/check-wording?' + new URLSearchParams({topic: original}), {
-          method: 'POST', headers: {'X-CSRF-Token': topics.form.querySelector('[name="_csrf_token"]').value},
-        });
-        const result = await response.json();
-        if (!row.isConnected || version !== wordingVersion) return;
-        if (!response.ok) throw new Error('Spelling unavailable');
-        if (!result.suggestion) { spellingStatus.textContent = 'No spelling suggestion found. Keep your wording, or add alternative terms if needed.'; return; }
-        suggestion = result.suggestion;
-        spellingStatus.textContent = `Did you mean “${suggestion}”? Your interest is unchanged until you choose Use suggestion.`;
+        const result = await lookupSpelling(original, signal);
+        if (!row.isConnected || signal.aborted || version !== wordingVersion) return;
+        if (!result) { clearSuggestion(); return; }
+        suggestion = result;
+        spelling.hidden = false;
+        spellingStatus.textContent = `PubMed suggests “${suggestion}”.`;
         accept.hidden = dismiss.hidden = false;
-      } catch (_) {
-        if (row.isConnected && version === wordingVersion) spellingStatus.textContent = 'Couldn’t check wording right now. Your interest is unchanged. Try again later.';
+      } catch (error) {
+        if (signal.aborted || !row.isConnected || version !== wordingVersion) return;
+        spelling.hidden = false; spellingStatus.textContent = 'Couldn’t check spelling.'; retry.hidden = false;
       } finally {
-        checkingWording = false;
-        rows.querySelectorAll('[data-check-wording]').forEach(button => { button.disabled = false; });
+        if (version === wordingVersion) spelling.setAttribute('aria-busy', 'false');
       }
+    };
+    const scheduleCheck = () => { clearTimeout(timer); if (!composing) timer = setTimeout(() => row.checkSpelling(), 700); };
+    nameInput.addEventListener('input', event => {
+      invalidate();
+      if (originalFacetName && nameInput.value.trim() !== originalFacetName) row.dataset.correctedFrom = originalFacetName;
+      else delete row.dataset.correctedFrom;
+      if (applying) checkedVersion = wordingVersion;
+      else if (!event.isComposing) scheduleCheck();
     });
+    nameInput.addEventListener('compositionstart', () => { composing = true; invalidate(); });
+    nameInput.addEventListener('compositionend', () => { composing = false; scheduleCheck(); });
+    nameInput.addEventListener('blur', () => { void row.checkSpelling(); });
+    retry.addEventListener('click', () => { void row.checkSpelling(true); });
     accept.addEventListener('click', () => {
       if (!suggestion) return;
       const duplicate = [...rows.children].some(other => other !== row && other.querySelector('[data-interest-name]').value.trim().toLowerCase() === suggestion.toLowerCase());
-      if (duplicate) { clearSuggestion(); spellingStatus.textContent = 'Another interest already uses that wording. Combine or remove duplicate interests before changing this one.'; return; }
+      if (duplicate) { clearSuggestion(); spelling.hidden = false; spellingStatus.textContent = 'Another topic already uses that name.'; return; }
       nameInput.value = suggestion;
-      nameInput.dispatchEvent(new Event('input', {bubbles: true}));
+      applying = true; nameInput.dispatchEvent(new Event('input', {bubbles: true})); applying = false;
       if (originalFacetName) row.dataset.correctedFrom = originalFacetName;
       serialize();
-      spellingStatus.textContent = 'Suggestion applied. Save your settings to use it for searches and ranking.';
-      nameInput.focus();
+      if (activeRow === row) nameInput.focus(); else editButton.focus();
     });
-    dismiss.addEventListener('click', () => { clearSuggestion(); spellingStatus.textContent = 'Your wording was kept.'; nameInput.focus(); });
-    nameInput.addEventListener('input', () => {
-      if (originalFacetName && nameInput.value.trim() !== originalFacetName) row.dataset.correctedFrom = originalFacetName;
-    });
+    dismiss.addEventListener('click', () => { clearSuggestion(); if (activeRow === row) nameInput.focus(); else editButton.focus(); });
     row.addEventListener('input', serialize); rows.append(row);
     if (!name.trim()) beginEditing(row, false);
   }
@@ -858,6 +846,7 @@
     const converted = {{ 'true' if errors and form.topic_weight_mode | default('') == 'percentage' else 'false' }} ? weights : percentages(weights);
     const equalShares = percentages(weights.map(() => 1));
     weightsEdited = converted.some((weight, index) => weight !== equalShares[index]);
+    [...rows.children].forEach(row => row.cancelSpelling?.());
     rows.replaceChildren(); activeRow = null; weightsTouched = {{ 'true' if errors and form.topic_weight_mode | default('') == 'percentage' else 'false' }}; loadedCount = configured.length;
     configured.forEach((row, index) => { addRow(row.name, converted[index], metadata[row.name] || {}); rows.lastElementChild.dataset.rawWeight = String(row.weight); });
     if (!configured.length) addRow();

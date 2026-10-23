@@ -55,12 +55,25 @@ const browser = await chromium.launch({executablePath: process.env.CHROME_PATH |
 
 async function check(name, fixture, run, width = 1280) {
   const context = await browser.newContext({viewport: {width, height: 900}});
-  const submissions = [], errors = [];
+  const submissions = [], errors = [], wordingRequests = [];
+  const expectedFailedURLs = new Set();
+  let wordingMode = 'normal', releaseWording;
   await context.route('**/*', async route => {
     const url = new URL(route.request().url());
     if (url.origin !== 'http://settings.test') {
       report.external.push(url.origin);
       return route.abort();
+    }
+    if (url.pathname === '/setup/check-wording') {
+      const topic = url.searchParams.get('topic');
+      wordingRequests.push(topic);
+      if (wordingMode === 'slow') await new Promise(resolve => {releaseWording = resolve;});
+      if (wordingMode === 'failure') {
+        expectedFailedURLs.add(route.request().url());
+        return route.fulfill({status: 503, json: {detail: 'Unavailable'}});
+      }
+      const suggestion = {'induced provimity': 'induced proximity', 'assymetric catalysis': 'asymmetric catalysis'}[topic] || null;
+      return route.fulfill({json: {topic, suggestion}}).catch(() => {});
     }
     if (route.request().method() === 'POST' && url.pathname === '/setup') {
       submissions.push(new URLSearchParams(route.request().postData()));
@@ -80,12 +93,18 @@ async function check(name, fixture, run, width = 1280) {
   });
   const page = await context.newPage();
   page.on('pageerror', error => errors.push(error.message));
-  page.on('console', message => {if (message.type() === 'error') errors.push(message.text());});
+  page.on('console', message => {
+    if (message.type() !== 'error') return;
+    // The dependency-failure case intentionally returns this one HTTP error.
+    if (expectedFailedURLs.has(message.location().url) && message.text() === 'Failed to load resource: the server responded with a status of 503 (Service Unavailable)') return;
+    errors.push(message.text());
+  });
   try {
     await page.goto('http://settings.test/setup');
     await page.locator('#interest-editor').waitFor({state: 'visible'});
     const weights = () => page.locator('[data-interest-weight]').evaluateAll(inputs => inputs.map(input => Number(input.value)));
-    await run({page, weights, submissions});
+    await run({page, weights, submissions, wordingRequests,
+      setWordingMode: mode => {wordingMode = mode;}, releaseWording: () => releaseWording?.()});
     assert.deepEqual(errors, []);
     report.checks.push({name, width, passed: true});
   } catch (error) {
@@ -98,6 +117,107 @@ async function check(name, fixture, run, width = 1280) {
 }
 
 try {
+  await check('automatic-spelling-debounce-and-reader-control', 'custom', async ({page, wordingRequests}) => {
+    await page.clock.install();
+    await page.clock.runFor(1500);
+    assert.deepEqual(wordingRequests, [], 'Loaded topics must not be sent automatically');
+    await page.locator('[data-interest-edit]').first().click();
+    const input = page.locator('[data-interest-name]').first();
+    await input.fill('induced prov');
+    await page.clock.runFor(500);
+    await input.fill('induced provimity');
+    await page.clock.runFor(699);
+    assert.deepEqual(wordingRequests, [], 'Do not check unfinished typing');
+    await page.clock.runFor(1);
+    const use = page.getByRole('button', {name: 'Use suggestion', exact: true});
+    await use.waitFor();
+    assert.deepEqual(wordingRequests, ['induced provimity']);
+    assert.equal(await input.inputValue(), 'induced provimity');
+    await use.click();
+    assert.equal(await input.inputValue(), 'induced proximity');
+    await page.clock.runFor(1500);
+    assert.deepEqual(wordingRequests, ['induced provimity'], 'Accepting must not cause another check');
+    assert.equal(JSON.parse(await page.locator('#topic-details').inputValue())['induced proximity'].previous_name, 'Battery materials');
+  });
+  await check('automatic-spelling-composition-blur-and-deduplication', 'custom', async ({page, wordingRequests}) => {
+    await page.clock.install();
+    await page.locator('[data-interest-edit]').first().click();
+    const input = page.locator('[data-interest-name]').first();
+    await input.dispatchEvent('compositionstart');
+    await input.fill('assymetric catalysis');
+    await page.clock.runFor(1500);
+    assert.deepEqual(wordingRequests, [], 'Do not query while an IME composition is unfinished');
+    await input.dispatchEvent('compositionend');
+    await page.locator('[data-interest-weight]').first().focus();
+    await page.getByRole('button', {name: 'Keep wording', exact: true}).waitFor();
+    assert.deepEqual(wordingRequests, ['assymetric catalysis']);
+    await page.clock.runFor(1500);
+    assert.deepEqual(wordingRequests, ['assymetric catalysis'], 'Blur and debounce must coalesce');
+    await page.getByRole('button', {name: 'Keep wording', exact: true}).click();
+    assert.equal(await input.inputValue(), 'assymetric catalysis');
+  });
+  await check('automatic-spelling-failure-retry-and-stale-result', 'custom', async ({page, wordingRequests, setWordingMode, releaseWording}) => {
+    await page.locator('[data-interest-edit]').first().click();
+    const row = page.locator('.interest-row').first(), input = row.locator('[data-interest-name]');
+    setWordingMode('failure');
+    await input.fill('induced provimity');
+    await row.locator('[data-interest-weight]').focus();
+    await row.getByRole('button', {name: 'Retry', exact: true}).waitFor();
+    assert.equal(await input.inputValue(), 'induced provimity');
+    setWordingMode('slow');
+    const retryStarted = page.waitForRequest(request => request.url().includes('/setup/check-wording'));
+    await row.getByRole('button', {name: 'Retry', exact: true}).click();
+    await retryStarted;
+    await input.fill('New specialist topic');
+    setWordingMode('normal'); releaseWording();
+    const latest = page.waitForResponse(response => response.url().includes('New+specialist+topic'));
+    await row.locator('[data-interest-weight]').focus();
+    await latest;
+    assert.equal(await input.inputValue(), 'New specialist topic');
+    assert.equal(await row.getByRole('button', {name: 'Use suggestion', exact: true}).isHidden(), true);
+    assert.equal(wordingRequests.filter(topic => topic === 'induced provimity').length, 2);
+  });
+  await check('optional-other-names-retain-context-and-precision', 'legacy', async ({page, submissions}) => {
+    await page.locator('[data-interest-edit]').first().click();
+    const row = page.locator('.interest-row').first();
+    await row.locator('.topic-aliases > summary').click();
+    await row.locator('[data-interest-aliases]').fill('RNA transport\nRNA transfer');
+    await page.locator('button[type="submit"]').click();
+    await page.getByText('Fictional settings submitted').waitFor();
+    assert.equal(submissions[0].get('topics').replace(/\r\n/g, '\n'), fixtures.legacy);
+    assert.deepEqual(JSON.parse(submissions[0].get('topic_details'))['RNA delivery'],
+      {aliases: ['RNA transport', 'RNA transfer'], description: 'Compare delivery methods.'});
+  });
+  await check('saved-topic-focus-remains-editable-without-new-blanks', 'legacy', async ({page, submissions}) => {
+    await page.locator('[data-interest-edit]').first().click();
+    const row = page.locator('.interest-row').first();
+    await row.locator('.topic-aliases > summary').click();
+    assert.equal(await row.locator('[data-interest-description]').inputValue(), 'Compare delivery methods.');
+    await row.locator('[data-interest-description]').fill('Compare delivery mechanisms.');
+    await page.locator('button[type="submit"]').click();
+    await page.getByText('Fictional settings submitted').waitFor();
+    assert.equal(JSON.parse(submissions[0].get('topic_details'))['RNA delivery'].description, 'Compare delivery mechanisms.');
+  });
+  for (const width of [1280, 390, 320]) {
+    await check('compact-topic-editor-and-done-spelling', 'legacy', async ({page, submissions, wordingRequests}) => {
+      await page.locator('[data-interest-edit]').first().click();
+      const row = page.locator('.interest-row').first();
+      assert.equal(await row.getByText('Matching & terminology', {exact: true}).count(), 0);
+      assert.equal(await row.getByRole('button', {name: 'Suggest wording variants'}).count(), 0);
+      assert.equal(await row.locator('[data-interest-description]').isVisible(), false);
+      assert.equal(await row.locator('[data-interest-aliases]').isVisible(), false);
+      await row.locator('[data-interest-name]').fill('induced provimity');
+      await row.locator('[data-interest-done]').click();
+      await row.getByRole('button', {name: 'Use suggestion', exact: true}).waitFor();
+      assert.equal(await row.locator('[data-interest-title]').innerText(), 'induced provimity');
+      await row.getByRole('button', {name: 'Keep wording', exact: true}).click();
+      await page.locator('button[type="submit"]').click();
+      await page.getByText('Fictional settings submitted').waitFor();
+      assert.deepEqual(JSON.parse(submissions[0].get('topic_details'))['induced provimity'],
+        {aliases: ['RNA transport'], description: 'Compare delivery methods.', previous_name: 'RNA delivery'});
+      assert.deepEqual(wordingRequests, ['induced provimity']);
+    }, width);
+  }
   for (const width of [1280, 390, 320]) {
     for (const fixture of ['empty', 'custom']) {
       await check('usable-topic-editor-' + fixture, fixture, async ({page}) => {
