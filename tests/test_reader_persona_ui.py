@@ -45,16 +45,20 @@ def test_existing_context_is_discoverable_without_adding_role_or_reading_level_f
     assert "new engineering methods, transferable design rules" not in html
 
 
-def test_topic_details_prioritize_purpose_and_disclose_pubmed_scope(monkeypatch, tmp_path):
+def test_topic_extras_are_optional_and_automatic_pubmed_checks_are_disclosed(monkeypatch, tmp_path):
     html = _render_settings(monkeypatch, tmp_path)
     row_markup = html.split("row.innerHTML = ", 1)[1].split(";\n", 1)[0]
-    assert "Matching &amp; terminology" in row_markup
-    assert row_markup.index("What would make a paper useful?") < row_markup.index("Alternative search terms")
+    assert "Other names (optional)" in row_markup
+    assert "Matching &amp; terminology" not in row_markup
+    assert "What would make a paper useful?" not in row_markup
+    assert "data-interest-aliases" in row_markup
+    assert "data-interest-description" in row_markup
     assert "targeted protein degradation" not in row_markup
     assert "PROTAC" not in row_markup
-    assert "Describe useful methods, applications or background" in row_markup
-    assert "Check spelling in PubMed" in html
-    assert "PubMed is focused on biomedical literature" in html
+    assert "Suggest wording variants" not in html
+    assert "After you finish typing, only the topic name is checked with PubMed" in html
+    assert "your wording changes only if you accept one" in html
+    assert "PubMed may not recognize specialist terms from every field" in html
 
 
 def feedback_html(*reasons):
