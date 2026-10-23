@@ -140,3 +140,18 @@ the unchanged assertion, with the same 30-second deadline. All 51 scenarios rema
 The exact 155 mobile sequence passed 20 consecutive runs after this test-only fix;
 product behavior was unchanged. Diagnostics now include browser version, named
 assertions, stack and focus state so any future CI failure is directly locatable.
+
+The integrated production UI deployed successfully at `713edb6`: all Pages and
+cross-platform checks passed, including 3095 Python tests (5 documented skips),
+259 browser unit tests and all release interaction suites. Live verification
+matched 108 packaged sources and the frontend to the commit, with no private data.
+
+Final live screenshot inspection then caught a mobile editing defect that
+overflow checks alone missed: the topic input was capped at 90 px by a legacy
+descendant selector intended for the priority field. Restricting that cap to a
+direct child preserves the inline percentage field while allowing the topic name
+to fill its grid column. Six additional real-template Chrome cases cover empty
+and existing-topic editors at 1280, 390 and 320 px. Before the fix, all four mobile
+cases failed the column-width assertion (90 px versus 196/126 px available);
+afterward all six passed, alongside the original 18 Settings scenarios. The
+affected reading-page suite also passed all 12 checks, including dark mode.

@@ -12,6 +12,7 @@ const output = resolve(process.env.DAILYDIGEST_SETTINGS_REPORT || '.full-review/
 const scratch = await mkdtemp(resolve(process.env.TMPDIR || tmpdir(), 'dd-settings-priorities-'));
 await mkdir(output, {recursive: true});
 const fixtures = {
+  empty: '',
   custom: 'Battery materials | 90\nThermal storage | 10',
   equal: 'Battery materials\nThermal storage',
   rounded: 'Battery materials | 34\nThermal storage | 33\nPolymer recycling | 33',
@@ -97,6 +98,29 @@ async function check(name, fixture, run, width = 1280) {
 }
 
 try {
+  for (const width of [1280, 390, 320]) {
+    for (const fixture of ['empty', 'custom']) {
+      await check('usable-topic-editor-' + fixture, fixture, async ({page}) => {
+        if (fixture === 'custom') await page.locator('[data-interest-edit]').first().click();
+        const input = page.locator('[data-interest-name]').first();
+        await input.waitFor({state: 'visible'});
+        const geometry = await input.evaluate(node => {
+          const box = node.getBoundingClientRect();
+          const column = node.closest('.interest-heading').firstElementChild.getBoundingClientRect();
+          return {input: box.width, column: column.width};
+        });
+        assert.ok(geometry.input >= geometry.column - 2,
+          `Topic input must fill its name column: ${JSON.stringify(geometry)}`);
+        assert.ok(geometry.input >= 125, 'A mobile topic needs usable typing space');
+        await page.screenshot({path: resolve(output, `topic-input-${fixture}-${width}.png`)});
+        await input.fill('DNA origami lattice assembly');
+        await page.locator('[data-interest-done]').first().click();
+        assert.equal(await page.locator('[data-interest-title]').first().innerText(), 'DNA origami lattice assembly');
+        assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+        await page.screenshot({path: resolve(output, `topic-editor-${fixture}-${width}.png`)});
+      }, width);
+    }
+  }
   await check('custom-add-remove', 'custom', async ({page, weights}) => {
     assert.deepEqual(await weights(), [90, 10]);
     await page.locator('#add-interest').click();

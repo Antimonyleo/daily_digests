@@ -34,7 +34,7 @@
   @media(max-width: 480px) {
     .interest-heading, #interest-editor:not(.show-priorities) .interest-heading { grid-template-columns: minmax(0, 1fr) auto; }
     .interest-heading label:first-child { grid-column: 1 / -1; }
-    .interest-heading label:nth-child(2) { max-width: 90px; }
+    .interest-heading > label:nth-child(2) { max-width: 90px; }
     .interest-heading button { grid-column: 2; justify-self: end; }
   }
   #topics { min-height: 245px; font-size: 15px; }
