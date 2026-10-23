@@ -191,6 +191,18 @@ const page = await context.newPage();
 page.setDefaultTimeout(30000);
 page.on('console', event => { if (['warning', 'error'].includes(event.type())) report.console.push({ type: event.type(), text: event.text() }); });
 page.on('pageerror', error => report.errors.push(error.message));
+let acceptDiscardedDraft = true;
+const discardedDraftPrompts = [];
+page.on('dialog', dialog => {
+  report.dialogs ||= [];
+  report.dialogs.push({type:dialog.type(),message:dialog.message(),at:new Date().toISOString()});
+  void writeFile(`${output}/dialog-events.json`,JSON.stringify(report.dialogs,null,2));
+  if (dialog.type() === 'beforeunload') { void dialog.accept(); return; }
+  if (dialog.message() === 'Discard unsaved settings changes?') {
+    discardedDraftPrompts.push(acceptDiscardedDraft);
+    void (acceptDiscardedDraft ? dialog.accept() : dialog.dismiss());
+  }
+});
 await page.addInitScript(() => {
   const NativeWorker = window.Worker;
   window.__workerEvents = [];
@@ -222,6 +234,19 @@ await page.exposeFunction('__recordCheckpoint', data => checkpointEvidence.push(
 const frame = () => page.frameLocator('#app');
 async function check(name, work) {
   const started = performance.now();
+  let sampling = false;
+  const progress = setInterval(async () => {
+    if (sampling) return;
+    sampling = true;
+    try {
+      const state = await page.evaluate(() => ({hash:location.hash,
+        status:document.getElementById('status')?.textContent,
+        text:document.querySelector('#app')?.contentDocument?.body?.innerText?.slice(-6000),
+        workerEvents:window.__workerEvents?.slice(-20)}));
+      await writeFile(`${output}/active-check.json`, JSON.stringify({name,elapsedMs:Math.round(performance.now()-started),sampledAt:new Date().toISOString(),...state},null,2));
+    } catch { /* Diagnostic sampling must not alter acceptance behavior. */ }
+    finally { sampling = false; }
+  }, 20000);
   try {
     const evidence = await work();
     report.checks.push({ name, passed: true, elapsedMs: Math.round(performance.now() - started), evidence });
@@ -234,6 +259,7 @@ async function check(name, work) {
     await page.screenshot({ path: `${output}/failure-${name.replace(/[^a-z0-9]/gi, '-')}.png`, fullPage: true }).catch(() => {});
     return null;
   } finally {
+    clearInterval(progress);
     report.workerEvents = await page.evaluate(() => window.__workerEvents).catch(() => []);
     await writeFile(`${output}/browser-acceptance.json`, JSON.stringify(report, null, 2));
   }
@@ -266,6 +292,30 @@ async function route(path, selector) {
   }, path, { timeout: 60000 });
   if (selector) await frame().locator(selector).first().waitFor({ state: 'visible' });
 }
+async function openSettingsGroup(id) {
+  const group = frame().locator('#' + id);
+  if (await group.getAttribute('open') === null) await group.locator(':scope > summary').click();
+}
+async function editInterest(row, matching = false) {
+  if (await row.locator('[data-interest-name]').isHidden()) await row.locator('[data-interest-edit]').click();
+  if (matching && await row.locator('details').getAttribute('open') === null) await row.locator('details > summary').click();
+}
+async function assertPercentagesReady() {
+  const inputs = frame().locator('[data-interest-weight]');
+  const values = await inputs.evaluateAll(nodes => nodes.map(node => Number(node.value)));
+  assert.equal(values.reduce((sum, value) => sum + value, 0), 100);
+  assert.ok(await inputs.evaluateAll(nodes => nodes.every(node => node.checkValidity())));
+}
+async function openAboutDigest() {
+  const about=frame().locator('.about-brew');
+  if (await about.getAttribute('open') === null) await about.locator(':scope>summary').click();
+}
+async function chooseDigest(value) {
+  await page.evaluate(()=>{window.__priorEditionDocument=document.querySelector('#app').contentDocument;});
+  await frame().locator('#digest-date').selectOption(value);
+  await page.waitForFunction(()=>document.querySelector('#app')?.contentDocument!==window.__priorEditionDocument);
+  await frame().locator('#digest-date').waitFor();
+}
 async function setTopics(value) {
   await frame().locator('#topics').evaluate((node, text) => { node.value = text; node.dispatchEvent(new Event('input', { bubbles: true })); }, value);
 }
@@ -289,7 +339,7 @@ async function openCompanionMenu() {
   if (await page.locator('#companion-menu').getAttribute('open') === null) await page.locator('#companion-menu > summary').click();
 }
 async function digestIdentity(digestId = '') {
-  await route(digestId ? '/?digest_id=' + encodeURIComponent(digestId) : '/', '.digest-date');
+  await route(digestId ? '/?digest_id=' + encodeURIComponent(digestId) : '/', '#digest-date');
   return (await frame().locator('.digest-date').textContent()).trim();
 }
 async function selectedStoredSummaries() {
@@ -428,7 +478,7 @@ try {
       return {top:box.top,bottom:box.bottom,viewport:innerHeight};
     });
     assert.ok(interest.top >= 0 && interest.bottom <= interest.viewport, JSON.stringify(interest));
-    assert.equal(await frame().locator('[data-interest-weight]').first().isHidden(), true);
+    assert.equal(await frame().locator('[data-interest-weight]').first().isVisible(), true);
     assert.equal(await frame().getByText('Back to today’s digest', {exact:true}).count(), 0);
     assert.equal(await frame().locator('input[id^="include_"]:checked').count(), 0);
     await frame().locator('[data-interest-name]').first().fill('DNA nanotechnology');
@@ -448,7 +498,7 @@ try {
     assert.equal(page.url(),beforeSkip);
     assert.equal(await frame().locator('main').evaluate(node=>node===document.activeElement),true);
     await setTopics('');
-    return {firstInterestVisible:interest,equalShares:true,researchOnly:true,optionalPercentages:true,uniqueFieldNames:true,saveReachable:save};
+    return {firstInterestVisible:interest,equalShares:true,researchOnly:true,inlinePercentages:true,uniqueFieldNames:true,saveReachable:save};
   });
   await check('fresh-profile-reuses-covered-public-vectors-or-encodes-locally', async () => {
     const response = await page.request.get(base+'assets/public-sources.json');
@@ -514,6 +564,7 @@ try {
   });
   await check('explicit-compute-controls-and-device-warning', async () => {
     await route('/setup', '#interest-editor');
+    await editInterest(frame().locator('.interest-row').first());
     await frame().locator('[data-interest-name]').first().fill('Unsaved compute test topic');
     await toggleMenu('compute-menu');
     await page.locator('#compute-apply').click();
@@ -577,30 +628,32 @@ try {
   });
   await check('individual-interest-percentages-must-total-100', async () => {
     await setTopics('RNA delivery | 3\nProtein engineering | 1');
-    if (await frame().locator('#priority-options').getAttribute('open') === null) await frame().locator('#priority-options > summary').click();
+    await openSettingsGroup('priority-options');
     const weights = frame().locator('[data-interest-weight]');
     assert.deepEqual(await weights.evaluateAll(inputs => inputs.map(input => input.value)), ['75', '25']);
-    assert.equal(await frame().locator('#topics').inputValue(), 'RNA delivery | 75\nProtein engineering | 25');
-    await weights.first().fill('60');
-    assert.match(await frame().locator('#interest-total').textContent(), /85%.*15% left/);
+    assert.equal(await frame().locator('#topics').inputValue(), 'RNA delivery | 3\nProtein engineering | 1', 'Viewing rounded percentages must preserve untouched relative inputs.');
+    await weights.first().fill('0');
+    assert.match(await frame().locator('#interest-total').textContent(), /25%.*75% left/);
     assert.equal(await weights.first().evaluate(input => input.checkValidity()), false);
     await frame().locator('form[action="/setup"] button[type="submit"]').click();
     assert.equal(await page.evaluate(() => location.hash), '#/setup');
     await frame().locator('#normalize-interests').click();
-    assert.match(await frame().locator('#interest-total').textContent(), /100%.*ready/);
+    await assertPercentagesReady();
     await frame().locator('#add-interest').click();
     assert.equal(await weights.count(), 3);
-    assert.match(await frame().locator('#interest-total').textContent(), /100%.*ready/);
+    await assertPercentagesReady();
     await frame().locator('.interest-row').last().getByRole('button', { name: /Remove research topic/ }).click();
-    assert.match(await frame().locator('#interest-total').textContent(), /100%.*ready/);
+    await assertPercentagesReady();
     await weights.first().fill('90');
-    await weights.nth(1).fill('25');
-    assert.match(await frame().locator('#interest-total').textContent(), /115%.*15% over/);
+    await weights.first().press('Tab');
+    assert.deepEqual(await weights.evaluateAll(inputs => inputs.map(input => input.value)), ['90', '10']);
+    await weights.first().fill('101');
+    assert.match(await frame().locator('#interest-total').textContent(), /111%.*11% over/);
     assert.equal(await weights.first().evaluate(input => input.checkValidity()), false);
     await frame().locator('#even-interests').click();
     assert.deepEqual(await weights.evaluateAll(inputs => inputs.map(input => input.value)), ['50', '50']);
     await route('/setup', '#interest-editor');
-    return { separateFields: true, shownEqualsSubmitted: true, underAndOverBlocked: true, addRemoveNormalizes: true };
+    return {separateFields:true, untouchedRawWeightsPreserved:true, underAndOverBlocked:true, addRemoveNormalizes:true, validEditBalancesOtherTopics:true};
   });
   await check('server-settings-validation-remains-editable-and-private', async () => {
     const before = await snapshot();
@@ -632,14 +685,14 @@ try {
     await setTopics('quantum error correction (QEC) | 100');
     const row = frame().locator('.interest-row').first();
     const before=await snapshot(), spellingBefore=spellingRequests.length, externalBefore=report.requests.length;
-    await row.locator('summary').click();
+    await editInterest(row, true);
     assert.equal(await row.locator('[data-interest-aliases]').inputValue(),'');
     await row.getByRole('button',{name:'Suggest wording variants',exact:true}).click();
     assert.equal(await row.locator('[data-interest-aliases]').inputValue(),'');
     await row.getByRole('button',{name:'Add “QEC”',exact:true}).click();
     assert.equal(await row.locator('[data-interest-aliases]').inputValue(),'QEC');
     assert.equal(await row.locator('[data-interest-name]').inputValue(),'quantum error correction (QEC)');
-    assert.match(await frame().locator('#interest-total').textContent(),/100%.*ready/);
+    await assertPercentagesReady();
     assert.deepEqual((await snapshot()).files,before.files,'Local suggestions change only the unsaved form');
     assert.equal(spellingRequests.length,spellingBefore);
     assert.equal(report.requests.length,externalBefore);
@@ -659,14 +712,15 @@ try {
     const firstStatus = first.locator('.interest-spelling .hint');
     assert.equal(spellingRequests.length, 0, 'Typing must not send an interest to the spelling provider.');
     assert.equal(await first.getByRole('button', {name:'Check spelling in PubMed', exact:true}).isHidden(), true);
-    await first.locator('summary').click();
-    await second.locator('summary').click();
-    await frame().locator('#advanced-interests > summary').click();
+    await editInterest(first, true);
+    await editInterest(second, true);
+    await openSettingsGroup('author-settings');
     await frame().locator('#authors_of_interest').fill('Fictional author');
-    await frame().locator('#paper-examples > summary').click();
+    await openSettingsGroup('advanced-interests');
     await frame().locator('#seed_works').fill('Fictional representative paper');
     await frame().locator('#context_keywords').fill('Fictional background topic');
     const before = await snapshot();
+    await editInterest(first, true);
     await first.getByRole('button', {name:'Check spelling in PubMed', exact:true}).click();
     await first.getByRole('button', {name:'Use suggestion', exact:true}).waitFor();
     assert.equal(await first.locator('[data-interest-name]').inputValue(), 'induced provimity');
@@ -674,46 +728,63 @@ try {
     await first.getByRole('button', {name:'Use suggestion', exact:true}).click();
     assert.equal(await first.locator('[data-interest-name]').inputValue(), 'induced proximity');
     assert.equal(await first.locator('[data-interest-weight]').inputValue(), '75');
+    await editInterest(second, true);
     await second.getByRole('button', {name:'Check spelling in PubMed', exact:true}).click();
     await second.getByRole('button', {name:'Keep wording', exact:true}).waitFor();
     await second.getByRole('button', {name:'Keep wording', exact:true}).click();
     assert.equal(await second.locator('[data-interest-name]').inputValue(), 'assymetric catalysis');
+    await editInterest(first, true);
     await first.locator('[data-interest-name]').fill('RNA delivery');
+    await editInterest(first, true);
     await first.getByRole('button', {name:'Check spelling in PubMed', exact:true}).click();
     await firstStatus.filter({hasText:'No spelling suggestion found'}).waitFor();
     assert.equal(await first.getByRole('button', {name:'Use suggestion', exact:true}).isHidden(), true);
     spellingMode = 'failure';
+    await editInterest(first, true);
     await first.getByRole('button', {name:'Check spelling in PubMed', exact:true}).click();
     await firstStatus.filter({hasText:'Couldn’t check wording'}).waitFor();
     assert.equal(await first.locator('[data-interest-name]').inputValue(), 'RNA delivery');
     spellingMode = 'slow';
+    await editInterest(first, true);
     await first.locator('[data-interest-name]').fill('induced provimity');
     const started = new Promise(resolve => { spellingStarted = resolve; });
-    await first.getByRole('button', {name:'Check spelling in PubMed', exact:true}).click(); await started;
-    assert.equal(await second.getByRole('button', {name:'Check spelling in PubMed', exact:true}).isDisabled(), true);
-    await first.locator('[data-interest-name]').fill('New specialist topic');
-    releaseSpelling(); spellingStarted = null;
-    await first.getByRole('button', {name:'Check spelling in PubMed', exact:true}).waitFor({state:'visible'});
-    await page.waitForFunction(() => !document.querySelector('#app').contentDocument.querySelector('[data-check-wording]').disabled);
-    assert.equal(await first.getByRole('button', {name:'Use suggestion', exact:true}).isHidden(), true);
-    assert.equal(await first.locator('[data-interest-name]').inputValue(), 'New specialist topic');
+    await editInterest(first, true);
+    try {
+      await first.getByRole('button', {name:'Check spelling in PubMed', exact:true}).click(); await started;
+      assert.equal(await second.locator('[data-check-wording]').isDisabled(), true);
+      await editInterest(first, true);
+      await first.locator('[data-interest-name]').fill('New specialist topic');
+      releaseSpelling(); spellingStarted = null;
+      await first.getByRole('button', {name:'Check spelling in PubMed', exact:true}).waitFor({state:'visible'});
+      await page.waitForFunction(() => !document.querySelector('#app').contentDocument.querySelector('[data-check-wording]').disabled);
+      assert.equal(await first.getByRole('button', {name:'Use suggestion', exact:true}).isHidden(), true);
+      assert.equal(await first.locator('[data-interest-name]').inputValue(), 'New specialist topic');
+    } finally {
+      releaseSpelling?.(); spellingStarted = null; spellingMode = 'success';
+    }
     spellingMode = 'success';
+    await editInterest(first, true);
     await first.locator('[data-interest-name]').fill('KRAS G12D inhibtor');
+    await editInterest(first, true);
     await first.getByRole('button', {name:'Check spelling in PubMed', exact:true}).click();
     await firstStatus.filter({hasText:'No spelling suggestion found'}).waitFor();
     assert.equal(await first.locator('[data-interest-name]').inputValue(), 'KRAS G12D inhibtor');
+    await editInterest(first, true);
     await first.locator('[data-interest-name]').fill('induced provimity');
+    await editInterest(second, true);
     await second.locator('[data-interest-name]').fill('induced proximity');
+    await editInterest(first, true);
     await first.getByRole('button', {name:'Check spelling in PubMed', exact:true}).click();
     await first.getByRole('button', {name:'Use suggestion', exact:true}).click();
     await firstStatus.filter({hasText:'Another interest already uses'}).waitFor();
     assert.equal(await first.locator('[data-interest-name]').inputValue(), 'induced provimity');
     await setTopics('induced provimity | 75\nassymetric catalysis | 25');
     for (const row of [first, second]) {
-      await row.locator('summary').click();
+      await editInterest(row, true);
       await row.getByRole('button', {name:'Check spelling in PubMed', exact:true}).click();
       await row.getByRole('button', {name:'Use suggestion', exact:true}).click();
     }
+    await editInterest(first, true);
     await first.locator('[data-interest-aliases]').fill('molecular glue');
     await first.locator('[data-interest-description]').fill('Validated proximity-inducing design methods.');
     await frame().locator('form[action="/setup"] button[type="submit"]').click();
@@ -741,15 +812,15 @@ try {
   });
   await check('setup-native-form', async () => {
     await setTopics('DNA nanotechnology | 5\nRNA nanotechnology | 5\nnucleic acid delivery | 15\nmRNA therapeutics | 10\ngene therapy | 10\nnucleic acid therapeutics | 15\nTarget protein degradation | 15\nInduce proximity | 15\nDrug development | 10');
-    assert.match(await frame().locator('#interest-total').textContent(), /100%/);
+    await assertPercentagesReady();
     const degradation = frame().locator('.interest-row').nth(6);
-    await degradation.locator('summary').click();
+    await editInterest(degradation, true);
     await degradation.locator('[data-interest-aliases]').fill('targeted protein degradation; PROTAC');
     await degradation.locator('[data-interest-description]').fill('New degrader designs and transferable methods.');
     const proximity = frame().locator('.interest-row').nth(7);
-    await proximity.locator('summary').click();
+    await editInterest(proximity, true);
     await proximity.locator('[data-interest-aliases]').fill('induced proximity; molecular glue');
-    await frame().locator('details:has(#name) > summary').click();
+    await openSettingsGroup('profile-options');
     await frame().locator('#name').fill('Browser Acceptance');
     await frame().locator('#bio').fill('Fictional browser acceptance reader researching RNA delivery, protein design and biomaterials.');
     await frame().locator('form[action="/setup"] button[type="submit"]').click();
@@ -773,12 +844,12 @@ try {
   });
   await check('api-connection-tests-are-explicit-private-and-unsaved', async () => {
     await route('/setup', '#interest-editor');
-    await frame().locator('#summary-options > summary').click();
+    await openSettingsGroup('summary-options');
     const before = await snapshot();
     assert.equal(apiTestRequests.length, 0, 'Rendering settings must not contact an API.');
     for (const backend of ['api', 'anthropic']) {
       const initialCount = apiTestRequests.length;
-      await frame().locator(`input[name="llm_backend"][value="${backend}"]`).check();
+      await frame().locator('#summary-backend').selectOption(backend);
       await frame().locator('#llm_base_url').fill(backend === 'anthropic' ? 'https://api.anthropic.com/v1' : 'https://api-fixture.invalid/v1');
       await frame().locator('#llm_api_key').fill('fictional-api-test-key');
       await frame().locator('#llm_model').fill('fictional-test-model');
@@ -822,7 +893,7 @@ try {
     await route('/setup', '#interest-editor');
     return {apiAndAnthropic:true, genericPromptOnly:true, explicitClickOnly:true, browserAnthropicHeaderScoped:true, noStateSaved:true, failurePreservesFields:true, staleReplyIgnored:true};
   });
-  await check('legacy-priorities-convert-to-displayed-percentages-on-save', async () => {
+  await check('legacy-priorities-show-percentages-without-changing-untouched-raw-weights', async () => {
     const backup = await snapshot();
     backup.files['data/profile.yaml'] = Buffer.from('bio: General reader.\nkeywords: [Astrophysics, History]\ncanonical_facets:\n  Astrophysics: {priority: 0.1}\n  History: {priority: 100}\n').toString('base64');
     const imported = await page.evaluate(body => window.__rpc({ type: 'import', body, overwrite: true }), JSON.stringify(backup));
@@ -832,15 +903,15 @@ try {
     assert.deepEqual(await frame().locator('[data-interest-weight]').evaluateAll(inputs => inputs.map(input => input.value)), ['1', '99']);
     const beforeSave = Buffer.from((await snapshot()).files['data/profile.yaml'], 'base64').toString();
     assert.match(beforeSave, /priority: 0\.1\b/);
-    await frame().locator('details:has(#name) > summary').click();
+    await openSettingsGroup('profile-options');
     await frame().locator('#name').fill('Renamed reader');
     await frame().locator('form[action="/setup"] button[type="submit"]').click();
     await page.waitForFunction(() => location.hash.startsWith('#/run'));
     const stored = await snapshot();
     const yaml = Buffer.from(stored.files['data/profile.yaml'], 'base64').toString();
-    assert.match(yaml, /priority: 1\.0\b/);
-    assert.match(yaml, /priority: 99\.0\b/);
-    return { noChangeUntilSave: true, shownEqualsSaved: true, totalExactly100: true };
+    assert.match(yaml, /priority: 0\.1\b/);
+    assert.match(yaml, /priority: 100(?:\.0)?\b/);
+    return { noChangeUntilSave:true, untouchedExactWeightsPreserved:true, displayedPercentagesTotal100:true };
   });
   const backupText = await readFile(fixture, 'utf8');
   await check('import-fixture-backup', async () => {
@@ -852,7 +923,7 @@ try {
   });
   await check('calibration-disabled-until-real-rating-threshold',async()=>{
     await route('/','.item[data-item-id]');
-    await frame().locator('.about-brew > summary').click();
+    await openAboutDigest();
     assert.equal(await frame().locator('#train-ranker-btn').isDisabled(),true);
     return {disabledWithoutRequiredRatings:true};
   });
@@ -900,7 +971,7 @@ try {
     });
     await check('calibration-button-runs-and-persists-real-calibrator',async()=>{
       await route('/','.item[data-item-id]');
-      await frame().locator('.about-brew > summary').click();
+      await openAboutDigest();
       assert.equal(await frame().locator('#train-ranker-btn').isEnabled(),true);
       await clickCalibration();
       const status=await completedCalibration();
@@ -959,13 +1030,14 @@ try {
     return evidence;
   });
   await check('route-title-landmark-and-reading-position-return', async () => {
-    await route('/', '.digest-date');
+    await route('/', '#digest-date');
+    await openAboutDigest();
     await frame().locator('#source-details').scrollIntoViewIfNeeded();
     const previous=await page.evaluate(()=>document.querySelector('#app').contentWindow.scrollY);
     assert.ok(previous>100);
     await route('/setup', '#interest-editor');assert.match(await page.title(), /Set up DailyDigest/);
     assert.equal(await frame().locator('main').count(),1);
-    await route('/', '.digest-date');
+    await route('/', '#digest-date');
     const returned=await page.evaluate(()=>document.querySelector('#app').contentWindow.scrollY);
     assert.ok(Math.abs(returned-previous)<5,JSON.stringify({previous,returned}));
     assert.match(await page.title(), /DailyDigest/);
@@ -973,10 +1045,11 @@ try {
   });
   await check('history-calendar-display-and-pip', async () => {
     await route('/', '.item[data-item-id]');
-    const history = frame().locator('.time-machine-link');
-    assert.ok(await history.count() >= 2, 'Fixture must include at least two historical digests.');
-    await history.first().click();
-    await frame().locator('.digest-date').waitFor();
+    const history = frame().locator('#digest-date option');
+    const historyCount = await history.count();
+    assert.ok(historyCount >= 2, 'Fixture must include at least two historical digests.');
+    const selected = await history.first().getAttribute('value');
+    await chooseDigest(selected);
     await frame().locator('#display-menu-toggle').click();
     await frame().locator('#theme-toggle').click();
     const root = frame().locator('html');
@@ -999,7 +1072,7 @@ try {
     const contents = await readFile(`${output}/calendar.ics`, 'utf8');
     assert.match(contents, /BEGIN:VCALENDAR/);
     assert.equal(await page.evaluate(() => location.hash), readingHash, 'Calendar export must preserve the reading route for reload.');
-    return { historyEntries: await history.count(), calendar: true, display: 'compact', theme: 'dark' };
+    return { historyEntries: historyCount, calendar: true, display: 'compact', theme: 'dark' };
   });
   await check('real-browser-mutation-and-impression-checkpoints', async () => {
     await route('/', '.item[data-section="research"]');
@@ -1061,11 +1134,11 @@ try {
   });
   await check('reload-persists-feedback-and-saved-reading', async () => {
     await page.reload(); await startup();
-    await route('/', '.time-machine-link');
-    const archived = frame().locator('.time-machine-link').last();
-    const archivedPath = new URL(await archived.getAttribute('href'), base).hash.slice(1);
-    await archived.click();
-    await page.waitForFunction(path => document.querySelector('#app')?.contentWindow?.ddLocation?.endsWith(path), archivedPath);
+    await route('/', '#digest-date');
+    const archivedPath = await frame().locator('#digest-date option').last().getAttribute('value');
+    await chooseDigest(archivedPath);
+    const archivedId=new URL(archivedPath,base).searchParams.get('digest_id');
+    assert.equal((await frame().locator('.digest-date').textContent()).trim(),archivedId);
     await openSection('events');
     await frame().locator('.item[data-section="events"] .known-btn[aria-pressed="true"]').waitFor();
     await route('/saved', '.saved-card');
@@ -1076,6 +1149,32 @@ try {
   });
   await check('saved-search-and-clear-vote', async () => {
     const card = frame().locator(`.saved-card[data-item-id="${itemId}"]`);
+    const gradeBefore=await card.getAttribute('data-current-grade');
+    await card.evaluate(node=>{node.__acceptanceOriginalCard=true;});
+    await card.locator('.remove-saved').click();
+    await frame().locator(`.saved-card[data-item-id="${itemId}"][data-saved-state="removed"]`).waitFor();
+    assert.equal(await card.locator('.saved-content').isHidden(),true);
+    assert.equal(await card.locator('.saved-removal').isVisible(),true);
+    const removed=await page.evaluate(()=>window.__rpc({type:'request',path:'/saved'}));
+    assert.equal(removed.status,200,removed.body);
+    assert.ok(!removed.body.includes(`data-item-id="${itemId}"`),'Removed bookmark must be absent from the actual Saved route');
+    const removedCheckpoint=await page.evaluate(()=>window.__rpc({type:'acceptance-state'}));
+    assert.equal(removedCheckpoint.status,200,removedCheckpoint.body);
+    assert.equal(JSON.parse(removedCheckpoint.body).equal,true,'Removal must be durably checkpointed');
+    await card.locator('.undo-saved').click();
+    await frame().locator(`.saved-card[data-item-id="${itemId}"][data-saved-state="saved"]`).waitFor();
+    assert.equal(await card.locator('.saved-content').isVisible(),true);
+    assert.equal(await card.locator('.saved-removal').isHidden(),true);
+    assert.equal(await card.evaluate(node=>node.__acceptanceOriginalCard),true,'Undo restores the original node');
+    assert.equal(await card.getAttribute('data-current-grade'),gradeBefore);
+    await card.locator('.vote-btn[data-grade="10"][aria-pressed="true"]').waitFor();
+    await card.locator('.reason-chip[data-reason="off_topic"][aria-pressed="true"]').waitFor();
+    const restored=await page.evaluate(()=>window.__rpc({type:'request',path:'/saved'}));
+    assert.equal(restored.status,200,restored.body);
+    assert.ok(restored.body.includes(`data-item-id="${itemId}"`),'Undo must restore the actual bookmark');
+    const restoredCheckpoint=await page.evaluate(()=>window.__rpc({type:'acceptance-state'}));
+    assert.equal(restoredCheckpoint.status,200,restoredCheckpoint.body);
+    assert.equal(JSON.parse(restoredCheckpoint.body).equal,true,'Undo must be durably checkpointed');
     await card.locator('.clear-rating').click();
     await card.locator('.clear-rating').waitFor({ state: 'hidden' });
     assert.equal(await card.locator('.vote-btn[aria-pressed="true"]').count(), 0);
@@ -1084,7 +1183,7 @@ try {
     await search.press('Enter');
     await page.waitForFunction(() => document.querySelector('#app')?.contentWindow?.ddLocation?.includes('impossibleAcceptanceSearchToken'));
     assert.equal(await frame().locator('.saved-card').count(), 0);
-    return { cleared: true, searchFilters: true };
+    return {cleared:true,searchFilters:true,durableTombstone:true,undoRestoresOriginalNodeAndRating:true};
   });
   await check('failed-compute-isolation-apply-leaves-feedback-usable', async () => {
     await page.evaluate(()=>{
@@ -1120,7 +1219,32 @@ try {
   await check('mobile-layout-and-keyboard', async () => {
     await page.setViewportSize({ width: 390, height: 844 });
     await route('/setup', '#interest-editor');
-    await frame().locator('details:has(#name) > summary').click();
+    const draftSnapshot = await snapshot();
+    const draftHash = await page.evaluate(() => location.hash);
+    const draftRow = frame().locator('.interest-row').first();
+    await editInterest(draftRow);
+    await draftRow.locator('[data-interest-name]').fill('Unsaved draft navigation sample');
+    await page.evaluate(() => { window.__retainedDraftDocument = document.querySelector('#app').contentDocument; });
+    const promptsBefore = discardedDraftPrompts.length;
+    try {
+      acceptDiscardedDraft = false;
+      const rejectedNavigation = page.waitForEvent('dialog', {predicate: dialog => dialog.message() === 'Discard unsaved settings changes?'});
+      await page.evaluate(() => document.querySelector('#app').contentWindow.ddNavigate('/saved'));
+      await rejectedNavigation;
+      assert.deepEqual(discardedDraftPrompts.slice(promptsBefore), [false]);
+      assert.equal(await page.evaluate(() => location.hash), draftHash);
+      assert.equal(await page.evaluate(() => document.querySelector('#app').contentDocument === window.__retainedDraftDocument), true);
+      assert.equal(await draftRow.locator('[data-interest-name]').inputValue(), 'Unsaved draft navigation sample');
+      assert.deepEqual((await snapshot()).files, draftSnapshot.files);
+      acceptDiscardedDraft = true;
+      await route('/saved', 'h1');
+      assert.deepEqual(discardedDraftPrompts.slice(promptsBefore), [false, true]);
+      assert.equal(await page.evaluate(() => location.hash), '#/saved');
+      assert.deepEqual((await snapshot()).files, draftSnapshot.files);
+      await route('/setup', '#interest-editor');
+      assert.notEqual(await frame().locator('[data-interest-name]').first().inputValue(), 'Unsaved draft navigation sample');
+    } finally { acceptDiscardedDraft = true; }
+    await openSettingsGroup('profile-options');
     const overflow = await page.evaluate(() => {
       const doc = document.querySelector('#app').contentDocument;
       return { width: doc.documentElement.clientWidth, scrollWidth: doc.documentElement.scrollWidth, outerWidth: document.documentElement.clientWidth, outerScrollWidth: document.documentElement.scrollWidth };
@@ -1133,13 +1257,18 @@ try {
     const companionBox = await page.locator('#companion-menu .data-tools').boundingBox();
     assert.ok(companionBox.x >= 0 && companionBox.x + companionBox.width <= 390, JSON.stringify(companionBox));
     await page.locator('#companion-menu > summary').press('Escape');
-    assert.equal(await frame().locator('[data-interest-weight]').first().isHidden(), true);
-    await frame().locator('[data-interest-name]').first().focus(); await page.keyboard.press('Tab');
-    assert.equal(await frame().locator('.interest-heading button').first().evaluate(node => node === document.activeElement), true);
-    await frame().locator('#priority-options > summary').click();
-    await frame().locator('[data-interest-weight]').first().waitFor({state:'visible'});
-    await frame().locator('[data-interest-name]').first().focus(); await page.keyboard.press('Tab');
-    assert.equal(await frame().locator('[data-interest-weight]').first().evaluate(node => node === document.activeElement), true);
+    assert.equal(await frame().locator('[data-interest-weight]').first().isVisible(), true);
+    const firstRow=frame().locator('.interest-row').first();
+    await editInterest(firstRow);
+    await firstRow.locator('[data-interest-name]').focus(); await page.keyboard.press('Tab');
+    assert.equal(await firstRow.locator('[data-interest-weight]').evaluate(node => node === document.activeElement), true);
+    await page.keyboard.press('Tab');
+    assert.equal(await firstRow.locator('[data-interest-edit]').evaluate(node => node === document.activeElement), true);
+    await firstRow.locator('[data-interest-done]').click();
+    await firstRow.locator('[data-interest-edit]').press('Enter');
+    assert.equal(await firstRow.locator('[data-interest-name]').isVisible(),true);
+    await frame().locator('#priority-options > summary').focus(); await page.keyboard.press('Enter');
+    assert.equal(await frame().locator('#normalize-interests').isVisible(),true);
     await page.screenshot({ path: `${output}/mobile-setup.png`, fullPage: true });
     await page.setViewportSize({ width: 320, height: 720 });
     const narrow = await page.evaluate(() => {
@@ -1147,16 +1276,13 @@ try {
       return {inner:doc.documentElement.scrollWidth <= doc.documentElement.clientWidth + 1, outer:document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1};
     });
     assert.deepEqual(narrow, {inner:true, outer:true});
-    await frame().locator('#paper-examples > summary').focus();
-    await page.keyboard.press('Enter');
-    assert.notEqual(await frame().locator('#paper-examples').getAttribute('open'), null);
-    await frame().locator('#seed_works').focus();
-    assert.equal(await frame().locator('#seed_works').evaluate(node => node === document.activeElement), true);
-    await frame().locator('#advanced-interests > summary').focus();
-    await page.keyboard.press('Enter');
+    await frame().locator('#author-settings > summary').focus(); await page.keyboard.press('Enter');
+    assert.notEqual(await frame().locator('#author-settings').getAttribute('open'), null);
+    await frame().locator('#authors_of_interest').focus(); await page.keyboard.press('Tab');
+    assert.equal(await frame().locator('#author-settings .settings-help>summary').evaluate(node=>node===document.activeElement),true);
+    await frame().locator('#advanced-interests > summary').focus(); await page.keyboard.press('Enter');
     assert.notEqual(await frame().locator('#advanced-interests').getAttribute('open'), null);
-    await frame().locator('#authors_of_interest').focus();
-    await page.keyboard.press('Tab');
+    await frame().locator('#seed_works').focus(); await page.keyboard.press('Tab');
     assert.equal(await frame().locator('#context_keywords').evaluate(node => node === document.activeElement), true);
     await frame().locator('.settings-actions button[type="submit"]').focus();
     assert.equal(await frame().locator('.settings-actions button[type="submit"]').evaluate(node => node === document.activeElement), true);
@@ -1177,7 +1303,7 @@ try {
     await page.keyboard.press('Escape');
     assert.equal(await page.locator('#compute-menu').getAttribute('open'), null);
     await page.setViewportSize({ width: 1360, height: 900 });
-    return overflow;
+    return {...overflow, rejectedDraftNavigationRetainsDocumentAndDraft:true, acceptedDraftNavigationDiscardsOnlyUnsavedChanges:true};
   });
   await check('gpu-probe-does-not-load-model-and-explains-result', async () => {
     const modelRequests = [];
@@ -1383,6 +1509,7 @@ try {
     const coverage = frame().locator('.source-coverage[aria-label="Source coverage and freshness"]');
     assert.match(await coverage.textContent(), /1 of 1 sources responded/);
     assert.match(await coverage.textContent(), /Checked.*UTC/s);
+    await openAboutDigest();
     await coverage.locator('summary').click();
     assert.match(await coverage.locator('li').first().textContent(), /Nature.*Responded.*Checked/s);
     await page.screenshot({ path: `${output}/source-coverage.png`, fullPage: true });
@@ -1442,7 +1569,7 @@ try {
   await check('optional-companion-explicit-actions', async () => {
     assert.equal(companionRequests.length, 0, 'No companion contact should occur before explicit setup.');
     await route('/setup', '#interest-editor');
-    await frame().locator('#summary-options > summary').click();
+    await openSettingsGroup('summary-options');
     assert.equal(await frame().locator('input[name="llm_backend"][value="claude_cli"]').isDisabled(), true);
     assert.equal(await frame().locator('input[name="llm_backend"][value="codex_cli"]').isDisabled(), true);
     assert.match(await frame().locator('[data-companion-note]').first().textContent(), /connect a browser companion/);
@@ -1518,8 +1645,8 @@ try {
     await page.waitForFunction(() => document.getElementById('companion-status').textContent.includes('Connected'));
     await page.locator('#companion-menu > summary').press('Escape');
     await route('/setup', '#interest-editor');
-    await frame().locator('details:has(input[name="llm_backend"]) > summary').click();
-    await frame().locator('input[name="llm_backend"][value="api"]').check();
+    await openSettingsGroup('summary-options');
+    await frame().locator('#summary-backend').selectOption('api');
     await frame().locator('#llm_api_key').fill('');
     await frame().locator('#llm_model').fill('fictional-companion-model');
     await frame().locator('form[action="/setup"] button[type="submit"]').click();
@@ -1551,8 +1678,8 @@ try {
     assert.deepEqual(second.map(row => row.id), first.map(row => row.id));
     for (const row of second) { assert.equal(row.backend, 'api'); assert.match(row.summary, /Mock API B summary/); assert.notEqual(row.signature, first.find(prior => prior.id === row.id).signature); }
     await route('/setup', '#interest-editor');
-    await frame().locator('details:has(input[name="llm_backend"]) > summary').click();
-    await frame().locator('input[name="llm_backend"][value="extractive"]').check();
+    await openSettingsGroup('summary-options');
+    await frame().locator('#summary-backend').selectOption('extractive');
     await frame().locator('form[action="/setup"] button[type="submit"]').click();
     await page.waitForFunction(() => document.querySelector('#app')?.contentWindow?.ddLocation?.startsWith('http://127.0.0.1:8765/run'));
     const restored = await snapshot();

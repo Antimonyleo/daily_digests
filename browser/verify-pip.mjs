@@ -34,7 +34,7 @@ const report = {scope: 'Production template, fictional empty desk; no Python bro
 const browser = await chromium.launch({executablePath: process.env.CHROME_PATH || '/usr/bin/google-chrome',
   headless: true, args: ['--no-sandbox'], env: {...process.env, TMPDIR: scratch}});
 try {
-  const context = await browser.newContext({viewport: {width: 1600, height: 1000}});
+  const context = await browser.newContext({viewport: {width: 1600, height: 1000}, hasTouch: true});
   await context.route('**/*', async route => {
     const url = new URL(route.request().url());
     if (url.origin !== 'http://pip.test') return route.abort();
@@ -53,20 +53,24 @@ try {
   await page.goto('http://pip.test/');
   const pet = page.locator('#tea-pet'), note = page.locator('#tea-note-text');
   const start = await page.locator('#tea-break').boundingBox();
+  assert.equal(await note.isVisible(), false, 'Pip starts as a quiet cup');
+  await pet.click();
+  assert.equal(await pet.getAttribute('aria-expanded'), 'true');
   const fact = await note.innerText();
   assert.ok(fact.length > 20);
   const box = await pet.boundingBox();
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
   await page.mouse.down();
   await page.mouse.move(box.x + box.width / 2 + 250, box.y + box.height / 2 - 200, {steps: 5});
-  assert.equal(await page.locator('.pip-drag-copy').isVisible(), true);
+  assert.equal(await note.isVisible(), true, 'The current fact must stay readable DURING dragging');
+  assert.equal(await note.innerText(), fact);
   assert.equal(await page.locator('#tea-another').isVisible(), true);
   await page.mouse.up();
   const moved = await page.locator('#tea-break').boundingBox();
   assert.ok(moved.x > start.x + 100);
   assert.equal(await note.innerText(), fact);
   assert.equal(await note.isVisible(), true);
-  report.checks.push('drag retains a visible conversation and leaf; original fact returns on release');
+  report.checks.push('cup opens its note; drag retains the same visible fact DURING movement and after release');
   await page.locator('#tea-another').click();
   await page.waitForFunction(previous => document.querySelector('#tea-note-text').textContent !== previous, fact);
   await page.waitForFunction(() => !document.querySelector('#tea-another').hasAttribute('aria-disabled'));
@@ -83,7 +87,14 @@ try {
   assert.ok((await page.locator('#tea-break').boundingBox()).x > restored.x);
   await page.keyboard.press('Home');
   assert.ok(Math.abs((await page.locator('#tea-break').boundingBox()).x - start.x) <= 1);
-  report.checks.push('keyboard movement and Home reset work');
+  await page.keyboard.press('Enter');
+  assert.equal(await note.isVisible(),false);
+  await page.keyboard.press('Enter');
+  assert.equal(await note.isVisible(),true);
+  await page.keyboard.press('Escape');
+  assert.equal(await note.isVisible(),false);
+  await page.keyboard.press('Enter');
+  report.checks.push('keyboard movement, Home reset, Enter note toggle and Escape close work');
   assert.equal(await page.getByRole('button', {name: 'Move Pip to another preset position'}).isVisible(), false,
     'The removed Move label must not reappear on wide screens');
   report.checks.push('wide-screen Pip has no redundant Move button');
@@ -92,9 +103,19 @@ try {
   for (const width of [390, 320]) {
     await page.setViewportSize({width, height: 844});
     await page.locator('#tea-break').scrollIntoViewIfNeeded();
-    assert.equal(await pet.getAttribute('role'), 'img');
+    assert.equal(await pet.getAttribute('role'), 'button');
     assert.equal(await note.isVisible(), true);
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+    const beforeTouch=await pet.boundingBox(),currentNote=await note.innerText();
+    const touch=await context.newCDPSession(page);
+    await touch.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x:beforeTouch.x+beforeTouch.width/2,y:beforeTouch.y+beforeTouch.height/2}]});
+    await touch.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:20,y:200}]});
+    assert.equal(await note.isVisible(),true,'Touch dragging also retains the current note');
+    assert.equal(await note.innerText(),currentNote);
+    const bubble=await page.locator('.tea-dialog').boundingBox();
+    assert.ok(bubble.x>=7 && bubble.y>=7 && bubble.x+bubble.width<=width-7);
+    await touch.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+    await touch.detach();
     await page.locator('#tea-another').click();
     await page.screenshot({path: resolve(output, `mobile-${width}.png`)});
   }
@@ -108,7 +129,7 @@ try {
   assert.equal(await page.locator('#tea-another').isDisabled(), true);
   await page.reload();
   assert.equal(await page.locator('#tea-leaf-count').innerText(), '10');
-  assert.match(await note.innerText(), /Tea break over/);
+  assert.match(await note.innerText(), /Your cup is full/);
   report.checks.push('ten-leaf cap and complete state survive reload');
 
   await page.setViewportSize({width: 1600, height: 1000});
@@ -119,8 +140,10 @@ try {
     const notes = ['<img src=x onerror="window.pipInjected=true">', 'Second fictional note'];
     const nativeSet = window.setTimeout, nativeClear = window.clearTimeout;
     const NativeObserver = window.IntersectionObserver;
+    const NativeResizeObserver = window.ResizeObserver;
     const pending = new Set();
     let disconnected = 0;
+    let resizeDisconnected = 0;
     window.setTimeout = (callback, delay, ...args) => {
       const id = nativeSet(() => { pending.delete(id); callback(...args); }, delay);
       pending.add(id); return id;
@@ -128,6 +151,9 @@ try {
     window.clearTimeout = id => { pending.delete(id); nativeClear(id); };
     window.IntersectionObserver = class extends NativeObserver {
       disconnect() { disconnected++; super.disconnect(); }
+    };
+    window.ResizeObserver = class extends NativeResizeObserver {
+      disconnect() { resizeDisconnected++; super.disconnect(); }
     };
     localStorage.removeItem('dailydigest-tea-leaves:shared-lifetime-test');
     // Mount twice: one accepted click must still count only once.
@@ -152,10 +178,11 @@ try {
     cleanAgain();
     window.setTimeout = nativeSet; window.clearTimeout = nativeClear;
     window.IntersectionObserver = NativeObserver;
-    return {literal, newDayReset, accepted, wasAnimating, remaining, afterCleanup, settled, restoredCount, disconnected};
+    window.ResizeObserver = NativeResizeObserver;
+    return {literal, newDayReset, accepted, wasAnimating, remaining, afterCleanup, settled, restoredCount, disconnected, resizeDisconnected};
   });
   assert.deepEqual(lifecycle, {literal: true, newDayReset: true, accepted: '1', wasAnimating: true, remaining: 0,
-    afterCleanup: '1', settled: true, restoredCount: '1', disconnected: 3});
+    afterCleanup: '1', settled: true, restoredCount: '1', disconnected: 3, resizeDisconnected: 3});
   report.checks.push('shared mount resets an exhausted prior day, escapes notes, replaces prior instance, cleans timers/observer/listeners during feeding, and restores accepted leaf');
   await page.locator('#display-menu-toggle').click();
   await page.getByRole('button', {name: 'Show Pip', exact: true}).click();
@@ -166,6 +193,21 @@ try {
   await page.getByRole('button', {name: 'Show Pip', exact: true}).click();
   assert.equal(await page.locator('#tea-break').isVisible(), true);
   report.checks.push('Show Pip preference persists and remains reversible');
+  const openDisplay = async () => {
+    if (await page.locator('#display-menu').getAttribute('open') === null) await page.locator('#display-menu-toggle').click();
+  };
+  await openDisplay(); await page.locator('#display-toggle').click();
+  assert.equal(await page.locator('html').getAttribute('data-display'), 'compact');
+  await openDisplay(); await page.locator('#pip-toggle').click();
+  const hiddenCup = () => page.locator('#tea-break').evaluate(node => ({display:getComputedStyle(node).display, rectangles:node.getClientRects().length}));
+  assert.equal(await page.locator('html').getAttribute('data-pip'), 'hidden');
+  assert.deepEqual(await hiddenCup(), {display:'none',rectangles:0});
+  await page.reload();
+  assert.equal(await page.locator('html').getAttribute('data-display'), 'compact');
+  assert.deepEqual(await hiddenCup(), {display:'none',rectangles:0});
+  await openDisplay(); await page.locator('#pip-toggle').click();
+  assert.equal(await page.locator('#tea-break').isVisible(), true);
+  report.checks.push('Compact view respects the real Pip visibility toggle and restores its saved hidden preference');
   assert.deepEqual(report.errors, []);
   report.success = true;
 } catch (error) {

@@ -248,11 +248,12 @@ def _compose_deck(jokes: list[str], facts: list[str], day: date) -> tuple[str, .
     return tuple(interleaved[offset:] + interleaved[:offset])
 
 
-def daily_tea_deck(day: date, *, refresh: bool = False) -> tuple[str, ...]:
+def daily_tea_deck(day: date, *, refresh: bool = False, record: bool = True) -> tuple[str, ...]:
     """Return the day's stable deck: ten jokes and five facts, shown one at a time.
 
-    The deck is drawn from the cards least recently served and then recorded, so
-    Pip works through the whole bank before repeating anything. Previously the
+    Reading decks are drawn from the cards least recently served and recorded;
+    read-only pages can preview the same deck with ``record=False``. This lets
+    Pip work through the whole bank before repeating anything. Previously the
     deck was a pure function of the date, which cycled a 57-card bank every few
     days -- by day 5 every card on offer had already been seen. If the store is
     unavailable (tests, ad-hoc use) this falls back to the old date-derived
@@ -298,11 +299,12 @@ def daily_tea_deck(day: date, *, refresh: bool = False) -> tuple[str, ...]:
         )
         deck = _compose_deck(jokes, _shuffle(facts, day, "fact-order"), day)
         if deck:
-            # Always record: the ledger is what stops the banks recycling, and
-            # skipping it left every pre-brew day drawing the same cards. A deck
+            # Record served reading decks: the ledger stops the banks recycling.
+            # Skipping it left every pre-brew day drawing the same cards. A deck
             # composed before the brew is replaced (once) as soon as the brew
             # lands -- see the BREW_PREFIX check above.
-            record_tea_deck(day.isoformat(), list(deck))
+            if record:
+                record_tea_deck(day.isoformat(), list(deck))
             return deck
     except Exception:  # noqa: BLE001 - Pip must never break the page
         pass
@@ -320,3 +322,8 @@ def daily_tea_deck(day: date, *, refresh: bool = False) -> tuple[str, ...]:
     offset = sha256(f"order|{day.isoformat()}".encode()).digest()[0] % len(interleaved)
     ordered = interleaved[offset:] + interleaved[:offset]
     return tuple(ordered)
+
+
+def preview_tea_deck(day: date) -> tuple[str, ...]:
+    """Reuse the same deck for Settings/Saved without recording a reading visit."""
+    return daily_tea_deck(day, record=False)

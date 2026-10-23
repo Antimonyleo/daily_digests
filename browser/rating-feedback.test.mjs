@@ -39,6 +39,9 @@ function feedbackControls(page,{initial='10',reason=true,pending=false,respond=a
     const start=source.indexOf('    const rate = createRatingQueue(');
     code=select+source.slice(start,source.indexOf('    itemEl.querySelectorAll(".reason-chip").forEach',start));
   } else {
+    // This lane exercises ratings only; bookmark durability is covered by the
+    // Saved Remove/Undo tests using the real controller and card states.
+    context.bookmarkCards = new Map();
     const start=source.indexOf('    function busy(');
     code=source.slice(start,source.indexOf('    card.querySelectorAll(".reason-chip").forEach',start));
     const committedEvent=source.indexOf("  window.addEventListener('dd-storage-committed'");

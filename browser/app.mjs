@@ -437,7 +437,7 @@ export function renderedDocument(html, token, path, publicURL) {
     try { const url = new URL(match[1]); if (url.protocol === 'https:') imageOrigins.add(url.origin); } catch { /* invalid figures remain blocked */ }
   }
   html = html.replace(/<script\b/gi, `<script nonce="${nonce}"`);
-  const bridge = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-${nonce}'; style-src 'unsafe-inline'; img-src 'self' data: blob: ${[...imageOrigins].join(' ')}; connect-src 'none'; form-action 'none'; base-uri 'none'">${routeFocusStyle}<script nonce="${nonce}">(${frameBridge.toString()})(${args});</script>`;
+  const bridge = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-${nonce}'; style-src 'unsafe-inline'; font-src data:; img-src 'self' data: blob: ${[...imageOrigins].join(' ')}; connect-src 'none'; form-action 'none'; base-uri 'none'">${routeFocusStyle}<script nonce="${nonce}">(${frameBridge.toString()})(${args});</script>`;
   return html.replace(/<head[^>]*>/i, match => match + bridge);
 }
 
@@ -580,6 +580,7 @@ async function boot() {
   const streams = new Map();
   let runtimeStarted = false, frameGeneration = null, cacheTimer, cachedPip;
   const scrollPositions = new Map();
+  const aboutDisclosureStates = new Map();
   let tabMoved = false, dirtySetup = false, hasUnflushedEdits = false, handoff;
   const tabActions = document.getElementById('tab-wait-actions');
   const useThisTab = document.getElementById('use-this-tab');
@@ -598,10 +599,10 @@ async function boot() {
     worker.postMessage({ type: 'init' });
   };
   const cacheReadingView = async () => {
-    if (!ready || activePath !== '/' || frameGeneration === null || frame.hidden) return;
+    if (!ready || activePath.split('?')[0] !== '/' || frameGeneration === null || frame.hidden) return;
     try {
       const document = frame.contentDocument;
-      if (!document || frame.contentWindow.ddLocation !== LOCAL_ORIGIN + '/') return;
+      if (!document || new URL(frame.contentWindow.ddLocation).pathname !== '/') return;
       const view = extractReadingView(document);
       if (view) await client.call({type:'cache-reading-view', generation:frameGeneration, view});
     } catch { /* A disposable reading copy must never block the authoritative desk. */ }
@@ -666,6 +667,8 @@ async function boot() {
     }
     const heading = frame.contentDocument?.querySelector('h1, main, [role="main"]');
     if (heading) { heading.setAttribute('tabindex', '-1'); heading.focus({ preventScroll: true }); }
+    const about = frame.contentDocument?.querySelector('.about-brew');
+    if (about && aboutDisclosureStates.has(activePath)) about.open = aboutDisclosureStates.get(activePath);
     if (scrollPositions.has(activePath)) frame.contentWindow.scrollTo(0, scrollPositions.get(activePath));
     if (frame.contentDocument?.title) document.title = frame.contentDocument.title + ' · DailyDigest';
     frame.contentDocument?.addEventListener('click', () => {
@@ -974,8 +977,20 @@ async function boot() {
   };
   async function navigate(path, options = {}) {
     if (tabMoved) return;
-    if (!frame.hidden && frame.contentDocument) scrollPositions.set(activePath, frame.contentWindow.scrollY);
-    if (typeof path === 'string' && path.startsWith('/done')) scrollPositions.delete('/');
+    if (dirtySetup && activePath.split('?')[0] === '/setup' && localPath(path).split('?')[0] !== '/setup'
+        && (!options.method || options.method.toUpperCase() === 'GET')
+        && !confirm('Discard unsaved settings changes?')) {
+      history.replaceState(null, '', '#' + activePath);
+      return;
+    }
+    if (!frame.hidden && frame.contentDocument) {
+      scrollPositions.set(activePath, frame.contentWindow.scrollY);
+      const about = frame.contentDocument.querySelector('.about-brew');
+      if (about) aboutDisclosureStates.set(activePath, about.open);
+    }
+    if (typeof path === 'string' && path.startsWith('/done')) {
+      scrollPositions.delete('/'); aboutDisclosureStates.delete('/');
+    }
     const version = ++navigation;
     setStatus('Opening DailyDigest…');
     frame.inert = true; frame.setAttribute('aria-busy', 'true');

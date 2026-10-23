@@ -1,0 +1,40 @@
+// Local visit timing only; no profile text, article data or telemetry.
+(() => {
+  const heading = document.getElementById('page-salutation');
+  if (!heading) return;
+  const key = 'dailydigest-reading-visits';
+  const day = now => { const d = new Date(now); return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`; };
+  let history;
+  try { history = JSON.parse(localStorage.getItem(key)); } catch (_) {}
+  if (!history || typeof history !== 'object') history = {};
+  const visit = now => {
+    const gap = Math.max(0, now - (Number(history.lastSeen) || now));
+    if (!history.lastSeen || gap >= 30 * 60 * 1000 || history.day !== day(now)) {
+      history.todayVisits = history.day === day(now) ? (Number(history.todayVisits) || 0) + 1 : 1;
+      history.activeMs = 0; history.returnGap = gap;
+    }
+    history.day = day(now); history.lastSeen = now;
+  };
+  const save = () => { try { localStorage.setItem(key, JSON.stringify(history)); } catch (_) {} };
+  const render = () => {
+    const hour = new Date().getHours(), name = heading.dataset.profileName || '';
+    let phrase = hour < 5 ? 'You’re up early' : hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
+    if (history.activeMs >= 25 * 60 * 1000) phrase = 'Time for another cup';
+    else if (history.activeMs >= 10 * 60 * 1000) phrase = 'Enjoying the deep dive';
+    else if (history.returnGap >= 7 * 86400000) phrase = 'Lovely to see you again';
+    else if (history.todayVisits >= 3) phrase = history.todayVisits % 2 ? 'Back for another discovery' : 'Good to see you again';
+    heading.textContent = phrase + (name ? ', ' + name : '');
+  };
+  let lastTick = Date.now(); visit(lastTick); render(); save();
+  const tick = () => {
+    const now = Date.now();
+    if (!document.hidden) { visit(now); history.activeMs = Math.max(0, Number(history.activeMs) || 0) + Math.min(60000, Math.max(0, now - lastTick)); render(); save(); }
+    lastTick = now;
+  };
+  let timer = setInterval(tick, 60000);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) { visit(Date.now()); render(); save(); } lastTick = Date.now(); });
+  window.addEventListener('pagehide', () => { tick(); clearInterval(timer); timer = null; });
+  window.addEventListener('pageshow', event => {
+    if (event.persisted && timer === null) { lastTick = Date.now(); visit(lastTick); render(); save(); timer = setInterval(tick, 60000); }
+  });
+})();

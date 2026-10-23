@@ -55,6 +55,22 @@ def test_deck_is_stable_within_a_day(tmp_path, monkeypatch):
     assert daily_tea_deck(day) == daily_tea_deck(day)
 
 
+def test_preview_keeps_read_only_pages_out_of_the_rotation_ledger(tmp_path, monkeypatch):
+    store = _reset_store(tmp_path, monkeypatch)
+    from dailydigest.tea_break import daily_tea_deck, preview_tea_deck
+
+    day = date(2026, 8, 22)
+    preview = preview_tea_deck(day)
+    assert preview
+    assert not store.tea_deck_for_day(day.isoformat())
+    assert not store.tea_note_last_shown()
+    assert daily_tea_deck(day) == preview
+    recorded = store.tea_note_last_shown()
+    assert recorded
+    assert preview_tea_deck(day) == preview
+    assert store.tea_note_last_shown() == recorded
+
+
 def test_rotation_survives_a_missing_store(tmp_path, monkeypatch):
     """Pip must never break the page, even with no database behind it."""
     from dailydigest import tea_break

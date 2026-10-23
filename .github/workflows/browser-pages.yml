@@ -80,6 +80,15 @@ jobs:
         env:
           DAILYDIGEST_SETTINGS_REPORT: .full-review/settings-priorities-ci
         run: node browser/verify-settings-priorities.mjs
+      - name: Restored reading layout and interactions
+        env:
+          DAILYDIGEST_READING_UI_REPORT: .full-review/reading-ui-ci
+          DAILYDIGEST_SAVED_UI_REPORT: .full-review/saved-ui-ci
+          DAILYDIGEST_PIP_REPORT: .full-review/pip-ci
+        run: |
+          node browser/verify-reading-ui.mjs
+          node browser/verify-saved-ui.mjs
+          node browser/verify-pip.mjs
       - name: Complete daily reading and publication relationships
         env:
           DAILYDIGEST_BREW_SITE: browser/dist

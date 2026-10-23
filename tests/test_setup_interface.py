@@ -61,6 +61,16 @@ def test_settings_starts_with_interests_and_discloses_optional_fields(monkeypatc
     assert html.index('id="top_research"') < html.index('id="summary-options"')
 
 
+def test_settings_pip_uses_the_configured_digest_day(monkeypatch, tmp_path):
+    from dailydigest import web
+
+    monkeypatch.setattr(web, "_digest_id", lambda: "2001-02-03")
+    monkeypatch.setattr(web, "preview_tea_deck", lambda day: (f"A note for {day.isoformat()}",))
+    html = _render_settings(monkeypatch, tmp_path)
+    assert 'digestId: "2001-02-03"' in html
+    assert 'notes: ["A note for 2001-02-03"]' in html
+
+
 def test_setup_keeps_first_interest_ahead_of_examples_and_storage_help(monkeypatch, tmp_path):
     html = _render_settings(monkeypatch, tmp_path, topics="")
 
@@ -174,6 +184,36 @@ def test_saving_plain_interests_preserves_existing_explicit_weight_and_context(m
     assert saved["canonical_facets"]["RNA delivery"] == {"priority": 17.5, "anchors": ["RNA transport"]}
     assert saved["canonical_facets"]["Hydrogels"]["priority"] == 1
     assert saved["bio"] == "Existing research context."
+
+
+def test_compact_editor_unrelated_save_preserves_relative_precision_and_topic_metadata(monkeypatch, tmp_path):
+    from dailydigest import web
+
+    profile = tmp_path / "profile.yaml"
+    profile.write_text(yaml.safe_dump({
+        "bio": "Original goal", "keywords": ["RNA delivery", "Hydrogels"],
+        "canonical_facets": {
+            "RNA delivery": {"priority": 17.5, "aliases": ["RNA transport"],
+                             "description": "Compare methods", "anchors": ["Original anchor"]},
+            "Hydrogels": {"priority": 1},
+        },
+    }))
+    monkeypatch.setattr(web, "_get_profile_path", lambda: profile)
+    monkeypatch.setattr(web, "_ENV_PATH", tmp_path / ".env")
+    response = asyncio.run(web.setup_post(_request("POST", "/setup", form={
+        "_csrf_token": web._CSRF_TOKEN, "topics": "RNA delivery | 17.5\nHydrogels | 1",
+        "topic_weight_mode": "relative", "llm_backend": "extractive", "bio": "Updated goal",
+        "topic_details": json.dumps({"RNA delivery": {"aliases": ["RNA transport"], "description": "Compare methods"}}),
+    })))
+
+    assert response.status_code == 303
+    saved = yaml.safe_load(profile.read_text())
+    assert saved["canonical_facets"]["RNA delivery"] == {
+        "priority": 17.5, "aliases": ["RNA transport"],
+        "description": "Compare methods", "anchors": ["Original anchor"],
+    }
+    assert saved["canonical_facets"]["Hydrogels"]["priority"] == 1
+    assert saved["bio"] == "Updated goal"
 
 
 def test_browser_validation_reveals_nested_closed_details():

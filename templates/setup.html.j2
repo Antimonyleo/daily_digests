@@ -155,6 +155,80 @@
   @media (max-width: 720px) {
     .field-grid, .section-option { grid-template-columns: 1fr; }
   }
+  .settings-refined .step { margin: 0; padding: 0; }
+  .settings-refined .topic-step { position: relative; margin-bottom: 18px; }
+  .settings-refined .topic-step h2 { color: var(--text); font-size: 20px; font-weight: 700; letter-spacing: 0; text-transform: none; margin-bottom: 10px; }
+  .settings-refined #interests-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+  .settings-refined .interest-list-head { display: grid; grid-template-columns: minmax(0, 1fr) 84px 48px; gap: 12px; color: var(--muted); font-size: 13px; padding: 4px 0; }
+  .settings-refined .interest-row { border: 0; border-bottom: 1px solid var(--border); border-radius: 0; padding: 0; margin: 0; }
+  .settings-refined #interest-editor .interest-heading { display: grid; grid-template-columns: minmax(0, 1fr) 84px 48px; align-items: center; gap: 12px; min-height: 52px; }
+  .settings-refined #interest-editor .interest-heading label.interest-weight-label { display: block; margin: 0; font-size: 12px; color: var(--muted); font-weight: 500; }
+  .settings-refined .interest-weight-wrap { display: flex; align-items: center; border: 1px solid var(--control-border); border-radius: 6px; padding-right: 9px; background: var(--card); }
+  .settings-refined .interest-weight-wrap input { min-width: 0; padding: 7px 3px 7px 6px; border: 0; text-align: right; font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; background: transparent; }
+  .settings-refined .interest-weight-wrap span { font-size: 14px; color: var(--muted); }
+  .settings-refined .interest-title { font-size: 16px; line-height: 1.4; overflow-wrap: anywhere; }
+  .settings-refined #interest-editor .interest-heading label.interest-name-field { display: block; }
+  .settings-refined .interest-name-field { margin: 0; font-size: 13px; }
+  .settings-refined .interest-name-field input { margin-top: 4px; }
+  .settings-refined .interest-heading > .interest-edit-button { grid-column: 3; grid-row: 1; justify-self: end; }
+  .settings-refined .interest-edit-button { padding: 8px 0; min-height: 40px; border: 0; background: transparent; color: var(--accent-strong); font-size: 14px; cursor: pointer; }
+  .settings-refined .interest-edit-panel { padding: 4px 0 16px; }
+  .settings-refined .interest-edit-panel details { margin-top: 0; }
+  .settings-refined .interest-edit-panel summary { font-size: 14px; min-height: 36px; padding: 7px 0; }
+  .settings-refined .interest-edit-actions { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
+  .settings-refined .interest-edit-actions [data-interest-remove] { margin-left: auto; }
+  .settings-refined .interest-actions { margin-top: 12px; }
+  .settings-refined #interest-total { color: var(--muted); font-size: 13px; }
+  .settings-refined #priority-options { border: 0; padding: 0; margin: 0 0 0 auto; max-width: 100%; }
+  .settings-refined #priority-options > summary { min-height: 38px; padding: 9px 0; }
+  .settings-refined #priority-options > summary { font-size: 13px; font-weight: 500; }
+  .settings-refined .settings-row { position: relative; border: 0; border-top: 1px solid var(--border); margin: 0; padding: 0; }
+  .settings-refined .settings-row > summary { display: grid; grid-template-columns: 190px minmax(0, 1fr) 12px; align-items: center; gap: 12px; padding: 16px 0; margin: 0; min-height: 58px; list-style: none; color: var(--text); font-size: 19px; font-weight: 700; line-height: 1.35; }
+  .settings-refined .settings-row > summary::-webkit-details-marker { display: none; }
+  .settings-refined .settings-row > summary::after { content: ''; width: 7px; height: 7px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(45deg); justify-self: end; margin-right: 2px; }
+  .settings-refined .settings-row[open] > summary::after { transform: rotate(225deg); }
+  .settings-refined .settings-row[open] { padding-bottom: 18px; }
+  .settings-refined .settings-value { font-size: 14px; font-weight: 400; color: var(--muted); line-height: 1.4; min-width: 0; overflow-wrap: anywhere; }
+  .settings-refined .settings-row[open] > summary .settings-value { visibility: hidden; }
+  .settings-refined .settings-row .settings-disclosure { margin-top: 12px; }
+  .settings-refined .section-options { gap: 0; margin-top: 0; }
+  .settings-refined .section-option { border: 0; border-bottom: 1px solid var(--border-soft); border-radius: 0; padding: 12px 0; gap: 16px; grid-template-columns: minmax(0, 1fr) 88px; }
+  .settings-refined .section-name { font-size: 16px; }
+  .settings-refined .section-desc { margin: 5px 0 0; font-size: 13px; max-width: 66ch; }
+  .settings-refined .count-field label { font-size: 13px; }
+  .settings-refined .opportunity-profile { padding: 16px 0 0; margin-top: 14px; border: 0; border-top: 1px solid var(--border); border-radius: 0; background: transparent; }
+  .settings-refined label { font-size: 14px; }
+  .settings-refined textarea, .settings-refined input[type=text], .settings-refined input[type=url], .settings-refined input[type=password], .settings-refined input[type=number], .settings-refined select { font-size: 15px; line-height: 1.45; }
+  .settings-refined .hint, .settings-refined .example-note { font-size: 13px; line-height: 1.45; }
+  .settings-refined .settings-help { position: relative; color: var(--muted); font-size: 13px; margin: 8px 0 0; }
+  .settings-refined .settings-help > summary { cursor: pointer; min-height: 30px; padding: 5px 0; font-size: 13px; font-weight: 500; }
+  .settings-refined .settings-topic-help { position: absolute; top: 0; right: 0; margin: 0; z-index: 10; }
+  .settings-refined .settings-topic-help > summary { display: grid; place-items: center; width: 30px; height: 30px; min-height: 30px; padding: 5px; list-style: none; }
+  .settings-refined .settings-topic-help > summary::-webkit-details-marker { display: none; }
+  .settings-refined .settings-topic-help svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.4; }
+  .settings-refined .settings-topic-help-body { position: absolute; top: 34px; right: 0; width: min(360px, calc(100vw - 72px)); max-height: 65vh; overflow-y: auto; padding: 12px 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--card); color: var(--copy-secondary); }
+  .settings-refined .settings-topic-help-body .hint { margin: 0 0 8px; }
+  .settings-refined .settings-help > p { max-width: 66ch; margin: 4px 0 8px; }
+  .settings-refined .settings-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 18px 0 0; margin-top: 0; }
+  .settings-refined .settings-actions .hint { flex-basis: 100%; margin: 0; }
+  .settings-refined .settings-actions .brew { width: auto; min-width: 150px; min-height: 44px; margin: 0; padding: 10px 18px; font-size: 15px; }
+  .settings-refined #topic-undo { font-size: 14px; margin: 8px 0; }
+  .settings-refined .embedded-paper-examples { border: 0; padding: 0; margin: 0; }
+  .settings-refined .embedded-paper-examples > summary { display: none; }
+  .settings-refined .settings-provider-choice { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  .settings-refined .settings-provider-choice label { margin: 0; }
+  .settings-refined .settings-provider-choice select { flex: 1; max-width: 520px; min-height: 44px; }
+  @media (max-width: 600px) {
+    .settings-refined .settings-row > summary { grid-template-columns: minmax(0, 1fr) 12px; gap: 4px 10px; font-size: 18px; }
+    .settings-refined .settings-row > summary .settings-value { grid-column: 1; }
+    .settings-refined .settings-row > summary::after { grid-column: 2; grid-row: 1 / span 2; }
+    .settings-refined .interest-list-head { grid-template-columns: minmax(0, 1fr) 74px 38px; gap: 8px; }
+    .settings-refined #interest-editor .interest-heading { grid-template-columns: minmax(0, 1fr) 74px 38px; gap: 8px; }
+    .settings-refined .interest-heading label:first-child { grid-column: auto; }
+    .settings-refined .interest-title { font-size: 15px; }
+    .settings-refined .section-option { grid-template-columns: minmax(0, 1fr) 76px; }
+    .settings-refined .settings-actions .brew { flex: 1; }
+  }
 {% endblock %}
 {% block body %}
 <div class="card">
@@ -215,7 +289,7 @@
       </aside>
       <details class="settings-disclosure" id="search-tips">
         <summary>Search tips and wording checks (optional)</summary>
-        <p class="hint">Priorities guide relative emphasis, not guaranteed digest slots. Adding or removing a topic adjusts the shares; old relative weights are converted to percentages when saved. Matching &amp; terminology lets you describe useful papers and add alternative search terms.</p>
+        <p class="hint">Priorities guide relative emphasis, not guaranteed digest slots. Adding or removing a topic adjusts the shares. Unchanged priorities retain their original precision. Matching &amp; terminology lets you describe useful papers and add alternative search terms.</p>
         <p class="hint">Suggest wording variants works locally from your supplied acronym or hyphenated wording. Check spelling in PubMed sends only the chosen interest to PubMed for spelling suggestions. PubMed is focused on biomedical literature; it may not recognize terms from other fields. Both are optional, and nothing is checked automatically. Accepting a suggestion changes searches and ranking only after saving. Specialist terms may have no suggestion.</p>
       </details>
 
@@ -564,14 +638,14 @@
       seen.add(key); return true;
     }).slice(0, 3);
   }
-  function percentages(weights) {
+  function percentages(weights, total = 100) {
     const count = weights.length;
     if (!count) return [];
     const sum = weights.reduce((a, b) => a + b, 0);
-    if (!(sum > 0)) return percentages(weights.map(() => 1));
-    const raw = weights.map(weight => 100 * weight / sum);
+    if (!(sum > 0)) return percentages(weights.map(() => 1), total);
+    const raw = weights.map(weight => total * weight / sum);
     const allocated = raw.map(weight => Math.max(1, Math.floor(weight)));
-    let difference = 100 - allocated.reduce((a, b) => a + b, 0);
+    let difference = total - allocated.reduce((a, b) => a + b, 0);
     // A forced 1% minimum has already received its rounding point.
     const order = raw.map((weight, index) => ({index, fraction: weight - allocated[index]})).sort((a, b) => b.fraction - a.fraction || a.index - b.index);
     for (let i = 0; difference > 0; i++, difference--) allocated[order[i % count].index]++;
@@ -583,11 +657,17 @@
     }
     return allocated;
   }
+  let baselineFormState = null;
+  let rowSequence = 0, weightsEdited = false, weightsTouched = false, loadedCount = 0, activeRow = null, removedTopic = null;
   function serialize() {
-    const result = [], data = {};
-    for (const row of rows.children) {
+    const result = [], data = Object.create(null);
+    const allRows = [...rows.children];
+    const preserveRaw = !weightsTouched && allRows.length === loadedCount && allRows.every(row => row.dataset.rawWeight !== undefined);
+    for (const row of allRows) {
       const name = row.querySelector('[data-interest-name]').value.trim();
-      const weight = row.querySelector('[data-interest-weight]').value;
+      const weight = preserveRaw ? row.dataset.rawWeight : row.querySelector('[data-interest-weight]').value;
+      const title = row.querySelector('[data-interest-title]');
+      if (title) title.textContent = name || 'New topic';
       if (name) {
         result.push(`${name} | ${weight}`);
         data[name] = {aliases: row.querySelector('[data-interest-aliases]').value.split(';').map(term => term.trim()).filter(Boolean), description: row.querySelector('[data-interest-description]').value.trim()};
@@ -595,37 +675,97 @@
       }
     }
     topics.value = result.join('\n'); details.value = JSON.stringify(data);
-    const sum = [...rows.querySelectorAll('[data-interest-weight]')].reduce((total, input) => total + Number(input.value || 0), 0);
+    document.getElementById('topic-weight-mode').value = preserveRaw ? 'relative' : 'percentage';
     const inputs = [...rows.querySelectorAll('[data-interest-weight]')];
-    const valid = sum === 100 && inputs.every(input => Number.isInteger(Number(input.value)) && Number(input.value) >= 1 && Number(input.value) <= 100);
+    const sum = inputs.reduce((total, input) => total + Number(input.value || 0), 0);
+    const individuallyValid = inputs.every(input => Number.isInteger(Number(input.value)) && Number(input.value) >= 1 && Number(input.value) <= 101 - inputs.length);
+    const valid = sum === 100 && individuallyValid;
     const reminder = sum < 100 ? ` · ${100 - sum}% left to assign` : sum > 100 ? ` · ${sum - 100}% over` : ' · use whole percentages';
-    document.getElementById('interest-total').textContent = `Total: ${sum}%${valid ? ' · ready to save' : reminder + ' · normalize before saving'}`;
-    if (inputs.length) inputs[0].setCustomValidity(valid ? '' : 'Use whole-number percentages totaling 100%. Choose Normalize to 100% to adjust them.');
+    document.getElementById('interest-total').textContent = valid ? '' : `Total: ${sum}%${reminder}`;
+    inputs.forEach(input => { input.max = String(101 - inputs.length); input.setCustomValidity(''); });
+    if (inputs.length && individuallyValid && !valid) inputs[0].setCustomValidity('Use whole-number percentages totaling 100%. Choose Normalize to 100% to adjust the shares.');
     document.getElementById('add-interest').disabled = rows.children.length >= 10;
+    if (baselineFormState !== null) markUnsaved();
   }
-  let rowSequence = 0, weightsEdited = false;
+  function finishEditing(row, keep = true) {
+    if (!row) return true;
+    const name = row.querySelector('[data-interest-name]');
+    if (keep && !name.checkValidity()) { name.reportValidity(); return false; }
+    if (!keep && row.creationSnapshot) {
+      const snapshot = row.creationSnapshot; row.remove(); activeRow = null;
+      for (const [existing, weight] of snapshot.weights) if (existing.isConnected) existing.querySelector('[data-interest-weight]').value = weight;
+      weightsTouched = snapshot.touched; weightsEdited = snapshot.edited; serialize();
+      document.getElementById('add-interest').focus(); return true;
+    }
+    if (!keep && row.editSnapshot) {
+      for (const [selector, value] of Object.entries(row.editSnapshot.fields)) row.querySelector(selector).value = value;
+      if (row.editSnapshot.previousName) row.dataset.correctedFrom = row.editSnapshot.previousName;
+      else delete row.dataset.correctedFrom;
+      name.dispatchEvent(new Event('input', {bubbles: true}));
+    }
+    row.querySelector('.interest-name-field').hidden = true;
+    row.querySelector('[data-interest-title]').hidden = false;
+    row.querySelector('.interest-edit-panel').hidden = true;
+    row.querySelector('[data-interest-edit]').setAttribute('aria-expanded', 'false');
+    if (activeRow === row) activeRow = null;
+    delete row.creationSnapshot; serialize(); return true;
+  }
+  function beginEditing(row, focus = true) {
+    if (activeRow && activeRow !== row && !finishEditing(activeRow)) return false;
+    if (activeRow !== row) row.editSnapshot = {fields: Object.fromEntries(['[data-interest-name]', '[data-interest-aliases]', '[data-interest-description]'].map(selector => [selector, row.querySelector(selector).value])), previousName: row.dataset.correctedFrom || ''};
+    activeRow = row;
+    row.querySelector('.interest-name-field').hidden = false;
+    row.querySelector('[data-interest-title]').hidden = true;
+    row.querySelector('.interest-edit-panel').hidden = false;
+    row.querySelector('[data-interest-edit]').setAttribute('aria-expanded', 'true');
+    if (focus) row.querySelector('[data-interest-name]').focus();
+    return true;
+  }
+  function commitPriority(input) {
+    const value = Number(input.value), others = [...rows.querySelectorAll('[data-interest-weight]')].filter(field => field !== input);
+    if (!Number.isInteger(value) || value < 1 || value > 100 - others.length || (!others.length && value !== 100)) { serialize(); return; }
+    if (others.length) percentages(others.map(field => Math.max(1, Number(field.value) || 1)), 100 - value).forEach((weight, index) => { others[index].value = weight; });
+    weightsTouched = true; weightsEdited = true; serialize();
+  }
   function addRow(name = '', weight = 100, detail = {}) {
     const row = document.createElement('div'); row.className = 'interest-row';
     const originalFacetName = detail.previous_name || name;
     if (detail.previous_name) row.dataset.correctedFrom = detail.previous_name;
     // This markup is constant; reader text is assigned through .value only.
-    row.innerHTML = '<div class="interest-heading"><label>Interest<input data-interest-name type="text" required maxlength="160" placeholder="e.g. battery materials or galaxy formation"></label><label>Priority %<input data-interest-weight type="number" min="1" max="100" step="1" required></label><button class="btn" type="button">Remove</button></div><details><summary>Matching &amp; terminology (optional)</summary><label>What would make a paper useful?<textarea data-interest-description maxlength="600" placeholder="e.g. Explain mechanisms and compare methods; include introductory reviews for concepts I am learning."></textarea></label><p class="hint">This description guides ranking within this topic. Mention useful methods, applications or background; topic names and alternative terms guide searches.</p><label>Alternative search terms, separated by semicolons<input data-interest-aliases type="text" placeholder="Other names or established abbreviations for this topic"></label></details>';
+    row.innerHTML = '<div class="interest-heading"><div><span class="interest-title" data-interest-title></span><label class="interest-name-field" hidden>Topic<input data-interest-name type="text" required maxlength="160" placeholder="e.g. battery materials or galaxy formation"></label></div><label class="interest-weight-label"><span class="sr-only">Priority percentage</span><span class="interest-weight-wrap"><input data-interest-weight type="number" min="1" max="100" step="1" required><span aria-hidden="true">%</span></span></label><button class="interest-edit-button" data-interest-edit type="button" aria-expanded="false">Edit</button></div><div class="interest-edit-panel" hidden><details><summary>Matching &amp; terminology</summary><label>What would make a paper useful?<textarea data-interest-description maxlength="600" placeholder="e.g. Explain mechanisms and compare methods; include introductory reviews for concepts I am learning."></textarea></label><p class="hint">Describe useful methods, applications or background. Topic names and alternative terms guide searches.</p><label>Alternative search terms, separated by semicolons<input data-interest-aliases type="text" placeholder="Other names or established abbreviations for this topic"></label></details><div class="interest-edit-actions"><button class="btn" data-interest-done type="button">Done</button><button class="btn" data-interest-cancel type="button">Cancel</button><button class="btn" data-interest-remove type="button">Remove</button></div></div>';
     const number = ++rowSequence;
     for (const [selector, label] of [['[data-interest-name]', 'Research topic'], ['[data-interest-weight]', 'Priority percentage'], ['[data-interest-aliases]', 'Alternative terms'], ['[data-interest-description]', 'Useful paper description']]) {
       row.querySelector(selector).setAttribute('aria-label', `${label} ${number}`);
     }
-    row.querySelector('button').setAttribute('aria-label', `Remove research topic ${number}`);
-    row.querySelector('[data-interest-weight]').addEventListener('input', () => { weightsEdited = true; });
+    const editButton = row.querySelector('[data-interest-edit]');
+    editButton.setAttribute('aria-label', `Edit research topic ${number}`);
+    row.querySelector('[data-interest-remove]').setAttribute('aria-label', `Remove research topic ${number}`);
+    const panel = row.querySelector('.interest-edit-panel'); panel.id = `interest-edit-${number}`;
+    editButton.setAttribute('aria-controls', panel.id);
+    editButton.addEventListener('click', () => activeRow === row ? finishEditing(row) : beginEditing(row));
+    row.querySelector('[data-interest-name]').addEventListener('keydown', event => {
+      if (event.key === 'Enter') { event.preventDefault(); if (finishEditing(row)) editButton.focus(); }
+      if (event.key === 'Escape') { event.preventDefault(); finishEditing(row, false); editButton.focus(); }
+    });
+    row.querySelector('[data-interest-done]').addEventListener('click', () => { if (finishEditing(row)) editButton.focus(); });
+    row.querySelector('[data-interest-cancel]').addEventListener('click', () => { finishEditing(row, false); editButton.focus(); });
+    const weightInput = row.querySelector('[data-interest-weight]');
+    weightInput.addEventListener('input', () => { weightsEdited = true; weightsTouched = true; });
+    weightInput.addEventListener('change', () => commitPriority(weightInput));
+    weightInput.addEventListener('keydown', event => { if (event.key === 'Enter') { event.preventDefault(); commitPriority(weightInput); } });
     row.querySelector('[data-interest-name]').value = name;
     row.querySelector('[data-interest-weight]').value = weight;
     row.querySelector('[data-interest-aliases]').value = (detail.aliases || []).join('; ');
     row.querySelector('[data-interest-description]').value = detail.description || '';
-    row.querySelector('button').addEventListener('click', () => {
+    row.querySelector('[data-interest-remove]').addEventListener('click', () => {
       const next = row.nextElementSibling || row.previousElementSibling;
-      row.remove();
-      if (!rows.children.length) { weightsEdited = false; addRow(); }
+      removedTopic = {row, next: row.nextElementSibling, weights: [...rows.children].map(item => [item, item.querySelector('[data-interest-weight]').value]), touched: weightsTouched, edited: weightsEdited};
+      row.remove(); activeRow = null; weightsTouched = true;
+      document.getElementById('topic-undo').hidden = false;
+      if (!rows.children.length) { weightsEdited = false; addRow(); removedTopic.placeholder = rows.lastElementChild; }
       distribute(!weightsEdited);
-      (next || rows.firstElementChild).querySelector('[data-interest-name]').focus();
+      removedTopic.afterWeights = [...rows.children].map(item => [item, item.querySelector('[data-interest-weight]').value]);
+      (next || rows.firstElementChild).querySelector('[data-interest-edit]').focus();
     });
     const aliasInput = row.querySelector('[data-interest-aliases]');
     const variantActions = document.createElement('div'); variantActions.className = 'interest-actions';
@@ -702,7 +842,11 @@
       nameInput.focus();
     });
     dismiss.addEventListener('click', () => { clearSuggestion(); spellingStatus.textContent = 'Your wording was kept.'; nameInput.focus(); });
+    nameInput.addEventListener('input', () => {
+      if (originalFacetName && nameInput.value.trim() !== originalFacetName) row.dataset.correctedFrom = originalFacetName;
+    });
     row.addEventListener('input', serialize); rows.append(row);
+    if (!name.trim()) beginEditing(row, false);
   }
   function loadRows() {
     try { metadata = JSON.parse(details.value || '{}'); } catch (_) { metadata = {}; }
@@ -714,8 +858,8 @@
     const converted = {{ 'true' if errors and form.topic_weight_mode | default('') == 'percentage' else 'false' }} ? weights : percentages(weights);
     const equalShares = percentages(weights.map(() => 1));
     weightsEdited = converted.some((weight, index) => weight !== equalShares[index]);
-    rows.replaceChildren();
-    configured.forEach((row, index) => addRow(row.name, converted[index], metadata[row.name] || {}));
+    rows.replaceChildren(); activeRow = null; weightsTouched = {{ 'true' if errors and form.topic_weight_mode | default('') == 'percentage' else 'false' }}; loadedCount = configured.length;
+    configured.forEach((row, index) => { addRow(row.name, converted[index], metadata[row.name] || {}); rows.lastElementChild.dataset.rawWeight = String(row.weight); });
     if (!configured.length) addRow();
     serialize();
   }
@@ -728,18 +872,45 @@
   topics.addEventListener('input', loadRows); topics.addEventListener('change', loadRows);
   document.getElementById('add-interest').addEventListener('click', () => {
     if (rows.children.length >= 10) return;
-    addRow('', 1);
-    distribute(!weightsEdited); rows.lastElementChild.querySelector('input').focus();
+    if (activeRow && !finishEditing(activeRow)) return;
+    const snapshot = {weights: [...rows.children].map(row => [row, row.querySelector('[data-interest-weight]').value]), touched: weightsTouched, edited: weightsEdited};
+    addRow('', 1); rows.lastElementChild.creationSnapshot = snapshot; weightsTouched = true;
+    distribute(!weightsEdited); beginEditing(rows.lastElementChild);
   });
   function distribute(even) {
+    weightsTouched = true;
     const inputs = [...rows.querySelectorAll('[data-interest-weight]')];
     const weights = percentages(inputs.map(input => even ? 1 : Math.max(0, Number(input.value) || 0)));
     inputs.forEach((input, index) => { input.value = weights[index]; });
     serialize();
   }
+  const undoTopic = document.createElement('div'); undoTopic.id = 'topic-undo'; undoTopic.hidden = true; undoTopic.setAttribute('role', 'status');
+  const undoText = document.createElement('span'); undoText.textContent = 'Topic removed. ';
+  const undoButton = document.createElement('button'); undoButton.type = 'button'; undoButton.className = 'btn'; undoButton.textContent = 'Undo';
+  undoTopic.append(undoText, undoButton); rows.after(undoTopic);
+  undoButton.addEventListener('click', () => {
+    if (!removedTopic) return;
+    const saved = removedTopic;
+    const unchanged = saved.afterWeights.length === rows.children.length && saved.afterWeights.every(([row, weight]) => row.isConnected && row.querySelector('[data-interest-weight]').value === weight);
+    saved.placeholder?.remove();
+    rows.insertBefore(saved.row, saved.next?.isConnected ? saved.next : null);
+    if (unchanged) {
+      for (const [row, weight] of saved.weights) if (row.isConnected) row.querySelector('[data-interest-weight]').value = weight;
+      weightsTouched = saved.touched; weightsEdited = saved.edited;
+    } else {
+      const restored = saved.row.querySelector('[data-interest-weight]');
+      restored.value = Math.min(Number(restored.value), 101 - rows.children.length);
+      commitPriority(restored);
+    }
+    removedTopic = null; undoTopic.hidden = true;
+    if (saved.row.querySelector('[data-interest-name]').value.trim()) finishEditing(saved.row);
+    else beginEditing(saved.row, false);
+    serialize(); markUnsaved(); saved.row.querySelector('[data-interest-edit]').focus();
+  });
   document.getElementById('normalize-interests').addEventListener('click', () => distribute(false));
   document.getElementById('even-interests').addEventListener('click', () => { weightsEdited = false; distribute(true); });
   topics.form.addEventListener('submit', event => {
+    if (activeRow && !finishEditing(activeRow)) { event.preventDefault(); return; }
     serialize();
     if (!topics.form.checkValidity()) { event.preventDefault(); topics.form.reportValidity(); }
   });
@@ -757,7 +928,7 @@
     topics.form.dispatchEvent(new Event('input', {bubbles: true}));
     exampleButton.disabled = true;
     document.getElementById('example-profile-note').textContent = 'Example loaded. Make it your own, then save when you’re ready.';
-    rows.querySelector('input').focus();
+    rows.querySelector('[data-interest-edit]').focus();
   });
   const timezoneInput = document.getElementById("user-timezone");
   try {
@@ -809,9 +980,10 @@
     const init = (hidden.value || "").split(",").map((s) => s.trim()).filter(Boolean);
     init.forEach((v) => chips.push(v));
     render();
+    return () => { chips.splice(0, chips.length, ...hidden.value.split(',').map(value => value.trim()).filter(Boolean)); text.value = ''; render(); };
   }
 
-	  makeChipInput("dw-input", "dw-text", "dw-hidden");
+	  const resetDownweight = makeChipInput("dw-input", "dw-text", "dw-hidden");
 
 	  const errors = document.querySelector(".errors");
 	  if (errors) errors.focus();
@@ -819,13 +991,19 @@
   // Reveal invalid fields before native validation focuses them.
   const settingsForm = document.querySelector('form[action="/setup"]');
   const saveStatus = document.getElementById('settings-save-status');
-  const markUnsaved = () => { saveStatus.textContent = 'Unsaved changes. Save to apply your settings.'; };
+  const formState = () => new URLSearchParams(new FormData(settingsForm)).toString();
+  const markUnsaved = () => {
+    const dirty = baselineFormState !== null && formState() !== baselineFormState;
+    settingsForm.dataset.dirty = String(dirty);
+    saveStatus.textContent = dirty ? 'Unsaved changes. Save to apply your settings.' : '';
+  };
   settingsForm.addEventListener('input', markUnsaved);
   settingsForm.addEventListener('change', markUnsaved);
   settingsForm.addEventListener('click', (event) => {
     if (event.target.closest('#add-interest, #even-interests, #normalize-interests, .interest-heading button, .chip')) markUnsaved();
   });
   settingsForm.addEventListener("invalid", (event) => {
+    if (event.target.matches('[data-interest-name]')) beginEditing(event.target.closest('.interest-row'), false);
     if (event.target.matches('[data-interest-weight]')) {
       priorities.open = true;
       showPriorities();
@@ -851,6 +1029,7 @@
     claude_cli: { base: "", model: "haiku" },
     codex_cli: { base: "", model: "" },
   };
+  let providerSelect = null, providerDescription = null;
   let activeBackend = (document.querySelector('input[name="llm_backend"]:checked') || {}).value || "extractive";
 
   function refresh() {
@@ -858,6 +1037,10 @@
     const v = sel ? sel.value : "extractive";
     const isApi = v === "api" || v === "anthropic";
     const isCli = v === "claude_cli" || v === "codex_cli";
+    if (providerSelect) {
+      providerSelect.value = v;
+      providerDescription.textContent = v === 'extractive' ? '' : (sel.closest('label').querySelector('.desc')?.textContent.trim() || '');
+    }
     summaryCurrent.textContent = v === "extractive" ? "Local extractive" : sel.closest("label").querySelector("strong").textContent;
     apiFields.hidden = !(isApi || isCli);
     apiAuthFields.hidden = !isApi;
@@ -967,6 +1150,108 @@
     if (toggle) toggle.addEventListener("change", refreshOpportunityProfile);
   });
   refreshOpportunityProfile();
+
+  // Present the complete production form as compact, readable groups.
+  function labelWithValue(title, value) {
+    const heading = document.createElement('span'); heading.textContent = title;
+    const current = document.createElement('span'); current.className = 'settings-value'; current.textContent = value;
+    return [heading, current];
+  }
+  function settingsRow(id, title, value = '') {
+    const group = document.createElement('details'); group.id = id; group.className = 'settings-row settings-disclosure';
+    const summary = document.createElement('summary'); summary.append(...labelWithValue(title, value));
+    summary.title = id === 'digest-sections' ? 'Choose sections and maximum items. Research is always included.' : 'Follow full researcher names. Ambiguous identities are not guessed.';
+    group.append(summary); return group;
+  }
+  function helpFor(node, title = 'Help & details') {
+    const help = document.createElement('details'); help.className = 'settings-help';
+    const summary = document.createElement('summary'); summary.textContent = title; summary.title = node.textContent.trim();
+    help.append(summary, node); return help;
+  }
+  const listHead = document.createElement('div'); listHead.className = 'interest-list-head'; listHead.setAttribute('aria-hidden', 'true');
+  listHead.innerHTML = '<span></span><span>Priority</span><span></span>'; rows.before(listHead);
+  const topicStep = editor.closest('.step'); topicStep.classList.add('topic-step');
+  topicStep.querySelector('h2').textContent = 'Research topics';
+  if (!{{ 'true' if first_run | default(not form.topics) else 'false' }}) { document.querySelector('.lede').hidden = true; document.getElementById('example-profile-note').hidden = true; }
+  const searchTips = document.getElementById('search-tips'); searchTips.classList.add('settings-help');
+  searchTips.classList.add('settings-topic-help');
+  const topicHelpSummary = searchTips.querySelector('summary'); topicHelpSummary.setAttribute('aria-label', 'Research topic help'); topicHelpSummary.title = 'How priorities, search terms and wording checks work.';
+  topicHelpSummary.innerHTML = '<svg aria-hidden="true" viewBox="0 0 20 20"><circle cx="10" cy="10" r="7.5"></circle><path d="M7.8 7.5a2.3 2.3 0 0 1 4.5.5c0 1.7-2.3 1.8-2.3 3.4M10 13.3v1"></path></svg>';
+  const topicHelpBody = document.createElement('div'); topicHelpBody.className = 'settings-topic-help-body';
+  for (const node of [...searchTips.children]) if (node !== topicHelpSummary) topicHelpBody.append(node);
+  searchTips.append(topicHelpBody);
+  searchTips.addEventListener('pointerenter', event => { if (event.pointerType === 'mouse') searchTips.open = true; });
+  searchTips.addEventListener('pointerleave', () => { if (!searchTips.contains(document.activeElement)) searchTips.open = false; });
+  searchTips.addEventListener('focusin', () => { if (topicHelpSummary.matches(':focus-visible')) searchTips.open = true; });
+  searchTips.addEventListener('keydown', event => { if (event.key === 'Escape') { event.preventDefault(); searchTips.open = false; } });
+  editor.querySelector(':scope > .interest-actions').append(priorities);
+  const repeatedPriorityHint = editor.querySelector(':scope > .hint.priority-control'); if (repeatedPriorityHint) repeatedPriorityHint.hidden = true;
+  document.getElementById('priority-options').querySelector('summary').textContent = 'Balance priorities';
+  document.querySelector('#priority-options .hint').textContent = 'Priorities guide relative emphasis, not paper counts. Valid edits redistribute the other topics proportionally. Keep a total of 100%.';
+  const sections = document.querySelector('.section-options').closest('.step');
+  const sectionGroup = settingsRow('digest-sections', 'Digest sections'); sections.before(sectionGroup); sectionGroup.append(sections);
+  sections.querySelector('h2').hidden = true;
+  const advanced = document.getElementById('advanced-interests'); advanced.classList.add('settings-row');
+  advanced.querySelector('summary').replaceChildren(...labelWithValue('Examples & interests', ''));
+  advanced.querySelector('summary').title = 'Add useful paper titles and background topics to refine matching.';
+  const papers = document.getElementById('paper-examples'); advanced.prepend(papers); papers.open = true; papers.classList.add('embedded-paper-examples');
+  const authorGroup = settingsRow('author-settings', 'Researchers to follow');
+  const author = document.getElementById('authors_of_interest');
+  authorGroup.append(document.querySelector('label[for="authors_of_interest"]'), author);
+  const authorHint = document.getElementById('authors-hint'); authorGroup.append(helpFor(authorHint));
+  author.placeholder = 'A researcher’s full name\nAnother researcher’s full name';
+  const context = document.getElementById('context_keywords'); context.placeholder = 'A nearby field to stay informed about\nA background method or research area';
+  const extraHint = advanced.querySelector(':scope > p.hint'); if (extraHint) advanced.append(helpFor(extraHint));
+  const summaryGroup = document.getElementById('summary-options'); summaryGroup.classList.add('settings-row');
+  const summaryHeading = document.createElement('span'); summaryHeading.textContent = 'Summaries'; summaryCurrent.className = 'settings-value';
+  summaryGroup.querySelector(':scope > summary').replaceChildren(summaryHeading, summaryCurrent);
+  summaryGroup.querySelector(':scope > summary').title = 'Choose local summaries or an explicitly configured provider.';
+  const providerIntro = summaryGroup.querySelector(':scope > p.hint'); if (providerIntro) summaryGroup.append(helpFor(providerIntro));
+  const providerChoice = document.createElement('div'); providerChoice.className = 'settings-provider-choice';
+  const providerLabel = document.createElement('label'); providerLabel.htmlFor = 'summary-backend'; providerLabel.textContent = 'Method';
+  providerSelect = document.createElement('select'); providerSelect.id = 'summary-backend';
+  for (const radio of radios) { const option = document.createElement('option'); option.value = radio.value; option.textContent = radio.value === 'extractive' ? 'Local extractive' : radio.closest('label').querySelector('strong').textContent; option.disabled = radio.disabled; providerSelect.append(option); }
+  providerDescription = document.createElement('p'); providerDescription.className = 'hint';
+  providerChoice.append(providerLabel, providerSelect);
+  const backendCards = summaryGroup.querySelector('.backends'); backendCards.before(providerChoice, providerDescription); backendCards.hidden = true;
+  providerSelect.addEventListener('change', () => { const radio = [...radios].find(field => field.value === providerSelect.value); radio.checked = true; radio.dispatchEvent(new Event('change', {bubbles: true})); });
+  window.addEventListener('dd-companion-capabilities', () => { for (const option of providerSelect.options) option.disabled = [...radios].find(radio => radio.value === option.value)?.disabled || false; });
+  refresh();
+  const profileGroup = document.getElementById('profile-options'); profileGroup.classList.add('settings-row');
+  profileGroup.querySelector('summary').replaceChildren(...labelWithValue('Research context', ''));
+  profileGroup.querySelector('summary').title = 'Your current goal, name and topics to see less often.';
+  if (!{{ 'true' if first_run | default(not form.topics) else 'false' }}) {
+    const bio = document.getElementById('bio'); profileGroup.querySelector('summary').after(document.querySelector('label[for="bio"]'), bio, document.getElementById('bio-hint'));
+  }
+  const actions = document.querySelector('.settings-actions');
+  actions.querySelector('button[type="submit"]').textContent = 'Save settings';
+  actions.before(sectionGroup, summaryGroup, authorGroup, advanced, profileGroup);
+  if ({{ 'true' if errors else 'false' }}) for (const group of [sectionGroup, authorGroup, advanced, profileGroup, summaryGroup]) group.open = true;
+  function updateSettingsSummaries() {
+    const enabled = [...document.querySelectorAll('input[role="switch"]')].filter(toggle => toggle.checked).length + 1;
+    sectionGroup.querySelector('.settings-value').textContent = `${enabled} section${enabled === 1 ? '' : 's'}`;
+    const authors = author.value.split('\n').filter(value => value.trim());
+    authorGroup.querySelector('.settings-value').textContent = authors.length ? `${authors.length} researcher${authors.length === 1 ? '' : 's'}` : '';
+    const seeds = document.getElementById('seed_works').value.split('\n').filter(value => value.trim()).length;
+    const background = context.value.split('\n').filter(value => value.trim()).length;
+    advanced.querySelector(':scope > summary .settings-value').textContent = [seeds ? `${seeds} example${seeds === 1 ? '' : 's'}` : '', background ? `${background} background topic${background === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ');
+    const bio = document.getElementById('bio').value.trim();
+    profileGroup.querySelector('.settings-value').textContent = bio.length > 72 ? bio.slice(0, 71) + '…' : bio;
+  }
+  settingsForm.addEventListener('input', updateSettingsSummaries); settingsForm.addEventListener('change', updateSettingsSummaries); updateSettingsSummaries();
+  document.querySelectorAll('#browser-storage-note button').forEach(button => button.classList.add('btn'));
+  const firstFields = [...settingsForm.elements].filter(field => field.name && !field.matches('[data-interest-name], [data-interest-weight], [data-interest-aliases], [data-interest-description]')).map(field => ({field, value: field.value, checked: field.checked}));
+  const cancelChanges = document.createElement('button'); cancelChanges.type = 'button'; cancelChanges.id = 'cancel-settings'; cancelChanges.className = 'btn'; cancelChanges.textContent = 'Cancel changes'; actions.append(cancelChanges);
+  cancelChanges.addEventListener('click', () => {
+    for (const {field, value, checked} of firstFields) { field.value = value; if (typeof checked === 'boolean') field.checked = checked; }
+    loadRows(); removedTopic = null; undoTopic.hidden = true; resetDownweight();
+    activeBackend = document.querySelector('input[name="llm_backend"]:checked').value; refresh(); invalidateConnection();
+    document.querySelectorAll('input[role="switch"]').forEach(toggle => toggle.dispatchEvent(new Event('change')));
+    refreshOpportunityProfile(); updateSettingsSummaries(); markUnsaved(); saveStatus.textContent = 'Form reset.';
+  });
+  settingsForm.classList.add('settings-refined');
+  baselineFormState = formState(); settingsForm.dataset.dirty = 'false';
+  if (!errors) saveStatus.textContent = '';
 })();
 </script>
 {% endblock %}

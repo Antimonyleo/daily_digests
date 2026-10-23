@@ -18,6 +18,7 @@ function mountPip(root, { digestId, notes = [] } = {}) {
   const controller = new window.AbortController();
   let disposed = false;
   let observer = null;
+  let bubbleObserver = null;
   const teaText = find("tea-note-text");
   const teaButton = find("tea-another");
   const teaBreak = find("tea-break");
@@ -25,7 +26,11 @@ function mountPip(root, { digestId, notes = [] } = {}) {
   const teaLeafCount = find("tea-leaf-count");
   const teaLeafStorageKey = "dailydigest-tea-leaves:" + digestId;
   const pipPositionStorageKey = "dailydigest-pip-position";
-  const teaBreakOver = "Tea break over—time to read? I’ll keep your cup warm.";
+  const pipChatStorageKey = "dailydigest-pip-chat";
+  const teaDialog = instance.querySelector(".tea-dialog");
+  const teaBreakOver = "Your cup is full. I’ll keep it warm while you read.";
+  let chatOpen = false;
+  try { chatOpen = localStorage.getItem(pipChatStorageKey) === "open"; } catch (_) {}
   let teaLeaves = 0;
   try {
     const savedTeaLeaves = Number.parseInt(localStorage.getItem(teaLeafStorageKey) || "0", 10);
@@ -35,7 +40,6 @@ function mountPip(root, { digestId, notes = [] } = {}) {
   const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
   const pipDock = window.matchMedia("(min-width: 1440px)");
   let pipDrag = null;
-  let pipPresetIndex = 0;
   let pipLandTimer = null;
 
   function syncTeaBreakState() {
@@ -44,31 +48,59 @@ function mountPip(root, { digestId, notes = [] } = {}) {
     if (teaLeaves < 10) {
       if (TEA_NOTES.length) teaText.textContent = TEA_NOTES[teaLeaves % TEA_NOTES.length];
       if (teaBreak) teaBreak.dataset.noteKind = teaText.textContent.startsWith("Lab joke") ? "joke" : "fact";
+      fitPipBubble();
       return;
     }
     teaText.textContent = teaBreakOver;
-    teaButton.setAttribute("aria-label", "Tea break complete after ten tea leaves");
-    teaButton.setAttribute("title", "Tea break complete");
+    teaButton.setAttribute("aria-label", "Ten leaves in Pip’s cup");
+    teaButton.setAttribute("title", "Your cup is full");
     teaButton.disabled = true;
     if (teaBreak) teaBreak.dataset.noteKind = "fact";
+    fitPipBubble();
+  }
+
+  function fitPipBubble() {
+    if (!teaDialog || !chatOpen || !teaPet || !teaPet.getClientRects().length) return;
+    const dock = teaPet.getBoundingClientRect();
+    const leaf = teaButton?.getBoundingClientRect();
+    const top = Math.min(dock.top, leaf?.top ?? dock.top);
+    const bottom = Math.max(dock.bottom, leaf?.bottom ?? dock.bottom);
+    const aboveSpace = Math.max(0, top - 22);
+    const belowSpace = Math.max(0, window.innerHeight - bottom - 22);
+    teaDialog.style.maxHeight = `${Math.max(44, Math.max(aboveSpace, belowSpace))}px`;
+    const width = teaDialog.offsetWidth, height = teaDialog.offsetHeight;
+    teaDialog.style.left = `${Math.round(Math.max(8, Math.min(window.innerWidth - width - 8, dock.left)))}px`;
+    const above = top - height - 14;
+    const below = bottom + 14;
+    teaDialog.style.top = `${Math.round(Math.max(8, Math.min(window.innerHeight - height - 8, above >= 8 ? above : below)))}px`;
+  }
+
+  function setPipChat(open, persist = true) {
+    chatOpen = Boolean(open);
+    teaBreak.dataset.chat = chatOpen ? "open" : "closed";
+    teaPet?.setAttribute("aria-expanded", String(chatOpen));
+    if (persist) {
+      try { localStorage.setItem(pipChatStorageKey, chatOpen ? "open" : "closed"); } catch (_) {}
+    }
+    fitPipBubble();
   }
 
   function clampPipPosition(x, y) {
     if (!teaBreak) return { x: 0, y: 0 };
-    const width = teaBreak.offsetWidth;
-    const height = teaBreak.offsetHeight;
     return {
-      x: Math.max(8, Math.min(window.innerWidth - width - 8, x)),
-      y: Math.max(8, Math.min(window.innerHeight - height - 8, y)),
+      x: Math.max(8, Math.min(window.innerWidth - teaBreak.offsetWidth - 8, x)),
+      y: Math.max(8, Math.min(window.innerHeight - teaBreak.offsetHeight - 8, y)),
     };
   }
 
   function setPipPosition(x, y, persist = true) {
-    if (!teaBreak || !pipDock.matches) return;
+    if (!teaBreak) return;
+    teaBreak.dataset.positioned = "true";
     const point = clampPipPosition(x, y);
     teaBreak.style.left = `${Math.round(point.x)}px`;
     teaBreak.style.top = `${Math.round(point.y)}px`;
     teaBreak.style.bottom = "auto";
+    fitPipBubble();
     if (persist) {
       try { localStorage.setItem(pipPositionStorageKey, JSON.stringify(point)); } catch (_) {}
     }
@@ -76,50 +108,29 @@ function mountPip(root, { digestId, notes = [] } = {}) {
 
   function resetPipPosition(clearSaved = true) {
     if (!teaBreak) return;
-    teaBreak.style.removeProperty("left");
-    teaBreak.style.removeProperty("top");
-    teaBreak.style.removeProperty("bottom");
+    delete teaBreak.dataset.positioned;
+    for (const name of ["left", "top", "bottom"]) teaBreak.style.removeProperty(name);
     if (clearSaved) {
       try { localStorage.removeItem(pipPositionStorageKey); } catch (_) {}
     }
+    fitPipBubble();
   }
 
   function restorePipPosition() {
     if (teaBreak && !teaBreak.getClientRects().length) return;
     const moveHelp = find("pip-move-help");
-    if (moveHelp) moveHelp.hidden = !pipDock.matches;
+    if (moveHelp) moveHelp.hidden = false;
     if (teaPet) {
-      teaPet.tabIndex = pipDock.matches ? 0 : -1;
-      teaPet.setAttribute("role", pipDock.matches ? "button" : "img");
-      teaPet.setAttribute("aria-label", pipDock.matches
-        ? "Move Pip. Drag with a pointer, use arrow keys, or press Home to reset."
-        : "Pip, your tea-cup companion");
-      if (pipDock.matches) teaPet.setAttribute("aria-describedby", "pip-move-help");
-      else teaPet.removeAttribute("aria-describedby");
-    }
-    if (!teaBreak || !pipDock.matches) {
-      resetPipPosition(false);
-      return;
+      teaPet.tabIndex = 0;
+      teaPet.setAttribute("role", "button");
+      teaPet.setAttribute("aria-label", "Pip. Select for a fact or joke; drag or use arrow keys to move.");
+      teaPet.setAttribute("aria-describedby", "pip-move-help");
     }
     try {
       const saved = JSON.parse(localStorage.getItem(pipPositionStorageKey) || "null");
-      if (saved && Number.isFinite(saved.x) && Number.isFinite(saved.y)) {
-        setPipPosition(saved.x, saved.y, false);
-      }
+      if (saved && Number.isFinite(saved.x) && Number.isFinite(saved.y)) setPipPosition(saved.x, saved.y, false);
     } catch (_) {}
-  }
-
-  function cyclePipPosition() {
-    if (!teaBreak || !pipDock.matches) return;
-    const rect = teaBreak.getBoundingClientRect();
-    const sideGap = Math.max(12, window.innerWidth / 2 - 714);
-    const presets = [
-      { x: sideGap, y: window.innerHeight - rect.height - 18 },
-      { x: sideGap, y: 72 },
-      { x: window.innerWidth - sideGap - rect.width, y: 72 },
-    ];
-    pipPresetIndex = (pipPresetIndex + 1) % presets.length;
-    setPipPosition(presets[pipPresetIndex].x, presets[pipPresetIndex].y);
+    fitPipBubble();
   }
 
   function landPip() {
@@ -153,29 +164,37 @@ function mountPip(root, { digestId, notes = [] } = {}) {
     teaButton.setAttribute("title", "Drop a tea leaf into Pip’s cup");
   }
   syncTeaBreakState();
+  setPipChat(chatOpen, false);
   restorePipPosition();
+  if (teaDialog && typeof window.ResizeObserver !== "undefined") {
+    bubbleObserver = new window.ResizeObserver(fitPipBubble);
+    bubbleObserver.observe(teaDialog);
+  }
   if (pipDock.addEventListener) pipDock.addEventListener("change", restorePipPosition, { signal: controller.signal });
   window.addEventListener("resize", restorePipPosition, { signal: controller.signal });
   document.addEventListener("pipvisibilitychange", restorePipPosition, { signal: controller.signal });
 
   if (teaPet) {
     teaPet.addEventListener("pointerdown", (event) => {
-      if (!pipDock.matches || event.button !== 0 || pipDrag) return;
+      if (event.button !== 0 || pipDrag) return;
       const rect = teaBreak.getBoundingClientRect();
       pipDrag = {
         pointerId: event.pointerId,
         offsetX: event.clientX - rect.left,
         offsetY: event.clientY - rect.top,
+        startX: event.clientX, startY: event.clientY, moved: false,
       };
       finishLeafCycle();
       clearPipIdle();
       resetPipLook();
       teaPet.setPointerCapture(event.pointerId);
-      teaBreak.classList.add("is-dragging");
       event.preventDefault();
     }, { signal: controller.signal });
     teaPet.addEventListener("pointermove", (event) => {
       if (pipDrag && event.pointerId === pipDrag.pointerId) {
+        if (!pipDrag.moved && Math.hypot(event.clientX - pipDrag.startX, event.clientY - pipDrag.startY) < 4) return;
+        pipDrag.moved = true;
+        teaBreak.classList.add("is-dragging");
         setPipPosition(event.clientX - pipDrag.offsetX, event.clientY - pipDrag.offsetY, false);
         return;
       }
@@ -183,7 +202,8 @@ function mountPip(root, { digestId, notes = [] } = {}) {
     const finishPipDrag = (event) => {
       if (!pipDrag || event.pointerId !== pipDrag.pointerId) return;
       const rect = teaBreak.getBoundingClientRect();
-      setPipPosition(rect.left, rect.top);
+      if (pipDrag.moved) setPipPosition(rect.left, rect.top);
+      else setPipChat(!chatOpen);
       pipDrag = null;
       if (teaPet.hasPointerCapture(event.pointerId)) teaPet.releasePointerCapture(event.pointerId);
       landPip();
@@ -193,7 +213,6 @@ function mountPip(root, { digestId, notes = [] } = {}) {
     teaPet.addEventListener("lostpointercapture", cancelPipDrag, { signal: controller.signal });
     window.addEventListener("blur", cancelPipDrag, { signal: controller.signal });
     teaPet.addEventListener("keydown", (event) => {
-      if (!pipDock.matches) return;
       const rect = teaBreak.getBoundingClientRect();
       const movements = {
         ArrowLeft: [-18, 0], ArrowRight: [18, 0],
@@ -212,8 +231,10 @@ function mountPip(root, { digestId, notes = [] } = {}) {
       } else if (event.key === "Enter" || event.key === " ") {
         event.preventDefault();
         finishLeafCycle();
-        cyclePipPosition();
-        landPip();
+        setPipChat(!chatOpen);
+      } else if (event.key === "Escape") {
+        event.preventDefault();
+        setPipChat(false);
       }
     }, { signal: controller.signal });
   }
@@ -306,6 +327,7 @@ function mountPip(root, { digestId, notes = [] } = {}) {
   if (teaText && teaButton && TEA_NOTES.length) {
     teaButton.addEventListener("click", () => {
       if (teaLeaves >= 10 || leafBusy || pipDrag) return;
+      setPipChat(true);
       teaLeaves = Math.min(10, teaLeaves + 1);
       // Save at acceptance so navigation or cancellation cannot lose a leaf.
       try { localStorage.setItem(teaLeafStorageKey, String(teaLeaves)); } catch (_) {}
@@ -327,6 +349,8 @@ function mountPip(root, { digestId, notes = [] } = {}) {
     stage.addEventListener("pointerleave", resetPipLook, { signal: controller.signal });
   }
   document.addEventListener("visibilitychange", syncPipMotion, { signal: controller.signal });
+  window.addEventListener("scroll", fitPipBubble, { passive: true, signal: controller.signal });
+  window.addEventListener("resize", fitPipBubble, { signal: controller.signal });
   document.addEventListener("pipvisibilitychange", syncPipMotion, { signal: controller.signal });
   if (reducedMotion.addEventListener) reducedMotion.addEventListener("change", syncPipMotion, { signal: controller.signal });
   // Resizing can move the target rim mid-fall; settle rather than miss the cup.
@@ -344,6 +368,7 @@ function mountPip(root, { digestId, notes = [] } = {}) {
     disposed = true;
     controller.abort();
     observer?.disconnect();
+    bubbleObserver?.disconnect();
     cancelPipDrag();
     finishLeafCycle();
     clearPipIdle();

@@ -952,12 +952,10 @@ def test_index_renders_time_machine_for_available_recent_brews(
 
     assert response.status_code == 200
     page = _text_payload(response)
-    assert 'aria-label="Browse recent digests"' in page
-    assert 'href="/"' in page
-    assert '>Today<' in page
-    assert 'href="/?digest_id=2026-05-04"' in page
-    assert '>Yesterday<' in page
-    assert 'aria-current="page"' in page
+    assert 'id="digest-date" aria-label="Choose digest date"' in page
+    assert '<option value="/"' in page
+    assert '<option value="/?digest_id=2026-05-04" selected>' in page
+    assert 'May 04' in page or 'May 4' in page
     assert "2026-05-03" not in page
 
 
@@ -981,10 +979,9 @@ def test_index_time_machine_uses_latest_actual_brews_across_gaps(
 
     page = _text_payload(web.index(_request("GET", "/")))
 
-    assert 'href="/?digest_id=2026-05-03"' in page
-    assert 'href="/?digest_id=2026-05-01"' in page
-    assert ">2 days ago<" in page
-    assert ">4 days ago<" in page
+    assert '<option value="/?digest_id=2026-05-03"' in page
+    assert '<option value="/?digest_id=2026-05-01"' in page
+    assert 'May 3' in page and 'May 1' in page
 
 
 def test_recent_digest_ids_are_ordered_by_actual_brew_time():
@@ -1035,13 +1032,13 @@ def test_explicit_current_and_previous_brew_navigation(tmp_path, monkeypatch, vi
     monkeypatch.setattr(web, '_load_today', lambda *_args, **_kwargs: ([], {}))
     response = web.index(_request('GET', '/'), digest_id=viewed)
     page = _text_payload(response)
-    assert 'href="/" aria-label="Open today’s digest"' in page
-    assert '>Today’s digest</a>' in page
+    assert 'id="digest-date"' in page
+    assert 'value="/"' in page
     if previous is None:
-        assert '>Previous digest</a>' not in page
+        assert 'aria-label="Previous digest"' not in page
     else:
         assert f'href="/?digest_id={previous}" rel="prev"' in page
-        assert '>Previous digest</a>' in page
+        assert 'aria-label="Previous digest"' in page
 
 
 def test_index_falls_back_to_today_outside_the_time_machine_window(
@@ -1315,10 +1312,14 @@ def test_index_renders_reader_card_hierarchy_and_feedback_controls(tmp_path, mon
     assert response.status_code == 200
     assert "Today’s spotlight" not in text
     assert text.count("First-in-class RNA delivery study") == 1
-    assert "Today’s cup" in text
-    assert "minute digest" in text
+    assert "Today’s cup" not in text
+    assert "minute digest" not in text
     assert "RNA nanotechnology" in text
-    assert "Brew again" in text
+    assert ">Brew</button>" in text
+    assert 'id="digest-search"' in text
+    assert 'id="topic-filter"' in text
+    assert 'class="contents-nav"' in text
+    assert 'class="copy-summary btn"' in text
     assert 'id="reading-mode-select"' in text
     assert '<details class="section-block"' in text
     assert 'class="section-toggle"' in text
@@ -1363,6 +1364,17 @@ def test_index_renders_reader_card_hierarchy_and_feedback_controls(tmp_path, mon
     assert "Choose Less relevant or Not relevant" in text
     assert "Refresh calibration" in text
     assert "Learned" not in text
+
+    # Older summaries remain readable in full, without repeating their parsed
+    # context underneath when they lack the current Key finding field.
+    with store_mod.session_scope() as session:
+        session.get(store_mod.ItemRow, item_id).summary = (
+            "Key point: Legacy finding.\nWhy read: Legacy relevance.\nCaveat: Legacy limitation."
+        )
+    legacy = _text_payload(web.index(_request("GET", "/")))
+    assert legacy.count("Legacy finding.") == 1
+    assert legacy.count("Legacy relevance.") == 1
+    assert legacy.count("Legacy limitation.") == 1
 
 
 def test_reader_can_save_and_remove_an_item_from_the_digest(tmp_path, monkeypatch):
@@ -2752,9 +2764,9 @@ def test_main_page_exposes_one_click_reading_modes_and_settings_can_return(
 
     assert "Welcome back, Ada" in main
     assert "new Date().getHours()" in main
-    assert "Choose your digest size" in main
+    assert 'aria-label="Choose digest size"' in main
     for label in ("Short", "Standard", "Full"):
-        assert f'<strong>{label}</strong>' in main
+        assert f'>{label}</option>' in main
     assert 'name="reading_mode"' in main
     assert 'value="full"' in main
     assert 'value="usual"' in main
@@ -2762,7 +2774,7 @@ def test_main_page_exposes_one_click_reading_modes_and_settings_can_return(
     assert 'action="/run"' in main
     assert 'name="autostart" value="1"' not in main
     assert "window.location.href = `/run?reading_mode=" not in main
-    assert "Pip’s tea break" in main
+    assert 'aria-label="Pip"' in main
     assert 'id="tea-note-text"' in main
     assert 'id="tea-another"' in main
     assert 'class="tea-leaf-drop"' in main
@@ -2772,8 +2784,8 @@ def test_main_page_exposes_one_click_reading_modes_and_settings_can_return(
     assert 'id="tea-leaf-count">0</span>' in main
     assert 'const teaLeafStorageKey = "dailydigest-tea-leaves:"' in main
     assert "Math.min(10, teaLeaves + 1)" in main
-    assert "Tea break over—time to read?" in main
-    assert 'teaButton.setAttribute("title", "Tea break complete")' in main
+    assert "Your cup is full. I’ll keep it warm while you read." in main
+    assert 'teaButton.setAttribute("title", "Your cup is full")' in main
     assert "teaButton.disabled = true" in main
     assert "localStorage.setItem(teaLeafStorageKey, String(teaLeaves))" in main
     assert "TEA_NOTES[teaLeaves % TEA_NOTES.length]" in main
@@ -2802,9 +2814,9 @@ def test_main_page_exposes_one_click_reading_modes_and_settings_can_return(
     assert 'teaPet.addEventListener("keydown"' in main
     assert 'id="pip-move"' not in main
     assert 'id="pip-move-help"' in main
-    assert 'class="pip-drag-copy"' in main
+    assert 'class="pip-drag-copy"' not in main
     assert main.index('class="pip-stage"') < main.index('class="tea-dialog"')
-    assert '<div class="tea-dialog">\n      <span class="tea-break-copy"' in main
+    assert '<div class="tea-dialog" id="pip-dialog">' in main
     assert 'window.matchMedia("(prefers-reduced-motion: reduce)")' in main
     assert 'role="progressbar"' in main
     assert 'aria-label="Digest reading progress"' in main
@@ -2821,7 +2833,7 @@ def test_main_page_exposes_one_click_reading_modes_and_settings_can_return(
         '<span class="tea-break-copy" id="tea-note-text" aria-live="polite">'
         f"{expected_tea_notes[0]}</span>"
     ) in main
-    assert "Summaries: Extractive (local, no AI)" in main
+    assert "Extractive (local, no AI)" in main
     assert 'href="/"' in settings
     assert "Back to today’s digest" in settings
 

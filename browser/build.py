@@ -83,7 +83,7 @@ def source_archive(output: Path, wheels: list[Path]) -> dict[str, str]:
         # Positive allowlist, not a broad repository copy with private exclusions.
         paths = list((ROOT / "src/dailydigest").rglob("*.py"))
         paths += list((ROOT / "templates").glob("*.j2"))
-        paths += [ROOT / "config/sources.yaml", HERE / "network.py"]
+        paths += [ROOT / "config/sources.yaml", HERE / "network.py", ROOT / "templates/FONT-LICENSE.txt"]
         for path in sorted(paths):
             if "__pycache__" in path.parts:
                 continue

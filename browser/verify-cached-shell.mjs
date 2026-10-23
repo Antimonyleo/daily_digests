@@ -18,7 +18,7 @@ try{
   await page.addInitScript(()=>{window.__workerStarts=0;window.Worker=class {constructor(){window.__workerStarts++;throw Error('Cached entry must never start Python');}};});
   await page.goto(base+'__cached_seed__');
   await page.evaluate(async(basePath)=>{
-    const view={version:4,date:'2026-10-22',savedAt:'2026-10-22T12:00:00Z',profileName:'Ada',notes:['Tiny fact — This is a fictional cached note.','Lab joke — A fictional harmless joke.'],items:[{section:'Research',title:'Fictional engineering result',url:'https://example.org/paper',meta:'Example journal',summary:'A small simulated result.',reason:'Text contains: engineering',opportunity:'',uncertainty:'Title only — topic fit needs checking.',details:'Caveat: Only simulated.\n\nAbstract: Not supplied by this source.'}]};
+    const view={version:5,date:'2026-10-22',savedAt:'2026-10-22T12:00:00Z',profileName:'Ada',notes:['Tiny fact — This is a fictional cached note.','Lab joke — A fictional harmless joke.'],items:[{section:'Research',title:'Fictional engineering result',url:'https://example.org/paper',meta:'Example journal',summary:'A small simulated result.',reason:'Text contains: engineering',opportunity:'',uncertainty:'Title only — topic fit needs checking.',why:'',caveat:'',details:'Caveat: Only simulated.\n\nAbstract: Not supplied by this source.'}]};
     const request=indexedDB.open('dailydigest:'+basePath,1);request.onupgradeneeded=()=>request.result.createObjectStore('state');
     const db=await new Promise(done=>request.onsuccess=()=>done(request.result));
     await new Promise(done=>{const tx=db.transaction('state','readwrite');tx.objectStore('state').put('{"version":1,"files":{}}','snapshot');tx.objectStore('state').put(view,'reading-view');tx.oncomplete=done;});db.close();

@@ -139,9 +139,15 @@ try{
   const frame=()=>page.frameLocator('#app');
   await frame().locator('.item[data-section="research"]').first().waitFor();
   const title=await frame().locator('.title-link').first().textContent();
+  const originalContext=await frame().locator('.item[data-section="research"]').first()
+    .evaluate(node=>Object.fromEntries([...node.querySelectorAll('.summary-field')].map(field=>[field.querySelector('.summary-label')?.textContent.trim(),field.querySelector('.summary-text')?.textContent.trim()]).filter(([label])=>['Why read','Caveat'].includes(label))));
   const originalDetails=await frame().locator('.item[data-section="research"]').first().locator('.item-details-body')
-    .evaluate(node=>Array.from(node.children,child=>child.textContent.trim()).filter(Boolean).join('\n\n'));
-  assert.match(originalDetails,/Fictional caveat — only tested in simulation/);
+    .evaluate(node=>{const copy=node.cloneNode(true);for(const field of copy.querySelectorAll('.summary-field'))if(['Why read','Caveat'].includes(field.querySelector('.summary-label')?.textContent.trim()))field.remove();return Array.from(copy.children,child=>child.textContent.trim()).filter(Boolean).join('\n\n');});
+  assert.match(originalContext.Caveat,/Fictional caveat — only tested in simulation/);
+  const rationale='A supplied source rationale, not independent validation.';
+  const fullArticle=frame().locator('.item[data-section="research"]').first();
+  await fullArticle.locator('.reading-context-field .summary-text').filter({hasText:rationale}).waitFor();
+  assert.equal((await fullArticle.textContent()).split(rationale).length-1,1,'The supplied rationale is shown exactly once in the full article');
   // A held IndexedDB save must not delay a route response. The model cache is
   // deliberately large; unchanged binary files must not be read/re-encoded.
   console.log('reading benchmark: runtime ready');
@@ -193,12 +199,15 @@ try{
   assert.ok(projection, 'The digest must regenerate its reading copy after feedback commits');
   assert.ok(projection.items.some(item=>item.title===title));
   const savedArticle=projection.items.find(item=>item.title===title);
-  assert.equal(projection.version,4);
+  assert.equal(projection.version,5);
+  assert.equal(savedArticle.why,originalContext['Why read'] || '');
+  assert.equal(savedArticle.caveat,originalContext.Caveat || '');
   assert.ok(projection.profileName,'The saved greeting must carry its reader name');
   assert.ok(projection.notes.length,'Pip must retain the supplied daily notes');
   assert.equal(savedArticle.details.replace(/\s/g,''),originalDetails.replace(/\s/g,''),'All original evidence text survives; only block separators may change');
   assert.match(savedArticle.details,/Abstract\s+We introduce/);
-  assert.match(savedArticle.details,/A supplied source rationale, not independent validation/);
+  assert.equal(savedArticle.why,rationale);
+  assert.equal(savedArticle.details.includes(rationale),false,'Promoted rationale must not be duplicated in Details');
   assert.ok(Object.keys(projection).every(key=>['date','items','savedAt','version','related','profileName','notes'].includes(key)));
   report.checks.push('real digest and feedback produce a bounded reading copy without credentials');
   console.log('reading benchmark: reading copy available');
@@ -218,6 +227,10 @@ try{
     const cachedArticle=frame().locator('article').filter({hasText:title});
     assert.match(await cachedArticle.textContent(),/Fictional caveat — only tested in simulation/);
     assert.match(await cachedArticle.textContent(),/A supplied source rationale, not independent validation/);
+    const cachedRationale=cachedArticle.locator(':scope > .summary-field .summary-text').filter({hasText:rationale});
+    assert.equal(await cachedRationale.count(),1);
+    assert.equal(await cachedRationale.isVisible(),true,'Cached rationale remains visible while Details are closed');
+    assert.equal((await cachedArticle.textContent()).split(rationale).length-1,1,'The cached rationale is retained exactly once');
     report.reloads.push({milliseconds:Date.now()-start,workerStarts:await page.evaluate(()=>window.__workerStarts)});
     assert.equal(await page.evaluate(()=>window.__workerStarts),0,'Cached reading must not initialize Python');
     assert.equal(await page.locator('#export').isDisabled(),true);
@@ -227,7 +240,7 @@ try{
     assert.equal(await canonicalHash(),canonical,'Read-only refresh must leave canonical bytes unchanged');
   }
   report.checks.push('three refreshes show the saved articles without starting any worker or changing saved bytes');
-  report.checks.push('structured source rationale and caveat survive each reload and remain accessible in Details without starting Python');
+  report.checks.push('supplied why/caveat stay visible beside the finding; full source evidence survives reload without starting Python');
   const readingURL=page.url();
   await page.locator('body > .skip-link').focus();
   await page.locator('body > .skip-link').press('Enter');
@@ -235,7 +248,7 @@ try{
     'The shell skip link must focus the isolated saved reading frame');
   await page.keyboard.press('Tab');
   assert.equal(await frame().locator('a').first().evaluate(link=>document.activeElement===link),true,
-    'Tab after skipping must reach the first saved article');
+    'Tab after skipping must reach cached section navigation');
   assert.equal(page.url(),readingURL,'Skipping to saved reading must preserve the hash route');
   assert.equal(await page.evaluate(()=>window.__workerStarts),0);
   report.checks.push('keyboard skip link enters the isolated saved reading frame and reaches its first article without changing the route or starting Python');
@@ -254,6 +267,9 @@ try{
   await page.screenshot({path:output+'/mobile-reading.png',fullPage:true});
   await page.locator('#cached-pip-toggle').click();
   await page.locator('#cached-pip .tea-break').waitFor({state:'visible'});
+  assert.equal(await page.locator('#cached-pip #tea-pet').getAttribute('aria-expanded'),'false');
+  await page.locator('#cached-pip #tea-pet').click();
+  await page.locator('#cached-pip #tea-note-text').waitFor({state:'visible'});
   assert.ok(projection.notes.includes(await page.locator('#tea-note-text').textContent()));
   await page.emulateMedia({reducedMotion:'reduce'});
   await page.locator('#tea-another').click();

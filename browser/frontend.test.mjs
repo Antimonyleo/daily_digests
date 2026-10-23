@@ -449,8 +449,8 @@ test('Settings validation rerenders retain their unsaved submission even at the 
 function navigationControls(response) {
   const source=readFileSync(new URL('./app.mjs',import.meta.url),'utf8');
   const errors=[],statuses=[],requests=[];
-  const frame={hidden:false,contentDocument:{},contentWindow:{scrollY:0},srcdoc:'original draft',setAttribute(){},removeAttribute(){}};
-  const context={frame,errors,tabMoved:false,scrollPositions:new Map(),activePath:'/setup',navigation:0,
+  const frame={hidden:false,contentDocument:{querySelector:()=>null},contentWindow:{scrollY:0},srcdoc:'original draft',setAttribute(){},removeAttribute(){}};
+  const context={frame,errors,tabMoved:false,scrollPositions:new Map(),aboutDisclosureStates:new Map(),activePath:'/setup',navigation:0,
     setStatus:message=>statuses.push(message),settleRenderedEdits:async()=>{},streams:new Map(),localPath,
     client:{call:async request=>{requests.push(request);return Array.isArray(response)?response.shift():response;}},Headers,
     history:{replaceState(){}},crypto:{randomUUID:()=> 'fixture-token'},renderedDocument,

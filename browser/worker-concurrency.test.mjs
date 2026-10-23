@@ -81,8 +81,8 @@ test('reads, rejected changes and running jobs retain nonblocking checkpoint sch
 });
 
 test('reading copies require the current committed generation and cannot be stored during brewing', async () => {
-  const view={version:4,profileName:'Ada',notes:[],date:'2026-10-15',savedAt:'2026-10-15T12:00:00Z',items:[{
-    section:'Research',title:'Fictional paper',url:'https://example.org/paper',meta:'Nature',summary:'Finding',reason:'Topic fit',opportunity:'',uncertainty:'',details:''}]};
+  const view={version:5,profileName:'Ada',notes:[],date:'2026-10-15',savedAt:'2026-10-15T12:00:00Z',items:[{
+    section:'Research',title:'Fictional paper',url:'https://example.org/paper',meta:'Nature',summary:'Finding',reason:'Topic fit',opportunity:'',uncertainty:'',details:'',why:'',caveat:''}]};
   const h=harness({storageWriter:{status:()=>({durable:true})},state:{py:{globals:{get:()=>()=>7}}}});
   await h.send({id:1,type:'cache-reading-view',generation:6,view});
   assert.equal(JSON.parse(h.replies.at(-1).body).cached,false);

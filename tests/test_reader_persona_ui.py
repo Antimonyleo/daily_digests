@@ -48,11 +48,11 @@ def test_existing_context_is_discoverable_without_adding_role_or_reading_level_f
 def test_topic_details_prioritize_purpose_and_disclose_pubmed_scope(monkeypatch, tmp_path):
     html = _render_settings(monkeypatch, tmp_path)
     row_markup = html.split("row.innerHTML = ", 1)[1].split(";\n", 1)[0]
-    assert "Matching &amp; terminology (optional)" in row_markup
+    assert "Matching &amp; terminology" in row_markup
     assert row_markup.index("What would make a paper useful?") < row_markup.index("Alternative search terms")
     assert "targeted protein degradation" not in row_markup
     assert "PROTAC" not in row_markup
-    assert "guides ranking" in row_markup
+    assert "Describe useful methods, applications or background" in row_markup
     assert "Check spelling in PubMed" in html
     assert "PubMed is focused on biomedical literature" in html
 

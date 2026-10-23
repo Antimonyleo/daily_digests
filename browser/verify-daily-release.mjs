@@ -180,6 +180,8 @@ export async function beforeMatrix({page,frame,route,record,report}){
   await route('/setup','#interest-editor');
   const setting=()=>frame().locator('input[type="checkbox"][name="publication_enrichment"]');
   assert.equal(await setting().isChecked(),false,'Public metadata must remain opt-in');
+  const sections=frame().locator('#digest-sections');
+  if(await sections.getAttribute('open')===null)await sections.locator(':scope>summary').click();
   await setting().check();
   await frame().locator('form[action="/setup"] button[type="submit"]').click();
   await frame().locator('#brew-button').waitFor();

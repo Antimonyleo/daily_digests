@@ -191,9 +191,9 @@ def test_percentage_editor_uses_exact_largest_remainders_with_positive_floor():
     if not node:
         pytest.skip('Node is required to check enhanced percentage math')
     source = (Path(__file__).parents[1] / 'templates/setup.html.j2').read_text()
-    function = source.split('  function percentages(weights) {', 1)[1].split('  function serialize()', 1)[0]
-    script = 'function percentages(weights) {' + function
-    script += '\nconsole.log(JSON.stringify([[1,3],[1,1,1],[0,0],[0.001,999.999],[]].map(percentages)));'
+    function = source.split('  function percentages(', 1)[1].split('  let baselineFormState', 1)[0]
+    script = 'function percentages(' + function
+    script += '\nconsole.log(JSON.stringify([[1,3],[1,1,1],[0,0],[0.001,999.999],[]].map(weights => percentages(weights))));'
     result = subprocess.run([node, '-e', script], capture_output=True, text=True, check=True)
     assert json.loads(result.stdout) == [[25, 75], [34, 33, 33], [50, 50], [1, 99], []]
 
@@ -275,28 +275,52 @@ def test_percentage_editor_submits_displayed_weights_and_blocks_invalid_totals()
     if not node:
         pytest.skip('Node is required to verify enhanced editor serialization')
     source = (Path(__file__).parents[1] / 'templates/setup.html.j2').read_text()
-    functions = 'function serialize() {' + source.split('  function serialize() {', 1)[1].split('  function addRow(', 1)[0]
+    functions = 'function serialize() {' + source.split('  function serialize() {', 1)[1].split('  function finishEditing(', 1)[0]
+    submit = "topics.form.addEventListener('submit', event => {" + source.split("  topics.form.addEventListener('submit', event => {", 1)[1].split('  const exampleButton', 1)[0]
     script = '''
 const assert = require('node:assert/strict');
 function row(name, raw, displayed) {
   const fields = {'[data-interest-name]': {value:name}, '[data-interest-weight]':{value:displayed, setCustomValidity(message) { this.error = message; }}, '[data-interest-aliases]':{value:''}, '[data-interest-description]':{value:''}};
-  return {dataset:{originalWeight:raw}, querySelector: key => fields[key]};
+  return {dataset:{rawWeight:raw}, querySelector: key => fields[key]};
 }
 const children = [row('A','0.1','1'), row('B','100','99')];
 const rows = {children, querySelectorAll: key => children.map(row => row.querySelector(key))};
 const topics = {value:''}, details = {value:''};
-const document = {getElementById: () => ({})};
-''' + functions + '''
-serialize(); assert.equal(topics.value, 'A | 1\\nB | 99');
+const controls = new Map();
+const document = {getElementById(id) {if (!controls.has(id)) controls.set(id, {}); return controls.get(id);}};
+let baselineFormState = null, weightsTouched = false, loadedCount = children.length, activeRow = null;
+let onSubmit, reported = 0;
+topics.form = {
+  addEventListener(type, callback) {assert.equal(type, 'submit'); onSubmit = callback;},
+  checkValidity() {return children.every(row => !row.querySelector('[data-interest-weight]').error);},
+  reportValidity() {reported++;}
+};
+''' + functions + submit + '''
+serialize(); assert.equal(topics.value, 'A | 0.1\\nB | 100');
+assert.equal(controls.get('topic-weight-mode').value, 'relative');
 children[0].querySelector('[data-interest-description]').value = 'New reader detail';
-serialize(); assert.equal(topics.value, 'A | 1\\nB | 99');
+serialize(); assert.equal(topics.value, 'A | 0.1\\nB | 100');
 assert.equal(JSON.parse(details.value).A.description, 'New reader detail');
 children[0].querySelector('[data-interest-name]').value = 'Renamed';
-serialize(); assert.equal(topics.value, 'Renamed | 1\\nB | 99');
+children[0].dataset.correctedFrom = 'A';
+serialize(); assert.equal(topics.value, 'Renamed | 0.1\\nB | 100');
+assert.equal(JSON.parse(details.value).Renamed.previous_name, 'A');
 const weight = children[0].querySelector('[data-interest-weight]');
 assert.equal(weight.error, '');
-weight.value = '10'; serialize(); assert.match(weight.error, /totaling 100%/);
-weight.value = '1'; serialize(); assert.equal(weight.error, '');
+weightsTouched = true;
+weight.value = '10'; children[1].querySelector('[data-interest-weight]').value = '90';
+serialize(); assert.equal(topics.value, 'Renamed | 10\\nB | 90');
+assert.equal(controls.get('topic-weight-mode').value, 'percentage');
+assert.equal(weight.error, '');
+weight.value = '15';
+let prevented = false;
+onSubmit({preventDefault() {prevented = true;}});
+assert.match(weight.error, /totaling 100%/);
+assert.equal(prevented, true); assert.equal(reported, 1);
+weight.value = '10'; prevented = false;
+onSubmit({preventDefault() {prevented = true;}});
+assert.equal(weight.error, ''); assert.equal(prevented, false);
+assert.equal(topics.value, 'Renamed | 10\\nB | 90');
 console.log('ok');
 '''
     result = subprocess.run([node, '-e', script], capture_output=True, text=True, check=True)

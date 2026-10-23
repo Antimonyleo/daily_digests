@@ -82,8 +82,8 @@ try{
   await config(first,{hold:false,release:true});
   await first.waitForFunction(()=>!document.querySelector('#app').contentWindow.ddHasPendingRatings?.());
   // A bounded refusal is safe; retry after the committed queue drains.
-  if(await first.locator('#app-error').isVisible()){await first.locator('#dismiss-error').click();await route(first,'/setup','[data-interest-name]');}
-  else await first.frameLocator('#app').locator('[data-interest-name]').first().waitFor();
+  if(await first.locator('#app-error').isVisible()){await first.locator('#dismiss-error').click();await route(first,'/setup','#interest-editor');}
+  else await first.frameLocator('#app').locator('#interest-editor').waitFor();
   await route(first,'/','.item[data-section="research"]');
   await card.locator('.vote-btn[data-grade="100"][aria-pressed="true"]').waitFor();
   report.checks.push('navigation drains rapid queued ratings and restores the latest intent on return');
@@ -115,11 +115,14 @@ try{
   await second.frameLocator('#app').locator('.vote-btn[data-grade="100"][aria-pressed="true"]').first().waitFor();
   await second.frameLocator('#app').locator('.bookmark-btn:not(.known-btn)[aria-pressed="true"]').first().waitFor();await oneOwner(second);
   report.checks.push('handoff drains both an in-flight and a queued rapid rating, restores the latest vote/save and fences the old tab');
-  await route(second,'/setup','[data-interest-name]');await second.frameLocator('#app').locator('[data-interest-name]').first().fill('Unsaved topic draft');
+  await route(second,'/setup','#interest-editor');
+  await second.frameLocator('#app').locator('[data-interest-edit]').first().click();
+  await second.frameLocator('#app').locator('[data-interest-name]').first().fill('Unsaved topic draft');
   await first.locator('#use-this-tab').click();await first.locator('#startup-status').filter({hasText:'unsaved settings'}).waitFor();
   assert.equal(await second.frameLocator('#app').locator('[data-interest-name]').first().inputValue(),'Unsaved topic draft');await oneOwner(second);
   report.checks.push('unsaved setup edits refuse handoff and remain intact');
-  await route(second,'/','.item[data-section="research"]');await config(second,{quota:true});
+  const discardDraft=second.waitForEvent('dialog').then(dialog=>{assert.equal(dialog.message(),'Discard unsaved settings changes?');return dialog.accept();});
+  await route(second,'/','.item[data-section="research"]');await discardDraft;await config(second,{quota:true});
   await second.frameLocator('#app').locator('.vote-btn[data-grade="100"]').first().click();
   await first.locator('#use-this-tab').click();await first.locator('#startup-status').filter({hasText:'could not be saved'}).waitFor();await oneOwner(second);
   await config(second,{quota:false});await first.locator('#use-this-tab').click();await ready(first);

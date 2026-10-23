@@ -139,7 +139,7 @@ try {
       const db=await new Promise((done,fail)=>{request.onsuccess=()=>done(request.result);request.onerror=()=>fail(request.error);});
       try {
         const copy=await new Promise((done,fail)=>{const get=db.transaction('state').objectStore('state').get('reading-view');get.onsuccess=()=>done(get.result);get.onerror=()=>fail(get.error);});
-        return copy?.version===4 && Array.isArray(copy.items) && copy.items.length>0;
+        return copy?.version===5 && Array.isArray(copy.items) && copy.items.length>0;
       } finally { db.close(); }
     });
     if(!readingReady)await page.waitForTimeout(200);

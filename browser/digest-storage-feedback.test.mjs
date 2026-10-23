@@ -160,40 +160,77 @@ test('an older checkpoint does not overwrite an in-flight or failed overflow rat
 });
 
 function savedRemoval({respond=async()=>response({pending:true})}={}) {
-  const button=control(),status=control(),card={dataset:{itemId:'7'},querySelector:()=>status};
-  const events={},reloads=[];button.textContent='Remove';button.closest=()=>card;
-  const context={CSRF_TOKEN:'fixture',fetch:respond,
+  const button=control(),undo=control(),status=control(),removalStatus=control(),content=control(),removal=control();
+  const count=control({total:'2',query:''});
+  const nodes={'.save-state':status,'.undo-saved':undo,'.saved-content':content,'.saved-removal':removal,'.removal-state':removalStatus};
+  const card={dataset:{itemId:'7',savedState:'saved'},querySelector:selector=>nodes[selector]};
+  const events={},reloads=[],requests=[];button.textContent='Remove';button.closest=()=>card;removal.hidden=true;undo.textContent='Undo';
+  const context={CSRF_TOKEN:'fixture',fetch:async(url,options)=>{requests.push({url,method:options.method});return respond(url,options);},
     window:{addEventListener:(name,callback)=>{events[name]=callback;},location:{reload:()=>reloads.push(true)}},
-    document:{querySelectorAll:selector=>{
+    document:{getElementById:id=>id==='archive-count'?count:null,querySelectorAll:selector=>{
       if(selector==='.remove-saved')return [button];
-      if(selector.includes('data-pending-removal'))return button.dataset.pendingRemoval?[button]:[];
       if(selector==='.save-state.pending')return status.classList.contains('pending')?[status]:[];
       return [];
     }}};
   const prefix=saved.slice(saved.indexOf('\n',saved.indexOf('  const CSRF_TOKEN ='))+1,saved.indexOf('  document.querySelectorAll(".saved-card")'));
   const remove=between(saved,'  document.querySelectorAll(".remove-saved")','\n})();');
   runInNewContext(prefix+remove,context);
-  return {button,status,reloads,click:()=>button.listeners.click(),commit:()=>events['dd-storage-committed']()};
+  return {button,undo,status,removalStatus,content,removal,card,count,reloads,requests,
+    click:()=>button.listeners.click(),restore:()=>undo.listeners.click(),commit:()=>events['dd-storage-committed']()};
 }
 
-test('Saved removal never reloads on a pending checkpoint and completes once after commit',async()=>{
+test('Saved removal waits for durable storage, then offers Undo without a reload',async()=>{
   const ui=savedRemoval();await ui.click();
   assert.equal(ui.reloads.length,0);assert.match(ui.status.textContent,/saving browser copy/i);
-  assert.equal(ui.button.disabled,false,'A failed checkpoint must allow an explicit retry');
-  ui.commit();ui.commit();assert.equal(ui.reloads.length,1);
+  assert.equal(ui.content.hidden,false);assert.equal(ui.button.disabled,false,'A failed checkpoint must allow an explicit retry');
+  ui.commit();ui.commit();assert.equal(ui.reloads.length,0);
+  assert.equal(ui.content.hidden,true);assert.equal(ui.removal.hidden,false);assert.equal(ui.undo.textContent,'Undo');
+  assert.equal(ui.count.textContent,'1 saved item');
 });
 
-test('Saved removal can retry a failed checkpoint and reload only after durable success',async()=>{
+test('Saved removal can retry a failed checkpoint and offers Undo after durable success',async()=>{
   let attempts=0;const ui=savedRemoval({respond:async()=>response({pending:attempts++===0})});
-  await ui.click();assert.equal(ui.reloads.length,0);await ui.click();assert.equal(ui.reloads.length,1);
-  ui.commit();assert.equal(ui.reloads.length,1);
+  await ui.click();assert.equal(ui.content.hidden,false);await ui.click();assert.equal(ui.content.hidden,true);
+  assert.equal(ui.removal.hidden,false);ui.commit();assert.equal(ui.count.textContent,'1 saved item');assert.equal(ui.reloads.length,0);
 });
 
-test('rejected Saved removal keeps the card available without scheduling a reload',async()=>{
+test('rejected Saved removal keeps the card available without changing its count',async()=>{
   const ui=savedRemoval({respond:async()=>response({status:503})});
   await ui.click();ui.commit();assert.equal(ui.reloads.length,0);assert.equal(ui.button.disabled,false);
-  assert.equal(ui.button.textContent,'Try again');
+  assert.equal(ui.content.hidden,false);assert.equal(ui.button.textContent,'Try again');assert.equal(ui.removal.hidden,true);
   assert.match(ui.status.textContent,/could not remove/i);
+});
+
+test('Saved Undo restores through POST and preserves the existing card and rating controls',async()=>{
+  const ui=savedRemoval({respond:async()=>response()});await ui.click();await ui.restore();
+  assert.deepEqual(ui.requests.map(row=>row.method),['DELETE','POST']);
+  assert.equal(ui.content.hidden,false);assert.equal(ui.removal.hidden,true);assert.equal(ui.card.dataset.savedState,'saved');
+  assert.equal(ui.count.textContent,'2 saved items');assert.match(ui.status.textContent,/Restored/);assert.equal(ui.reloads.length,0);
+});
+
+test('Saved Undo reports pending restoration without claiming durable success',async()=>{
+  const ui=savedRemoval({respond:async(_url,options)=>response({pending:options.method==='POST'})});
+  await ui.click();await ui.restore();assert.equal(ui.content.hidden,true);assert.equal(ui.count.textContent,'1 saved item');
+  assert.match(ui.removalStatus.textContent,/Restore recorded.*saving browser copy/);assert.equal(ui.undo.textContent,'Retry restore');
+  ui.commit();assert.equal(ui.content.hidden,false);assert.equal(ui.count.textContent,'2 saved items');assert.equal(ui.removal.hidden,true);
+});
+
+test('failed Saved Undo keeps a retryable removed state and the correct count',async()=>{
+  const ui=savedRemoval({respond:async(_url,options)=>response({status:options.method==='POST'?503:200})});
+  await ui.click();await ui.restore();ui.commit();assert.equal(ui.content.hidden,true);assert.equal(ui.count.textContent,'1 saved item');
+  assert.equal(ui.undo.disabled,false);assert.equal(ui.undo.textContent,'Retry restore');assert.match(ui.removalStatus.textContent,/Could not restore/);
+});
+
+test('a failed retry does not discard a pending removal or a later durable acknowledgement',async()=>{
+  let attempts=0;const ui=savedRemoval({respond:async()=>attempts++===0?response({pending:true}):response({status:503})});
+  await ui.click();await ui.click();assert.equal(ui.content.hidden,false);assert.match(ui.status.textContent,/still waiting for browser storage/);
+  ui.commit();assert.equal(ui.content.hidden,true);assert.equal(ui.removal.hidden,false);
+});
+
+test('a checkpoint that completes a pending removal invalidates a stale in-flight retry failure',async()=>{
+  let attempts=0,reject;const ui=savedRemoval({respond:async()=>attempts++===0?response({pending:true}):new Promise((_done,fail)=>{reject=fail;})});
+  await ui.click();const retry=ui.click();await new Promise(done=>setImmediate(done));ui.commit();
+  reject(Error('late failure'));await retry;assert.equal(ui.content.hidden,true);assert.equal(ui.undo.disabled,false);assert.equal(ui.undo.textContent,'Undo');assert.equal(ui.count.textContent,'1 saved item');
 });
 
 test('completed calibration failure is visible and leaves the action retryable',async()=>{
@@ -203,7 +240,7 @@ test('completed calibration failure is visible and leaves the action retryable',
     fetch:async()=>new Response(JSON.stringify({status:{can_train:true},training_job:{running:false,last_result:{
       ok:false,trained:false,reason:'training_error',message:'Ranking training failed: PermissionError: fixture',
     }}}),{headers:{'content-type':'application/json'}})};
-  const poll=between(digest,'  async function pollTrainingStatus()','  function activeFilterState()');
+  const poll=between(digest,'  async function pollTrainingStatus()','  const searchInput =');
   const run=runInNewContext(poll+';pollTrainingStatus',context);
   await run();assert.equal(button.disabled,false);assert.equal(button.textContent,'Refresh calibration');
   assert.match(toasts.at(-1)||'',/calibration.*(failed|could not)|could not.*calibration/i);

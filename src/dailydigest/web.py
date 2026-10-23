@@ -105,7 +105,7 @@ from .store import (
     set_bookmark,
     set_item_known,
 )
-from .tea_break import daily_tea_deck
+from .tea_break import daily_tea_deck, preview_tea_deck
 
 logger = logging.getLogger(__name__)
 
@@ -222,6 +222,8 @@ app = FastAPI(title="DailyDigest")
 templates = Jinja2Templates(
     env=Environment(loader=FileSystemLoader(str(_TEMPLATE_DIR)), autoescape=True)
 )
+templates.env.globals["pip_notes"] = lambda: preview_tea_deck(date.fromisoformat(_digest_id()))
+templates.env.globals["pip_day"] = lambda: _digest_id()
 
 # Per-section sort order so we can ORDER BY (section_order, label_number).
 _SECTION_RANK = {name: idx for idx, name in enumerate(SECTION_ORDER)}
@@ -1478,6 +1480,7 @@ def index(request: Request, digest_id: str = "") -> Response:
         {
             "digest_id": digest_id,
             "viewing_today": digest_id == today_id,
+            "today_label": today_date.strftime("%b %d").replace(" 0", " "),
             "cup_kicker": cup_kicker,
             "profile_name": _profile_name(),
             "salutation": "Welcome back",
@@ -1551,7 +1554,8 @@ def saved_items(request: Request, q: str = "", page: int = 1) -> Response:
             for child in companions.get(int(row.item_id), [])
         ],
         "section": SECTION_META.get(row.section, {"title": row.section.title() or "Other"})["title"],
-        "summary": row.summary, "published": _saved_date(row.published_at),
+        "summary": row.summary, "summary_fields": _summary_fields(row.summary or ""),
+        "published": _saved_date(row.published_at),
         "saved": _saved_date(row.saved_at), "current_grade": ratings.get(row.item_id),
         "current_reasons": reasons.get(str(row.item_id), []),
     } for row in rows]

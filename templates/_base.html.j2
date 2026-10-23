@@ -61,7 +61,7 @@
     min-height: 38px; padding: 8px 13px;
     border: 1px solid var(--control-border); border-radius: 8px;
     background: var(--card); color: var(--text); text-decoration: none;
-    cursor: pointer; font-weight: 650; font-size: 13px;
+    cursor: pointer; font-weight: 600; font-size: 14px;
   }
   .btn:hover { border-color: var(--accent); background: var(--surface-hover); }
   .btn.primary {
@@ -140,6 +140,7 @@
     a { color: black; }
   }
   {% block extra_styles %}{% endblock %}
+  {% if request is defined and request.url.path in ['/setup', '/saved'] %}{% include "_pip.css.j2" %}{% endif %}
   button:not(.active):not([aria-pressed="true"]), input, select, textarea { border-color: var(--control-border); }
   button, summary, input:not([type="checkbox"]):not([type="radio"]), select { min-height: 44px; }
 
@@ -150,6 +151,10 @@
 <main class="wrap" id="page-content" tabindex="-1">
   {% block body %}{% endblock %}
 </main>
+{% if request is defined and request.url.path in ['/setup', '/saved'] %}
+{% set shared_pip_notes = pip_notes() %}
+{% with daily_note=shared_pip_notes[0] %}{% include "_pip.html.j2" %}{% endwith %}
+{% endif %}
 <details class="app-utilities" id="display-menu">
   <summary class="app-utility" aria-label="Display" id="display-menu-toggle" aria-controls="display-options">Display</summary>
   <div class="app-display-options" id="display-options" role="group" aria-label="Display preferences">
@@ -277,5 +282,25 @@
   });
 </script>
 {% block scripts %}{% endblock %}
+{% if request is defined and request.url.path in ['/setup', '/saved'] %}
+<script>{% include "_pip.js.j2" %}
+mountPip(document, {digestId: {{ pip_day()|tojson }}, notes: {{ shared_pip_notes|tojson }}});
+</script>
+{% endif %}
+<script>{% include "_copy_summary.js.j2" %}</script>
+<script>{% include "_greeting.js.j2" %}</script>
+<script>
+// Browser mode owns this check in its outer router. Native pages use navigation protection.
+(() => {
+  const form = document.querySelector('form[action="/setup"]');
+  if (!form || typeof window.ddNavigate === 'function') return;
+  const baseline = JSON.stringify([...new FormData(form)]);
+  let submitting = false;
+  form.addEventListener('submit', () => { submitting = true; });
+  window.addEventListener('beforeunload', event => {
+    if (!submitting && JSON.stringify([...new FormData(form)]) !== baseline) { event.preventDefault(); event.returnValue = ''; }
+  });
+})();
+</script>
 </body>
 </html>

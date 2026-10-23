@@ -1,0 +1,30 @@
+(() => {
+  document.querySelectorAll('.copy-summary').forEach(button => {
+    button.addEventListener('click', async () => {
+      const item = button.closest('.item, .saved-card');
+      const title = item.querySelector('.title-link, .saved-title');
+      const meta = item.querySelector('.meta, .saved-meta');
+      const finding = item.querySelector('.summary-primary .summary-text, .summary, .saved-summary');
+      const context = Array.from(item.querySelectorAll('.reading-context-field'), field => {
+        const label = field.querySelector('.summary-label')?.textContent.trim();
+        const value = field.querySelector('.summary-text')?.textContent.trim();
+        return label && value ? `${label}: ${value}` : field.textContent.trim();
+      });
+      const text = [title?.textContent.trim(), meta?.textContent.trim(), title?.href, '', finding?.textContent.trim(), ...context].filter(value => value !== undefined).join('\n');
+      const status = item.querySelector('.copy-status');
+      try {
+        await navigator.clipboard.writeText(text);
+        item.querySelector('.copy-fallback')?.remove();
+        status.textContent = 'Summary copied';
+      } catch (_) {
+        let fallback = item.querySelector('.copy-fallback');
+        if (!fallback) {
+          fallback = document.createElement('textarea'); fallback.className = 'copy-fallback'; fallback.readOnly = true;
+          fallback.setAttribute('aria-label', 'Summary to copy'); button.after(fallback);
+        }
+        fallback.value = text; fallback.focus(); fallback.select();
+        status.textContent = 'Select and copy the summary';
+      }
+    });
+  });
+})();

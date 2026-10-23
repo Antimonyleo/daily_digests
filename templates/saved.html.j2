@@ -1,74 +1,16 @@
 {% extends "_base.html.j2" %}
 {% from "_feedback_controls.html.j2" import feedback_controls %}
 {% block title %}Saved reading · DailyDigest{% endblock %}
-{% block extra_styles %}
-  .rating-help { color: var(--muted); font-size: 12px; margin: 8px 0; }
-  .wrap { max-width: 920px; }
-  .saved-header {
-    display: flex; align-items: end; justify-content: space-between; gap: 18px;
-    margin-bottom: 18px;
-  }
-  .eyebrow {
-    color: var(--accent); font-size: 12px; font-weight: 800;
-    letter-spacing: 0.09em; text-transform: uppercase; margin-bottom: 7px;
-  }
-  h1 { margin: 0; font-size: clamp(30px, 5vw, 44px); line-height: 1.05; }
-  .subhead { color: var(--muted); margin: 9px 0 0; line-height: 1.5; }
-  .saved-actions { display: flex; gap: 8px; flex-wrap: wrap; }
-  .search-card {
-    display: grid; grid-template-columns: 1fr auto; gap: 8px;
-    padding: 14px; margin-bottom: 14px; border: 1px solid var(--border);
-    border-radius: 12px; background: var(--card); box-shadow: var(--shadow);
-  }
-  .search-card input {
-    width: 100%; min-height: 42px; padding: 9px 12px;
-    border: 1px solid var(--border); border-radius: 8px;
-    background: var(--panel); color: var(--text);
-  }
-  .archive-meta { color: var(--muted); font-size: 13px; margin: 0 0 12px; }
-  .saved-list { display: grid; gap: 10px; }
-  .saved-card {
-    display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 18px;
-    padding: 18px; border: 1px solid var(--border); border-radius: 12px;
-    background: var(--card); box-shadow: 0 8px 26px rgba(21, 34, 27, 0.05);
-  }
-  .saved-title {
-    color: var(--text); font-size: 17px; font-weight: 760;
-    line-height: 1.35; text-decoration: none;
-  }
-  .saved-title:hover { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
-  .saved-meta { color: var(--muted); font-size: 12px; margin-top: 7px; }
-  .saved-summary { color: var(--text); opacity: 0.82; font-size: 13px; line-height: 1.55; margin-top: 10px; }
-  .related-commentaries { margin: 10px 0; padding: 0 0 0 12px; border-left: 2px solid var(--border); list-style: none; font-size: 14px; line-height: 1.45; }
-  .related-commentaries li + li { margin-top: 6px; }
-  .related-commentaries .publication-label { color: var(--muted); }
-  .related-commentaries a { overflow-wrap: anywhere; text-underline-offset: 3px; }
-  .vote-row, .reason-chip-row, .feedback-actions { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
-  .vote-btn, .reason-chip { min-height:44px; border:1px solid var(--control-border); border-radius:8px; padding:8px; background:var(--panel); color:var(--text); cursor:pointer; }
-  .vote-btn.active, .reason-chip.active { border-color:var(--accent); font-weight:750; }
-  .reason-prompt, .vote-title, .save-state { font-size:13px; color:var(--muted); margin-top:12px; }
-  .vote-btn:focus-visible, .reason-chip:focus-visible { outline:3px solid var(--accent); outline-offset:2px; }
-  .remove-saved { align-self: start; white-space: nowrap; }
-  .empty-archive {
-    padding: 48px 24px; text-align: center; border: 1px dashed var(--border);
-    border-radius: 12px; color: var(--muted); background: var(--panel);
-  }
-  @media (max-width: 680px) {
-    .saved-header { align-items: start; flex-direction: column; }
-    .search-card, .saved-card { grid-template-columns: 1fr; }
-  }
-{% endblock %}
+{% block extra_styles %}{% include "_saved_layout.css.j2" %}{% endblock %}
 {% block body %}
   {% if feedback_warning %}<p role="alert">Feedback is paused: {{ feedback_warning }}</p>{% endif %}
   <header class="saved-header">
     <div>
-      <div class="eyebrow">Your personal library</div>
       <h1>Saved reading</h1>
-      <p class="subhead">Keep useful papers, calls, and news within reach.</p>
     </div>
     <div class="saved-actions">
-      <a class="btn primary" href="/">Today’s digest</a>
-      <a class="btn" href="/run">Brew again</a>
+      <a class="btn" href="/">Today’s digest</a>
+      <a class="btn" href="/setup">Settings</a>
     </div>
   </header>
 
@@ -77,17 +19,20 @@
     <button class="btn primary" type="submit">Search</button>
   </form>
 
-  <p class="archive-meta" id="archive-count">{{ total }} saved item{{ '' if total == 1 else 's' }}{% if query %} matching “{{ query }}”{% endif %}</p>
+  <p class="archive-meta" id="archive-count" data-total="{{ total }}" data-query="{{ query }}">{{ total }} saved item{{ '' if total == 1 else 's' }}{% if query %} matching “{{ query }}”{% endif %}</p>
   {% if items %}
   <div class="saved-list" id="saved-list">
     {% for item in items %}
-    <article class="saved-card" data-item-id="{{ item.id }}" data-current-grade="{{ item.current_grade if item.current_grade is not none else '' }}">
-      <div>
+    <article class="saved-card" data-item-id="{{ item.id }}" data-current-grade="{{ item.current_grade if item.current_grade is not none else '' }}" data-saved-state="saved">
+      <div class="saved-content">
         <a class="saved-title" href="{{ item.url }}" target="_blank" rel="noopener">{{ item.title }}</a>
         <div class="saved-meta">
           {{ item.section }} · {{ item.source }}{% if item.publication_label %} · {{ item.publication_label }}{% endif %}{% if item.published %} · Published {{ item.published }}{% endif %}{% if item.saved %} · Saved {{ item.saved }}{% endif %}
         </div>
-        {% if item.summary %}<div class="saved-summary">{{ item.summary }}</div>{% endif %}
+        {% if item.summary_fields and item.summary_fields.get('Key finding') %}
+        <div class="summary-primary"><div class="summary-label">Key finding</div><div class="summary-text">{{ item.summary_fields.get('Key finding') }}</div></div>
+        {% for label in ['Why read', 'Caveat'] %}{% if item.summary_fields.get(label) %}<div class="reading-context-field"><div class="summary-label">{{ label }}</div><div class="summary-text">{{ item.summary_fields.get(label) }}</div></div>{% endif %}{% endfor %}
+        {% else %}{% if item.summary %}<div class="saved-summary">{{ item.summary }}</div>{% endif %}{% endif %}
         {% include "_article_figure.html.j2" %}
         {% if item.related_commentaries %}
         <ul class="related-commentaries" aria-label="Commentary on {{ item.title }}">
@@ -96,10 +41,11 @@
           {% endfor %}
         </ul>
         {% endif %}
-        {{ feedback_controls(item) }}
+        <div class="saved-feedback">{{ feedback_controls(item) }}<button class="copy-summary btn" type="button">Copy summary</button><span class="copy-status" role="status"></span></div>
         <div class="save-state" aria-live="polite"></div>
       </div>
-      <button class="btn remove-saved" type="button">Remove</button>
+      <button class="btn remove-saved" type="button" aria-label="Remove {{ item.title }} from saved reading">Remove</button>
+      <div class="saved-removal" hidden><span>Removed from saved reading: <strong>{{ item.title }}</strong></span><button class="btn undo-saved" type="button">Undo</button><span class="removal-state" role="status"></span></div>
     </article>
     {% endfor %}
   </div>
@@ -108,6 +54,7 @@
     {% if query %}No saved items match “{{ query }}”.{% else %}Nothing saved yet. Use “Save for later” on any digest item.{% endif %}
   </div>
   {% endif %}
+  <details class="saved-rating-help"><summary>About ratings</summary><p>Ratings guide future recommendations. Less relevant and Not relevant lower their priority; reasons distinguish topic fit, difficulty and access.</p></details>
   {% if pages > 1 %}<nav class="saved-actions" aria-label="Saved reading pages">
     {% if previous_page %}<a class="btn" href="{{ previous_page }}">Previous page</a>{% endif %}
     <span>Page {{ page }} of {{ pages }}</span>
@@ -118,22 +65,36 @@
 <script>
 (function () {
   const CSRF_TOKEN = {{ csrf_token|tojson }};
-  let reloadRequested = false;
-  function reloadSavedOnce() {
-    if (reloadRequested) return;
-    reloadRequested = true;
-    window.location.reload();
+  const bookmarkCards = new Map();
+  function updateSavedCount() {
+    const count = document.getElementById('archive-count');
+    if (!count) return;
+    const removed = Array.from(bookmarkCards.values()).filter(state => !state.saved).length;
+    const total = Math.max(0, Number(count.dataset.total) - removed);
+    const query = count.dataset.query;
+    count.textContent = `${total} saved item${total === 1 ? '' : 's'}${query ? ` matching “${query}”` : ''}`;
   }
-
+  function finishBookmark(state, saved) {
+    // A checkpoint may finish a pending action while its retry is in flight.
+    // Invalidating that response prevents a stale failure from changing the UI.
+    state.serial += 1;
+    state.saved = saved; state.pending = null;
+    state.card.dataset.savedState = saved ? 'saved' : 'removed';
+    delete state.remove.dataset.pendingRemoval; delete state.undo.dataset.pendingRestore;
+    state.content.hidden = !saved; state.remove.hidden = !saved; state.removal.hidden = saved;
+    state.remove.disabled = state.undo.disabled = false;
+    state.remove.textContent = 'Remove'; state.undo.textContent = 'Undo';
+    state.status.classList.remove('pending'); state.removalStatus.classList.remove('pending');
+    state.status.textContent = saved ? 'Restored to saved reading' : '';
+    state.removalStatus.textContent = '';
+    updateSavedCount();
+    (saved ? state.remove : state.undo).focus();
+  }
   window.addEventListener('dd-storage-committed', () => {
     document.querySelectorAll('.save-state.pending').forEach(status => {
       status.classList.remove('pending'); status.textContent='Saved in this browser';
     });
-    const removed = document.querySelectorAll('.remove-saved[data-pending-removal]');
-    if (removed.length) {
-      removed.forEach(button => {delete button.dataset.pendingRemoval;});
-      reloadSavedOnce();
-    }
+    bookmarkCards.forEach(state => { if (state.pending !== null) finishBookmark(state, state.pending); });
   });
 
   document.querySelectorAll(".saved-card").forEach(card => {
@@ -200,35 +161,48 @@
     }));
   });
   document.querySelectorAll(".remove-saved").forEach((button) => {
-    button.addEventListener("click", async () => {
-      const card = button.closest(".saved-card");
-      const itemId = card.dataset.itemId;
-      button.disabled = true;
+    const card = button.closest('.saved-card');
+    const state = {card, remove:button, undo:card.querySelector('.undo-saved'),
+      content:card.querySelector('.saved-content'), removal:card.querySelector('.saved-removal'),
+      status:card.querySelector('.save-state'), removalStatus:card.querySelector('.removal-state'),
+      saved:true, pending:null, serial:0};
+    bookmarkCards.set(card.dataset.itemId,state);
+    async function changeBookmark(saved) {
+      const serial = ++state.serial;
+      const action = saved ? state.undo : state.remove;
+      const status = saved ? state.removalStatus : state.status;
+      action.disabled = true;
+      status.textContent = saved ? 'Restoring…' : 'Removing…';
       try {
-        const response = await fetch(`/bookmark/${itemId}`, {
-          method: "DELETE",
-          headers: { "X-CSRF-Token": CSRF_TOKEN },
+        const response = await fetch(`/bookmark/${card.dataset.itemId}`, {
+          method:saved ? 'POST' : 'DELETE', headers:{'X-CSRF-Token':CSRF_TOKEN},
         });
-        if (!response.ok) throw new Error("HTTP " + response.status);
-        if (response.headers.get("x-dailydigest-storage") === "pending") {
-          button.dataset.pendingRemoval = "true";
-          button.disabled = false;
-          button.textContent = "Retry removal";
-          const status = card.querySelector(".save-state");
-          status.classList.add("pending");
-          status.textContent = "Removal recorded · saving browser copy…";
+        if (serial !== state.serial) return;
+        if (!response.ok) throw new Error('HTTP '+response.status);
+        if (response.headers.get('x-dailydigest-storage') === 'pending') {
+          state.pending = saved;
+          if (saved) state.undo.dataset.pendingRestore = 'true';
+          else state.remove.dataset.pendingRemoval = 'true';
+          status.classList.add('pending');
+          status.textContent = (saved ? 'Restore recorded' : 'Removal recorded')+' · saving browser copy…';
+          action.textContent = saved ? 'Retry restore' : 'Retry removal';
+        } else finishBookmark(state,saved);
+      } catch (_error) {
+        if (serial !== state.serial) return;
+        if (state.pending !== null) {
+          status.classList.add('pending');
+          status.textContent = 'Retry failed; '+(saved ? 'restore' : 'removal')+' is still waiting for browser storage.';
         } else {
-          delete button.dataset.pendingRemoval;
-          reloadSavedOnce();
+          status.classList.remove('pending');
+          status.textContent = saved ? 'Could not restore this item. Try again.' : 'Could not remove this item. Try again.';
         }
-      } catch (error) {
-        button.disabled = false;
-        button.textContent = "Try again";
-        const status = card.querySelector(".save-state");
-        status.classList.remove("pending");
-        status.textContent = "Could not remove this item. Try again.";
+        action.textContent = saved ? 'Retry restore' : 'Try again';
+      } finally {
+        if (serial === state.serial) action.disabled = false;
       }
-    });
+    }
+    state.remove.addEventListener('click', () => changeBookmark(false));
+    state.undo.addEventListener('click', () => changeBookmark(true));
   });
 })();
 </script>

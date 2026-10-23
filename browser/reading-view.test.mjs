@@ -2,10 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { DeferredWorker, validateReadingView, readingViewDocument, readingViewRoute, extractReadingView } from './reading-view.mjs';
 
-const fixture = () => ({ version: 4, date: '2026-10-15', savedAt: '2026-10-15T12:00:00.000Z', profileName:'Ada', notes:['A fictional note.'],
+const fixture = () => ({ version: 5, date: '2026-10-15', savedAt: '2026-10-15T12:00:00.000Z', profileName:'Ada', notes:['A fictional note.'],
   items: [{ section: 'Research', title: 'A <new> result', url: 'https://example.org/paper',
     meta: 'Nature · 2026-10-15', summary: 'A finding & its limits.', reason: 'Matches your interests',
-    opportunity: '', uncertainty: '', details: '' }] });
+    opportunity: '', uncertainty: '', details: '', why:'', caveat:'' }] });
 
 test('reading a cached desk does not create a Python worker; first action creates just one', () => {
   let created = 0;
@@ -77,11 +77,28 @@ test('related reading remains optional bounded links, not executable markup or a
     {...value.related,links:[{title:'Credentials',url:'https://user:secret@example.org'}]}]) {
     assert.equal(validateReadingView({...value,related}),null);
   }
-  for(const key of ['details','uncertainty']){
+  for(const key of ['details','uncertainty','why','caveat']){
     const invalid=fixture();delete invalid.items[0][key];
     assert.equal(validateReadingView(invalid),null,'Missing fidelity fields must regenerate from the saved desk');
     invalid.items[0][key]='x'.repeat(60001);assert.equal(validateReadingView(invalid),null);
   }
+});
+
+test('current cached layout promotes supplied context once and keeps section/date navigation inert', () => {
+  const value=fixture();
+  value.items[0].why='Compare assembly methods.';
+  value.items[0].caveat='Only simulated <not validated>.';
+  value.items[0].details='Abstract\nThe source abstract.';
+  const html=readingViewDocument(value,'light','https://example.org/desk/reading-view.mjs');
+  assert.match(html,/aria-label="In this digest"/);
+  assert.match(html,/href="about:srcdoc#cached-section-0">Research <span>1<\/span>/);
+  assert.match(html,/<time class="digest-date" datetime="2026-10-15">2026-10-15/);
+  assert.equal((html.match(/Compare assembly methods\./g)||[]).length,1);
+  assert.match(html,/Only simulated &lt;not validated&gt;/);
+  assert.ok(html.indexOf('Compare assembly methods.')<html.indexOf('<details>'));
+  assert.match(html,/font-src data:/);
+  assert.match(html,/script-src 'none'/);
+  assert.equal(validateReadingView({...value,version:4}),null,'The older disposable copy regenerates from SQLite');
 });
 
 test('saved opportunity facts are explicitly historical rather than rechecked eligibility', () => {

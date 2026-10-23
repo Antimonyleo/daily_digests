@@ -3,9 +3,9 @@ import assert from 'node:assert/strict';
 import {extractReadingView,readingViewDocument,validateReadingView} from './reading-view.mjs';
 
 const companion={title:'How the molecular hinge works',url:'https://example.org/commentary',publicationLabel:'News & Views'};
-const fixture=()=>({version:4,date:'2026-10-22',savedAt:'2026-10-22T12:00:00Z',profileName:'Reader',notes:[],
+const fixture=()=>({version:5,date:'2026-10-22',savedAt:'2026-10-22T12:00:00Z',profileName:'Reader',notes:[],
  items:[{section:'Research',title:'A molecular hinge',url:'https://example.org/research',meta:'Research article',
-  summary:'A measured result.',reason:'DNA origami',opportunity:'',uncertainty:'',details:'',companions:[companion]}]});
+  summary:'A measured result.',reason:'DNA origami',opportunity:'',uncertainty:'',details:'',why:'',caveat:'',companions:[companion]}]});
 
 test('cached reading preserves each companion label and link beneath its research paper',()=>{
  const text={'.title-link':'A molecular hinge','.meta':'Research article','.summary-primary .summary-text, .summary':'A measured result.'};

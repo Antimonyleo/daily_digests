@@ -293,6 +293,7 @@ def test_pip_interrupted_drag_releases_capture_and_allows_feeding(interruption):
     _run_pip_js('''
         pipDock.matches = true;
         teaPet.events.pointerdown({button:0, pointerId:1, clientX:30, clientY:30, preventDefault() {}});
+        teaPet.events.pointermove({pointerId:1, clientX:80, clientY:80});
         assert.equal(teaBreak.classList.contains('is-dragging'), true);
     ''' + interrupt + '''
         assert.equal(pipDrag, null);
@@ -311,7 +312,11 @@ def test_display_preferences_and_menu_keyboard_dismissal(storage_available):
 
     base = TEMPLATE.with_name('_base.html.j2').read_text()
     base = base.replace('{% include "_rating_queue.js.j2" %}', TEMPLATE.with_name('_rating_queue.js.j2').read_text())
-    scripts = re.findall(r'<script>(.*?)</script>', base, re.DOTALL)
+    # Exercise the actual theme bootstrap and display-menu controller. Other
+    # base scripts have independent tests and may contain Jinja component calls.
+    scripts = [script for script in re.findall(r'<script>(.*?)</script>', base, re.DOTALL)
+               if 'const savedTheme =' in script or 'const displayButton =' in script]
+    assert len(scripts) == 2
     _run_js(f'const storageAvailable = {str(storage_available).lower()};' + '''
         const assert = require('node:assert/strict');
         const nodes = {};
