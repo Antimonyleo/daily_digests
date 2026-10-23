@@ -53,7 +53,7 @@ def test_settings_starts_with_interests_and_discloses_optional_fields(monkeypatc
 
     assert fields["topics"][1] == ()
     assert html.index('id="topics"') < html.index('id="name"')
-    assert fields["bio"][1] == ("profile-options",)
+    assert fields["bio"][1] == ()
     assert fields["dw-hidden"][1] == ("profile-options",)
     assert fields["llm_model"][1] == ("summary-options",)
     assert "open" not in fields["profile-options"][0]
@@ -189,14 +189,20 @@ def test_browser_validation_reveals_nested_closed_details():
             if (name === 'invalid') { invalid = fn; assert.equal(capture, true); }
         }};
         const document = {querySelector: () => form, getElementById: () => ({})};
+        const priorities = {open: false};
+        let priorityReveals = 0;
+        const showPriorities = () => { priorityReveals++; };
     ''' + script + '''
         const outer = {tagName: 'DETAILS', open: false, parentElement: form};
         const inner = {tagName: 'DETAILS', open: false, parentElement: outer};
         const hidden = {tagName: 'DIV', hidden: true, parentElement: inner};
-        invalid({target: {parentElement: hidden}});
+        invalid({target: {matches: () => false, parentElement: hidden}});
         assert.equal(inner.open, true);
         assert.equal(outer.open, true);
         assert.equal(hidden.hidden, false);
+        invalid({target: {matches: selector => selector === '[data-interest-weight]', parentElement: form}});
+        assert.equal(priorities.open, true);
+        assert.equal(priorityReveals, 1, 'Priority CSS must update synchronously before native focus');
     '''], capture_output=True, text=True, timeout=10)
     assert result.returncode == 0, json.dumps(result.stderr)
 
@@ -244,8 +250,10 @@ def test_advanced_interest_validation_preserves_form_and_saved_profile(monkeypat
 def test_advanced_interests_and_coverage_limits_are_discoverable(monkeypatch, tmp_path):
     html = _render_settings(monkeypatch, tmp_path)
     fields = FormElements(html).elements
-    for field in ("authors_of_interest", "seed_works", "context_keywords"):
+    for field in ("authors_of_interest", "context_keywords"):
         assert fields[field][1] == ("advanced-interests",)
+    assert fields["seed_works"][1] == ("paper-examples",)
+    assert "open" not in fields["paper-examples"][0]
     assert "open" not in fields["advanced-interests"][0]
     assert "Grants.gov" in html and "EMBL" in html
     assert "not exhaustive" in html

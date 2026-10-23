@@ -3,6 +3,7 @@
 .github
 .venv
 data
+dailydigest-reader-response*.json
 *.db
 *.db-shm
 *.db-wal

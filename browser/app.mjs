@@ -1,9 +1,10 @@
 const LOCAL_ORIGIN = 'http://127.0.0.1:8765';
 import { formatComputeProgress } from './compute.mjs';
-import { DeferredWorker, extractReadingView, readReadingView, readingViewDocument, hasSavedDesk } from './reading-view.mjs';
+import { DeferredWorker, extractReadingView, readReadingView, readingViewDocument, readingViewRoute, hasSavedDesk, SHARED_READING_STYLES } from './reading-view.mjs';
 import { createTabHandoff } from './tab-handoff.mjs';
 import { initializeQuickGuide } from './guide.mjs';
 import { createLinkedBackup, linkedBackupStore, createBackupScheduler } from './linked-backup.mjs';
+import { prepareDefaultCPU, readComputeChoice } from './cpu-startup.mjs';
 
 export function backupReminderDue({lastExport, firstOpen, now = Date.now()}) {
   const exported = lastExport ? new Date(lastExport).getTime() : NaN;
@@ -112,6 +113,73 @@ export function skipToReadingDesk(event, frame, startup) {
   const target = frame.hidden ? startup : frame.contentDocument?.querySelector('main') || frame;
   if (target === startup) target.tabIndex = -1;
   target.focus();
+}
+
+/** Mount only build-owned Pip markup in the trusted shell, never article HTML. */
+export function mountCachedReadingPip(frame, view) {
+  const document = frame.ownerDocument, window = document.defaultView;
+  const controller = new window.AbortController();
+  const host = document.createElement('div'); host.id = 'cached-pip';
+  const stylesheet = document.createElement('link'); stylesheet.rel = 'stylesheet';
+  stylesheet.href = new URL('./pip.css', import.meta.url).href;
+  const styled = new Promise((resolve, reject) => {
+    stylesheet.addEventListener('load', resolve, {once:true});
+    stylesheet.addEventListener('error', () => reject(new Error('Pip styles unavailable')), {once:true});
+    controller.signal.addEventListener('abort', resolve, {once:true});
+  });
+  document.head.append(stylesheet); frame.after(host);
+  const placeDock = () => host.style.setProperty('--cached-pip-bottom', `${Math.max(18, window.innerHeight - frame.getBoundingClientRect().bottom + 18)}px`);
+  const placement = new window.ResizeObserver(placeDock);
+  placement.observe(frame);
+  window.addEventListener('resize', placeDock, {signal:controller.signal});
+  placeDock();
+  const toggle = document.createElement('button'); toggle.type = 'button'; toggle.id = 'cached-pip-toggle';
+  document.querySelector('#reading-view-notice > div').append(toggle);
+  let disposed = false, unmount = () => {}, compactOpen = false, focusRequested = false;
+  const focusPip = () => (host.querySelector('#tea-another:not(:disabled)') || host.querySelector('#tea-pet'))?.focus();
+  const dock = window.matchMedia('(min-width: 1440px)');
+  toggle.setAttribute('aria-controls', host.id);
+  const visibility = () => {
+    const hidden = document.documentElement.dataset.pip === 'hidden';
+    host.hidden = hidden || (!dock.matches && !compactOpen);
+    toggle.textContent = hidden ? 'Show Pip' : host.hidden ? 'Visit Pip' : 'Hide Pip';
+    toggle.setAttribute('aria-expanded', String(!host.hidden));
+  };
+  try { document.documentElement.dataset.pip = window.localStorage.getItem('dailydigest-pip') === 'hidden' ? 'hidden' : 'visible'; }
+  catch { document.documentElement.dataset.pip = 'visible'; }
+  visibility();
+  dock.addEventListener('change', visibility, {signal:controller.signal});
+  toggle.addEventListener('click', () => {
+    const value = host.hidden ? 'visible' : 'hidden';
+    compactOpen = value === 'visible';
+    focusRequested = compactOpen;
+    document.documentElement.dataset.pip = value;
+    try { window.localStorage.setItem('dailydigest-pip', value); } catch { /* Optional preference. */ }
+    visibility(); document.dispatchEvent(new window.Event('pipvisibilitychange'));
+    if (focusRequested) focusPip();
+  }, {signal:controller.signal});
+  const dispose = () => {
+    if (disposed) return;
+    disposed = true; controller.abort(); placement.disconnect(); unmount(); host.remove(); toggle.remove(); stylesheet.remove();
+  };
+  window.addEventListener('pagehide', event => { if (!event.persisted) dispose(); }, {signal:controller.signal});
+  const ready = Promise.all([
+    fetch(new URL('./pip.html', import.meta.url), {signal:controller.signal}).then(response => {
+      if (!response.ok) throw new Error('Pip markup unavailable');
+      return response.text();
+    }),
+    import(new URL('./pip.mjs', import.meta.url).href),
+    styled,
+  ]).then(([html, module]) => {
+    if (disposed) return;
+    // This is the static, same-build component. Cached article data enters only
+    // the controller's textContent-based notes API, never this HTML assignment.
+    host.innerHTML = html;
+    unmount = module.mountPip(host, {digestId:view.date, notes:view.notes});
+    host.dataset.state = 'ready';
+    if (focusRequested) focusPip();
+  }).catch(error => { dispose(); if (error.name !== 'AbortError') throw error; });
+  return {ready, dispose};
 }
 
 export async function settleRenderedEdits(frame, {timeoutMs = 5000} = {}) {
@@ -385,11 +453,15 @@ async function boot() {
   document.querySelector('.skip-link').onclick = event => skipToReadingDesk(event, frame, startup);
   const status = document.getElementById('status');
   const startupStatus = document.getElementById('startup-status');
+  let ready = false, companionBackends = [], themeObserver, restoringBackup = false;
   const topicDraftForm = document.getElementById('startup-topics-form');
   const topicDraft = document.getElementById('startup-topics');
   const topicDraftKey = `dailydigest:startup-topics:${location.pathname}`;
   let draftSubmitted = false;
-  try { topicDraft.value = sessionStorage.getItem(topicDraftKey) || ''; } catch { /* optional draft retention */ }
+  try {
+    topicDraft.value = sessionStorage.getItem(topicDraftKey) || '';
+    draftSubmitted = sessionStorage.getItem(topicDraftKey + ':submitted') === 'true';
+  } catch { /* optional draft retention */ }
   topicDraft.addEventListener('input', () => {
     try { sessionStorage.setItem(topicDraftKey, topicDraft.value); } catch { /* keep the on-screen draft */ }
   });
@@ -401,6 +473,7 @@ async function boot() {
       return;
     }
     draftSubmitted = true;
+    try { sessionStorage.setItem(topicDraftKey + ':submitted', 'true'); } catch { /* current page still keeps it */ }
     document.getElementById('startup-topics-message').textContent = 'Keeping these topics while the reading desk opens…';
     if (ready) navigate('/setup');
   });
@@ -487,14 +560,25 @@ async function boot() {
     if (isolate) url.searchParams.set('isolate', '1');
     return navigator.serviceWorker.register(url, { scope: new URL('.', import.meta.url).pathname });
   };
+  // Keep the topic draft usable during the brief, one-time CPU preparation.
+  hasSavedDesk(indexedDB, `dailydigest:${new URL('.', import.meta.url).pathname}`)
+    .then(present => { if (!present && !startupFailedForDraft()) topicDraftForm.hidden = false; }).catch(() => {});
+  let cpuStartup = {isolate: isolationRequested, reload: false};
+  try {
+    cpuStartup = await prepareDefaultCPU({navigator, storage: localStorage, session: sessionStorage,
+      key: isolationKey, isolated: crossOriginIsolated, secure: isSecureContext,
+      readChoice: () => readComputeChoice(indexedDB, `dailydigest:${new URL('.', import.meta.url).pathname}`),
+      register: registerWorker});
+  } catch { /* Storage-restricted browsers retain their existing CPU path. */ }
+  isolationRequested = cpuStartup.isolate;
+  if (cpuStartup.reload) { location.reload(); return; }
   if ('serviceWorker' in navigator) registerWorker(isolationRequested)
     .catch(error => { setStatus(`App shortcut unavailable: ${error.message}`); });
   let token = crypto.randomUUID();
   const worker = new DeferredWorker(() => new Worker(new URL('./worker.mjs?compute=v1', import.meta.url), { type: 'module' }));
   const client = new WorkerClient(worker);
   const streams = new Map();
-  let ready = false, companionBackends = [], themeObserver, restoringBackup = false;
-  let runtimeStarted = false, frameGeneration = null, cacheTimer;
+  let runtimeStarted = false, frameGeneration = null, cacheTimer, cachedPip;
   const scrollPositions = new Map();
   let tabMoved = false, dirtySetup = false, hasUnflushedEdits = false, handoff;
   const tabActions = document.getElementById('tab-wait-actions');
@@ -508,6 +592,7 @@ async function boot() {
     if (path) history.replaceState(null, '', '#' + localPath(path));
     if (runtimeStarted) return;
     runtimeStarted = true;
+    cachedPip?.dispose(); cachedPip = null;
     for (const button of previewNotice.querySelectorAll('button')) button.disabled = true;
     document.getElementById('reading-view-status').textContent = 'Opening controls… You can keep reading below.';
     worker.postMessage({ type: 'init' });
@@ -567,7 +652,7 @@ async function boot() {
   let navigation = 0;
   let activePath = '/';
   let computeTimer, latestCompute, computeReceivedAt, lastAnnouncement;
-  const computeNotice = 'Brewing uses this device’s processor and memory, and can increase heat, fan noise and battery use. Thousands of new articles may take 20 minutes or more on one CPU core. Choose optional acceleration in Data & compute. Keep this tab open until the brew finishes to save its calculations.';
+  const computeNotice = 'Brew runs locally on this device. Keep this tab open until it finishes. Change computation mode in Data & compute.';
   frame.addEventListener('load', () => {
     frame.contentWindow.postMessage({ type: 'compute-config', token, message: computeNotice }, location.origin);
     sendCompanionCapabilities();
@@ -593,7 +678,10 @@ async function boot() {
       topics.value = topicDraft.value;
       topics.dispatchEvent(new frame.contentWindow.Event('input', {bubbles:true}));
       dirtySetup = true;
-      try { sessionStorage.removeItem(topicDraftKey); } catch { /* harmless retained draft */ }
+      try {
+        sessionStorage.removeItem(topicDraftKey);
+        sessionStorage.removeItem(topicDraftKey + ':submitted');
+      } catch { /* harmless retained draft */ }
       topicDraft.value = '';
       draftSubmitted = false;
     }
@@ -1301,7 +1389,7 @@ async function boot() {
     } catch (error) { setStatus(error.message); }
     finally { useThisTab.disabled = false; }
   };
-  document.getElementById('reading-view-open').onclick = () => startRuntime('/');
+  document.getElementById('reading-view-open').onclick = () => startRuntime(readingViewRoute(preview));
   document.getElementById('reading-view-brew').onclick = () => startRuntime('/run');
   // Read one small derived record, never the full database or vector cache.
   // Unavailable browser storage falls back to the existing startup/recovery path.
@@ -1316,15 +1404,19 @@ async function boot() {
     guide.showWelcome(true);
     frame.setAttribute('sandbox', 'allow-popups allow-popups-to-escape-sandbox');
     document.title = `Saved DailyDigest ${preview.date}`;
-    frame.srcdoc = readingViewDocument(preview, document.documentElement.dataset.theme);
+    frame.srcdoc = readingViewDocument(preview, document.documentElement.dataset.theme, import.meta.url, new Date(), SHARED_READING_STYLES);
     frame.hidden = false; startup.hidden = true;
     previewNotice.hidden = false;
+    cachedPip = mountCachedReadingPip(frame, preview);
+    cachedPip.ready.catch(() => {
+      if (!runtimeStarted) document.getElementById('reading-view-status').textContent += ' Pip could not load; open controls to retry.';
+    });
     startup.dataset.state = 'reading';
-    document.getElementById('reading-view-status').textContent = `Last saved digest · ${preview.date}. Read now; open controls to rate, save or change settings.`;
-    setStatus('Saved reading view · computation starts when you open controls');
-    document.getElementById('compute-support').textContent = 'Open the full reading desk to choose acceleration.';
+    document.getElementById('reading-view-status').textContent = `Saved digest · ${preview.date}`;
+    setStatus('Ready to read');
+    document.getElementById('compute-support').textContent = 'Open controls to choose acceleration.';
     document.getElementById('compute-status').textContent = 'Computation is paused while you read the saved digest.';
-    companionStatus.textContent = 'Open the full reading desk to connect a companion.';
+    companionStatus.textContent = 'Open controls to connect a companion.';
     document.getElementById('backup-runtime-notice').hidden = false;
     checkRelease();
   } else {

@@ -73,7 +73,6 @@ from .store import (
     recent_viewed_facet_dates,
     session_scope,
     upsert_items,
-    write_summaries,
 )
 from .summarize import (
     effective_summary_backend,
@@ -247,8 +246,21 @@ def _best_per_other_section(
     return list(best.values())
 
 
+def _restore_research_order(picked, ordered):
+    """Preserve explicit selection priorities through balancing and truncation."""
+    positions = {_row_feature_key(row): index for index, (row, _) in enumerate(ordered)
+                 if (row.section or "") == "research"}
+    research = iter(sorted(
+        [pair for pair in picked if (pair[0].section or "") == "research"],
+        key=lambda pair: positions.get(_row_feature_key(pair[0]), len(ordered)),
+    ))
+    return [next(research) if (row.section or "") == "research" else (row, score)
+            for row, score in picked]
+
+
 def apply_reading_mode(
-    picked: list[tuple[ItemRow, float]], reading_mode: str, *, as_of_date: date | None = None
+    picked: list[tuple[ItemRow, float]], reading_mode: str, *, as_of_date: date | None = None,
+    preserve_research_order: bool = False,
 ) -> list[tuple[ItemRow, float]]:
     """Limit an already-qualified slate to today's requested reading depth.
 
@@ -268,24 +280,27 @@ def apply_reading_mode(
         pair for pair in picked if (pair[0].section or "") not in DEADLINE_SECTIONS
     ]
     ranked = sorted(reading_picks, key=lambda pair: pair[1], reverse=True)
+    if preserve_research_order:
+        ranked = _restore_research_order(ranked, picked)
+
+    def finish(selected):
+        result = sorted(selected, key=lambda pair: pair[1], reverse=True)
+        return _restore_research_order(result, picked) if preserve_research_order else result
+
     kept_deadline = _limit_deadline_picks(deadline_picks, mode, as_of_date)
     trimmed_deadline = len(kept_deadline) != len(deadline_picks)
     deadline_picks = kept_deadline
     if mode == "minimal":
         research = [pair for pair in ranked if (pair[0].section or "") == "research"]
         selected = research[:MINIMAL_RESEARCH_LIMIT] + _best_per_other_section(ranked)
-        return sorted(
-            selected + deadline_picks, key=lambda pair: pair[1], reverse=True
-        )
+        return finish(selected + deadline_picks)
 
     limit = READING_MODE_LIMITS[mode]
     if limit is None or len(reading_picks) <= limit:
         # Nothing was cut, so preserve the caller's ordering exactly.
         if not trimmed_deadline:
             return picked
-        return sorted(
-            reading_picks + deadline_picks, key=lambda pair: pair[1], reverse=True
-        )
+        return finish(reading_picks + deadline_picks)
     # Scores are NOT comparable across sections: a research pick fuses to ~1.0
     # while a strong news pick tops out near 0.5. A plain global top-N therefore
     # kept only research and silently emptied every other section the reader had
@@ -297,9 +312,7 @@ def apply_reading_mode(
     fill = [
         pair for pair in ranked if _row_feature_key(pair[0]) not in reserved_keys
     ][: max(0, remaining)]
-    return sorted(
-        reserved + fill + deadline_picks, key=lambda pair: pair[1], reverse=True
-    )
+    return finish(reserved + fill + deadline_picks)
 
 
 def _interest_coverage_audit(snapshot: dict) -> list[dict]:
@@ -1216,7 +1229,8 @@ def _score_items_for_pipeline(
 def _prepare_ranking_enrichment(items, topic_scores) -> None:
     """Resolve venue evidence for potentially eligible research before scoring."""
     settings = get_settings()
-    if not getattr(settings, "citation_enrichment", False):
+    if not (getattr(settings, "citation_enrichment", False)
+            or getattr(settings, "publication_enrichment", False)):
         return
     # A venue discovered by lookup can receive the strongest existing credit.
     # Keep borderline candidates until that evidence is resolved, while avoiding
@@ -1226,6 +1240,22 @@ def _prepare_ranking_enrichment(items, topic_scores) -> None:
     candidates = [row for row, topic in zip(items, topic_scores, strict=True)
                   if (row.section or "") == "research"
                   and (not settings.adaptive_section_sizes or float(topic) >= floor)]
+    if getattr(settings, "publication_enrichment", False):
+        from .publication_enrichment import enrich_publications
+        from .store import persist_publication_metadata
+
+        candidate_ids = {id(row) for row in candidates}
+        prioritized = [row for row, _ in sorted(
+            zip(items, topic_scores, strict=True), key=lambda pair: float(pair[1]), reverse=True
+        ) if id(row) in candidate_ids]
+        previous = {id(row): row.metadata_json for row in prioritized}
+        diagnostics = enrich_publications(prioritized, settings=settings)
+        changed = [row for row in prioritized if row.metadata_json != previous[id(row)]]
+        if changed:
+            persist_publication_metadata(changed)
+        logger.info("publication metadata: %s", diagnostics)
+    if not getattr(settings, "citation_enrichment", False):
+        return
     try:
         from .rank.enrich import prepare_enrichment
         prepare_enrichment(candidates, settings=settings)
@@ -1460,7 +1490,9 @@ def run_all(
                 )
     except Exception as _e:  # noqa: BLE001
         logger.warning("carryover injection failed: %s", _e)
-    after_reviewed = exclude_reviewed_items(recent_raw)
+    from .store import exclude_publication_companions
+
+    after_reviewed = exclude_reviewed_items(exclude_publication_companions(recent_raw))
     after_shown = exclude_previously_shown(after_reviewed, exclude_digest_id=digest_id)
     # Manual "I already know this" flags win over every re-surfacing rule above,
     # including the standing funding/events shortlist that never hides an active
@@ -1520,6 +1552,14 @@ def run_all(
     scored, score_features = _score_items_for_pipeline(
         items, profile_vec, profile.downweight, attribution=_attribution_ctx
     )
+    # A bounded lookup can reveal commentary/retraction after initial gating.
+    # Recheck before selection so new evidence cannot occupy a research slot.
+    if getattr(section_settings, "publication_enrichment", False):
+        verified_rows, publication_drops = _quality_gate([row for row, _ in scored])
+        verified_ids = {id(row) for row in verified_rows}
+        scored = [(row, score) for row, score in scored if id(row) in verified_ids]
+        if publication_drops:
+            funnel_audit["publication_metadata_drops"] = publication_drops
     scored = _apply_opportunity_profile_relevance(
         scored, score_features, opportunity_profile
     )
@@ -1781,8 +1821,13 @@ def run_all(
         except Exception as _e:  # noqa: BLE001
             logger.warning("exploration slot failed: %s", _e)
 
+    picked = _restore_research_order(picked, pickable)
     pre_mode_picked = picked
-    picked = apply_reading_mode(picked, reading_mode, as_of_date=decision_local_date)
+    picked = apply_reading_mode(picked, reading_mode, as_of_date=decision_local_date,
+                                preserve_research_order=True)
+    from .rank.topic_support import annotate_topic_support
+
+    annotate_topic_support(picked, score_features, profile)
     _annotate_research_evidence(picked, score_features)
     reading_mode_overflow = _build_reading_mode_overflow_audit(
         pre_mode_picked, picked, score_features
@@ -1885,11 +1930,6 @@ def run_all(
         for item_id in new_summaries
         if item_id in row_by_id
     }
-    write_summaries(
-        {rid: s for rid, s in new_summaries.items() if s},
-        signatures=new_signatures,
-        backends=summary_backends,
-    )
     _emit(progress_callback, "summarize_done", {"items": len(new_summaries)})
     stage_done("summary")
     check_cancel()
@@ -1955,6 +1995,7 @@ def run_all(
                     contribution_claims=_feature(row).get("contribution_claims"),
                     article_evidence=_feature(row).get("article_evidence"),
                     topic_alignment=_feature(row).get("topic_alignment"),
+                    topic_support=_feature(row).get("topic_support"),
                 ),
             )
             for row, score, label in labeled
@@ -2074,6 +2115,9 @@ def run_all(
             audits=_audits,
             run_id=run_id,
             ranking_snapshot=ranking_snapshot,
+            summaries={rid: text for rid, text in new_summaries.items() if text},
+            summary_signatures=new_signatures,
+            summary_backends=summary_backends,
         )
         published = True
         stage_done("publication")

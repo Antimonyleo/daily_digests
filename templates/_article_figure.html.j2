@@ -6,7 +6,7 @@
     <a class="figure-link" href="{{ item.figure.url }}" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer" aria-label="Expand {{ item.figure.label|lower }} for {{ item.title }}">
       <img data-src="{{ item.figure.url }}" alt="{{ item.figure.alt or item.figure.label }}" loading="lazy" decoding="async" referrerpolicy="no-referrer" crossorigin="anonymous">
     </a>
-    <figcaption>Image supplied in the article feed · <a href="{{ item.url }}" target="_blank" rel="noopener noreferrer">Publisher article and credit</a>. <span class="figure-unavailable" hidden>Preview unavailable here; open the image or publisher article.</span></figcaption>
+    <figcaption>Image supplied in the article feed · <a href="{{ item.url }}" target="_blank" rel="noopener noreferrer">Publisher article and credit</a>. <span class="figure-unavailable" role="status" hidden>Preview unavailable. <button type="button" class="figure-retry">Retry image</button></span></figcaption>
   </figure>
 </details>
 {% endif %}

@@ -10,7 +10,7 @@
 <section class="card study">
   <a class="btn" href="/">Back to reading</a>
   <h1>Useful research picks per digest</h1>
-  <p>This study uses your current explicit ratings from recent saved research slates. “Useful” means Relevant or Must read. Unrated papers remain unknown. Repeated papers can share a rating across days; this is not an independent comparison of ranking algorithms or proof of improvement.</p>
+  <p>This study uses your current explicit ratings from recent saved research slates. “Useful” means Relevant or Very relevant. Unrated papers remain unknown. Repeated papers can share a rating across days; this is not an independent comparison of ranking algorithms or proof of improvement.</p>
   <table><caption>Up to 14 recent digests · current ratings</caption>
     <thead><tr><th scope="col">Digest</th><th scope="col">Useful</th><th scope="col">Rated</th><th scope="col">Unrated</th></tr></thead>
     <tbody>{% for day in days %}<tr><th scope="row">{{ day.digest_id }}</th><td>{{ day.useful }}</td><td>{{ day.rated }}</td><td>{{ day.unrated }}</td></tr>{% else %}<tr><td colspan="4">No saved research slates yet. Rate papers after your next brew to build this study.</td></tr>{% endfor %}</tbody>

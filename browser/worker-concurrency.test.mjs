@@ -32,9 +32,57 @@ function harness(overrides = {}) {
     configure: { id: 1, type: 'configure-companion', endpoint: 'http://127.0.0.1:9999', token: 'fixture' } };
 }
 
+function requestHarness({status = 200, method = 'POST', path = '/bookmark/5', busy = false} = {}) {
+  const checkpoint = deferred(), delivered = [];
+  let saved = false, flushes = 0;
+  const h = harness({
+    jobRunning: busy,
+    prepareComputePackages: async () => {},
+    storageWriter: {status: () => ({dirty: !saved, durable: saved}), schedule: () => {}},
+    persist: async () => { flushes++; saved = await checkpoint.promise; return saved; },
+    emit: value => delivered.push(JSON.parse(value)),
+    state: {py: {globals: {get: key => key === 'handle_request'
+      ? {callPromising: async () => JSON.stringify({id: 91, type: 'response', status, headers: {}, body: '{}'})}
+      : () => key === 'state_generation' ? 3 : false}}},
+  });
+  return {...h, checkpoint, delivered, flushes: () => flushes,
+    request: {id: 91, type: 'request', method, path}};
+}
+
+test('successful idle reader edits acknowledge only after the browser checkpoint', async () => {
+  for (const path of ['/vote/5/100', '/bookmark/5', '/known/5', '/setup']) {
+    const h = requestHarness({path});
+    const pending = h.send(h.request);
+    await turn();
+    assert.equal(h.delivered.length, 0, path + ' acknowledged before durable storage');
+    assert.equal(h.flushes(), 1);
+    h.checkpoint.resolve(true); await pending;
+    assert.equal(h.delivered[0].headers['x-dailydigest-storage'], 'saved');
+  }
+});
+
+test('a failed reader checkpoint remains pending and does not claim durability', async () => {
+  const h = requestHarness();
+  const pending = h.send(h.request);
+  await turn(); h.checkpoint.resolve(false); await pending;
+  assert.equal(h.flushes(), 1);
+  assert.equal(h.delivered[0].headers['x-dailydigest-storage'], 'pending');
+  assert.ok(h.replies.some(row => row.type === 'storage-dirty'));
+});
+
+test('reads, rejected changes and running jobs retain nonblocking checkpoint scheduling', async () => {
+  for (const options of [{method: 'GET'}, {status: 403}, {busy: true},
+    {path: '/run/start'}, {path: '/refresh'}, {path: '/ranking/train'}]) {
+    const h = requestHarness(options);
+    await h.send(h.request);
+    assert.equal(h.flushes(), 0, JSON.stringify(options));
+    assert.equal(h.delivered.length, 1);
+  }
+});
+
 test('reading copies require the current committed generation and cannot be stored during brewing', async () => {
-  const view={version:1,date:'2026-10-15',savedAt:'2026-10-15T12:00:00Z',items:[{
-    section:'Research',title:'Fictional paper',url:'https://example.org/paper',meta:'Nature',summary:'Finding',reason:'Topic fit',opportunity:''}]};
+  const view={version:4,profileName:'Ada',notes:[],date:'2026-10-15',savedAt:'2026-10-15T12:00:00Z',items:[{
+    section:'Research',title:'Fictional paper',url:'https://example.org/paper',meta:'Nature',summary:'Finding',reason:'Topic fit',opportunity:'',uncertainty:'',details:''}]};
   const h=harness({storageWriter:{status:()=>({durable:true})},state:{py:{globals:{get:()=>()=>7}}}});
   await h.send({id:1,type:'cache-reading-view',generation:6,view});
   assert.equal(JSON.parse(h.replies.at(-1).body).cached,false);

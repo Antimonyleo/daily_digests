@@ -50,6 +50,16 @@ for (const [name, gpu, expected] of [
   if (result.available) assert.equal(result.info.vendor, 'fixture');
 });
 
+test('a stalled GPU adapter probe cannot hold startup or Compute controls indefinitely', async () => {
+  const probe = production('probeGPU', {navigator: {gpu: {requestAdapter: () => new Promise(() => {})}}});
+  const result = await Promise.race([
+    probe({timeoutMs: 10}),
+    new Promise(resolve => setTimeout(() => resolve({reason: 'hung'}), 100)),
+  ]);
+  assert.equal(result.reason, 'probe-timeout');
+  assert.equal(result.available, false);
+});
+
 test('a suspended real job records recovery state until its final checkpoint commits', async () => {
   let release;
   const suspended = new Promise(resolve => { release = resolve; });
@@ -105,14 +115,25 @@ test('calculation packages load once on demand, sharing concurrent preparation',
   const order=[];
   const prepare=production('prepareComputePackages', {computePackagesReady:false,computePackagesPending:null,
     deferredPackages:['scipy','scikit-learn'],progress:()=>{},
-    state:{py:{loadPackage:async values=>order.push(Array.from(values))}}});
+    state:{py:{loadPackage:async values=>order.push(Array.from(values)),
+      runPythonAsync:async code=>order.push(code)}}});
   await Promise.all([prepare(),prepare()]);await prepare();
-  assert.deepEqual(order, [['scipy','scikit-learn']]);
+  assert.deepEqual(order, [['scipy','scikit-learn'], 'network.install_public_source_fallback(public_source_url)']);
 });
 
 test('failed calculation-library loading is retryable before any job is queued', async () => {
-  let calls=0;
+  let calls=0, adapters=0;
   const prepare=production('prepareComputePackages', {computePackagesReady:false,computePackagesPending:null,
-    deferredPackages:['scipy'],progress:()=>{},state:{py:{loadPackage:async()=>{if(++calls===1)throw Error('offline');}}}});
-  await assert.rejects(prepare(),/offline/);await prepare();assert.equal(calls,2);
+    deferredPackages:['scipy'],progress:()=>{},state:{py:{loadPackage:async()=>{if(++calls===1)throw Error('offline');},
+      runPythonAsync:async()=>{adapters++;}}}});
+  await assert.rejects(prepare(),/offline/);assert.equal(adapters,0);
+  await prepare();assert.equal(calls,2);assert.equal(adapters,1);
+});
+
+test('failed feed adapter initialization remains retryable', async () => {
+  let adapters=0;
+  const prepare=production('prepareComputePackages', {computePackagesReady:false,computePackagesPending:null,
+    deferredPackages:[],progress:()=>{},state:{py:{runPythonAsync:async()=>{if(++adapters===1)throw Error('adapter failed');}}}});
+  await assert.rejects(prepare(),/adapter failed/);await prepare();await prepare();
+  assert.equal(adapters,2);
 });

@@ -1,9 +1,9 @@
 {% macro feedback_controls(item) %}
-          <div class="vote-title">Your read</div>
-          <div class="vote-row" role="group" aria-label="Evaluate {{ item.label }}">
+          <div class="vote-title">Relevance to you</div>
+          <div class="vote-row" role="group" aria-label="Rate relevance of {{ item.label }}">
             <button class="vote-btn must{% if item.current_grade == 100 %} active{% endif %}"
                     data-grade="100" type="button" aria-pressed="{{ 'true' if item.current_grade == 100 else 'false' }}">
-              <span class="vote-label">Must read</span>
+              <span class="vote-label">Very relevant</span>
             </button>
             <button class="vote-btn good{% if item.current_grade == 70 %} active{% endif %}"
                     data-grade="70" type="button" aria-pressed="{{ 'true' if item.current_grade == 70 else 'false' }}">
@@ -11,19 +11,25 @@
             </button>
             <button class="vote-btn neutral{% if item.current_grade == 40 %} active{% endif %}"
                     data-grade="40" type="button" title="Lower relevance; teaches a negative preference" aria-pressed="{{ 'true' if item.current_grade == 40 else 'false' }}">
-              <span class="vote-label">Hmmm</span>
+              <span class="vote-label">Less relevant</span>
             </button>
             <button class="vote-btn bad{% if item.current_grade == 10 %} active{% endif %}"
                     data-grade="10" type="button" aria-pressed="{{ 'true' if item.current_grade == 10 else 'false' }}">
-              <span class="vote-label">Not for me</span>
+              <span class="vote-label">Not relevant</span>
             </button>
           </div>
-          <p class="rating-help">Hmmm and Not for me lower future recommendations. Reasons are optional.</p>
+          <p class="rating-help">Less relevant and Not relevant lower future recommendations. Reasons help distinguish topic fit from difficulty or access.</p>
           <div class="reason-block"{% if not (item.current_grade in [40, 10]) %} hidden{% endif %}>
           <div class="reason-prompt">Why? (optional)</div>
           <div class="reason-chip-row" role="group" aria-label="Feedback reason for {{ item.label }}">
             <button class="reason-chip{% if 'off_topic' in item.current_reasons %} active{% endif %}" data-reason="off_topic" type="button" aria-pressed="{{ 'true' if 'off_topic' in item.current_reasons else 'false' }}">Off topic</button>
-            <button class="reason-chip{% if 'too_contextual' in item.current_reasons %} active{% endif %}" data-reason="too_contextual" type="button" aria-pressed="{{ 'true' if 'too_contextual' in item.current_reasons else 'false' }}">Too contextual</button>
+            <button class="reason-chip{% if 'too_contextual' in item.current_reasons %} active{% endif %}" data-reason="too_contextual" type="button" title="Related background, but not the work I need" aria-pressed="{{ 'true' if 'too_contextual' in item.current_reasons else 'false' }}">Background only</button>
+            <button class="reason-chip{% if 'too_technical' in item.current_reasons %} active{% endif %}" data-reason="too_technical" type="button" aria-pressed="{{ 'true' if 'too_technical' in item.current_reasons else 'false' }}">Too technical</button>
+          </div>
+          {% set extra_reasons = ['low_quality', 'low_impact', 'promotional', 'access_friction', 'duplicate', 'already_known', 'not_urgent'] %}
+          <details class="more-reasons"{% if item.current_reasons | select('in', extra_reasons) | list %} open{% endif %}>
+          <summary class="reason-prompt">More reasons</summary>
+          <div class="reason-chip-row" role="group" aria-label="Other feedback reasons for {{ item.label }}">
             <button class="reason-chip{% if 'low_quality' in item.current_reasons %} active{% endif %}" data-reason="low_quality" type="button" aria-pressed="{{ 'true' if 'low_quality' in item.current_reasons else 'false' }}">Low quality</button>
             <button class="reason-chip{% if 'low_impact' in item.current_reasons %} active{% endif %}" data-reason="low_impact" type="button" aria-pressed="{{ 'true' if 'low_impact' in item.current_reasons else 'false' }}">Low impact</button>
             <button class="reason-chip{% if 'promotional' in item.current_reasons %} active{% endif %}" data-reason="promotional" type="button" aria-pressed="{{ 'true' if 'promotional' in item.current_reasons else 'false' }}">Too promotional</button>
@@ -32,6 +38,7 @@
             <button class="reason-chip{% if 'already_known' in item.current_reasons %} active{% endif %}" data-reason="already_known" type="button" aria-pressed="{{ 'true' if 'already_known' in item.current_reasons else 'false' }}">Already known</button>
             <button class="reason-chip{% if 'not_urgent' in item.current_reasons %} active{% endif %}" data-reason="not_urgent" type="button" aria-pressed="{{ 'true' if 'not_urgent' in item.current_reasons else 'false' }}">Not urgent</button>
           </div>
+          </details>
           </div>
 
           <div class="feedback-actions">

@@ -184,6 +184,26 @@ class OpenAlexSource:
                     f"{spec.name}: {len(core)} core queries exceed the "
                     f"{self.PROFILE_MAX_ITEMS}-item retrieval budget"
                 )
+            alias_queries = {}
+            for term in core:
+                phrases = []
+                seen_aliases = {term.casefold()}
+                for alias in aliases.get(term.casefold(), []):
+                    alias = alias.strip()
+                    if alias and alias.casefold() not in seen_aliases:
+                        phrases.append(alias)
+                        seen_aliases.add(alias.casefold())
+                if phrases:
+                    alias_queries[term] = " OR ".join(
+                        json.dumps(phrase, ensure_ascii=False) for phrase in phrases
+                    )
+            # Split only when the original first pass can leave a full lane
+            # even if every query saturates. Otherwise preserve the prior OR
+            # coverage rather than silently dropping explicit vocabulary.
+            spare_requests = self.last_fetch_diagnostics["request_budget"] - len(terms)
+            spare_items = max(0, self.PROFILE_MAX_ITEMS - len(terms) * self.PROFILE_PER_TERM)
+            split_slots = max(0, min(spare_requests, spare_items // self.PROFILE_PER_TERM))
+            split_aliases = set(list(alias_queries)[:split_slots])
             out: list[Item] = []
             seen: set[str] = set()
             remaining = self.PROFILE_MAX_ITEMS
@@ -201,16 +221,12 @@ class OpenAlexSource:
                         "stop_reason": "item_budget", "failure": None,
                     })
                     continue
-                # One OR search per parent keeps overlapping synonyms from
-                # returning the same small slice repeatedly. Keep the original
-                # unquoted: OpenAlex quotes impose phrase adjacency, so adding
-                # an alias must not narrow the original stemmed word search.
-                # Explicit aliases remain quoted literal phrases.
-                phrases = list(dict.fromkeys([term, *aliases.get(term.casefold(), [])]))
-                query = term if len(phrases) == 1 else (
-                    "((" + term + ") OR "
-                    + " OR ".join(json.dumps(phrase, ensure_ascii=False) for phrase in phrases[1:]) + ")"
-                )
+                # Reserve the original query's result slots before broader
+                # aliases compete for the provider's relevance-sorted page.
+                query = term
+                combined = term in alias_queries and term not in split_aliases
+                if combined:
+                    query = f"(({term}) OR {alias_queries[term]})"
                 attempted += 1
                 core_attempted += int(index < len(core))
                 try:
@@ -224,6 +240,11 @@ class OpenAlexSource:
                     fetched = []
                 diagnostic = self.last_fetch_diagnostics["queries"][-1]
                 diagnostic["interest"] = term
+                diagnostic["query_role"] = (
+                    "combined" if combined else "core" if index < len(core) else "context"
+                )
+                if combined:
+                    diagnostic["alias_split_reason"] = "budget"
                 # Count raw rows, including duplicates/invalid records.
                 remaining -= min(cap, diagnostic["fetched_count"])
                 before = len(out)
@@ -237,6 +258,42 @@ class OpenAlexSource:
                 raise RuntimeError(f"{spec.name}: all core profile searches failed")
             if attempted and failures == attempted:
                 raise RuntimeError(f"{spec.name}: all profile searches failed")
+            # Optional explicit vocabulary shares the remaining original
+            # budgets. Never spend it before every core/context query got its
+            # reserved turn, or let alias success hide all-core failure.
+            for term in core:
+                if term not in split_aliases:
+                    continue
+                query = alias_queries[term]
+                cap = min(self.PROFILE_PER_TERM, remaining)
+                if not cap or attempted >= self.last_fetch_diagnostics["request_budget"]:
+                    self.last_fetch_diagnostics["queries"].append({
+                        "query": query, "interest": term, "query_role": "alias",
+                        "attempted": False, "request_count": 0,
+                        "fetched_count": 0, "returned_count": 0, "unique_yield": 0,
+                        "exhausted": False, "truncated": True,
+                        "stop_reason": "item_budget" if not cap else "request_budget",
+                        "failure": None,
+                    })
+                    continue
+                attempted += 1
+                try:
+                    fetched = self._fetch_works(
+                        spec, days, headers, cap=cap, query=query,
+                        upgrade_venue=True, max_pages=1,
+                    )
+                except RuntimeError:
+                    fetched = []
+                diagnostic = self.last_fetch_diagnostics["queries"][-1]
+                diagnostic.update(interest=term, query_role="alias")
+                remaining -= min(cap, diagnostic["fetched_count"])
+                before = len(out)
+                for item in fetched:
+                    if item.external_id not in seen:
+                        seen.add(item.external_id)
+                        out.append(item)
+                diagnostic["unique_yield"] = len(out) - before
+                self.last_fetch_diagnostics["returned_count"] = len(out)
             logger.debug("%s: profile-driven fetched %d items over %d terms", spec.name, len(out), len(terms))
             return out
         out = self._fetch_works(spec, days, headers, cap=self.MAX_ITEMS, query=spec.query or "")
@@ -478,7 +535,7 @@ class OpenAlexAuthorsSource:
 
     ``authors_of_interest`` is otherwise only a ranking boost applied to items
     that already arrived via some feed; this makes it a *retrieval* channel, so a
-    watched lab's new paper surfaces even from a journal not in the feed list.
+    watched researcher's new paper can surface even from a journal not in the feed list.
     Author names are resolved only when a unique exact-name match exists, then their
     works in the window are fetched in a single filtered query.
     """

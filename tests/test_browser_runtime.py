@@ -778,7 +778,7 @@ def test_worker_refreshes_provider_identity_before_brew_and_preserves_digest_on_
 const fs = require('node:fs'), vm = require('node:vm'), assert = require('node:assert/strict');
 const events = [], posted = [];
 let failHealth = false;
-const context = vm.createContext({URL, setTimeout, clearTimeout, setInterval, clearInterval, AbortSignal, AbortController, DOMException,
+const context = vm.createContext({assert, events, URL, setTimeout, clearTimeout, setInterval, clearInterval, AbortSignal, AbortController, DOMException,
   self: {postMessage: message => posted.push(message)},
   fetch: async url => {
     assert.ok(url.endsWith('/health')); events.push('health');
@@ -804,7 +804,10 @@ vm.runInContext(`
   boot = Promise.resolve({}); companion = {endpoint: 'https://companion.example', token: 'explicit',
     capabilities: {summarize: ['api']}, provider_identities: {api: 'old-model-fingerprint'}};
   globalThis.browserCompanionSupports = backend => companion.capabilities.summarize.includes(backend);
-  state = {py: {globals: {get: name => {
+  state = {py: {runPythonAsync: async code => {
+    assert.equal(code, 'network.install_public_source_fallback(public_source_url)');
+    events.push('source-adapters');
+  }, globals: {get: name => {
     if (name === 'selected_browser_backend') return () => 'api';
     if (name === 'handle_request') return request;
     if (name === 'export_snapshot') return () => 'existing digest snapshot';
@@ -816,9 +819,9 @@ vm.runInContext(`
 `, context);
 (async () => {
   await context.self.onmessage({data: {id: 1, type: 'request', method: 'POST', path: '/run/start', body: '{}'}});
-  assert.deepEqual(events, ['health', 'save-companion', 'native-request']);
+  assert.deepEqual(events, ['health', 'save-companion', 'source-adapters', 'native-request']);
   assert.equal(await vm.runInContext('storageWriter.flush({force:true})', context), true);
-  assert.deepEqual(events, ['health', 'save-companion', 'native-request', 'save-snapshot']);
+  assert.deepEqual(events, ['health', 'save-companion', 'source-adapters', 'native-request', 'save-snapshot']);
   assert.equal(posted.find(row => row.type === 'response' && row.id === 1).status, 200);
   events.length = 0; failHealth = true;
   await context.self.onmessage({data: {id: 2, type: 'request', method: 'POST', path: '/run/start', body: '{}'}});

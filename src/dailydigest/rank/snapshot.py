@@ -132,6 +132,7 @@ def build_ranking_snapshot(
         "schema_version": 1, "run_id": run_id, "digest_id": digest_id,
         "decision_at": decision_at.isoformat(), "decision_local_date": decision_local_date.isoformat(),
         "reading_mode": reading_mode, "catch_up": catch_up,
+        "reading_order_policy": "selection_priority",
         "exploration_slots": int(getattr(settings, "exploration_slots", 0) or 0),
         "complete_candidate_pool": True, "pool_scope": "all locally available candidates for this run",
         "replay_scope": "selection from frozen scores and eligibility; not retrieval or full rescoring",

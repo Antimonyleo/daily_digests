@@ -1332,7 +1332,7 @@ def test_index_renders_reader_card_hierarchy_and_feedback_controls(tmp_path, mon
     assert "Top-journal audit" not in text
     assert "Lead story" not in text
     assert "Ranked for High-quality source, Fresh signal; selected via protected published-journal slot." not in text
-    assert "Why this recommendation?" in text
+    assert "Why this pick?" in text
     assert "editorial-signals" not in text
     assert "score-bars" not in text
     assert "High-quality source" in text
@@ -1351,16 +1351,16 @@ def test_index_renders_reader_card_hierarchy_and_feedback_controls(tmp_path, mon
     assert "Why it matters, caveat and recommendation details" not in text
     assert "Key finding" in text
     # 4-level graded feedback
-    assert "Must read" in text
+    assert "Very relevant" in text
     assert "Relevant" in text
-    assert "Hmmm" in text
-    assert "Not for me" in text
+    assert "Less relevant" in text
+    assert "Not relevant" in text
     assert 'data-grade="100"' in text and 'data-grade="10"' in text
     assert "No response saved yet." not in text
     assert 'class="vote-pct"' not in text
     assert "Too promotional" in text
     assert "Choose Seen or Not for me" not in text
-    assert "Choose Hmmm or Not for me" in text
+    assert "Choose Less relevant or Not relevant" in text
     assert "Refresh calibration" in text
     assert "Learned" not in text
 
@@ -1778,15 +1778,17 @@ def test_index_renders_reason_line_and_content_type_label(tmp_path, monkeypatch)
     text = _text_payload(response)
 
     assert response.status_code == 200
-    # Reason line from primary_facet, with high-profile journal suffix.
-    assert "Shown for RNA nanotechnology" in text
+    # Match attribution is shown once; the source remains in metadata.
+    assert text.count("<strong>RNA nanotechnology</strong>") == 2
+    assert text.count("Related by meaning; check the connection") == 2
+    assert "RNA nanotechnology</strong> · Nature" not in text
     # Review content type gets a visible badge; plain research does not.
     assert 'class="type-label">Review<' in text
     # Exactly one type badge overall (only the review item), so primary research
     # is not silently tagged.
     assert text.count('class="type-label"') == 1
     # Empty-facet plain item never renders a broken reason line.
-    assert "Shown for ." not in text
+    assert text.count('class="match-topic') == 2
 
 
 def test_index_marks_latest_run_impressions_viewed(tmp_path, monkeypatch):
@@ -2798,7 +2800,7 @@ def test_main_page_exposes_one_click_reading_modes_and_settings_can_return(
     assert 'teaPet.addEventListener("pointerdown"' in main
     assert "teaPet.setPointerCapture(event.pointerId)" in main
     assert 'teaPet.addEventListener("keydown"' in main
-    assert 'id="pip-move"' in main
+    assert 'id="pip-move"' not in main
     assert 'id="pip-move-help"' in main
     assert 'class="pip-drag-copy"' in main
     assert main.index('class="pip-stage"') < main.index('class="tea-dialog"')
@@ -2863,7 +2865,8 @@ def test_settings_offer_native_api_and_signed_in_cli_summarizers(monkeypatch, tm
     assert "Signed-in Codex" in body
     assert "API billing" in body
     assert "chat subscription" in body.lower()
-    assert "short reader profile" in body
+    assert "first 400 characters of your current research or learning goal" in body
+    assert "up to 20 core topics" in body
 
 
 def test_setup_saves_signed_in_cli_backend_without_api_credentials(tmp_path, monkeypatch):
@@ -3052,3 +3055,30 @@ def test_first_visit_puts_blank_interests_before_optional_examples(monkeypatch, 
     assert 'value="chemistry"' in rendered and 'value="astronomy"' in rendered
     assert '<details class="settings-disclosure" id="search-tips">' in rendered
     assert 'Nothing is saved until' in rendered
+
+
+def test_shared_feedback_labels_describe_relevance_without_changing_scores():
+    from jinja2 import Environment, FileSystemLoader
+    environment = Environment(loader=FileSystemLoader(Path(__file__).parents[1] / 'templates'), autoescape=True)
+    controls = environment.get_template('_feedback_controls.html.j2').module.feedback_controls
+    html = controls({'label': 'R1', 'current_grade': 40, 'current_reasons': []})
+    labels = re.findall(r'data-grade="(\d+)"[^>]*>\s*<span class="vote-label">([^<]+)</span>', html)
+    assert labels == [('100', 'Very relevant'), ('70', 'Relevant'), ('40', 'Less relevant'), ('10', 'Not relevant')]
+    assert 'data-grade="40" type="button"' in html
+    assert 'aria-pressed="true"' in html
+    assert 'Less relevant and Not relevant lower future recommendations' in html
+
+
+@pytest.mark.parametrize("first_run", [True, False])
+def test_setup_timezone_detection_is_only_enabled_on_first_run(
+    tmp_path, monkeypatch, first_run
+):
+    from dailydigest import web
+
+    monkeypatch.setattr(web, "_get_profile_path", lambda: tmp_path / "profile.yaml")
+    monkeypatch.setattr(web, "_ENV_PATH", tmp_path / ".env")
+    monkeypatch.setattr(web, "_profile_exists", lambda: not first_run)
+    response = web.setup_get(_request(path="/setup"))
+    assert response.status_code == 200
+    expected = "true" if first_run else "false"
+    assert f'data-detect-timezone="{expected}"' in _text_payload(response)

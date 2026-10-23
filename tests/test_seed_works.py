@@ -35,15 +35,24 @@ def test_seed_works_add_high_weight_rows(monkeypatch):
     assert float(norms.max()) >= float(np.linalg.norm(base_mat, axis=1).max())
 
 
-def test_seed_works_ignores_too_short(monkeypatch):
-    monkeypatch.setattr(profile_mod, "embed_texts", _fake_embed)
+def test_seed_works_keeps_short_titles_but_ignores_nonlinguistic_input(monkeypatch):
+    encoded = []
+
+    def embed(texts, is_query=False):
+        encoded.extend(texts)
+        return _fake_embed(texts, is_query=is_query)
+
+    monkeypatch.setattr(profile_mod, "embed_texts", embed)
     base = Profile(bio="Short bio sentence about biology.", keywords=["CRISPR"])
     short_seed = Profile(
         bio="Short bio sentence about biology.",
         keywords=["CRISPR"],
-        seed_works=["tiny"],  # <= 10 chars, ignored
+        seed_works=["RNA design", "蛋白质从头设计", "", "  ", "...", "12345"],
     )
+    base_rows = profile_mod.build_profile_matrix(base).shape[0]
+    encoded.clear()
     assert (
         profile_mod.build_profile_matrix(short_seed).shape[0]
-        == profile_mod.build_profile_matrix(base).shape[0]
+        == base_rows + 2
     )
+    assert encoded[-2:] == ["RNA design", "蛋白质从头设计"]

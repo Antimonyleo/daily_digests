@@ -1045,6 +1045,16 @@ def upsert_items(items: Iterable[Item]) -> int:
                 ):
                     row.url = it.url
                 merged_metadata = {**old_metadata, **incoming_metadata}
+                from .publications import companion_metadata
+
+                for facts in (companion_metadata(row), companion_metadata(it)):
+                    for field, values in facts.items():
+                        existing = merged_metadata.get(field, [])
+                        existing = list(existing) if isinstance(existing, list) else []
+                        for value in values:
+                            if value not in existing:
+                                existing.append(value)
+                        merged_metadata[field] = existing
                 if it.section == "research" and old_date_source == "published" and row.published_at is not None:
                     # A later RSS update must not relabel the retained publication
                     # timestamp, even when the rest of the metadata refreshes.
@@ -1078,12 +1088,19 @@ def upsert_items(items: Iterable[Item]) -> int:
                         separators=(",", ":"),
                         default=str,
                     )
-                if content_changed:
-                    # A summary of superseded source text is more misleading
-                    # than an empty summary; it will regenerate if selected.
+                from .publications import retraction_label
+
+                if retraction_label(row) or (content_changed and authoritative_revision):
+                    # Explicit corrections/withdrawals invalidate old claims
+                    # immediately, even when only metadata has changed.
                     row.summary = ""
                     row.summary_signature = None
                     row.summary_backend = None
+                elif content_changed:
+                    # Ordinary richer feed text invalidates cache reuse, but
+                    # cannot erase a previously readable summary on a failed
+                    # or cancelled Brew. Publication replaces it atomically.
+                    row.summary_signature = None
     return inserted
 
 
@@ -1093,6 +1110,80 @@ def item_metadata(row: ItemRow) -> dict:
     except (TypeError, json.JSONDecodeError):
         return {}
     return value if isinstance(value, dict) else {}
+
+
+def _publication_companion_rows(session: Session) -> list[ItemRow]:
+    # Restrict deserialization to records that actually carry relationship
+    # metadata. Publication dates do not constrain links to archived papers.
+    return list(session.scalars(select(ItemRow).where(or_(
+        ItemRow.metadata_json.contains('"companion_of_doi'),
+        ItemRow.metadata_json.contains('"is-commentary-on"'),
+        ItemRow.metadata_json.contains('"is-review-of"'),
+    )).order_by(ItemRow.id)))
+
+
+def persist_publication_metadata(rows: Iterable[ItemRow]) -> None:
+    """Persist only publication evidence/cache fields, preserving all user state."""
+    from .publication_enrichment import merge_publication_metadata
+
+    init_db()
+    with session_scope() as session:
+        for incoming in rows:
+            if incoming.id is None:
+                continue
+            saved = session.get(ItemRow, int(incoming.id))
+            if saved is None:
+                continue
+            evidence = item_metadata(incoming)
+            metadata = merge_publication_metadata(item_metadata(saved), evidence)
+            if isinstance(evidence.get("publication_enrichment"), dict):
+                metadata["publication_enrichment"] = evidence["publication_enrichment"]
+            saved.metadata_json = json.dumps(metadata, sort_keys=True, separators=(",", ":"))
+            from .publications import retraction_label
+
+            if retraction_label(saved):
+                saved.summary = ""
+                saved.summary_signature = None
+                saved.summary_backend = None
+
+
+def load_publication_companions(rows: Iterable[ItemRow]) -> dict[int, list[dict]]:
+    """Load evidenced companion links across dates, without merging work IDs."""
+    from .publications import companion_entries
+
+    parents = list(rows)
+    if not parents:
+        return {}
+    init_db()
+    with session_scope() as session:
+        return companion_entries(parents, _publication_companion_rows(session))
+
+
+def exclude_publication_companions(rows: list[ItemRow]) -> list[ItemRow]:
+    """Also suppress generic copies of companions evidenced by an older source."""
+    from .dedupe import candidate_identity_keys
+    from .publications import is_companion
+
+    if not rows:
+        return []
+    init_db()
+
+    def durable_keys(row):
+        try:
+            return {key for key in candidate_identity_keys(row)
+                    if key.startswith(("doi:", "pmid:", "arxiv:", "url:"))}
+        except ValueError:
+            # Malformed feed URLs must not break rendering or establish a
+            # guessed identity. Explicit companion metadata still applies.
+            return set()
+
+    with session_scope() as session:
+        companion_keys = {
+            key for row in _publication_companion_rows(session) if is_companion(row)
+            for key in durable_keys(row)
+        }
+    return [row for row in rows if not is_companion(row)
+            and not companion_keys.intersection(durable_keys(row))]
 
 
 def opportunity_history(item_id: int) -> list[dict]:
@@ -1295,6 +1386,25 @@ def prune(days: int) -> int:
             ItemRow.id.not_in(email_item_subq),
             ItemRow.id.not_in(impression_item_subq),
         )
+        # A retained paper's associated explanation is part of its reading
+        # archive, even though the explanation never occupied a digest slot.
+        from .publications import companion_entries
+
+        companions = _publication_companion_rows(s)
+        if companions:
+            protected = list(s.scalars(select(ItemRow).where(or_(
+                ItemRow.fetched_at >= cutoff,
+                ItemRow.id.in_(voted_subq), ItemRow.id.in_(feedback_subq),
+                ItemRow.id.in_(bookmarked_subq), ItemRow.id.in_(known_subq),
+                ItemRow.id.in_(carryover_subq), ItemRow.id.in_(digest_item_subq),
+                ItemRow.id.in_(email_item_subq), ItemRow.id.in_(impression_item_subq),
+            ))))
+            retained_children = {
+                child["item_id"] for children in companion_entries(protected, companions).values()
+                for child in children if child.get("item_id") is not None
+            }
+            if retained_children:
+                stmt = stmt.where(ItemRow.id.not_in(retained_children))
         result = s.execute(stmt)
         return result.rowcount or 0
 
@@ -1678,8 +1788,11 @@ def publish_digest(
     audits: dict[str, list[dict]] | None = None,
     run_id: str | None = None,
     ranking_snapshot: dict | None = None,
+    summaries: dict[int, str] | None = None,
+    summary_signatures: dict[int, str] | None = None,
+    summary_backends: dict[int, str] | None = None,
 ) -> str:
-    """Publish one complete slate and its measurement rows in one transaction.
+    """Publish a slate, its reading text and measurement rows in one transaction.
 
     A supplied ranking snapshot must match the explicit ``run_id`` and digest.
     Reusing a snapshot run id rejects and rolls back the entire publication.
@@ -1749,6 +1862,14 @@ def publish_digest(
                     score=float(score) if score is not None else None,
                 )
             )
+
+        _write_summaries_in_session(
+            s,
+            {item_id: text for item_id, text in (summaries or {}).items()
+             if item_id in selected_ids},
+            signatures=summary_signatures,
+            backends=summary_backends,
+        )
 
         new_feature_ids = [int(item_id) for _, item_id, _, _ in feature_rows]
         s.execute(
@@ -1951,14 +2072,24 @@ def write_summaries(
         return
     init_db()
     with session_scope() as s:
-        for item_id, summary in summaries.items():
-            row = s.get(ItemRow, int(item_id))
-            if row is not None:
-                row.summary = summary
-                if signatures is not None:
-                    row.summary_signature = signatures.get(int(item_id))
-                if backends is not None:
-                    row.summary_backend = backends.get(int(item_id))
+        _write_summaries_in_session(s, summaries, signatures=signatures, backends=backends)
+
+
+def _write_summaries_in_session(
+    session: Session,
+    summaries: dict[int, str],
+    *,
+    signatures: dict[int, str] | None = None,
+    backends: dict[int, str] | None = None,
+) -> None:
+    for item_id, summary in summaries.items():
+        row = session.get(ItemRow, int(item_id))
+        if row is not None:
+            row.summary = summary
+            if signatures is not None:
+                row.summary_signature = signatures.get(int(item_id))
+            if backends is not None:
+                row.summary_backend = backends.get(int(item_id))
 
 
 def mark_sent(

@@ -63,17 +63,19 @@ REASON_PENALTIES = {
 }
 _NON_SEMANTIC_REASONS = {
     "already_known", "not_urgent", "duplicate", "access_friction", "low_quality",
-    "low_impact", "promotional",
+    "low_impact", "promotional", "too_technical",
 }
 # Training-policy provenance, independent of the unchanged feature dimensions.
-FEEDBACK_SEMANTICS_VERSION = "reason-aware-v1"
+FEEDBACK_SEMANTICS_VERSION = "reason-aware-v2"
 _GENERALIZED_REASON_HALF_LIFE_DAYS = 60.0
 _GOOD_VOTE_COUNTER_SIGNAL = 0.14
 _SOURCE_GENERALIZATION_CAP = 0.12
 _BUCKET_GENERALIZATION_CAP = 0.06
 _CONTENT_GENERALIZATION_CAP = 0.045
 
-LR_FEATURE_SCHEMA_VERSION = "lr_ranker_preference_affinity_v6"
+# Author matching now respects byline boundaries and Unicode names. Existing
+# weights used the older feature meaning, so preserve but do not reuse them.
+LR_FEATURE_SCHEMA_VERSION = "lr_ranker_preference_affinity_author_boundaries_v7"
 # De-confounded feature set (v5). The previous v4 set included the raw source
 # quality family (prestige, source_bucket) and three cosine×X interaction terms.
 # Those (a) DOUBLE-COUNT venue quality, which is already applied deterministically
@@ -128,7 +130,7 @@ def is_semantic_vote(value: int, reasons: Iterable[str]) -> bool:
     """Whether a rating teaches topic preference rather than a practical issue.
 
     Positive and unexplained negative ratings retain their existing meaning.
-    A negative explained solely by access, timing, repetition, or article quality
+    A negative explained solely by access, difficulty, timing, repetition, or article quality
     does not establish dislike of related research. Mixed topic reasons still do.
     Raw ratings and their item/source penalties are retained independently.
     """

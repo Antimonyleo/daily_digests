@@ -216,7 +216,9 @@ def test_openalex_alias_query_preserves_original_nonadjacent_recall(monkeypatch)
         outputs.append([item.external_id for item in openalex.OpenAlexSource().fetch(
             SourceSpec(name='OpenAlex', kind='openalex', profile_driven=True))])
     assert outputs[0] and outputs[1] == outputs[0]
-    assert queries[1] == '((protein degradation) OR "PROTAC")'
+    # The original unquoted word search gets its own protected page; the
+    # optional explicit alias runs afterwards without narrowing that recall.
+    assert queries == ['protein degradation', 'protein degradation', '"PROTAC"']
 
 
 @pytest.mark.parametrize('precise_count', [0, 2, 3, 14])

@@ -70,7 +70,6 @@ from .config import SETTINGS, get_settings, reload_settings, section_enabled, se
 from .email_render import (
     SECTION_META,
     SECTION_ORDER,
-    _is_high_profile,
     content_type_label,
     reason_line,
     safe_url,
@@ -82,6 +81,7 @@ from .opportunities import (
     opportunity_display,
 )
 from .brew import BrewCancelled, _digest_id, normalize_reading_mode
+from .publications import publication_label
 from .rank.source_quality import display_breakdown, display_source, source_bucket
 from .store import (
     DigestItemRow,
@@ -92,11 +92,13 @@ from .store import (
     bookmarked_item_ids,
     carryover_item_ids,
     count_bookmarks,
+    exclude_publication_companions,
     init_db,
     item_metadata,
     known_item_ids,
     load_digest_audit,
     load_digest_features,
+    load_publication_companions,
     mark_impressions_viewed,
     search_bookmarks,
     session_scope,
@@ -296,7 +298,7 @@ def _breakdown_payload(row: ItemRow, persisted: dict | None = None) -> dict:
         }
         if isinstance(persisted.get("contribution_rerank"), dict):
             payload["contribution_rerank"] = dict(persisted["contribution_rerank"])
-        for field in ('contribution_claims', 'article_evidence', 'topic_alignment'):
+        for field in ('contribution_claims', 'article_evidence', 'topic_alignment', 'topic_support'):
             if isinstance(persisted.get(field), dict):
                 payload[field] = dict(persisted[field])
         return payload
@@ -450,9 +452,13 @@ def _load_today(
 
         if not include_disabled_sections:
             rows = [r for r in rows if section_enabled(SETTINGS, r.section or "")]
+        # A linked commentary belongs to its paper, including when it arrives
+        # on a later day or an older slate selected it as a standalone item.
+        rows = exclude_publication_companions(rows)
         if not rows:
             return [], {}
 
+        companions = load_publication_companions(rows)
         item_ids = [r.id for r in rows]
         saved_item_ids = bookmarked_item_ids(int(item_id) for item_id in item_ids)
         known_ids = known_item_ids(int(item_id) for item_id in item_ids)
@@ -510,6 +516,9 @@ def _load_today(
         by_section: dict[str, list[dict]] = {}
         for row in rows:
             key = row.section or "other"
+            genre_label = publication_label(row)
+            if key != "research" and genre_label == "Publication":
+                genre_label = ""
             source = display_source(row)
             ranking = _breakdown_payload(row, persisted_features.get(int(row.id)))
             confidence_score = _entry_confidence(
@@ -517,10 +526,6 @@ def _load_today(
             )
             reason = reason_line(
                 ranking.get("primary_facet"),
-                high_profile=_is_high_profile(
-                    ranking.get("source_bucket"), ranking.get("tags") or []
-                ),
-                journal=source,
                 why_shown=ranking.get("why_shown") or [],
                 tags=ranking.get("tags") or [],
             )
@@ -547,6 +552,7 @@ def _load_today(
                     "source": source,
                     "published": _format_date(row),
                     "summary": row.summary or "",
+                    "abstract": row.abstract or "",
                     "summary_fields": _summary_fields(row.summary or ""),
                     "figure": display_figure(item_metadata(row)),
                     "score_raw": _slate_score(row),
@@ -555,11 +561,11 @@ def _load_today(
                     "reason_line": reason,
                     "match_evidence": evidence,
                     "authors": str(row.authors or '').strip()[:400],
-                    "publication_label": (
-                        'Preprint · not peer reviewed' if ranking.get('source_bucket') in {'arxiv_cs', 'arxiv_other', 'bio_med_preprint', 'preprint_other'}
-                        else 'Journal publication' if ranking.get('source_bucket') in {'published_journal', 'low_impact_journal'}
-                        else ''
-                    ),
+                    "publication_label": genre_label,
+                    "related_commentaries": [
+                        {**child, "url": safe_url(child.get("url", ""))}
+                        for child in companions.get(int(row.id), [])
+                    ],
                     "type_label": type_label,
                     "opportunity": opportunity,
                     "current_vote": current_vote.get(int(row.id)),
@@ -919,15 +925,19 @@ def _interest_coverage(sections: list[dict], audits: list[dict]) -> list[dict]:
     profile = _profile_data()
     names = list(profile.get("canonical_facets") or {}) or list(profile.get("keywords") or [])
     recorded = {str(row.get("title", "")).casefold(): row for row in audits}
-    selected = Counter(str(entry.get("ranking", {}).get("primary_facet") or "").casefold()
-                       for section in sections for entry in section.get("entries", []))
+    facets = [str(entry.get("ranking", {}).get("primary_facet") or "").casefold()
+              for section in sections if section.get("key", "research") == "research"
+              for entry in section.get("entries", [])]
+    selected = Counter(facets)
+    complete = bool(facets) and all(facets)
     rows = []
     for name in names:
         row = dict(recorded.get(str(name).casefold(), {}))
-        row.update(title=name, selected=selected[str(name).casefold()])
+        count = selected[str(name).casefold()]
+        row.update(title=name, selected=count if count or complete else row.get("selected"))
         row.setdefault("candidates", None)
         row.setdefault("eligible", None)
-        row.setdefault("explanation", "Candidate attribution was not recorded for this saved digest; zero selected does not mean no papers were found.")
+        row.setdefault("explanation", "Candidate attribution was not recorded for this saved digest.")
         rows.append(row)
     return rows
 
@@ -976,6 +986,7 @@ def _load_existing_form_defaults() -> dict[str, str]:
         "llm_model": SETTINGS.llm_model,
         "user_tz": SETTINGS.user_tz,
         "top_research": str(SETTINGS.top_research),
+        "publication_enrichment": str(SETTINGS.publication_enrichment).lower(),
         "include_industry": str(section_enabled(SETTINGS, "industry")).lower(),
         "top_industry": str(SETTINGS.top_industry),
         "include_ai": str(section_enabled(SETTINGS, "ai")).lower(),
@@ -1521,6 +1532,7 @@ def saved_items(request: Request, q: str = "", page: int = 1) -> Response:
     pages = max(1, (total + page_size - 1) // page_size)
     page = max(1, min(int(page), pages))
     rows = search_bookmarks(query, limit=page_size, offset=(page - 1) * page_size)
+    companions = load_publication_companions(rows)
     reasons, warning = _feedback_reasons()
     with session_scope() as session:
         ratings = {}
@@ -1533,6 +1545,11 @@ def saved_items(request: Request, q: str = "", page: int = 1) -> Response:
     items = [{
         "id": row.item_id, "label": row.title, "title": row.title, "url": safe_url(row.url),
         "source": row.source, "figure": display_figure(row.metadata),
+        "publication_label": publication_label(row) if row.section == "research" else "",
+        "related_commentaries": [
+            {**child, "url": safe_url(child.get("url", ""))}
+            for child in companions.get(int(row.item_id), [])
+        ],
         "section": SECTION_META.get(row.section, {"title": row.section.title() or "Other"})["title"],
         "summary": row.summary, "published": _saved_date(row.published_at),
         "saved": _saved_date(row.saved_at), "current_grade": ratings.get(row.item_id),
@@ -1655,7 +1672,7 @@ def vote_reason(request: Request, item_id: int, reason: str) -> JSONResponse:
     if not ok:
         raise HTTPException(
             status_code=400,
-            detail="choose Seen or Not for me before adding a reason",
+            detail="choose Less relevant or Not relevant before adding a reason",
         )
     return JSONResponse(
         {
@@ -2029,6 +2046,7 @@ async def setup_post(request: Request) -> Response:
         "llm_model": str(raw.get("llm_model", "")),
         "user_tz": str(raw.get("user_tz", SETTINGS.user_tz)),
         "top_research": str(raw.get("top_research", SETTINGS.top_research)),
+        "publication_enrichment": _bool_form(raw, "publication_enrichment", SETTINGS.publication_enrichment),
         "include_industry": _bool_form(
             raw, "include_industry", section_enabled(SETTINGS, "industry")
         ),
@@ -2203,6 +2221,7 @@ async def setup_post(request: Request) -> Response:
         "LLM_MODEL": form["llm_model"].strip() or default_model,
         "USER_TZ": form["user_tz"].strip() or SETTINGS.user_tz,
         "TOP_RESEARCH": _int_form(form, "top_research", SETTINGS.top_research),
+        "PUBLICATION_ENRICHMENT": form["publication_enrichment"],
         "INCLUDE_INDUSTRY": form["include_industry"],
         "TOP_INDUSTRY": _int_form(form, "top_industry", SETTINGS.top_industry),
         "INCLUDE_AI": form["include_ai"],

@@ -34,6 +34,9 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '24'
+      - name: Install browser test dependencies
+        working-directory: prototypes/browser-compute
+        run: npm ci --ignore-scripts
       - name: Browser bridge and compute unit checks
         run: |
           node --test --test-isolation=none browser/*.test.mjs

@@ -299,3 +299,26 @@ def test_malformed_health_rows_leave_valid_diagnostics_readable(tmp_path, monkey
     health.record([health.IngestStats(source='Current', items=1)])
     retained = json.loads((tmp_path/'health.json').read_text())['history']
     assert any(valid in entry['stats'] for entry in retained)
+
+
+def test_coverage_preserves_watched_author_resolution_states(tmp_path, monkeypatch):
+    from dailydigest import health
+    monkeypatch.setattr(health, '_health_path', lambda: tmp_path / 'health.json')
+    _write_health_payload(tmp_path / 'health.json', [{
+        'source': 'Watched authors', 'ok': True, 'items': 2,
+        'diagnostics': {'author_queries': [
+            {'query': 'Ada Example', 'stop_reason': 'matched', 'resolved_id': 'A123'},
+            {'query': 'Sam Common', 'stop_reason': 'ambiguous'},
+            {'query': 'New Researcher', 'stop_reason': 'no_match'},
+            {'query': 'Unavailable Name', 'stop_reason': 'failure'},
+            {'query': 'Other Name', 'stop_reason': 'unverified'},
+            {'query': 'Malformed Name', 'stop_reason': ['unexpected']},
+            None,
+        ]},
+    }])
+    result = health.coverage_summary()
+    assert [row['status'] for row in result['authors']] == [
+        'Resolved', 'Ambiguous name', 'Not found', 'Check failed', 'Identity unverified', 'Not checked',
+    ]
+    assert result['authors'][0]['name'] == 'Ada Example'
+    assert result['checked_at']

@@ -41,13 +41,13 @@ jobs:
           HF_HUB_OFFLINE: "1"
           TRANSFORMERS_OFFLINE: "1"
           LLM_API_KEY: ""
+      - name: Install browser dependencies
+        working-directory: prototypes/browser-compute
+        run: npm ci --ignore-scripts
       - name: Browser bridge checks
         run: |
           node --test --test-isolation=none browser/*.test.mjs
           node --test --test-isolation=none prototypes/browser-compute/browser.test.mjs
-      - name: Install browser dependencies
-        working-directory: prototypes/browser-compute
-        run: npm ci --ignore-scripts
       - name: Reject vulnerable Node dependencies
         working-directory: prototypes/browser-compute
         run: npm audit --package-lock-only --audit-level=moderate
@@ -76,6 +76,16 @@ jobs:
         run: node browser/verify-storage-startup.mjs
       - name: Prepare isolated browser acceptance fixtures
         run: uv run python browser/make_test_fixture.py --output .full-review/browser-launch-2026-10-13
+      - name: Settings priorities and hidden validation
+        env:
+          DAILYDIGEST_SETTINGS_REPORT: .full-review/settings-priorities-ci
+        run: node browser/verify-settings-priorities.mjs
+      - name: Complete daily reading and publication relationships
+        env:
+          DAILYDIGEST_BREW_SITE: browser/dist
+          DAILYDIGEST_BREW_FIXTURES: .full-review/browser-launch-2026-10-13
+          DAILYDIGEST_BREW_REPORT: .full-review/daily-release-ci
+        run: node browser/verify-daily-release.mjs
       - name: Quick guide and optional local backup copies
         env:
           DAILYDIGEST_GUIDE_SITE: browser/dist

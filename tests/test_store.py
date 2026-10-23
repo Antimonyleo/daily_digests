@@ -523,9 +523,9 @@ def test_duplicate_upsert_refreshes_richer_metadata_and_invalidates_summary(
         assert row.authors == "Ada Example"
         assert row.published_at is not None
         assert row.url == "https://example.com/paper-1"
-        assert row.summary == ""
+        assert row.summary == "Summary of stale text"
         assert row.summary_signature is None
-        assert row.summary_backend is None
+        assert row.summary_backend == "extractive_fallback"
         assert store_mod.item_metadata(row)["doi"] == "10.1/example"
 
 

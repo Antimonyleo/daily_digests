@@ -1,0 +1,22 @@
+  <section class="tea-break" id="tea-break" data-note-kind="{{ 'joke' if daily_note.startswith('Lab joke') else 'fact' }}" aria-label="Pip’s tea break">
+    <div class="pip-stage">
+      <button class="tea-leaf-drop" id="tea-another" type="button" aria-label="Drop a tea leaf into Pip’s cup for another science fact or joke" title="Drop a tea leaf into Pip’s cup">
+        <span class="tea-leaf-shape" aria-hidden="true"></span>
+      </button>
+      <div class="tea-pet" id="tea-pet" role="button" tabindex="0" aria-label="Move Pip. Drag with a pointer, use arrow keys, or press Home to reset." aria-describedby="pip-move-help">
+        <span class="pet-steam one"></span><span class="pet-steam two"></span>
+        <span class="pet-cup" aria-hidden="true">
+          <span class="pet-rim"><span class="pet-ripple"></span></span>
+          <span class="pet-eye left"></span><span class="pet-eye right"></span>
+          <span class="pet-cheek left"></span><span class="pet-cheek right"></span><span class="pet-mouth"></span>
+        </span>
+        <span class="pet-saucer"></span>
+      </div>
+      <span class="tea-leaf-count" aria-label="Tea leaves given to Pip"><span id="tea-leaf-count">0</span>/10</span>
+    </div>
+    <span class="sr-only" id="pip-move-help">Press Enter to cycle through preset positions. Arrow keys move Pip. Home returns Pip to the lower-left dock.</span>
+    <div class="tea-dialog">
+      <span class="tea-break-copy" id="tea-note-text" aria-live="polite">{{ daily_note }}</span>
+      <span class="pip-drag-copy" aria-hidden="true">Easy—my tea is still hot!</span>
+    </div>
+  </section>

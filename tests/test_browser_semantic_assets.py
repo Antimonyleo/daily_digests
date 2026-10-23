@@ -108,9 +108,9 @@ def test_full_build_manifest_identifies_lazy_semantic_assets_and_ships_engine(tm
     browser.mkdir()
     cache.rename(browser / '.build-cache')
     original = builder.HERE
-    for name in ('index.html', 'app.mjs', 'guide.mjs', 'linked-backup.mjs', 'reading-view.mjs', 'tab-handoff.mjs', 'compute.mjs', 'public-embeddings.mjs', 'semantic.mjs', 'http.mjs', 'storage.mjs',
+    for name in ('index.html', 'app.mjs', 'guide.mjs', 'linked-backup.mjs', 'reading-view.mjs', 'tab-handoff.mjs', 'compute.mjs', 'embedding-memo.mjs', 'cpu-startup.mjs', 'public-embeddings.mjs', 'semantic.mjs', 'http.mjs', 'storage.mjs',
                  'style.css', 'worker.mjs', 'manifest.webmanifest', 'app-icon.svg', 'sw.js', 'runtime.py',
-                 'requirements-browser.txt'):
+                 'requirements-browser.txt', 'compile-python.mjs'):
         (browser / name).write_bytes((original / name).read_bytes())
     proto = tmp_path / 'prototype'
     for name in ('@huggingface/transformers/dist/transformers.min.js',
@@ -128,6 +128,8 @@ def test_full_build_manifest_identifies_lazy_semantic_assets_and_ships_engine(tm
     monkeypatch.setattr(builder, 'HERE', browser)
     monkeypatch.setattr(builder, 'PROTO', proto)
     monkeypatch.setattr(builder, 'pure_package_files', lambda cache: [])
+    monkeypatch.setattr(builder, 'compile_startup_python', lambda output: {
+        'modules': 0, 'python': 'fixture', 'invalidation': 'checked-hash'})
     monkeypatch.setattr(builder, 'resolve_pyodide_packages', lambda lock, names: [])
     monkeypatch.setattr(builder, 'gpu_model_files', lambda root, output, cache: output.mkdir(parents=True))
     monkeypatch.setattr(builder, 'publish_public_embeddings', lambda *args: {
@@ -146,9 +148,16 @@ def test_full_build_manifest_identifies_lazy_semantic_assets_and_ships_engine(tm
     assert manifest['private_data_included'] is False
     assert (output / 'semantic.mjs').is_file()
     assert (output / 'public-embeddings.mjs').is_file()
+    assert (output / 'embedding-memo.mjs').is_file()
+    assert './embedding-memo.mjs?build=' + report['build_id'] in (output / 'worker.mjs').read_text()
     assert (output / 'reading-view.mjs').is_file()
     for name in ('guide.mjs', 'linked-backup.mjs'):
         assert (output / name).is_file()
         assert f'./{name}?build=' + report['build_id'] in (output / 'app.mjs').read_text()
     assert './reading-view.mjs?build=' + report['build_id'] in (output / 'app.mjs').read_text()
     assert './reading-view.mjs?build=' + report['build_id'] in (output / 'worker.mjs').read_text()
+    # A pure-Python dependency update must invalidate application/bytecode URLs.
+    requirements = browser / 'requirements-browser.txt'
+    requirements.write_text(requirements.read_text().replace('filelock==3.29.0', 'filelock==3.30.0'))
+    updated = builder.build(tmp_path / 'updated-dependencies')
+    assert updated['build_id'] != report['build_id']

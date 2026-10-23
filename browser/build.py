@@ -110,6 +110,15 @@ def source_archive(output: Path, wheels: list[Path]) -> dict[str, str]:
     return manifest
 
 
+def compile_startup_python(output: Path) -> dict:
+    """Compile public startup modules using the exact deployed Python runtime."""
+    result = subprocess.run(
+        ['node', str(HERE / 'compile-python.mjs'), str(output.resolve())],
+        check=True, capture_output=True, text=True, timeout=120,
+    )
+    return json.loads(result.stdout.strip().splitlines()[-1])
+
+
 def gpu_model_files(model_root: Path, output: Path, cache: Path) -> None:
     """Pin the unfused float32 BGE export; the CPU export has GPU-incompatible attention."""
     graph = download(f"https://huggingface.co/Xenova/bge-small-en-v1.5/resolve/{GPU_MODEL_REVISION}/onnx/model.onnx",
@@ -130,7 +139,7 @@ def stamp_urls(text: str, build_id: str) -> str:
                  if part and not part.startswith(("compute=", "build="))]
         parts.append("build=" + build_id)
         return path + "?" + "&".join(parts)
-    return re.sub(r"(\./[^\s'\"`<>?]+\.(?:mjs|json|js|css|webmanifest|svg|zip|py))(?![a-zA-Z0-9_.])(\?[^\s'\"`<>]*)?", replace, text)
+    return re.sub(r"(\./[^\s'\"`<>?]+\.(?:mjs|json|js|css|html|webmanifest|svg|zip|py))(?![a-zA-Z0-9_.])(\?[^\s'\"`<>]*)?", replace, text)
 
 
 def semantic_model_files(output: Path, cache: Path) -> dict:
@@ -318,6 +327,37 @@ if (typeof document !== 'undefined' && document.querySelector('meta[name="dailyd
     worker.write_text(text)
 
 
+def embed_shared_reading_styles(output: Path) -> None:
+    """Inline authored CSS for an opaque, scriptless cached reading frame."""
+    templates = ROOT / "templates"
+    # Opaque article frames cannot fetch CSS under COEP. Embed the exact shared
+    # source at build time, avoiding a network dependency before cached reading.
+    reading_path = output / "reading-view.mjs"
+    reading_source = reading_path.read_text()
+    marker = "export const SHARED_READING_STYLES = null;"
+    if reading_source.count(marker) != 1:
+        raise ValueError("Shared reading style marker must occur exactly once")
+    styles = "\n".join((templates / name).read_text() for name in (
+        "_design_tokens.css.j2", "_reading_surface.css.j2"))
+    reading_path.write_text(reading_source.replace(
+        marker, "export const SHARED_READING_STYLES = " + json.dumps(styles) + ";"))
+
+
+def publish_shared_reading_assets(output: Path) -> None:
+    """Publish only authored shared components; never render a reader profile."""
+    from jinja2 import Environment, FileSystemLoader, StrictUndefined
+
+    templates = ROOT / "templates"
+    shutil.copyfile(templates / "_pip.css.j2", output / "pip.css")
+    shutil.copyfile(templates / "_reading_surface.css.j2", output / "reading-surface.css")
+    script = (templates / "_pip.js.j2").read_text()
+    (output / "pip.mjs").write_text(script + "\nexport { mountPip };\n")
+    environment = Environment(loader=FileSystemLoader(templates), autoescape=True,
+                              undefined=StrictUndefined)
+    markup = environment.get_template("_pip.html.j2").render(daily_note="")
+    (output / "pip.html").write_text(markup)
+
+
 def build(output: Path) -> dict:
     if output.exists() and any(output.iterdir()):
         raise ValueError("Output must be a new or empty directory; choose --output")
@@ -331,10 +371,12 @@ def build(output: Path) -> dict:
     cache = HERE / ".build-cache"
     wheels = list(pure_package_files(cache / "wheels"))
     manifest = source_archive(assets / "app.zip", wheels)
-    for name in ("index.html", "app.mjs", "guide.mjs", "linked-backup.mjs", "reading-view.mjs", "tab-handoff.mjs", "compute.mjs", "public-embeddings.mjs", "semantic.mjs", "http.mjs", "storage.mjs", "style.css", "worker.mjs", "manifest.webmanifest",
+    for name in ("index.html", "app.mjs", "guide.mjs", "linked-backup.mjs", "reading-view.mjs", "tab-handoff.mjs", "compute.mjs", "embedding-memo.mjs", "cpu-startup.mjs", "public-embeddings.mjs", "semantic.mjs", "http.mjs", "storage.mjs", "style.css", "worker.mjs", "manifest.webmanifest",
                  "app-icon.svg", "sw.js"):
         shutil.copyfile(HERE / name, output / name)
     shutil.copyfile(ROOT / "templates/_design_tokens.css.j2", output / "design-tokens.css")
+    embed_shared_reading_styles(output)
+    publish_shared_reading_assets(output)
     shutil.copyfile(HERE / "runtime.py", assets / "runtime.py")
     shutil.copyfile(PROTO / "bge-tokenizer.mjs", output / "bge-tokenizer.mjs")
     for package, files in {
@@ -363,6 +405,7 @@ def build(output: Path) -> dict:
     (assets / "dependencies.json").write_text(json.dumps({
         "pyodide": [name for name in resolved if name not in deferred],
         "compute": sorted(deferred), "micropip": []}))
+    python_bytecode = compile_startup_python(output)
     model_root = PROTO / "assets/models/bge-small"
     if not model_root.is_dir():
         raise ValueError("Prepare prototype model assets with npm run prepare-fixture first")
@@ -383,6 +426,8 @@ def build(output: Path) -> dict:
     # GitHub Pages must serve the node_modules directory without Jekyll filtering.
     (output / ".nojekyll").write_text("")
     release_inputs = {"source_hashes": manifest,
+        "python_compiler": hashlib.sha256((HERE / 'compile-python.mjs').read_bytes()).hexdigest(),
+        "python_requirements": hashlib.sha256((HERE / 'requirements-browser.txt').read_bytes()).hexdigest(),
         "builder": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(), "frontend": {
         path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in output.iterdir()
         if path.is_file()}, "runtime": hashlib.sha256((assets / "runtime.py").read_bytes()).hexdigest(),
@@ -397,6 +442,7 @@ def build(output: Path) -> dict:
     report = {"schema_version": 1, "build_id": build_id, "runtime_path": runtime_path,
               "dependency_id": dependency_id, "model_path": model_path, "model_id": model_id,
               "semantic_model": semantic_model,
+              "python_bytecode": python_bytecode,
               "public_embeddings": public_embeddings,
               "public_sources": public_source_summary(snapshot or {}),
               "private_data_included": False,

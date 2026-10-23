@@ -9,8 +9,12 @@ from jinja2 import Environment, FileSystemLoader
 
 from .config import get_settings
 from .opportunities import load_opportunity_profile, opportunity_display
+from .publications import is_companion, publication_label
 from .rank.source_quality import display_breakdown, display_source, source_bucket
-from .store import ItemRow, item_metadata, load_digest_features
+from .store import (
+    ItemRow, exclude_publication_companions, item_metadata,
+    load_digest_features, load_publication_companions,
+)
 
 _PACKAGE_TEMPLATE_DIR = Path(__file__).resolve().parent / "templates"
 _TEMPLATE_DIR = (
@@ -151,6 +155,13 @@ def render_digest(
         persisted_features = {}
 
     rendered_sections = []
+    primary_rows = exclude_publication_companions(
+        [row for items in sections.values() for row, _score, _summary in items]
+    )
+    primary_ids = {row.id for row in primary_rows}
+    companions = load_publication_companions(
+        primary_rows
+    )
     opportunity_profile = None
     if any(sections.get(key) for key in ("opportunities", "events")):
         try:
@@ -160,7 +171,8 @@ def render_digest(
         except Exception:  # noqa: BLE001
             pass
     for key in SECTION_ORDER:
-        items = sections.get(key) or []
+        items = [entry for entry in (sections.get(key) or [])
+                 if entry[0].id in primary_ids and not is_companion(entry[0])]
         if not items:
             continue
         meta = SECTION_META.get(key, {"title": key.title(), "emoji": ""})
@@ -201,6 +213,8 @@ def render_digest(
                     "score": score,
                     "reason": reason,
                     "type_label": content_type_label(content_type),
+                    "publication_label": publication_label(row) if key == "research" else "",
+                    "related_commentaries": companions.get(row.id, []),
                     "opportunity": (
                         opportunity_display(item_metadata(row), opportunity_profile)
                         if key in {"opportunities", "events"}

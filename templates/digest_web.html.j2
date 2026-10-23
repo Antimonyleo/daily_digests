@@ -67,217 +67,7 @@
     min-height: 27px; border: 0; border-radius: 6px; background: var(--panel);
     color: var(--text); font-size: 12px; font-weight: 720; cursor: pointer;
   }
-  .tea-break {
-    --idle-direction: 1; --steam-drift: 2px;
-    display: grid; grid-template-columns: 72px minmax(0, 1fr); align-items: center;
-    gap: 12px; margin: 0 0 12px; padding: 10px 12px;
-    border: 1px solid var(--border); border-radius: 14px;
-    background: linear-gradient(115deg, var(--accent-soft), var(--panel) 44%, var(--gold-soft));
-    color: var(--copy-secondary); font-size: 13px; line-height: 1.45;
-    box-shadow: 0 10px 28px rgba(21, 34, 27, 0.05);
-  }
-  .pip-stage {
-    position: relative; width: 68px; height: 68px; justify-self: center; align-self: start;
-  }
-  .tea-pet {
-    --pet-look-x: 0px; --pet-look-y: 0px; --pet-tilt: 0deg;
-    position: absolute; inset: auto 0 0; width: 64px; height: 62px; touch-action: pan-y;
-    cursor: default; outline: none;
-  }
-  .tea-pet:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 12px; }
-  .pet-steam {
-    position: absolute; top: 0; width: 7px; height: 17px;
-    border-left: 2px solid var(--accent); border-radius: 50%; opacity: 0;
-  }
-  .pet-steam.one { left: 23px; }
-  .pet-steam.two { left: 37px; }
-  .pet-cup {
-    position: absolute; left: 8px; bottom: 7px; width: 44px; height: 33px;
-    border: 2px solid var(--accent-strong); border-radius: 5px 5px 17px 17px;
-    background: var(--card); box-shadow: inset 0 -5px 0 var(--accent-soft);
-    transform: rotate(var(--pet-tilt));
-    transform-origin: 50% 90%;
-    transition: transform 0.24s ease;
-  }
-  .pet-rim {
-    position: absolute; left: -2px; right: -2px; top: -4px; height: 8px;
-    border: 1.5px solid var(--accent-strong); border-radius: 50%;
-    background: var(--gold-soft); overflow: hidden;
-  }
-  .pet-ripple {
-    position: absolute; inset: 1px 25%; border: 1px solid var(--accent);
-    border-radius: 50%; opacity: 0;
-  }
-  .pet-cup::after {
-    content: ""; position: absolute; right: -13px; top: 6px; width: 13px; height: 15px;
-    border: 2px solid var(--accent-strong); border-left: 0; border-radius: 0 9px 9px 0;
-  }
-  .pet-eye {
-    position: absolute; top: 10px; width: 3px; height: 5px;
-    border-radius: 50%; background: var(--accent-strong);
-    transform: translate(var(--pet-look-x), var(--pet-look-y));
-    transition: transform 0.18s ease;
-    transform-origin: center;
-  }
-  .pet-eye.left { left: 13px; }
-  .pet-eye.right { right: 13px; }
-  .pet-mouth {
-    position: absolute; left: 50%; top: 19px; width: 7px; height: 4px;
-    border: 1.5px solid var(--accent-strong); border-top: 0; border-radius: 0 0 7px 7px;
-    transform: translateX(-50%);
-  }
-  .pet-cheek {
-    position: absolute; top: 18px; width: 6px; height: 3px; border-radius: 50%;
-    background: var(--gold); opacity: 0.28;
-  }
-  .pet-cheek.left { left: 7px; }
-  .pet-cheek.right { right: 7px; }
-  .pip-drag-copy { display: none; }
-  .tea-break.is-dragging .tea-break-copy { display: none; }
-  .tea-break.is-dragging .pip-drag-copy { display: block; }
-  .tea-break.is-dragging .tea-pet { cursor: grabbing; }
-  .tea-break.is-dragging .pet-cup {
-    transform: translateY(-4px) rotate(-4deg);
-    box-shadow: inset 0 -7px 0 var(--accent-soft), 0 12px 18px rgba(21, 34, 27, 0.18);
-  }
-  .tea-break.is-dragging .pet-eye { transform: translateY(-1px); }
-  .tea-break.is-dragging .pet-mouth {
-    width: 5px; height: 5px;
-    border: 1.5px solid var(--accent-strong); border-radius: 50%;
-  }
-  .pet-saucer {
-    position: absolute; left: 5px; bottom: 2px; width: 56px; height: 8px;
-    border: 2px solid var(--accent-strong); border-top: 0; border-radius: 0 0 50% 50%;
-  }
-  .tea-dialog {
-    position: relative; min-width: 0; padding: 8px 11px 9px;
-    border: 1px solid var(--border); border-radius: 10px; background: var(--card);
-    background: color-mix(in srgb, var(--card) 91%, transparent);
-  }
-  .tea-dialog::before {
-    content: ""; position: absolute; left: -7px; top: 20px; width: 12px; height: 12px;
-    border-left: 1px solid var(--border); border-bottom: 1px solid var(--border);
-    background: var(--card); transform: rotate(45deg);
-  }
-  .tea-leaf-count {
-    position: absolute; right: -3px; bottom: -4px; z-index: 5;
-    display: inline-flex; align-items: center; justify-content: center;
-    min-width: 29px; min-height: 18px; padding: 0 4px;
-    border: 1px solid var(--border); border-radius: 999px; background: var(--card);
-    color: var(--muted); font-size: 12px; font-weight: 800; white-space: nowrap;
-  }
-  .tea-break-copy { display: block; min-width: 0; }
-  .tea-leaf-drop {
-    position: absolute; left: 27px; top: -8px; z-index: 6;
-    width: 34px; height: 34px; padding: 0; border: 0; border-radius: 50%;
-    background: transparent; color: var(--accent); cursor: pointer;
-  }
-  .tea-leaf-shape {
-    position: absolute; left: 9px; top: 10px; width: 15px; height: 10px;
-    border-radius: 14px 3px 14px 3px;
-    background: linear-gradient(135deg, var(--accent), var(--accent-strong));
-    box-shadow: 0 2px 5px rgba(21, 76, 56, 0.18);
-    transform: rotate(-30deg); transform-origin: center;
-    transition: transform 0.24s ease, opacity 0.24s ease;
-  }
-  .tea-leaf-shape::after {
-    content: ""; position: absolute; right: -4px; bottom: -1px;
-    width: 7px; height: 1.5px; border-radius: 2px; background: var(--accent-strong);
-    transform: rotate(28deg); transform-origin: left center;
-  }
-  .tea-leaf-drop:hover .tea-leaf-shape { transform: rotate(-20deg) scale(1.12); }
-  .tea-leaf-drop:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; }
-  .tea-leaf-drop:disabled { cursor: default; }
-  .tea-leaf-drop:disabled .tea-leaf-shape { opacity: 0; }
-  .pip-move {
-    display: none; border: 0; padding: 2px 5px; border-radius: 999px; background: transparent;
-    color: var(--muted); cursor: pointer; font-size: 12px; font-weight: 760;
-  }
-  .pip-move:hover { color: var(--accent-strong); background: var(--accent-soft); }
-  .pip-move:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-  @keyframes pet-steam-rise {
-    0% { opacity: 0; transform: translateY(5px) scaleX(0.8); }
-    35% { opacity: 0.4; }
-    100% { opacity: 0; transform: translateY(-7px) translateX(var(--steam-drift)) scaleX(1.1); }
-  }
-  @keyframes leaf-sway {
-    0%, 100% { transform: rotate(-30deg); }
-    30% { transform: translate(calc(var(--idle-direction) * -2px), -1px) rotate(-38deg); }
-    60% { transform: translate(calc(var(--idle-direction) * 2px), -1.5px) rotate(-18deg); }
-    80% { transform: rotate(-30deg); }
-  }
-  @keyframes pet-curious-look {
-    0%, 100% { transform: translate(var(--pet-look-x), var(--pet-look-y)); }
-    30% { transform: translate(calc(var(--idle-direction) * -0.8px), -1.5px); }
-    60% { transform: translate(calc(var(--idle-direction) * 0.8px), -1.5px); }
-    80% { transform: none; }
-    90% { transform: scaleY(0.15); }
-  }
-  @keyframes pet-curious-tilt {
-    0%, 80%, 100% { transform: rotate(var(--pet-tilt)); }
-    40% { transform: rotate(calc(var(--idle-direction) * -1deg)); }
-    60% { transform: rotate(calc(var(--idle-direction) * 1deg)); }
-  }
-  @keyframes pet-settle {
-    0%, 100% { transform: none; }
-    30% { transform: translateY(1.5px) scale(1.025, 0.97); }
-    65% { transform: translateY(0) scale(0.995, 1.01); }
-  }
-  @keyframes pet-blink {
-    0%, 100% { transform: translate(var(--pet-look-x), var(--pet-look-y)) scaleY(1); }
-    45% { transform: translate(var(--pet-look-x), var(--pet-look-y)) scaleY(0.1); }
-  }
-  @keyframes pet-follow-leaf {
-    0%, 25% { transform: translateY(-2px) scaleY(1.08); }
-    100% { transform: translateY(0); }
-  }
-  @keyframes tea-ripple {
-    0% { opacity: 0.7; transform: scaleX(0.25); }
-    100% { opacity: 0; transform: scaleX(2); }
-  }
-  @keyframes leaf-drop {
-    0% { opacity: 1; transform: translate(0, 0) rotate(-30deg) scale(1); }
-    65% { opacity: 1; transform: translate(calc(var(--leaf-land-x) * 0.6), calc(var(--leaf-land-y) * 0.5)) rotate(12deg) scale(0.85); }
-    90% { opacity: 1; }
-    100% { opacity: 0; transform: translate(var(--leaf-land-x), var(--leaf-land-y)) rotate(35deg) scale(0.2); }
-  }
-  /* The replacement leaf unfurls instead of popping into place, after a short
-     beat with an empty stem — otherwise the drop reads as a stutter, not a fall. */
-  @keyframes leaf-regrow {
-    0% { opacity: 0; transform: translate(2px, -5px) rotate(-72deg) scale(0.35); }
-    55% { opacity: 1; transform: translate(0, 1px) rotate(-18deg) scale(1.08); }
-    100% { opacity: 1; transform: translate(0, 0) rotate(-30deg) scale(1); }
-  }
-  @keyframes pet-land {
-    0% { transform: translateY(-3px); }
-    55% { transform: translateY(1px) scale(1.01, 0.99); }
-    100% { transform: none; }
-  }
-  @media (prefers-reduced-motion: no-preference) {
-    .tea-break.is-blinking .pet-eye { animation: pet-blink 0.22s ease-in-out 1; }
-    .tea-break.is-steaming .pet-steam { animation: pet-steam-rise 1.5s ease-out 1 both; }
-    .tea-break.is-steaming .pet-steam.two { animation-delay: 0.28s; }
-    .tea-break.is-curious .tea-leaf-shape { animation: leaf-sway 2s ease-in-out 1; }
-    .tea-break.is-curious .pet-eye { animation: pet-curious-look 2s ease-in-out 1; }
-    .tea-break.is-curious .pet-cup { animation: pet-curious-tilt 2s ease-in-out 1; }
-    .tea-break.is-feeding .pet-eye { animation: pet-follow-leaf 0.48s ease-in 1 both; }
-    .tea-break.is-feeding .pet-cup { transform: none; transition: none; }
-    .tea-break.is-feeding .tea-leaf-shape { animation: leaf-drop 0.48s ease-in 1 forwards; }
-    .tea-break.is-sipping .tea-leaf-shape { opacity: 0; transition: none; }
-    .tea-break.is-sipping .pet-cup { animation: pet-settle 0.42s ease-out 1; }
-    .tea-break.is-sipping .pet-ripple { animation: tea-ripple 0.42s ease-out 1; }
-    .tea-break.is-sipping .pet-eye {
-      height: 4px; width: 6px; background: transparent; border-top: 1.8px solid var(--accent-strong);
-      border-radius: 50% 50% 0 0; transform: translateY(1px);
-    }
-    .tea-break.is-sipping .pet-cheek { opacity: 0.65; }
-    .tea-break.is-sipping .pet-mouth { height: 5px; }
-    .tea-break.is-regrowing .tea-leaf-shape { animation: leaf-regrow 0.3s ease-out 1 backwards; }
-    .tea-break.is-dropping .pet-cup { animation: pet-land 0.36s ease-out 1; }
-  }
-  @media (hover: hover) and (pointer: fine) and (prefers-reduced-motion: no-preference) {
-    .pip-stage:has(.tea-leaf-drop:hover) .pet-mouth { height: 5px; }
-  }
+{% include "_pip.css.j2" %}
   .brew-choice {
     display: grid; grid-template-columns: minmax(150px, 0.65fr) minmax(0, 2fr) auto;
     align-items: center; gap: 14px; margin: 0 0 16px; padding: 14px 16px;
@@ -484,6 +274,10 @@
     display: grid; grid-template-columns: 92px 1fr; gap: 8px; margin: 10px 0 0;
   }
   .summary-field { display: grid; grid-template-columns: 92px 1fr; gap: 8px; }
+  .related-commentaries { margin: 10px 0; padding: 0 0 0 12px; border-left: 2px solid var(--border); list-style: none; font-size: 14px; line-height: 1.45; }
+  .related-commentaries li + li { margin-top: 6px; }
+  .related-commentaries .publication-label { color: var(--muted); }
+  .related-commentaries a { overflow-wrap: anywhere; text-underline-offset: 3px; }
   .summary-label { color: var(--accent-strong); font-size: 12px; font-weight: 840; text-transform: uppercase; letter-spacing: 0.04em; }
   .summary-text { max-width: 78ch; color: var(--copy-secondary); font-size: 14px; line-height: 1.6; overflow-wrap: anywhere; }
   .reason-row { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
@@ -506,7 +300,8 @@
   .save-state:empty { display: none; }
   .save-state.saved { color: var(--up); }
   .save-state.error { color: var(--down); }
-  .rating-help { color: var(--muted); font-size: 12px; margin: 8px 0; }
+  .rating-help {
+    grid-column: 1 / -1; color: var(--muted); font-size: 12px; margin: 8px 0; }
   .vote-panel {
     display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 10px 14px;
     margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border-soft);
@@ -540,7 +335,7 @@
   .vote-btn.active.neutral { background: var(--surface-muted); border-color: var(--neutral); color: var(--neutral); }
   .vote-btn.active.bad { background: #fdecea; border-color: var(--down); color: var(--down); }
   .vote-btn { border-color: var(--control-border); min-height: 44px; }
-  .reason-chip, .bookmark-btn, .filter-chip, .time-machine-link, .pip-move, .tea-leaf-drop { min-height: 44px; }
+  .reason-chip, .bookmark-btn, .filter-chip, .time-machine-link { min-height: 44px; }
   .section-mark { width: 10px; height: 10px; background: var(--accent); border-radius: 50%; display: inline-block; }
   .vote-btn:disabled { opacity: 0.65; cursor: progress; }
   .item.flash { background: var(--flash); transition: background 0.4s; }
@@ -611,12 +406,6 @@
   html[data-display="compact"] .cup-details { gap: 4px; }
   html[data-display="compact"] .cup-row { gap: 4px; }
   html[data-display="compact"] .cup-chip { min-height: 21px; padding: 2px 6px; }
-  html[data-display="compact"] .tea-break {
-    grid-template-columns: 54px minmax(0, 1fr); gap: 8px; padding: 6px 8px; margin-bottom: 8px;
-  }
-  html[data-display="compact"] .pip-stage { width: 52px; height: 54px; }
-  html[data-display="compact"] .tea-pet { transform: scale(0.82); transform-origin: bottom left; }
-  html[data-display="compact"] .tea-dialog { padding: 6px 9px 7px; }
   html[data-display="compact"] .digest-toolbar { padding: 7px 12px; }
   html[data-display="compact"] .feedback-note { display: none; }
   html[data-display="compact"] .reader-tools { gap: 6px; padding: 6px 12px; }
@@ -646,51 +435,6 @@
   html[data-display="compact"] .vote-title { display: none; }
   html[data-display="compact"] .vote-btn { min-height: 29px; padding: 4px 7px; font-size: 12px; }
   html[data-display="compact"] .reason-block { grid-column: 1; }
-  @media (min-width: 1440px) {
-    .tea-break,
-    html[data-display="compact"] .tea-break {
-      position: fixed; left: max(12px, calc(50% - 714px)); bottom: 18px; z-index: 35;
-      width: 196px; margin: 0; padding: 0; grid-template-columns: 1fr; gap: 8px;
-      border: 0; background: transparent; box-shadow: none;
-    }
-    .tea-dialog,
-    html[data-display="compact"] .tea-dialog {
-      order: 1; padding: 9px 10px 10px;
-      box-shadow: 0 10px 28px rgba(21, 34, 27, 0.10);
-    }
-    .tea-dialog::before {
-      left: calc(50% - 6px); top: auto; bottom: -7px;
-      border-left: 0; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border);
-    }
-    .pip-stage,
-    html[data-display="compact"] .pip-stage {
-      order: 2; justify-self: center; width: 106px; height: 96px;
-    }
-    .tea-pet,
-    html[data-display="compact"] .tea-pet {
-      width: 94px; height: 88px; left: 6px;
-      transform: none; transform-origin: center;
-      touch-action: none; cursor: grab;
-    }
-    .tea-pet .pet-cup { left: 16px; bottom: 10px; width: 60px; height: 45px; border-width: 2.5px; }
-    .tea-pet .pet-cup::after { right: -17px; top: 8px; width: 17px; height: 21px; border-width: 2.5px; border-left: 0; }
-    .tea-pet .pet-eye { top: 14px; width: 4px; height: 6px; }
-    .tea-pet .pet-eye.left { left: 17px; }
-    .tea-pet .pet-eye.right { right: 17px; }
-    .tea-pet .pet-mouth { top: 27px; width: 9px; height: 6px; }
-    .tea-pet .pet-rim { top: -5px; height: 10px; }
-    .tea-pet .pet-cheek { top: 25px; width: 8px; height: 4px; }
-    .tea-pet .pet-cheek.left { left: 10px; }
-    .tea-pet .pet-cheek.right { right: 10px; }
-    .tea-pet .pet-saucer { left: 10px; bottom: 3px; width: 75px; height: 10px; border-width: 2.5px; border-top: 0; }
-    .tea-pet .pet-steam { top: 0; height: 22px; }
-    .tea-pet .pet-steam.one { left: 34px; }
-    .tea-pet .pet-steam.two { left: 52px; }
-    .tea-leaf-drop { left: 39px; top: -5px; }
-    .tea-leaf-count { right: 0; bottom: 0; }
-    .pip-move { display: inline-flex; position: absolute; left: -29px; bottom: 8px; }
-    .tea-break-copy { font-size: 12px; line-height: 1.45; }
-  }
   html[data-theme="dark"] .today-cup {
     background: linear-gradient(135deg, var(--panel), var(--accent-soft));
     border-color: var(--border);
@@ -724,9 +468,6 @@
     .cup-time { font-size: 23px; }
     .brew-choice { grid-template-columns: 1fr; }
     .density-options { grid-template-columns: 1fr; }
-    .tea-break { grid-template-columns: 60px minmax(0, 1fr); align-items: center; gap: 8px; padding: 8px; }
-    .pip-stage { width: 58px; height: 62px; }
-    .tea-pet { transform: scale(0.9); transform-origin: bottom left; }
     .item { padding: 16px; }
     .item-head { gap: 8px; }
     html[data-display="compact"] .today-cup { grid-template-columns: 1fr; }
@@ -739,7 +480,6 @@
     html[data-display="compact"] .more-filters summary,
     html[data-display="compact"] .bookmark-btn,
     html[data-display="compact"] .vote-btn { min-height: 44px; }
-    .tea-leaf-drop { width: 44px; height: 44px; }
     .item-head:has(.known-btn) { grid-template-columns: minmax(0, 1fr); }
   }
   .source-coverage { margin: 16px 0; padding: 16px 20px; border: 1px solid var(--border); border-radius: 12px; background: var(--card); font-size: 13px; line-height: 1.6; }
@@ -799,7 +539,7 @@
     <p id="learning-summary-message">{% if ranking_status.blocked | default(false) or has_helpful_ratings %}{{ ranking_status.learning_message | default(ranking_status.message) }}{% else %}Rate a paper to help shape future digests.{% endif %}</p>
     <p id="usefulness-summary"{% if not feedback_summary.rated %} hidden{% endif %}>{% if feedback_summary.rated %}{{ feedback_summary.useful }} useful of {{ feedback_summary.rated }} rated picks in this digest · {{ feedback_summary.unrated }} unrated.{% endif %}</p>
     <a href="/reading/study">Review useful picks per digest</a>
-    <details><summary>What the feedback means</summary><p>Useful means marked Relevant or Must read. Ratings help future brews; this saved list does not reshuffle. Unrated papers are unknown, not unsuccessful recommendations.</p></details>
+    <details><summary>What the feedback means</summary><p>Useful means marked Relevant or Very relevant. Ratings help future brews; this saved list does not reshuffle. Unrated papers are unknown, not unsuccessful recommendations.</p></details>
   </aside>
   {% if recent_brews %}
   <nav class="time-machine" aria-label="Browse recent digests">
@@ -888,7 +628,7 @@
     <div class="reader-tools" aria-label="Digest filters">
       <div class="tool-group" role="group" aria-label="Filter recommendations">
         <button class="filter-chip active" data-filter="all" type="button" aria-pressed="true">All</button>
-        <button class="filter-chip" data-filter="priority" data-filter-group="status" data-filter-value="priority" type="button" aria-pressed="false">Priority</button>
+        <button class="filter-chip" data-filter="priority" data-filter-group="status" data-filter-value="priority" type="button" aria-pressed="false" title="Show the higher-ranked picks in this digest">Top picks</button>
         <button class="filter-chip" data-filter="unreviewed" data-filter-group="status" data-filter-value="unreviewed" type="button" aria-pressed="false">Unrated</button>
       </div>
       <div class="reader-tools-side">
@@ -970,8 +710,11 @@
             &middot; <a href="{{ item.opportunity.calendar_url }}">Add to calendar</a>
           </div>
           {% endif %}
-          {% if item.ranking.primary_facet %}<p class="match-topic"><strong>Shown for {{ item.ranking.primary_facet }}</strong>{% if item.match_evidence %} · Text contains “{{ item.match_evidence.term }}”{% else %} · Semantic match; no exact topic phrase in the supplied text{% endif %}</p>{% endif %}
-          {% if item.reason_line %}
+          {% set uncertain_fit = (not item.abstract) or (item.ranking.topic_alignment and (item.ranking.topic_alignment.uncertain or not item.ranking.topic_alignment.complete)) %}
+          {% set evidence_topic = item.ranking.topic_support.topic if item.ranking.topic_support and item.ranking.topic_support.status == 'text_supported' else item.ranking.primary_facet %}
+          {% if item.ranking.primary_facet %}<p class="match-topic{% if uncertain_fit or not item.match_evidence %} topic-support{% endif %}"><strong>{{ evidence_topic }}</strong>{% if not item.abstract %} · Title only; fit needs checking{% elif uncertain_fit %} · Topic fit is uncertain{% elif item.match_evidence %} · Text contains “{{ item.match_evidence.term }}”{% elif item.ranking.topic_support and item.ranking.topic_support.status == 'text_supported' %} · Topic terms found in the supplied text{% else %} · Related by meaning; check the connection{% endif %}</p>{% endif %}
+          {% if section.key == 'research' and not item.abstract and not item.ranking.primary_facet %}<p class="topic-support">Title only; fit needs checking</p>{% endif %}
+          {% if item.reason_line and not item.ranking.primary_facet %}
           <div class="reason-line">{{ item.reason_line }}</div>
           {% endif %}
           {% if item.summary_fields.get('Key finding') %}
@@ -983,6 +726,13 @@
           <div class="summary">{{ item.summary }}</div>
           {% endif %}
           {% include "_article_figure.html.j2" %}
+          {% if item.related_commentaries %}
+          <ul class="related-commentaries" aria-label="Commentary on {{ item.title }}">
+            {% for commentary in item.related_commentaries %}
+            <li><span class="publication-label">{{ commentary.publication_label }}</span> · <a href="{{ commentary.url }}" target="_blank" rel="noopener noreferrer">{{ commentary.title }}</a></li>
+            {% endfor %}
+          </ul>
+          {% endif %}
           <details class="item-details">
             <summary>Details</summary>
             <div class="item-details-body">
@@ -996,8 +746,9 @@
                   {% endif %}
                 {% endfor %}
               {% endif %}
+              {% if item.abstract %}<div class="summary-field article-abstract"><div class="summary-label">Abstract</div><div class="summary-text">{{ item.abstract }}</div></div>{% endif %}
               {% if item.match_evidence %}<blockquote class="match-quote">{{ item.match_evidence.quote }}</blockquote><p class="hint">Exact text match explains the topic connection, not scientific quality.</p>{% endif %}
-              <div class="why-copy"><strong>Why this recommendation?</strong>
+              <div class="why-copy"><strong>Why this pick?</strong>
                 {% if item.ranking.primary_facet %}Best-matching interest: {{ item.ranking.primary_facet }}.{% endif %}
                 {% if item.ranking.why_shown %}
                 {{ item.ranking.why_shown | join('; ') }}.
@@ -1043,13 +794,13 @@
           </details>
           <div class="save-state{% if item.current_grade is not none %} saved{% endif %}" aria-live="polite">
             {% if item.current_grade == 100 %}
-            Must read saved.
+            Very relevant saved.
             {% elif item.current_grade == 70 %}
             Relevant saved.
             {% elif item.current_grade == 40 %}
-            Hmmm saved.
+            Less relevant saved.
             {% elif item.current_grade == 10 %}
-            Not for me saved.
+            Not relevant saved.
             {% endif %}
           </div>
           </div>
@@ -1101,10 +852,10 @@
                publication date has usually left the candidate window — so the
                handler also pins it, exactly as "Save all for tomorrow" would. #}
             <span class="overflow-votes" role="group" aria-label="Rate {{ entry.title }}">
-              <button class="overflow-vote" data-grade="100" type="button">Must read</button>
+              <button class="overflow-vote" data-grade="100" type="button">Very relevant</button>
               <button class="overflow-vote" data-grade="70" type="button">Relevant</button>
-              <button class="overflow-vote" data-grade="40" type="button">Hmmm</button>
-              <button class="overflow-vote" data-grade="10" type="button">Not for me</button>
+              <button class="overflow-vote" data-grade="40" type="button">Less relevant</button>
+              <button class="overflow-vote" data-grade="10" type="button">Not relevant</button>
               <span class="overflow-vote-state" aria-live="polite"></span>
             </span>
           </li>
@@ -1126,7 +877,7 @@
     <details><summary>Your interests · {{ interest_coverage|length }} configured</summary>
       <p>These are your configured interests. Counts describe the saved digest, which may predate your latest settings. Percentages guide relative priority; they do not reserve digest slots. A topic without a selected paper may still have matching papers.</p>
       <ul>{% for interest in interest_coverage %}
-        <li><strong>{{ interest.title }} · {{ interest.selected }} selected</strong>
+        <li><strong>{{ interest.title }} · {% if interest.selected is not none %}{{ interest.selected }} selected{% else %}Attribution not recorded{% endif %}</strong>
           {% if interest.candidates is not none %}<span>{{ interest.candidates }} scored matches · {{ interest.eligible }} passed eligibility{% if interest.queries %} · Searches: {{ interest.queries|join(', ') }}{% endif %}</span>{% endif %}
           <span>{{ interest.explanation }}</span>
           {% for search in interest.searches|default([]) %}<span>{{ search.source }}: {{ search.status }}{% if search.status in ['completed', 'limited'] and search.returned_count == 0 %} · 0 papers returned by this search{% endif %}{% if search.query %} · Searched: <code>{{ search.query }}</code>{% endif %}.{% for warning in search.warnings|default([]) %} Provider notice: {{ warning }}.{% endfor %}</span>{% endfor %}
@@ -1146,6 +897,12 @@
       <details><summary>See source details</summary><ul>
         {% for row in source_coverage.rows %}<li><strong>{{ row.name }}</strong><span>{{ row.status }} · {{ row.freshness }}</span></li>{% endfor %}
       </ul></details>
+      {% if source_coverage.authors %}
+      <details><summary>Researchers to follow</summary>
+        <p>Identity checks · {{ source_coverage.checked_label }}. A resolved name does not guarantee complete publication coverage.</p>
+        <ul>{% for author in source_coverage.authors %}<li><strong>{{ author.name }}</strong><span>{{ author.status }}</span></li>{% endfor %}</ul>
+      </details>
+      {% endif %}
       <p class="source-check-time">This is the latest check, including failed attempts. Feed update times are separate from paper publication dates.</p>
     {% else %}
       <p>No source check recorded yet. Brew a digest to check your selected sources.</p>
@@ -1155,29 +912,10 @@
 
 
 
-  <section class="tea-break" id="tea-break" data-note-kind="{{ 'joke' if daily_note.startswith('Lab joke') else 'fact' }}" aria-label="Pip’s tea break">
-    <div class="pip-stage">
-      <button class="tea-leaf-drop" id="tea-another" type="button" aria-label="Drop a tea leaf into Pip’s cup for another science fact or joke" title="Drop a tea leaf into Pip’s cup">
-        <span class="tea-leaf-shape" aria-hidden="true"></span>
-      </button>
-      <div class="tea-pet" id="tea-pet" role="button" tabindex="0" aria-label="Move Pip. Drag with a pointer, use arrow keys, or press Home to reset." aria-describedby="pip-move-help">
-        <span class="pet-steam one"></span><span class="pet-steam two"></span>
-        <span class="pet-cup" aria-hidden="true">
-          <span class="pet-rim"><span class="pet-ripple"></span></span>
-          <span class="pet-eye left"></span><span class="pet-eye right"></span>
-          <span class="pet-cheek left"></span><span class="pet-cheek right"></span><span class="pet-mouth"></span>
-        </span>
-        <span class="pet-saucer"></span>
-      </div>
-      <span class="tea-leaf-count" aria-label="Tea leaves given to Pip"><span id="tea-leaf-count">0</span>/10</span>
-      <button class="pip-move" id="pip-move" type="button" aria-label="Move Pip to another preset position">Move</button>
-    </div>
-    <span class="sr-only" id="pip-move-help">Press Enter to cycle through preset positions. Arrow keys move Pip. Home returns Pip to the lower-left dock.</span>
-    <div class="tea-dialog">
-      <span class="tea-break-copy" id="tea-note-text" aria-live="polite">{{ daily_note }}</span>
-      <span class="pip-drag-copy" aria-hidden="true">Easy—my tea is still hot!</span>
-    </div>
-  </section>
+  {% include "_pip.html.j2" %}
+  {% set reader_notes = namespace(values=[]) %}
+  {% for note in daily_notes[:32] %}{% set reader_notes.values = reader_notes.values + [note[:2000]] %}{% endfor %}
+  <script type="application/json" id="reading-personalization">{{ {"name": (profile_name|default("", true))[:200], "notes": reader_notes.values}|tojson }}</script>
 
   {% if not empty or overview.source_mix or top_journal_audit or candidate_funnel %}
   <details class="about-brew">
@@ -1190,7 +928,7 @@
       <div class="ranking-kicker">Personalization</div>
       <div class="ranking-counts" id="ranking-counts"{% if not has_helpful_ratings %} hidden{% endif %}>
         <span class="count-pill good">Relevant <span id="vote-good">{{ ranking_status.vote_counts.good }}</span></span>
-        <span class="count-pill bad">Not for me <span id="vote-bad">{{ ranking_status.vote_counts.bad }}</span></span>
+        <span class="count-pill bad">Not relevant <span id="vote-bad">{{ ranking_status.vote_counts.bad }}</span></span>
         <span class="count-pill">Helpful ratings <span id="vote-signed">{{ ranking_status.vote_counts.signed }}</span>/<span id="vote-threshold">{{ ranking_status.min_votes_for_lr }}</span></span>
       </div>
       <div class="ranking-message" id="ranking-message">
@@ -1258,9 +996,10 @@
 {% endblock %}
 {% block scripts %}
 <script>
+{% include "_pip.js.j2" %}
 (function () {
 	  const GRADE_CLASS = { "100": "must", "70": "good", "40": "neutral", "10": "bad" };
-	  const GRADE_LABEL = { "100": "Must read", "70": "Relevant", "40": "Hmmm", "10": "Not for me" };
+	  const GRADE_LABEL = { "100": "Very relevant", "70": "Relevant", "40": "Less relevant", "10": "Not relevant" };
 	  const NEGATIVE_GRADES = new Set(["40", "10"]);
 	  const CSRF_TOKEN = {{ csrf_token|tojson }};
   const OVERFLOW_QUERY = new URLSearchParams({digest_id: {{ digest_id|tojson }}, audit_signature: {{ overflow_signature|tojson }}}).toString();
@@ -1280,322 +1019,7 @@
     salutation.textContent = greeting + (name ? `, ${name}` : "");
   }
 
-  const teaText = document.getElementById("tea-note-text");
-  const teaButton = document.getElementById("tea-another");
-  const teaBreak = document.getElementById("tea-break");
-  const teaPet = document.getElementById("tea-pet");
-  const pipMoveButton = document.getElementById("pip-move");
-  const teaLeafCount = document.getElementById("tea-leaf-count");
-  const teaLeafStorageKey = "dailydigest-tea-leaves:" + {{ digest_id|tojson }};
-  const pipPositionStorageKey = "dailydigest-pip-position";
-  const teaBreakOver = "Tea break over—time to read? I’ll keep your cup warm.";
-  let teaLeaves = 0;
-  try {
-    const savedTeaLeaves = Number.parseInt(localStorage.getItem(teaLeafStorageKey) || "0", 10);
-    teaLeaves = Number.isFinite(savedTeaLeaves) ? Math.max(0, Math.min(10, savedTeaLeaves)) : 0;
-  } catch (_) {}
-  const finePointer = window.matchMedia("(hover: hover) and (pointer: fine)");
-  const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
-  const pipDock = window.matchMedia("(min-width: 1440px)");
-  let pipDrag = null;
-  let pipPresetIndex = 0;
-  let pipLandTimer = null;
-
-  function syncTeaBreakState() {
-    if (teaLeafCount) teaLeafCount.textContent = String(teaLeaves);
-    if (!teaButton || !teaText) return;
-    if (teaLeaves < 10) {
-      if (TEA_NOTES.length) teaText.textContent = TEA_NOTES[teaLeaves % TEA_NOTES.length];
-      if (teaBreak) teaBreak.dataset.noteKind = teaText.textContent.startsWith("Lab joke") ? "joke" : "fact";
-      return;
-    }
-    teaText.textContent = teaBreakOver;
-    teaButton.setAttribute("aria-label", "Tea break complete after ten tea leaves");
-    teaButton.setAttribute("title", "Tea break complete");
-    teaButton.disabled = true;
-    if (teaBreak) teaBreak.dataset.noteKind = "fact";
-  }
-
-  function clampPipPosition(x, y) {
-    if (!teaBreak) return { x: 0, y: 0 };
-    const width = teaBreak.offsetWidth;
-    const height = teaBreak.offsetHeight;
-    return {
-      x: Math.max(8, Math.min(window.innerWidth - width - 8, x)),
-      y: Math.max(8, Math.min(window.innerHeight - height - 8, y)),
-    };
-  }
-
-  function setPipPosition(x, y, persist = true) {
-    if (!teaBreak || !pipDock.matches) return;
-    const point = clampPipPosition(x, y);
-    teaBreak.style.left = `${Math.round(point.x)}px`;
-    teaBreak.style.top = `${Math.round(point.y)}px`;
-    teaBreak.style.bottom = "auto";
-    if (persist) {
-      try { localStorage.setItem(pipPositionStorageKey, JSON.stringify(point)); } catch (_) {}
-    }
-  }
-
-  function resetPipPosition(clearSaved = true) {
-    if (!teaBreak) return;
-    teaBreak.style.removeProperty("left");
-    teaBreak.style.removeProperty("top");
-    teaBreak.style.removeProperty("bottom");
-    if (clearSaved) {
-      try { localStorage.removeItem(pipPositionStorageKey); } catch (_) {}
-    }
-  }
-
-  function restorePipPosition() {
-    if (teaBreak && !teaBreak.getClientRects().length) return;
-    const moveHelp = document.getElementById("pip-move-help");
-    if (moveHelp) moveHelp.hidden = !pipDock.matches;
-    if (teaPet) {
-      teaPet.tabIndex = pipDock.matches ? 0 : -1;
-      teaPet.setAttribute("role", pipDock.matches ? "button" : "img");
-      teaPet.setAttribute("aria-label", pipDock.matches
-        ? "Move Pip. Drag with a pointer, use arrow keys, or press Home to reset."
-        : "Pip, your tea-cup companion");
-      if (pipDock.matches) teaPet.setAttribute("aria-describedby", "pip-move-help");
-      else teaPet.removeAttribute("aria-describedby");
-    }
-    if (!teaBreak || !pipDock.matches) {
-      resetPipPosition(false);
-      return;
-    }
-    try {
-      const saved = JSON.parse(localStorage.getItem(pipPositionStorageKey) || "null");
-      if (saved && Number.isFinite(saved.x) && Number.isFinite(saved.y)) {
-        setPipPosition(saved.x, saved.y, false);
-      }
-    } catch (_) {}
-  }
-
-  function cyclePipPosition() {
-    if (!teaBreak || !pipDock.matches) return;
-    const rect = teaBreak.getBoundingClientRect();
-    const sideGap = Math.max(12, window.innerWidth / 2 - 714);
-    const presets = [
-      { x: sideGap, y: window.innerHeight - rect.height - 18 },
-      { x: sideGap, y: 72 },
-      { x: window.innerWidth - sideGap - rect.width, y: 72 },
-    ];
-    pipPresetIndex = (pipPresetIndex + 1) % presets.length;
-    setPipPosition(presets[pipPresetIndex].x, presets[pipPresetIndex].y);
-  }
-
-  function landPip() {
-    if (!teaBreak) return;
-    window.clearTimeout(pipLandTimer);
-    teaBreak.classList.remove("is-dragging");
-    teaBreak.classList.remove("is-dropping");
-    resetPipLook();
-    if (!pipMotionAllowed()) return;
-    void teaBreak.offsetWidth;
-    teaBreak.classList.add("is-dropping");
-    pipLandTimer = window.setTimeout(() => teaBreak.classList.remove("is-dropping"), 360);
-    schedulePipIdle();
-  }
-
-  function cancelPipDrag() {
-    if (!pipDrag) return;
-    const pointerId = pipDrag.pointerId;
-    pipDrag = null;
-    if (teaPet.hasPointerCapture(pointerId)) teaPet.releasePointerCapture(pointerId);
-    teaBreak.classList.remove("is-dragging");
-    resetPipLook();
-    resetPipPosition(false);
-    restorePipPosition();
-    schedulePipIdle();
-  }
-
-  syncTeaBreakState();
-  restorePipPosition();
-  if (pipDock.addEventListener) pipDock.addEventListener("change", restorePipPosition);
-  window.addEventListener("resize", restorePipPosition);
-  document.addEventListener("pipvisibilitychange", restorePipPosition);
-
-  if (pipMoveButton) pipMoveButton.addEventListener("click", cyclePipPosition);
-  if (teaPet) {
-    teaPet.addEventListener("pointerdown", (event) => {
-      if (!pipDock.matches || event.button !== 0 || pipDrag) return;
-      const rect = teaBreak.getBoundingClientRect();
-      pipDrag = {
-        pointerId: event.pointerId,
-        offsetX: event.clientX - rect.left,
-        offsetY: event.clientY - rect.top,
-      };
-      finishLeafCycle();
-      clearPipIdle();
-      resetPipLook();
-      teaPet.setPointerCapture(event.pointerId);
-      teaBreak.classList.add("is-dragging");
-      event.preventDefault();
-    });
-    teaPet.addEventListener("pointermove", (event) => {
-      if (pipDrag && event.pointerId === pipDrag.pointerId) {
-        setPipPosition(event.clientX - pipDrag.offsetX, event.clientY - pipDrag.offsetY, false);
-        return;
-      }
-    });
-    const finishPipDrag = (event) => {
-      if (!pipDrag || event.pointerId !== pipDrag.pointerId) return;
-      const rect = teaBreak.getBoundingClientRect();
-      setPipPosition(rect.left, rect.top);
-      pipDrag = null;
-      if (teaPet.hasPointerCapture(event.pointerId)) teaPet.releasePointerCapture(event.pointerId);
-      landPip();
-    };
-    teaPet.addEventListener("pointerup", finishPipDrag);
-    teaPet.addEventListener("pointercancel", cancelPipDrag);
-    teaPet.addEventListener("lostpointercapture", cancelPipDrag);
-    window.addEventListener("blur", cancelPipDrag);
-    teaPet.addEventListener("keydown", (event) => {
-      if (!pipDock.matches) return;
-      const rect = teaBreak.getBoundingClientRect();
-      const movements = {
-        ArrowLeft: [-18, 0], ArrowRight: [18, 0],
-        ArrowUp: [0, -18], ArrowDown: [0, 18],
-      };
-      if (movements[event.key]) {
-        event.preventDefault();
-        finishLeafCycle();
-        setPipPosition(rect.left + movements[event.key][0], rect.top + movements[event.key][1]);
-        landPip();
-      } else if (event.key === "Home") {
-        event.preventDefault();
-        finishLeafCycle();
-        resetPipPosition();
-        landPip();
-      } else if (event.key === "Enter" || event.key === " ") {
-        event.preventDefault();
-        finishLeafCycle();
-        cyclePipPosition();
-        landPip();
-      }
-    });
-  }
-  // Impact, contentment, then a replacement leaf. Keep these durations aligned
-  // with leaf-drop, pet-settle and leaf-regrow above.
-  const LEAF_FALL_MS = 480;
-  const LEAF_REST_MS = 420;
-  const LEAF_REGROW_MS = 300;
-  let leafTimer = null;
-  let leafBusy = false;
-  let pipIdleTimer = null;
-  let pipIdleBeat = 0;
-  function pipMotionAllowed() {
-    if (!teaPet || document.hidden || reducedMotion.matches || !teaPet.getClientRects().length) return false;
-    const rect = teaPet.getBoundingClientRect();
-    return rect.bottom > 0 && rect.top < window.innerHeight && rect.right > 0 && rect.left < window.innerWidth;
-  }
-  function resetPipLook() {
-    if (!teaPet) return;
-    for (const name of ["--pet-look-x", "--pet-look-y", "--pet-tilt"]) teaPet.style.removeProperty(name);
-  }
-  function clearPipIdle() {
-    window.clearTimeout(pipIdleTimer);
-    if (teaBreak) teaBreak.classList.remove("is-blinking", "is-steaming", "is-curious");
-  }
-  function schedulePipIdle(continueCycle = false) {
-    clearPipIdle();
-    if (!continueCycle) pipIdleBeat = 0;
-    if (!pipMotionAllowed() || leafBusy || pipDrag) return;
-    // One gesture at a time, with 8–12 seconds of rest. Every third gesture
-    // watches the leaf; a finished tea break gets a sleepy blink instead.
-    pipIdleTimer = window.setTimeout(() => {
-      if (!pipMotionAllowed() || leafBusy || pipDrag) return;
-      pipIdleBeat = (pipIdleBeat + 1) % 3;
-      teaBreak.style.setProperty("--steam-drift", `${(Math.random() * 6 - 3).toFixed(1)}px`);
-      teaBreak.style.setProperty("--idle-direction", Math.random() < 0.5 ? "-1" : "1");
-      teaBreak.classList.add(pipIdleBeat ? "is-steaming" : teaLeaves < 10 ? "is-curious" : "is-blinking");
-      pipIdleTimer = window.setTimeout(() => schedulePipIdle(true), 2000);
-    }, 8000 + Math.random() * 4000);
-  }
-  function finishLeafCycle() {
-    window.clearTimeout(leafTimer);
-    if (teaBreak) teaBreak.classList.remove("is-feeding", "is-sipping", "is-regrowing");
-    if (leafBusy) syncTeaBreakState();
-    leafBusy = false;
-    if (teaButton) teaButton.removeAttribute("aria-disabled");
-    schedulePipIdle();
-  }
-  function runLeafCycle() {
-    if (!pipMotionAllowed()) {
-      syncTeaBreakState();
-      return;
-    }
-    clearPipIdle();
-    resetPipLook();
-    window.clearTimeout(pipLandTimer);
-    teaBreak.classList.remove("is-dropping");
-    leafBusy = true;
-    teaButton.setAttribute("aria-disabled", "true");
-    teaBreak.classList.add("is-feeding");
-    // Inline Pip is scaled independently of the leaf; measure the actual rim
-    // so the same motion lands correctly on mobile, desktop and compact views.
-    const leaf = teaButton.querySelector(".tea-leaf-shape").getBoundingClientRect();
-    const rim = teaPet.querySelector(".pet-rim").getBoundingClientRect();
-    teaBreak.style.setProperty("--leaf-land-x", `${rim.left + rim.width / 2 - leaf.left - leaf.width / 2}px`);
-    teaBreak.style.setProperty("--leaf-land-y", `${rim.top + rim.height / 2 - leaf.top - leaf.height / 2}px`);
-    leafTimer = window.setTimeout(() => {
-      teaBreak.classList.remove("is-feeding");
-      teaBreak.classList.add("is-sipping");
-      syncTeaBreakState();
-      leafTimer = window.setTimeout(() => {
-        teaBreak.classList.remove("is-sipping");
-        if (teaLeaves < 10) teaBreak.classList.add("is-regrowing");
-        leafTimer = window.setTimeout(finishLeafCycle, LEAF_REGROW_MS);
-      }, LEAF_REST_MS);
-    }, LEAF_FALL_MS);
-  }
-  function syncPipMotion() {
-    if (!pipMotionAllowed()) {
-      cancelPipDrag();
-      finishLeafCycle();
-      clearPipIdle();
-      resetPipLook();
-      window.clearTimeout(pipLandTimer);
-      if (teaBreak) teaBreak.classList.remove("is-dropping");
-    } else {
-      schedulePipIdle();
-    }
-  }
-  if (teaText && teaButton && TEA_NOTES.length) {
-    teaButton.addEventListener("click", () => {
-      if (teaLeaves >= 10 || leafBusy || pipDrag) return;
-      teaLeaves = Math.min(10, teaLeaves + 1);
-      // Save at acceptance so navigation or cancellation cannot lose a leaf.
-      try { localStorage.setItem(teaLeafStorageKey, String(teaLeaves)); } catch (_) {}
-      runLeafCycle();
-    });
-  }
-  if (teaPet) {
-    const stage = teaPet.closest(".pip-stage");
-    stage.addEventListener("pointermove", (event) => {
-      if (!finePointer.matches || !pipMotionAllowed() || pipDrag || leafBusy) return;
-      schedulePipIdle();
-      const box = teaPet.getBoundingClientRect();
-      const x = Math.max(-1, Math.min(1, ((event.clientX - box.left) / box.width) * 2 - 1));
-      const y = Math.max(-1, Math.min(1, ((event.clientY - box.top) / box.height) * 2 - 1));
-      teaPet.style.setProperty("--pet-look-x", `${(x * 1.6).toFixed(2)}px`);
-      teaPet.style.setProperty("--pet-look-y", `${(y * 1.2).toFixed(2)}px`);
-      teaPet.style.setProperty("--pet-tilt", `${(x * 1.5).toFixed(2)}deg`);
-    });
-    stage.addEventListener("pointerleave", resetPipLook);
-  }
-  document.addEventListener("visibilitychange", syncPipMotion);
-  document.addEventListener("pipvisibilitychange", syncPipMotion);
-  if (reducedMotion.addEventListener) reducedMotion.addEventListener("change", syncPipMotion);
-  // Resizing can move the target rim mid-fall; settle rather than miss the cup.
-  window.addEventListener("resize", () => { cancelPipDrag(); finishLeafCycle(); });
-  if (teaPet && typeof IntersectionObserver !== "undefined") {
-    new IntersectionObserver(syncPipMotion).observe(teaPet);
-  } else {
-    window.addEventListener("scroll", syncPipMotion, { passive: true });
-  }
-  schedulePipIdle();
+  mountPip(document, { digestId: {{ digest_id|tojson }}, notes: TEA_NOTES });
 
   const progressBar = document.getElementById("reading-progress");
   const progressFill = document.getElementById("reading-progress-fill");
@@ -1666,11 +1090,23 @@
   }
 
   function setStatus(itemEl, text, state) {
-    const status = itemEl.querySelector(".save-state");
+    setSaveState(itemEl.querySelector(".save-state"), text, state);
+  }
+
+  function setSaveState(status, text, state, committedText = "Saved in this browser") {
     if (!status) return;
     status.classList.remove("saved", "error", "pending");
     if (state) status.classList.add(state);
     status.textContent = text;
+    if (state === "pending") status.dataset.storageSavedText = committedText;
+    else delete status.dataset.storageSavedText;
+  }
+
+  function setStorageLabel(label, text, pending) {
+    if (!label) return;
+    label.textContent = pending ? "Saving…" : text;
+    if (pending) label.dataset.storageSavedLabel = text;
+    else delete label.dataset.storageSavedLabel;
   }
 
   async function responsePayload(response) {
@@ -1711,7 +1147,12 @@
   }
 
   window.addEventListener("dd-storage-committed", () => {
-    document.querySelectorAll(".save-state.pending").forEach(status => { status.classList.remove("pending"); status.classList.add("saved"); status.textContent = "Saved in this browser"; });
+    document.querySelectorAll(".save-state.pending, .overflow-vote-state.pending").forEach(status => {
+      setSaveState(status, status.dataset.storageSavedText || "Saved in this browser", "saved");
+    });
+    document.querySelectorAll("[data-storage-saved-label]").forEach(label => {
+      setStorageLabel(label, label.dataset.storageSavedLabel, false);
+    });
   });
 
   function flash(itemEl) {
@@ -1768,6 +1209,12 @@
           }
           const result = payload.training_job ? payload.training_job.last_result : null;
           if (result && result.ok) showToast("Personal ranking updated");
+          else if (result && result.ok === false) {
+            const message = "Calibration could not be updated. Try again.";
+            const status = document.getElementById("ranking-message");
+            if (status) status.textContent = message;
+            showToast(message);
+          }
           return;
         }
       } catch (e) {
@@ -1866,8 +1313,11 @@
           headers: { "X-CSRF-Token": CSRF_TOKEN },
         });
         const payload = await responsePayload(response);
-        overflowSaveBtn.textContent = "Saved for tomorrow \u2713";
-        showToast(`${payload.saved} picks will compete again in tomorrow's brew`);
+        setStorageLabel(overflowSaveBtn, "Saved for tomorrow \u2713", payload.storagePending);
+        overflowSaveBtn.disabled = !payload.storagePending;
+        showToast(payload.storagePending
+          ? `${payload.saved} picks queued · saving browser copy…`
+          : `${payload.saved} picks will compete again in tomorrow's brew`);
       } catch (error) {
         overflowSaveBtn.disabled = false;
         showToast(error.message || "Could not save these for tomorrow");
@@ -1883,28 +1333,38 @@
         const grade = btn.dataset.grade;
         const buttons = rowEl.querySelectorAll(".overflow-vote");
         buttons.forEach((b) => { b.disabled = true; });
+        setSaveState(stateEl, "Recording response…", "");
         try {
           const response = await fetch(`/vote/${id}/${grade}`, {
             method: "POST",
             headers: { "X-CSRF-Token": CSRF_TOKEN },
           });
-          if (!response.ok) throw new Error("HTTP " + response.status);
+          const payload = await responsePayload(response);
           buttons.forEach((b) => b.classList.toggle("active", b === btn));
-          const payload = await response.json();
           if (payload.ranking_status) updateRankingStatus(payload.ranking_status);
+          setSaveState(stateEl, payload.storagePending ? "Rating recorded · saving browser copy…" : "Saved",
+            payload.storagePending ? "pending" : "saved", "Saved");
           // A positive rating means "I want this" — pin it so it competes in the
           // next brew instead of ageing out of the candidate window.
-          let kept = false;
           if (Number(grade) >= 70) {
-            const pin = await fetch(`/overflow/save/${id}?${OVERFLOW_QUERY}`, {
-              method: "POST",
-              headers: { "X-CSRF-Token": CSRF_TOKEN },
-            });
-            kept = pin.ok;
+            try {
+              const pin = await responsePayload(await fetch(`/overflow/save/${id}?${OVERFLOW_QUERY}`, {
+                method: "POST",
+                headers: { "X-CSRF-Token": CSRF_TOKEN },
+              }));
+              // This later mutation's checkpoint includes the preceding rating.
+              setSaveState(stateEl, pin.storagePending
+                ? "Rating recorded · keeping for tomorrow · saving browser copy…" : "Saved · kept for tomorrow",
+                pin.storagePending ? "pending" : "saved", "Saved · kept for tomorrow");
+            } catch (error) {
+              const pending = stateEl?.classList.contains("pending");
+              const retry = "could not keep for tomorrow. Try again.";
+              setSaveState(stateEl, pending ? `Rating recorded · ${retry} Saving browser copy…` : `Rating saved · ${retry}`,
+                pending ? "pending" : "error", `Rating saved · ${retry}`);
+            }
           }
-          if (stateEl) stateEl.textContent = kept ? "Saved · kept for tomorrow" : "Saved";
         } catch (error) {
-          if (stateEl) stateEl.textContent = "Could not save";
+          setSaveState(stateEl, "Could not save. Try again.", "error");
         } finally {
           buttons.forEach((b) => { b.disabled = false; });
         }
@@ -1920,12 +1380,13 @@
         const id = itemEl.dataset.itemId;
         const wasSaved = itemEl.dataset.bookmarked === "true";
         bookmarkBtn.disabled = true;
+        setStatus(itemEl, wasSaved ? "Removing saved item…" : "Saving item…", "");
         try {
           const response = await fetch(`/bookmark/${id}`, {
             method: wasSaved ? "DELETE" : "POST",
             headers: { "X-CSRF-Token": CSRF_TOKEN },
           });
-          if (!response.ok) throw new Error("HTTP " + response.status);
+          const payload = await responsePayload(response);
           const nowSaved = !wasSaved;
           itemEl.dataset.bookmarked = nowSaved ? "true" : "false";
           bookmarkBtn.classList.toggle("active", nowSaved);
@@ -1933,10 +1394,14 @@
           const bookmarkIcon = bookmarkBtn.querySelector(".bookmark-icon");
           const bookmarkLabel = bookmarkBtn.querySelector(".bookmark-label");
           if (bookmarkIcon) bookmarkIcon.textContent = nowSaved ? "★" : "☆";
-          if (bookmarkLabel) bookmarkLabel.textContent = nowSaved ? "Saved" : "Save";
+          setStorageLabel(bookmarkLabel, nowSaved ? "Saved" : "Save", payload.storagePending);
           bookmarkBtn.setAttribute("aria-label", nowSaved ? "Remove from saved items" : "Save for later");
-          showToast(nowSaved ? "Saved for later" : "Removed from saved items");
+          const message = payload.storagePending ? "Saved-item change recorded · saving browser copy…"
+            : nowSaved ? "Saved for later" : "Removed from saved items";
+          setStatus(itemEl, message, payload.storagePending ? "pending" : "saved");
+          showToast(message);
         } catch (error) {
+          setStatus(itemEl, "Saved-item change was not saved. Try again.", "error");
           showToast("Saved-item change failed");
         } finally {
           bookmarkBtn.disabled = false;
@@ -1949,12 +1414,13 @@
         const id = itemEl.dataset.itemId;
         const wasKnown = itemEl.dataset.known === "true";
         knownBtn.disabled = true;
+        setStatus(itemEl, "Updating known status…", "");
         try {
           const response = await fetch(`/known/${id}`, {
             method: wasKnown ? "DELETE" : "POST",
             headers: { "X-CSRF-Token": CSRF_TOKEN },
           });
-          if (!response.ok) throw new Error("HTTP " + response.status);
+          const payload = await responsePayload(response);
           const nowKnown = !wasKnown;
           itemEl.dataset.known = nowKnown ? "true" : "false";
           knownBtn.classList.toggle("active", nowKnown);
@@ -1962,10 +1428,14 @@
           const knownIcon = knownBtn.querySelector(".known-icon");
           const knownLabel = knownBtn.querySelector(".known-label");
           if (knownIcon) knownIcon.textContent = nowKnown ? "\u2713" : "\u2298";
-          if (knownLabel) knownLabel.textContent = nowKnown ? "Known" : "Mark known";
+          setStorageLabel(knownLabel, nowKnown ? "Known" : "Mark known", payload.storagePending);
           knownBtn.setAttribute("aria-label", nowKnown ? "Show this again in future digests" : "Mark as known so it stops appearing");
-          showToast(nowKnown ? "Marked known - it won't come back" : "Un-marked - it can appear again");
+          const message = payload.storagePending ? "Known status recorded · saving browser copy…"
+            : nowKnown ? "Marked known - it won't come back" : "Un-marked - it can appear again";
+          setStatus(itemEl, message, payload.storagePending ? "pending" : "saved");
+          showToast(message);
         } catch (error) {
+          setStatus(itemEl, "Known status was not saved. Try again.", "error");
           showToast("Could not update the known flag");
         } finally {
           knownBtn.disabled = false;
@@ -2020,7 +1490,7 @@
         const reason = chip.dataset.reason;
         const removing = chip.classList.contains("active");
         if (!removing && !reasonFeedbackEnabled(itemEl)) {
-          setStatus(itemEl, "Choose Hmmm or Not for me before adding a reason.", "");
+          setStatus(itemEl, "Choose Less relevant or Not relevant before adding a reason.", "");
           showToast("Choose a read response first");
           return;
         }
@@ -2031,12 +1501,15 @@
             method: removing ? "DELETE" : "POST",
             headers: { "X-CSRF-Token": CSRF_TOKEN },
           });
-          await responsePayload(r);
+          const payload = await responsePayload(r);
           chip.classList.toggle("active", !removing);
           chip.setAttribute("aria-pressed", removing ? "false" : "true");
           const stamp = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-          setStatus(itemEl, `${removing ? "Reason removed" : "Reason saved"} at ${stamp}`, "saved");
-          showToast(removing ? "Reason removed" : "Reason saved");
+          const message = payload.storagePending
+            ? `${removing ? "Reason removed" : "Reason recorded"} · saving browser copy…`
+            : `${removing ? "Reason removed" : "Reason saved"} at ${stamp}`;
+          setStatus(itemEl, message, payload.storagePending ? "pending" : "saved");
+          showToast(message);
         } catch (e) {
           setStatus(itemEl, "Reason change was not saved. " + e.message, "error");
           flash(itemEl);

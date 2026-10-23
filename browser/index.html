@@ -33,7 +33,7 @@
       <p id="startup-topics-message" role="status"></p>
     </form>
     <ol id="startup-stages" aria-label="Startup stages"><li data-startup-stage="python">Python and libraries</li><li data-startup-stage="data">Your saved data</li><li data-startup-stage="ready">Reading desk ready</li></ol>
-    <details class="startup-details"><summary>First visit and local computing</summary><p><span id="download-size">The CPU model is about 66 MB, plus the Python runtime and libraries.</span> Downloads are cached; models load when needed. Brewing uses processor and memory, and can increase heat, fan noise and battery use. Thousands of new papers may take 20+ minutes on one core. Keep this tab open while brewing. Choose acceleration in Compute and export copies in Backup.</p></details>
+    <details class="startup-details"><summary>First visit and local computing</summary><p><span id="download-size">The CPU model is about 66 MB, plus the Python runtime and libraries.</span> Downloads and article comparisons are cached. Keep this tab open while brewing; large collections of new papers take longer. Change modes in Data &amp; compute.</p></details>
     <div class="desk-skeleton" aria-hidden="true"><span></span><span></span><span></span></div>
     <p id="startup-status">Warming up your reading desk. A fresh cup is on its way.</p>
     <button id="retry" hidden type="button">Retry startup</button>
@@ -46,7 +46,7 @@
   </main>
   <aside id="reading-view-notice" class="reading-view-notice" aria-label="Saved reading view" hidden>
     <p id="reading-view-status"></p>
-    <div><button id="reading-view-open" type="button">Open full reading desk</button><button id="reading-view-brew" type="button">Brew a new digest</button></div>
+    <div><button id="reading-view-open" type="button">Open controls</button><button id="reading-view-brew" type="button">Brew</button></div>
   </aside>
   <aside id="backup-reminder" class="backup-reminder" role="status" hidden><span id="backup-reminder-text"></span> <button id="backup-reminder-open" type="button">Backup &amp; transfer</button><button id="backup-reminder-dismiss" type="button">Later</button></aside>
   <iframe id="app" title="DailyDigest reading desk" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-downloads" hidden></iframe>
@@ -76,11 +76,11 @@
     <section data-guide-step>
       <h1 id="quick-guide-title" tabindex="-1">Start with your interests</h1>
       <p>Add a few research topics or load an example and edit it. Use alternative terms for abbreviations and other names for the same topic. Percentages are optional; when you use them, they must add up to 100%.</p>
-      <p>Choose Standard for up to 15 papers, or Short for fewer. Brewing runs on your device, so keep the tab open. The first brew can take 20 minutes or more on one CPU core.</p>
+      <p>Choose Standard for up to 15 papers, or Short for fewer. Brewing runs on your device; keep the tab open until it finishes.</p>
     </section>
     <section data-guide-step hidden>
       <h1 tabindex="-1">Make the digest yours</h1>
-      <p>Rate papers to tell DailyDigest what helps. Save papers to revisit them, or mark a paper as known. Each pick shows the topic it matched.</p>
+      <p>Rate papers to tell DailyDigest what helps. Save papers to revisit them. For familiar papers you want to see less often, choose Less relevant, then More reasons → Already known. Funding and event cards offer Mark known. Each pick shows the topic it matched.</p>
       <p>Saved papers and earlier digests stay in your reading desk. Check source coverage to see which sources responded and how old their data is.</p>
     </section>
     <section data-guide-step hidden>
@@ -111,7 +111,7 @@
         <form id="compute-form">
           <label for="compute-mode">Local computation</label>
           <select id="compute-mode" aria-describedby="compute-support" disabled>
-            <option value="cpu">CPU · one core (default)</option>
+            <option value="cpu">CPU · one core</option>
             <option value="gpu">Use GPU acceleration (experimental, opt-in)</option>
             <option value="multicore">CPU · up to four cores</option>
           </select>
@@ -119,9 +119,9 @@
           <button id="compute-apply" disabled type="submit">Apply and reload</button>
         </form>
         <button id="test-gpu" type="button" disabled>Test GPU</button><p id="gpu-test-result" role="status"></p>
-        <p id="compute-status" role="status">CPU · one core. GPU acceleration is optional and may vary by device.</p>
+        <p id="compute-status" role="status">Preparing local CPU computation…</p>
         <details><summary>More about computing</summary><p>Choose a mode, then Apply and reload. Finish or stop an active brew first. Acceleration speeds new text comparisons; fetching and other work still use the CPU. Cached comparisons need no acceleration, and the existing digest does not change when you switch.</p>
-        <p>Switching between CPU and GPU can require recalculating saved text comparisons.</p>
+        <p>CPU and GPU can select different borderline papers. Switching modes can require recalculating saved text comparisons.</p>
         <p>First-time GPU setup downloads a separate model export, about 133 MB.</p>
         <p>Brewing uses processor and memory and can increase heat, fan noise and battery use. Thousands of new articles may take 20 minutes or more on one CPU core. GPU support is experimental while hardware performance is being verified across devices. CPU fallback keeps the same ranking rules.</p></details>
       </div>

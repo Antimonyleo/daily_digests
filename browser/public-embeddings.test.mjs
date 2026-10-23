@@ -97,3 +97,58 @@ test('Stop cancels a stalled public download before local inference and a later 
   await assert.rejects(pending,/stopped/i);assert.equal(signal.aborted,true);assert.equal(local,0);
   cancel=false;retry=true;assert.deepEqual(await cache.embed(['Public']),[vector(2)]);assert.equal(local,1);
 });
+
+for(const failure of ['503','429','network','body-network','vector-body-network','vector-body-abort','timeout']) {
+  test(`transient public ${failure} retries once after cooldown, sharing concurrent recovery`,async()=>{
+    const {manifest,bytes}=fixture();let now=0,requests=0,local=0;
+    const vectorBodyFailure=failure.startsWith('vector-body-');
+    const cache=createPublicEmbeddingCache({signature:manifest.signature,backend:()=> 'browser-onnx',crypto:webcrypto,
+      url:new URL('https://example.test/assets/public-embeddings.json'),now:()=>now,retryDelayMs:100,
+      timeoutMs:failure==='timeout'?50:1000,
+      fetcher:async url=>{
+        requests++;
+        if(requests===2&&vectorBodyFailure)
+          return {ok:true,arrayBuffer:async()=>{throw failure==='vector-body-abort'
+            ?new DOMException('Connection aborted','AbortError'):new TypeError('Connection interrupted');}};
+        if(requests===1&&!vectorBodyFailure) {
+          if(failure==='network') throw new TypeError('Network unavailable');
+          if(failure==='body-network') return {ok:true,json:async()=>{throw new TypeError('Connection interrupted');}};
+          if(failure==='timeout') return new Promise(()=>{});
+          return new Response('',{status:Number(failure)});
+        }
+        return new Response(String(url).endsWith('.json')?JSON.stringify(manifest):bytes);
+      },embed:async texts=>{local++;return texts.map(()=>vector(2));}});
+    assert.deepEqual(await cache.embed(['Public paper one']),[vector(2)]);
+    now=99;
+    assert.deepEqual(await cache.embed(['Public paper one']),[vector(2)]);
+    assert.equal(requests,vectorBodyFailure?2:1);
+    now=100;
+    const recovered=await Promise.all([cache.embed(['Public paper one']),cache.embed(['Public paper two'])]);
+    assert.deepEqual(recovered,[[vector(0)],[vector(1)]]);
+    assert.equal(requests,vectorBodyFailure?4:3);assert.equal(local,2);
+    assert.equal(cache.stats.status,'ready');assert.equal(cache.stats.reason,'');
+  });
+}
+
+for(const failure of ['404','410','signature','malformed-json']) {
+  test(`permanent public ${failure} does not retry after cooldown`,async()=>{
+    const {manifest}=fixture({signature:'different-model'});let now=0,requests=0;
+    const cache=createPublicEmbeddingCache({signature:'expected',backend:()=> 'browser-onnx',crypto:webcrypto,
+      url:new URL('https://example.test/assets/public-embeddings.json'),now:()=>now,retryDelayMs:100,
+      fetcher:async()=>{requests++;return failure==='malformed-json'?new Response('{')
+        :failure==='signature'?new Response(JSON.stringify(manifest))
+        :new Response('',{status:Number(failure)});},embed:async()=>[vector(2)]});
+    assert.deepEqual(await cache.embed(['Public']),[vector(2)]);
+    now=1000;assert.deepEqual(await cache.embed(['Public']),[vector(2)]);
+    assert.equal(requests,1);
+  });
+}
+
+test('a continuing outage exhausts the single retry without stalling later batches',async()=>{
+  let now=0,requests=0;
+  const cache=createPublicEmbeddingCache({signature:'x',backend:()=> 'browser-onnx',crypto:webcrypto,
+    url:new URL('https://example.test/assets/public-embeddings.json'),now:()=>now,retryDelayMs:100,
+    fetcher:async()=>{requests++;return new Response('',{status:503});},embed:async()=>[vector(2)]});
+  for(now of [0,50,100,200,1000]) assert.deepEqual(await cache.embed(['Public']),[vector(2)]);
+  assert.equal(requests,2);
+});

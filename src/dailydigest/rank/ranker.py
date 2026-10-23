@@ -966,6 +966,7 @@ def pick_top_per_section(
     *,
     settings: Any | None = None,
     selection_facts: Mapping[int, Mapping[str, Any]] | None = None,
+    experimental_unknown_journal_cap: int | None = None,
 ) -> list[tuple[ItemRow, float]]:
     """Take up to caps[section] while protecting research source diversity.
 
@@ -992,6 +993,7 @@ def pick_top_per_section(
                     score_features=score_features,
                     settings=settings,
                     selection_facts=selection_facts,
+                    experimental_unknown_journal_cap=experimental_unknown_journal_cap,
                 )
             )
         else:
@@ -1008,7 +1010,16 @@ def _pick_research_balanced(
     *,
     settings: Any | None = None,
     selection_facts: Mapping[int, Mapping[str, Any]] | None = None,
+    experimental_unknown_journal_cap: int | None = None,
 ) -> list[tuple[ItemRow, float]]:
+    # Offline, single-factor policy trial only. No application setting enables
+    # this override; the serving default retains the historical unknown budget.
+    if experimental_unknown_journal_cap is not None and (
+        type(experimental_unknown_journal_cap) is not int
+        or experimental_unknown_journal_cap < 0
+    ):
+        raise ValueError("Experimental unknown journal cap must be a nonnegative integer")
+
     def fact(row, key, fallback):
         if selection_facts is not None:
             return selection_facts[_row_feature_key(row)][key]
@@ -1123,7 +1134,11 @@ def _pick_research_balanced(
                 return False
             # Unknown evidence has its own conservative budget; it must not
             # consume the measured-low budget or become unrestricted fill.
-            if bucket_counts.get(_bucket(row), 0) >= max_low_impact:
+            budget = max_low_impact
+            if (_bucket(row) == "unknown_journal" and not _low_impact(row)
+                    and experimental_unknown_journal_cap is not None):
+                budget = min(cap, experimental_unknown_journal_cap)
+            if bucket_counts.get(_bucket(row), 0) >= budget:
                 return False
         source = _source_key(row)
         if (

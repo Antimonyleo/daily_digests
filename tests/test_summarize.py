@@ -439,3 +439,23 @@ def test_windows_cli_timeout_terminates_child_tree_without_shell(monkeypatch):
     assert calls[0][1]['timeout'] == 5
     assert calls[0][1].get('shell', False) is False
     assert proc.killed
+
+
+def test_summary_payload_matches_declared_reader_data_boundaries():
+    from dailydigest.models import Profile
+    profile = Profile(name='PRIVATE_DISPLAY_NAME', bio='b' * 400 + 'PRIVATE_BIO_TAIL',
+                      keywords=[f'topic-{i}' for i in range(21)],
+                      authors_of_interest=['PRIVATE_WATCHED_NAME'],
+                      seed_works=['PRIVATE_SEED_WORK'], context_keywords=['PRIVATE_BACKGROUND'])
+    try:
+        sm._set_reader_context(profile)
+        system, prompt = sm._build_prompt([_row('Fixture', 'a' * 1500 + 'PRIVATE_ABSTRACT_TAIL')])
+        text = system + prompt
+        assert 'b' * 400 in text
+        assert 'topic-19' in text
+        for excluded in ('PRIVATE_DISPLAY_NAME', 'PRIVATE_BIO_TAIL', 'topic-20',
+                         'PRIVATE_WATCHED_NAME', 'PRIVATE_SEED_WORK', 'PRIVATE_BACKGROUND',
+                         'PRIVATE_ABSTRACT_TAIL'):
+            assert excluded not in text
+    finally:
+        sm._set_reader_context(None)

@@ -79,33 +79,23 @@ def test_failed_brew_retry_preserves_reader_selected_serving():
 
 @pytest.mark.parametrize('leaves, expected', [(4, 'Lab joke: second'), (10, 'complete')])
 def test_pip_restores_note_with_saved_leaf_count(leaves, expected):
-    source = TEMPLATE.read_text()
-    script = source.split('  const teaText =')[1].split('  function clampPipPosition')[0]
-    script = script.replace('{{ digest_id|tojson }}', '"2026-09-11"')
-    _run_js('''
-        const assert = require('node:assert/strict');
-        const TEA_NOTES = ['Science fact: first', 'Lab joke: second', 'Science fact: third'];
-        const nodes = {};
-        const document = {getElementById: (id) => nodes[id] ||= {
-            textContent: TEA_NOTES[0], dataset: {}, setAttribute: () => {},
-        }};
-        const window = {matchMedia: () => ({matches: false})};
-    ''' + f'const localStorage = {{getItem: () => "{leaves}"}};'
-        + 'const teaText =' + script + '''
-        syncTeaBreakState();
+    _run_pip_js('''
+        assert.equal(teaLeafCount.textContent, String(initialLeaves));
     ''' + ('''
         assert.equal(teaText.textContent, teaBreakOver);
         assert.equal(teaButton.disabled, true);
     ''' if expected == 'complete' else '''
         assert.equal(teaText.textContent, TEA_NOTES[1]);
         assert.equal(teaBreak.dataset.noteKind, 'joke');
-    '''))
+    '''), leaves=leaves)
 
 
 def _run_pip_js(check, *, leaves=0, reduced=False, single_note=False):
-    source = TEMPLATE.read_text()
-    script = 'const teaText =' + source.split('  const teaText =')[1].split('  const progressBar =')[0]
-    script = script.replace('{{ digest_id|tojson }}', '"preview"')
+    source = TEMPLATE.with_name("_pip.js.j2").read_text()
+    # Execute the actual exported controller against a deterministic DOM/clock.
+    # Insert assertions at its return to retain coverage of timing state without
+    # adding a test-only API to the shipped component.
+    script = source.replace("  return cleanup;", check + "\n  return cleanup;")
     _run_js(f'const initialLeaves = {leaves}, initiallyReduced = {str(reduced).lower()};' + '''
         const assert = require('node:assert/strict');
         const TEA_NOTES = ['Science fact: first', 'Lab joke: second', 'Science fact: third'];
@@ -128,7 +118,7 @@ def _run_pip_js(check, *, leaves=0, reduced=False, single_note=False):
             if (nodes[id]) return nodes[id];
             const classes = new Set();
             return nodes[id] = {
-                textContent: TEA_NOTES[0], dataset: {}, events: {}, disabled: false,
+                id, textContent: TEA_NOTES[0], dataset: {}, events: {}, disabled: false,
                 style: {setProperty(k,v) {this[k]=v;}, removeProperty(k) {delete this[k];}},
                 classList: {add: (...names) => names.forEach(n => classes.add(n)),
                     remove: (...names) => names.forEach(n => classes.delete(n)),
@@ -145,18 +135,23 @@ def _run_pip_js(check, *, leaves=0, reduced=False, single_note=False):
         }
         const motion = {matches: initiallyReduced, addEventListener(k,cb) {this.change=cb;}};
         const document = {hidden: false, getElementById: node,
+            querySelector: selector => node(selector.replace(/^#/, '')),
             addEventListener: (k,cb) => documentEvents[k]=cb};
-        const window = {innerWidth:1000, innerHeight:800,
+        const window = {innerWidth:1000, innerHeight:800, AbortController,
             matchMedia: q => q.includes('reduced-motion') ? motion : {matches:false, addEventListener() {}},
             addEventListener: (k,cb) => windowEvents[k]=cb, clearTimeout: id => timers.delete(id),
             setTimeout: (callback,delay) => {timers.set(++nextTimer, {at:now+delay, callback}); return nextTimer;}};
         class IntersectionObserver {
             constructor(cb) {intersect=cb;}
             observe() {}
+            disconnect() {}
         }
         const saved = {'dailydigest-tea-leaves:preview': String(initialLeaves)};
         const localStorage = {getItem: k => saved[k], setItem: (k,v) => saved[k]=v, removeItem: k => delete saved[k]};
-    ''' + script + check)
+        document.defaultView = window;
+        window.localStorage = localStorage;
+        window.IntersectionObserver = IntersectionObserver;
+    ''' + script + '\nmountPip(document, {digestId: "preview", notes: TEA_NOTES});')
 
 
 def test_pip_feeding_reacts_after_impact_and_ignores_repeated_clicks():

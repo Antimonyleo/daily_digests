@@ -182,11 +182,19 @@ def coverage_summary() -> dict:
                "unknown": 0, "checked_at": checked.isoformat() if checked else "",
                "checked_label": checked.strftime("%b %d, %Y %H:%M UTC") if checked else "Time not recorded",
                "checked_stale": bool(checked and checked < cutoff),
-               "public_oldest_label": "", "public_stale": False, "rows": []}
+               "public_oldest_label": "", "public_stale": False, "rows": [], "authors": []}
     public_times = []
     for row in rows:
         row = row if isinstance(row, dict) else {}
         diagnostics = row.get("diagnostics") if isinstance(row.get("diagnostics"), dict) else {}
+        author_queries = diagnostics.get("author_queries")
+        for author in author_queries if isinstance(author_queries, list) else []:
+            if not isinstance(author, dict) or not author.get("query"):
+                continue
+            author_status = {"matched": "Resolved", "ambiguous": "Ambiguous name",
+                             "no_match": "Not found", "unverified": "Identity unverified",
+                             "failure": "Check failed"}.get(str(author.get("stop_reason", "")), "Not checked")
+            summary["authors"].append({"name": str(author["query"]), "status": author_status})
         queries = diagnostics.get("queries") if isinstance(diagnostics.get("queries"), list) else []
         limited = bool(diagnostics.get("truncated") or diagnostics.get("snapshot_refresh_error")
                        or diagnostics.get("snapshot_carried_forward")

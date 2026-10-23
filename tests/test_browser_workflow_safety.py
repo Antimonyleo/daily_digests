@@ -2,7 +2,22 @@
 from pathlib import Path
 import re
 
+import pytest
 import yaml
+
+
+@pytest.mark.parametrize('file, job', [('ci.yml', 'browser-unit'), ('browser-pages.yml', 'build')])
+def test_browser_dependencies_are_installed_before_runtime_tests(file, job):
+    root = Path(__file__).resolve().parents[1]
+    workflow = yaml.load((root / '.github/workflows' / file).read_text(), Loader=yaml.BaseLoader)
+    steps = workflow['jobs'][job]['steps']
+    installs = [(i, step) for i, step in enumerate(steps) if 'npm ci' in step.get('run', '')]
+    assert len(installs) == 1, 'The Pyodide bytecode test requires the locked Node dependencies'
+    index, install = installs[0]
+    assert install.get('working-directory') == 'prototypes/browser-compute'
+    assert '--ignore-scripts' in install['run']
+    tests = [i for i, step in enumerate(steps) if 'node --test' in step.get('run', '')]
+    assert tests and index < min(tests), 'A clean runner must install Pyodide before importing its tests'
 
 
 def test_dependency_advisories_block_checks_and_publication():
@@ -51,6 +66,20 @@ def test_release_exercises_both_browser_kernels_before_upload():
     # Both kernels must use the served project subpath, including the matcher
     # whose standalone default differs from the full browser acceptance tool.
     assert steps[acceptance].get("env", {}).get("DAILYDIGEST_BROWSER_URL") == "http://127.0.0.1:8767/daily_digests/"
+
+
+def test_release_runs_daily_flow_with_generated_not_local_history_fixtures():
+    workflow = yaml.load((Path(__file__).resolve().parents[1] / '.github/workflows/browser-pages.yml').read_text(), Loader=yaml.BaseLoader)
+    steps = workflow['jobs']['build']['steps']
+    fixtures = next(i for i, step in enumerate(steps) if 'browser/make_test_fixture.py' in step.get('run', ''))
+    daily = next(i for i, step in enumerate(steps) if 'node browser/verify-daily-release.mjs' in step.get('run', ''))
+    upload = next(i for i, step in enumerate(steps) if step.get('uses', '').startswith('actions/upload-pages-artifact@'))
+    assert fixtures < daily < upload
+    assert steps[daily]['env']['DAILYDIGEST_BREW_SITE'] == 'browser/dist'
+    assert steps[daily]['env']['DAILYDIGEST_BREW_FIXTURES'] == '.full-review/browser-launch-2026-10-13'
+    assert steps[daily].get('continue-on-error', 'false') == 'false'
+    settings = next(i for i, step in enumerate(steps) if 'node browser/verify-settings-priorities.mjs' in step.get('run', ''))
+    assert settings < upload
 
 
 def test_recurring_issue_is_scoped_to_strict_refreshes_and_its_own_permissions():

@@ -22,6 +22,7 @@ _SETUP_ENV_KEYS = (
     "LLM_MODEL",
     "USER_TZ",
     "TOP_RESEARCH",
+    "PUBLICATION_ENRICHMENT",
     "INCLUDE_INDUSTRY",
     "TOP_INDUSTRY",
     "INCLUDE_AI",
@@ -54,6 +55,7 @@ def _isolate_env(tmp_path, tmp_path_factory, monkeypatch):
     # General unit tests never download/load ML models. Dedicated semantic
     # integration tests opt in and inject their backend explicitly.
     monkeypatch.setenv("SEMANTIC_MATCHING", "false")
+    monkeypatch.setenv("PUBLICATION_ENRICHMENT", "false")
     monkeypatch.setenv("USER_TZ", "UTC")
     # A developer's private opportunity settings must not change validation of
     # ordinary setup-form tests. Tests that exercise these sections opt in.

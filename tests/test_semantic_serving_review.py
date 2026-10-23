@@ -148,7 +148,7 @@ def test_configured_serving_failure_aborts_before_digest_or_summary_replacement(
         writes.append(True)
         pytest.fail('Configured model failure reached digest/summaries persistence or provider')
 
-    for name in ('write_summaries', 'summarize_items', 'send_digest'):
+    for name in ('publish_digest', 'summarize_items', 'send_digest'):
         monkeypatch.setattr(pipeline, name, forbidden)
     monkeypatch.setattr('dailydigest.store.write_digest', forbidden)
     with pytest.raises(FileNotFoundError, match='missing.json'):

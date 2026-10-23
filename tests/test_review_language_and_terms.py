@@ -37,6 +37,50 @@ def test_language_filter_rejects_clear_long_non_english_text():
     assert filter_english([french, english]) == [english]
 
 
+def test_language_detection_reuses_exact_text_and_rechecks_edits(monkeypatch):
+    import langdetect
+
+    calls = []
+
+    def detect(text):
+        calls.append(text)
+        return [SimpleNamespace(lang='fr' if 'French revision' in text else 'en', prob=.99)]
+
+    monkeypatch.setattr(langdetect, 'detect_langs', detect)
+    row = item('A molecular method', 'This is an English abstract. ' * 12)
+    assert filter_english([row]) == [row]
+    duplicate = row.model_copy(update={'url': 'https://example.org/another'})
+    assert filter_english([duplicate]) == [duplicate]
+    assert len(calls) == 1
+    edited = row.model_copy(update={'abstract': row.abstract + ' French revision'})
+    assert filter_english([edited]) == []
+    assert len(calls) == 2
+
+
+def test_language_detection_failure_is_retried_and_large_text_is_not_retained(monkeypatch):
+    import langdetect
+
+    calls = []
+
+    def detect(text):
+        calls.append(text)
+        if len(calls) == 1:
+            raise RuntimeError('Temporary detector failure')
+        return [SimpleNamespace(lang='fr', prob=.99)]
+
+    monkeypatch.setattr(langdetect, 'detect_langs', detect)
+    row = item('A long abstract', 'Une nouvelle méthode de recherche. ' * 12)
+    assert filter_english([row]) == [row]
+    assert filter_english([row]) == []
+    assert filter_english([row]) == []
+    assert len(calls) == 2
+    long = row.model_copy(update={'abstract': row.abstract * 30})
+    assert filter_english([long]) == []
+    assert filter_english([long]) == []
+    assert calls[-2:] == [(long.title + ' ' + long.abstract).strip()] * 2
+    assert len(calls) == 4
+
+
 @pytest.mark.parametrize(('title', 'expected'), [
     ('A certain mechanism maintains stability', False),
     ('The main result', False), ('AI-driven protein design', True),

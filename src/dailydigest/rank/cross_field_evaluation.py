@@ -14,9 +14,15 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter
+from contextlib import contextmanager
 import hashlib
 import json
 from pathlib import Path
+import time
+
+from .cold_start_evaluation import (
+    INPUT_MODES, evaluate_first_slate, prepare_profile, review_packet,
+)
 
 
 def load_fixture(path: str | Path) -> dict:
@@ -117,6 +123,48 @@ def _embedding_provenance() -> dict:
             "query_signature": embed.active_embedding_signature(is_query=True)}
 
 
+@contextmanager
+def _isolated_profile_store(state: Path, index: int, settings):
+    """Give each scenario fresh metadata, feedback and item embedding state."""
+    from .. import store
+
+    profile_state = state / f'profile-{index:03d}'
+    profile_state.mkdir(parents=True, exist_ok=False)
+    previous_path = settings.db_path
+    if store._ENGINE is not None:
+        store._ENGINE.dispose()
+    store._reset_init_for_testing()
+    settings.db_path = str(profile_state / 'digest.db')
+    try:
+        store.init_db()
+        yield
+    finally:
+        if store._ENGINE is not None:
+            store._ENGINE.dispose()
+        store._reset_init_for_testing()
+        settings.db_path = previous_path
+
+
+def _score_captured_research(rows, profile, *, profile_matrix, paper_text):
+    """Ablate ranking text only; serving dedupe retains title and full abstract."""
+    from unittest.mock import patch
+    from .. import pipeline
+    from . import embedding_cache
+    from .contribution_claims import contribution_text
+    from .profile import build_attribution_context, build_profile_matrix
+
+    original_item_text = embedding_cache.item_text
+
+    def evaluation_item_text(row):
+        return (contribution_text(row.title or '', row.abstract or '')
+                if paper_text == 'claims' else original_item_text(row))
+
+    with patch.object(embedding_cache, 'item_text', evaluation_item_text):
+        return pipeline._score_items_for_pipeline(
+            rows, build_profile_matrix(profile, mode=profile_matrix), profile.downweight,
+            build_attribution_context(profile))
+
+
 def _select_captured_research(scored, features, *, settings, digest_id):
     """Use serving deduplication, budgets, selection and reading-mode helpers."""
     import inspect
@@ -155,7 +203,8 @@ def _select_captured_research(scored, features, *, settings, digest_id):
         if "caps" in inspect.signature(apply_exploration).parameters:
             exploration.update(caps=caps, **selection)
         picked = apply_exploration(picked, ordered, uncertainty, **exploration)
-    picked = pipeline.apply_reading_mode(picked, "full")
+    picked = pipeline._restore_research_order(picked, ordered)
+    picked = pipeline.apply_reading_mode(picked, "full", preserve_research_order=True)
     effective_settings = {name: getattr(settings, name) for name in (
         "scoring_mode", "semantic_matching", "adaptive_section_sizes", "top_research",
         "min_research", "min_topic_relevance", "within_day_dedupe",
@@ -171,7 +220,8 @@ def _select_captured_research(scored, features, *, settings, digest_id):
 
 
 def replay_offline(corpus: dict, *, state: Path, model_cache: Path,
-                   reader_detail: bool = False) -> list[dict]:
+                   reader_detail: bool = False, profile_input: str = 'provided',
+                   profile_matrix: str = 'legacy', paper_text: str = 'full') -> list[dict]:
     """CLI-only replay: creates a new state directory and forbids socket access.
 
     Run in a dedicated process: settings, working directory and embedding lifecycle
@@ -182,6 +232,17 @@ def replay_offline(corpus: dict, *, state: Path, model_cache: Path,
     import socket
     from unittest.mock import patch
 
+    if reader_detail:
+        if profile_input != 'provided':
+            raise ValueError('Use reader_detail or profile_input, not both')
+        profile_input = 'intent'
+    if profile_matrix not in {'legacy', 'detailed', 'canonical', 'additive'}:
+        raise ValueError('Unknown profile matrix mode')
+    if paper_text not in {'full', 'claims'}:
+        raise ValueError('Unknown paper text mode')
+    # Validate every scenario before creating state or loading a model.
+    prepared_profiles = {entry['id']: prepare_profile(entry, profile_input)
+                         for entry in corpus['profiles']}
     if any(entry["profile"].get(key) for entry in corpus["profiles"]
            for key in ("negative_interests", "authors_of_interest")):
         raise ValueError("Captured-pool replay requires profiles without negative interests or watched authors")
@@ -211,7 +272,6 @@ def replay_offline(corpus: dict, *, state: Path, model_cache: Path,
     from .. import pipeline, store
     from ..dedupe import dedupe_ranking_candidates
     from ..models import Item, Profile
-    from .profile import build_attribution_context, build_profile_matrix
 
     original_datetime = datetime_module.datetime
     decision_at = original_datetime.fromisoformat(corpus["decision_at"])
@@ -234,44 +294,46 @@ def replay_offline(corpus: dict, *, state: Path, model_cache: Path,
           patch.object(datetime_module, "datetime", FrozenDateTime),
           patch.object(pipeline, "datetime", FrozenDateTime),
           patch.object(store, "datetime", FrozenDateTime)):
-        store.init_db()
-        for entry in corpus["profiles"]:
-            profile_data = dict(entry["profile"])
-            if reader_detail:
-                profile_data["canonical_facets"] = {
-                    keyword: {"description": entry["intent"]}
-                    for keyword in profile_data["keywords"]}
-            profile = Profile.model_validate(profile_data)
-            config.load_profile = lambda *args, profile=profile: profile
-            items = [Item.model_validate(item) for item in entry["pool"]]
-            store.upsert_items(items)
-            urls = {item.url for item in items}
-            rows = dedupe_ranking_candidates(
-                [row for row in store.recent_items(days=36500) if row.url in urls])
-            quality, _ = pipeline._quality_gate(rows)
-            scored, features = pipeline._score_items_for_pipeline(
-                quality, build_profile_matrix(profile), profile.downweight,
-                build_attribution_context(profile))
-            relevant = pipeline._filter_off_topic(scored, features)
-            selection_pool, picked, selection_trace = _select_captured_research(
-                relevant, features, settings=settings, digest_id=decision_at.date().isoformat())
-            quality_urls = {row.url for row in quality}
-            topic_urls = {row.url for row, _ in relevant}
-            eligible = {row.url for row, _ in selection_pool}
-            selected = {row.url for row, _ in picked}
-            rows_by_url = {row.url: row for row in rows}
-            for item in items:
-                row = rows_by_url.get(item.url)
-                decisions.append({"profile_id": entry["id"], "url": item.url,
-                                  "eligible": item.url in eligible,
-                                  "selected": item.url in selected,
-                                  "stages": {"after_quality_gate": item.url in quality_urls,
-                                             "after_topic_gate": item.url in topic_urls,
-                                             "after_within_day_dedupe": item.url in eligible},
-                                  "selection_trace": selection_trace,
-                                  "features": features.get(row.id, {}) if row else {},
-                                  "embedding_provenance": _embedding_provenance()})
-    store._ENGINE.dispose()
+        for index, entry in enumerate(corpus["profiles"]):
+            with _isolated_profile_store(state, index, settings):
+                started = time.perf_counter()
+                profile_data = prepared_profiles[entry['id']]
+                profile = Profile.model_validate(profile_data)
+                config.load_profile = lambda *args, profile=profile: profile
+                items = [Item.model_validate(item) for item in entry["pool"]]
+                store.upsert_items(items)
+                urls = {item.url for item in items}
+                rows = dedupe_ranking_candidates(
+                    [row for row in store.recent_items(days=36500) if row.url in urls])
+                quality, _ = pipeline._quality_gate(rows)
+                scored, features = _score_captured_research(
+                    quality, profile, profile_matrix=profile_matrix, paper_text=paper_text)
+                relevant = pipeline._filter_off_topic(scored, features)
+                selection_pool, picked, selection_trace = _select_captured_research(
+                    relevant, features, settings=settings, digest_id=decision_at.date().isoformat())
+                quality_urls = {row.url for row in quality}
+                topic_urls = {row.url for row, _ in relevant}
+                eligible = {row.url for row, _ in selection_pool}
+                selected = {row.url for row, _ in picked}
+                positions = {row.url: index for index, (row, _) in enumerate(picked, 1)}
+                selection_trace.update(profile_input=profile_input, profile_matrix=profile_matrix,
+                                       paper_text=paper_text, elapsed_seconds=time.perf_counter() - started,
+                                       supplied_profile=profile_data,
+                                       candidate_isolation='fresh_database_per_profile',
+                                       dedupe_representation='full_title_abstract')
+                rows_by_url = {row.url: row for row in rows}
+                for item in items:
+                    row = rows_by_url.get(item.url)
+                    decisions.append({"profile_id": entry["id"], "url": item.url,
+                                      "eligible": item.url in eligible,
+                                      "selected": item.url in selected,
+                                      "selected_position": positions.get(item.url),
+                                      "stages": {"after_quality_gate": item.url in quality_urls,
+                                                 "after_topic_gate": item.url in topic_urls,
+                                                 "after_within_day_dedupe": item.url in eligible},
+                                      "selection_trace": selection_trace,
+                                      "features": features.get(row.id, {}) if row else {},
+                                      "embedding_provenance": _embedding_provenance()})
     return decisions
 
 
@@ -282,21 +344,27 @@ def main() -> None:
     parser.add_argument("--state", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--reader-detail", action="store_true")
+    parser.add_argument("--profile-input", choices=INPUT_MODES, default='provided')
+    parser.add_argument("--profile-matrix", choices=('legacy', 'detailed', 'canonical', 'additive'), default='legacy')
+    parser.add_argument("--paper-text", choices=('full', 'claims'), default='full')
+    parser.add_argument("--review-packet", type=Path)
     args = parser.parse_args()
     output = args.output.resolve()
+    packet_path = args.review_packet.resolve() if args.review_packet else None
     fixture = args.fixture.resolve()
     corpus = load_fixture(fixture)
     source_root = Path(__file__).resolve().parent
     source_paths = [source_root / name for name in (
         "cross_field_evaluation.py", "ranker.py", "source_quality.py", "profile.py",
-        "embed.py", "embedding_cache.py")]
+        "embed.py", "embedding_cache.py", "cold_start_evaluation.py", "contribution_claims.py")]
     source_paths.extend(source_root.parent / name for name in (
         "pipeline.py", "dedupe.py", "config.py", "models.py"))
     source_configuration = _source_configuration()
     source_hashes = {str(path.relative_to(source_root.parent)): hashlib.sha256(
         path.read_bytes()).hexdigest() for path in source_paths}
     decisions = replay_offline(corpus, state=args.state, model_cache=args.model_cache,
-                               reader_detail=args.reader_detail)
+                               reader_detail=args.reader_detail, profile_input=args.profile_input,
+                               profile_matrix=args.profile_matrix, paper_text=args.paper_text)
     report = evaluate_alignment(corpus, decisions)
     report.update(fixture_sha256=hashlib.sha256(fixture.read_bytes()).hexdigest(),
                   effective_settings=(decisions[0]["selection_trace"]["effective_settings"]
@@ -308,11 +376,18 @@ def main() -> None:
                                     "selection": "serving within-day dedupe, adaptive budgets, source caps, full reading mode",
                                     "comparison_limit": "Earlier fixed-cap/no-within-day-dedupe metrics are obsolete"},
                   reader_detail=args.reader_detail, decision_at=corpus["decision_at"],
+                  profile_input='intent' if args.reader_detail else args.profile_input,
+                  profile_matrix=args.profile_matrix, paper_text=args.paper_text,
+                  first_session=evaluate_first_slate(corpus, decisions),
                   scoring_source_sha256=source_hashes,
                   source_configuration_sha256=hashlib.sha256(
                       source_configuration.read_bytes()).hexdigest(),
                   decisions=decisions)
     output.write_text(json.dumps(report, indent=2) + "\n")
+    if packet_path:
+        packet_path.write_text(json.dumps(review_packet(
+            corpus, profile_input='intent' if args.reader_detail else args.profile_input),
+            ensure_ascii=False, indent=2) + '\n')
 
 
 if __name__ == "__main__":

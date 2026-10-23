@@ -9,7 +9,7 @@ from dailydigest.models import Profile
 from dailydigest.rank import profile, ranker
 
 
-@pytest.mark.parametrize("version", [None, "older-policy", "future-policy"])
+@pytest.mark.parametrize("version", [None, "reason-aware-v1", "older-policy", "future-policy"])
 def test_incompatible_rocchio_is_preserved_and_static_profile_used(monkeypatch, version):
     path = Path(config.get_settings().db_path).parent / "learned_profile.npz"
     values = {"profile": np.array([0., 1.]), "vote_count": np.array([60])}
@@ -48,7 +48,7 @@ def test_new_vote_builds_versioned_rocchio_accepted_by_reader(monkeypatch):
     assert result[2, 0] > 0
 
 
-@pytest.mark.parametrize("version", [None, "older-policy", "future-policy"])
+@pytest.mark.parametrize("version", [None, "reason-aware-v1", "older-policy", "future-policy"])
 def test_incompatible_lr_is_preserved_and_rejected_even_with_current_features(version):
     values = {
         "coef": np.ones((1, votes.LR_FEATURE_DIM), dtype=np.float32),
@@ -62,6 +62,20 @@ def test_incompatible_lr_is_preserved_and_rejected_even_with_current_features(ve
         values["feedback_semantics_version"] = np.array([version])
     path = ranker._lr_weights_path()
     np.savez(path, **values)
+    before = path.read_bytes(), path.stat().st_mtime_ns
+    assert ranker.LRRanker().load() is False
+    assert (path.read_bytes(), path.stat().st_mtime_ns) == before
+
+
+def test_weights_trained_with_cross_author_matching_are_preserved_but_not_reused():
+    path = ranker._lr_weights_path()
+    np.savez(path, coef=np.ones((1, votes.LR_FEATURE_DIM), dtype=np.float32),
+             intercept=np.array([0.]), classes=np.array([-1, 1]),
+             feature_mean=np.zeros(votes.LR_FEATURE_DIM), feature_scale=np.ones(votes.LR_FEATURE_DIM),
+             feature_dim=np.array([votes.LR_FEATURE_DIM]),
+             feature_schema_version=np.array(['lr_ranker_preference_affinity_v6']),
+             feedback_semantics_version=np.array([votes.FEEDBACK_SEMANTICS_VERSION]),
+             feedback_reasons_signature=np.array([votes.feedback_reasons_signature()]))
     before = path.read_bytes(), path.stat().st_mtime_ns
     assert ranker.LRRanker().load() is False
     assert (path.read_bytes(), path.stat().st_mtime_ns) == before

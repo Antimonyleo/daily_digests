@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 from datetime import datetime
+from functools import lru_cache
 from typing import Any
 from urllib.parse import parse_qsl, quote, unquote, urldefrag, urlencode, urlparse, urlunparse
 
@@ -303,7 +304,9 @@ def _preserve_research_exclusions(items: list[Any]) -> None:
     """
     from .rank.source_quality import _row_metadata, research_publication_metadata
 
-    if not any(research_publication_metadata(item) for item in items):
+    from .publications import _retracted, companion_metadata, is_companion, publication_label
+
+    if not any(research_publication_metadata(item) or companion_metadata(item) for item in items):
         return
     parent = list(range(len(items)))
 
@@ -315,8 +318,6 @@ def _preserve_research_exclusions(items: list[Any]) -> None:
 
     by_key: dict[str, int] = {}
     for index, item in enumerate(items):
-        if getattr(item, "section", "") != "research":
-            continue
         for key in candidate_identity_keys(item):
             if not key.startswith(("doi:", "pmid:", "arxiv:", "url:")):
                 continue
@@ -327,10 +328,20 @@ def _preserve_research_exclusions(items: list[Any]) -> None:
 
     evidence_by_root: dict[int, dict[str, Any]] = {}
     for index, item in enumerate(items):
-        evidence = research_publication_metadata(item)
+        evidence = {**research_publication_metadata(item), **companion_metadata(item)}
+        if companion_metadata(item) and _retracted(item):
+            evidence["is_retracted"] = True
+        if is_companion(item):
+            evidence["publication_types"] = sorted(set(evidence.get("publication_types", []))
+                                                    | {publication_label(item).casefold()})
         if not evidence:
             continue
         shared = evidence_by_root.setdefault(find(index), {})
+        shared.setdefault("companion_of_dois", set()).update(evidence.get("companion_of_dois", []))
+        relations = shared.setdefault("companion_relation_evidence", [])
+        for record in evidence.get("companion_relation_evidence", []):
+            if record not in relations:
+                relations.append(record)
         if evidence.get("is_retracted") is True:
             shared["is_retracted"] = True
         shared.setdefault("publication_types", set()).update(evidence.get("publication_types", []))
@@ -344,6 +355,13 @@ def _preserve_research_exclusions(items: list[Any]) -> None:
         if not evidence:
             continue
         metadata = dict(_row_metadata(item))
+        if evidence.get("companion_of_dois"):
+            metadata["companion_of_dois"] = sorted(evidence["companion_of_dois"])
+            prior = metadata.get("companion_relation_evidence", [])
+            prior = list(prior) if isinstance(prior, list) else []
+            metadata["companion_relation_evidence"] = prior + [
+                record for record in evidence["companion_relation_evidence"] if record not in prior
+            ]
         if evidence.get("is_retracted") is True:
             metadata["is_retracted"] = True
         if evidence.get("publication_types"):
@@ -576,6 +594,13 @@ def _normalized_title_key(title: str) -> str:
     return re.sub(r"[\W_]+", " ", title.casefold()).strip()
 
 
+@lru_cache(maxsize=4096)
+def _language_allowed(sample: str, detector) -> bool:
+    """Reuse deterministic decisions for identical text within this process."""
+    languages = detector(sample)
+    return not languages or languages[0].lang == 'en' or languages[0].prob < 0.95
+
+
 def filter_english(items: list[Item]) -> list[Item]:
     """Drop only confident non-English long text; technical titles are ambiguous."""
     try:
@@ -592,8 +617,10 @@ def filter_english(items: list[Item]) -> list[Item]:
             out.append(it)
             continue
         try:
-            languages = detect_langs(sample)
-            if not languages or languages[0].lang == 'en' or languages[0].prob < 0.95:
+            # Bound retained text, but always classify the complete sample.
+            # Exceptions are not cached, so temporary failures are retried.
+            detect = _language_allowed if len(sample) <= 8192 else _language_allowed.__wrapped__
+            if detect(sample, detect_langs):
                 out.append(it)
         except Exception:
             out.append(it)

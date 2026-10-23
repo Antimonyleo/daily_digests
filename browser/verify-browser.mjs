@@ -20,6 +20,7 @@ function publicCacheProbeTexts(snapshot, hashes) {
 }
 await mkdir(output, { recursive: true });
 const report = { url: base, started: new Date().toISOString(), checks: [], console: [], errors: [], requests: [], fixtureRequests: [], workerEvents: [] };
+report.verifierSha256 = createHash('sha256').update(await readFile(new URL(import.meta.url))).digest('hex');
 const scopeCorpus = JSON.parse(await readFile(new URL('../tests/fixtures/research_scope_benchmark.json', import.meta.url), 'utf8')).examples;
 const fixtureLabels = new Map(scopeCorpus.map(row => [row.title, row.label]));
 const companionRequests = [];
@@ -46,6 +47,15 @@ await context.route('**/*', async route => {
     let source = await response.text();
     // Test-only instrumentation; never included in the published worker.
     source = source.replace("self.onmessage = async ({ data }) => {", `self.onmessage = async ({ data }) => {
+      if (data.type === 'acceptance-calibration-obstruction') {
+        try {
+          await initialize();
+          state.py.runPython('from dailydigest.rank.calibrate import _calibrator_path; _acceptance_calibration_tmp = _calibrator_path().with_suffix(".json.tmp")');
+          state.py.runPython(data.block ? '_acceptance_calibration_tmp.mkdir()' : '_acceptance_calibration_tmp.rmdir()');
+          self.postMessage(response(data.id,JSON.stringify({blocked:Boolean(data.block)})));
+        } catch(error) {self.postMessage(response(data.id,String(error),500));}
+        return;
+      }
       if (data.type === 'acceptance-embedding-cache') {
         try {
           await initialize();
@@ -310,6 +320,89 @@ async function successfulBrew(mode = 'full') {
   assert.equal(JSON.parse(checkpoint.body).equal, true, 'Mocked brew completion must persist the full committed snapshot');
   report.brewCheckpoints ||= []; report.brewCheckpoints.push(JSON.parse(checkpoint.body));
 }
+function readerControlsFixture(backupText) {
+  // Prepare a private fictional restore, not special app handlers or a forced
+  // button state. The real vote/feature thresholds decide whether training runs.
+  const result = spawnSync(new URL('../.venv/bin/python', import.meta.url).pathname, ['-c', `
+import base64,json,os,sys,tempfile
+from pathlib import Path, PurePosixPath
+from datetime import datetime,timezone
+import yaml
+backup=json.load(sys.stdin)
+state=Path(tempfile.mkdtemp(prefix='dailydigest-reader-controls-',dir=os.environ.get('TMPDIR')))
+for name,encoded in backup['files'].items():
+    relative=PurePosixPath(name)
+    assert not relative.is_absolute() and '..' not in relative.parts
+    assert name=='.env' or relative.parts[0]=='data'
+    target=state/name;target.parent.mkdir(parents=True,exist_ok=True)
+    target.write_bytes(base64.b64decode(encoded))
+os.chdir(state)
+sys.path.insert(0,str(Path(sys.argv[1])/'src'))
+os.environ.update(DB_PATH=str(state/'data/digest.db'),PROFILE_PATH=str(state/'data/profile.yaml'),LLM_BACKEND='extractive',LLM_API_KEY='',RESEND_API_KEY='')
+from dailydigest import store
+from dailydigest.rank.source_quality import RANKER_VERSION
+profile_path=state/'data/profile.yaml'
+profile=yaml.safe_load(profile_path.read_text());profile.pop('name',None)
+profile_path.write_text(yaml.safe_dump(profile))
+store.init_db()
+with store.session_scope() as session:
+    original_saved=session.query(store.BookmarkRow).count()
+    session.add(store.DigestRow(id='1900-01-01',item_count=0));session.flush()
+    for number in range(1,56):
+        item=store.ItemRow(source='Fictional controls fixture',section='research',external_id=f'reader-controls-{number}',title=f'Acceptance saved pagination {number:02}',url=f'https://acceptance.invalid/controls/{number}',abstract='Fictional archive and calibration control input.',published_at=datetime(1900,1,1,tzinfo=timezone.utc))
+        session.add(item);session.flush()
+        session.add(store.BookmarkRow(item_id=item.id))
+        if number<=30:
+            positive=number%2==0
+            session.add(store.VoteRow(item_id=item.id,value=1 if positive else -1,grade=100 if positive else 10))
+            session.add(store.DigestItemFeatureRow(digest_id='1900-01-01',item_id=item.id,item_label=f'R{number}',final_score=.85 if positive else .25,features_json=json.dumps({'ranker_version':RANKER_VERSION})))
+store._ENGINE.dispose()
+backup['files']={str(path.relative_to(state)):base64.b64encode(path.read_bytes()).decode() for path in (state/'data').rglob('*') if path.is_file()}
+backup['files']['.env']=base64.b64encode((state/'.env').read_bytes()).decode()
+print(json.dumps({'backup':backup,'originalSaved':original_saved,'addedSaved':55,'addedRatings':30,'policy':RANKER_VERSION}))
+`, new URL('../', import.meta.url).pathname], {input:backupText,encoding:'utf8',maxBuffer:20*1024*1024});
+  assert.equal(result.status,0,result.stderr);
+  return JSON.parse(result.stdout);
+}
+async function importFixture(backupText) {
+  const response = await page.evaluate(body => window.__rpc({type:'import',body,overwrite:true}),backupText);
+  assert.equal(response.status,200,response.body);
+  await page.reload(); await startup();
+}
+async function completedCalibration() {
+  const completed=await page.waitForFunction(async () => {
+    const response=await window.__rpc({type:'request',path:'/ranking/status'});
+    if(response.status!==200)return false;
+    const status=JSON.parse(response.body);
+    return !status.training_job?.running && status.training_job?.last_result ? status : false;
+  },undefined,{timeout:120000,polling:250});
+  const status=await completed.jsonValue();
+  await completed.dispose();
+  await page.waitForFunction(() => !document.querySelector('#app')?.contentDocument?.querySelector('#train-ranker-btn')?.disabled);
+  return status;
+}
+async function clickCalibration() {
+  // Observe the real fetch acknowledgement before polling, so a preceding
+  // job's result cannot satisfy the next job's completion check.
+  const previous=await frame().locator('#train-ranker-btn').evaluate(button=>{
+    const win=button.ownerDocument.defaultView;
+    if(!win.__acceptanceTrainingResponses){
+      win.__acceptanceTrainingResponses=[];
+      const nativeFetch=win.fetch;
+      win.fetch=async(...args)=>{
+        const response=await nativeFetch(...args);
+        if(args[0]==='/ranking/train')win.__acceptanceTrainingResponses.push({status:response.status,body:await response.clone().json()});
+        return response;
+      };
+    }
+    return win.__acceptanceTrainingResponses.length;
+  });
+  await frame().locator('#train-ranker-btn').click();
+  await page.waitForFunction(previous=>document.querySelector('#app')?.contentWindow?.__acceptanceTrainingResponses?.length>previous,previous,{timeout:120000});
+  const acknowledged=await frame().locator('#train-ranker-btn').evaluate(button=>button.ownerDocument.defaultView.__acceptanceTrainingResponses.at(-1));
+  assert.equal(acknowledged.status,200);
+  assert.equal(acknowledged.body.started,true);
+}
 let initialReady = false;
 let itemId;
 try {
@@ -321,6 +414,7 @@ try {
     assert.equal(await page.locator('#startup .steam').first().evaluate(node => getComputedStyle(node).animationName), 'none');
     await page.emulateMedia({ reducedMotion: 'no-preference' });
     const evidence = await startup();
+    report.buildId = (await (await page.request.get(base + 'assets/build-manifest.json')).json()).build_id;
     await frame().locator('#interest-editor').waitFor();
     await frame().locator('#browser-storage-note').waitFor({ state: 'visible' });
     assert.match(await page.locator('#data-settings > .storage-location').textContent(), /Saved in this browser/);
@@ -434,7 +528,10 @@ try {
     await page.locator('#close-guide').click();
     const current = await page.evaluate(async () => JSON.parse((await window.__rpc({ type: 'compute-status' })).body));
     await toggleMenu('compute-menu');
-    assert.equal(await page.locator('#compute-mode').inputValue(), 'cpu');
+    const expectedDefault = await page.evaluate(() => crossOriginIsolated
+      && navigator.hardwareConcurrency >= 4 && (navigator.deviceMemory ?? 4) >= 4 ? 'multicore' : 'cpu');
+    assert.equal(current.mode, expectedDefault);
+    assert.equal(await page.locator('#compute-mode').inputValue(), expectedDefault);
     assert.equal(await page.locator('#compute-mode option[value="multicore"]').isDisabled(), false);
     assert.equal(await page.locator('#compute-mode option[value="gpu"]').isDisabled(), !current.capabilities.gpu);
     assert.match(await page.locator('#compute-menu').textContent(), /heat, fan noise and battery use/);
@@ -450,7 +547,7 @@ try {
     } else await toggleMenu('compute-menu');
     await frame().locator('#interest-editor').waitFor();
     return { unsavedSettingsPreserved:true, helpDoesNotDirtySettings:true,
-      optInPersistsAcrossReload: current.capabilities.gpu, unsupportedChoicesDisabled: true, deviceWarning: true, cpuDefault: true };
+      optInPersistsAcrossReload: current.capabilities.gpu, unsupportedChoicesDisabled: true, deviceWarning: true, cpuDefault: expectedDefault };
   });
   await check('muted-research-examples-require-explicit-use-and-save', async () => {
     const topics = frame().locator('#topics');
@@ -561,59 +658,60 @@ try {
     const first = frame().locator('.interest-row').nth(0), second = frame().locator('.interest-row').nth(1);
     const firstStatus = first.locator('.interest-spelling .hint');
     assert.equal(spellingRequests.length, 0, 'Typing must not send an interest to the spelling provider.');
-    assert.equal(await first.getByRole('button', {name:'Check wording', exact:true}).isHidden(), true);
+    assert.equal(await first.getByRole('button', {name:'Check spelling in PubMed', exact:true}).isHidden(), true);
     await first.locator('summary').click();
     await second.locator('summary').click();
     await frame().locator('#advanced-interests > summary').click();
     await frame().locator('#authors_of_interest').fill('Fictional author');
+    await frame().locator('#paper-examples > summary').click();
     await frame().locator('#seed_works').fill('Fictional representative paper');
     await frame().locator('#context_keywords').fill('Fictional background topic');
     const before = await snapshot();
-    await first.getByRole('button', {name:'Check wording', exact:true}).click();
+    await first.getByRole('button', {name:'Check spelling in PubMed', exact:true}).click();
     await first.getByRole('button', {name:'Use suggestion', exact:true}).waitFor();
     assert.equal(await first.locator('[data-interest-name]').inputValue(), 'induced provimity');
     assert.deepEqual((await snapshot()).files, before.files, 'Checking wording must not save private state.');
     await first.getByRole('button', {name:'Use suggestion', exact:true}).click();
     assert.equal(await first.locator('[data-interest-name]').inputValue(), 'induced proximity');
     assert.equal(await first.locator('[data-interest-weight]').inputValue(), '75');
-    await second.getByRole('button', {name:'Check wording', exact:true}).click();
+    await second.getByRole('button', {name:'Check spelling in PubMed', exact:true}).click();
     await second.getByRole('button', {name:'Keep wording', exact:true}).waitFor();
     await second.getByRole('button', {name:'Keep wording', exact:true}).click();
     assert.equal(await second.locator('[data-interest-name]').inputValue(), 'assymetric catalysis');
     await first.locator('[data-interest-name]').fill('RNA delivery');
-    await first.getByRole('button', {name:'Check wording', exact:true}).click();
+    await first.getByRole('button', {name:'Check spelling in PubMed', exact:true}).click();
     await firstStatus.filter({hasText:'No spelling suggestion found'}).waitFor();
     assert.equal(await first.getByRole('button', {name:'Use suggestion', exact:true}).isHidden(), true);
     spellingMode = 'failure';
-    await first.getByRole('button', {name:'Check wording', exact:true}).click();
+    await first.getByRole('button', {name:'Check spelling in PubMed', exact:true}).click();
     await firstStatus.filter({hasText:'Couldn’t check wording'}).waitFor();
     assert.equal(await first.locator('[data-interest-name]').inputValue(), 'RNA delivery');
     spellingMode = 'slow';
     await first.locator('[data-interest-name]').fill('induced provimity');
     const started = new Promise(resolve => { spellingStarted = resolve; });
-    await first.getByRole('button', {name:'Check wording', exact:true}).click(); await started;
-    assert.equal(await second.getByRole('button', {name:'Check wording', exact:true}).isDisabled(), true);
+    await first.getByRole('button', {name:'Check spelling in PubMed', exact:true}).click(); await started;
+    assert.equal(await second.getByRole('button', {name:'Check spelling in PubMed', exact:true}).isDisabled(), true);
     await first.locator('[data-interest-name]').fill('New specialist topic');
     releaseSpelling(); spellingStarted = null;
-    await first.getByRole('button', {name:'Check wording', exact:true}).waitFor({state:'visible'});
+    await first.getByRole('button', {name:'Check spelling in PubMed', exact:true}).waitFor({state:'visible'});
     await page.waitForFunction(() => !document.querySelector('#app').contentDocument.querySelector('[data-check-wording]').disabled);
     assert.equal(await first.getByRole('button', {name:'Use suggestion', exact:true}).isHidden(), true);
     assert.equal(await first.locator('[data-interest-name]').inputValue(), 'New specialist topic');
     spellingMode = 'success';
     await first.locator('[data-interest-name]').fill('KRAS G12D inhibtor');
-    await first.getByRole('button', {name:'Check wording', exact:true}).click();
+    await first.getByRole('button', {name:'Check spelling in PubMed', exact:true}).click();
     await firstStatus.filter({hasText:'No spelling suggestion found'}).waitFor();
     assert.equal(await first.locator('[data-interest-name]').inputValue(), 'KRAS G12D inhibtor');
     await first.locator('[data-interest-name]').fill('induced provimity');
     await second.locator('[data-interest-name]').fill('induced proximity');
-    await first.getByRole('button', {name:'Check wording', exact:true}).click();
+    await first.getByRole('button', {name:'Check spelling in PubMed', exact:true}).click();
     await first.getByRole('button', {name:'Use suggestion', exact:true}).click();
     await firstStatus.filter({hasText:'Another interest already uses'}).waitFor();
     assert.equal(await first.locator('[data-interest-name]').inputValue(), 'induced provimity');
     await setTopics('induced provimity | 75\nassymetric catalysis | 25');
     for (const row of [first, second]) {
       await row.locator('summary').click();
-      await row.getByRole('button', {name:'Check wording', exact:true}).click();
+      await row.getByRole('button', {name:'Check spelling in PubMed', exact:true}).click();
       await row.getByRole('button', {name:'Use suggestion', exact:true}).click();
     }
     await first.locator('[data-interest-aliases]').fill('molecular glue');
@@ -752,6 +850,93 @@ try {
     await route('/', '.item[data-item-id]');
     return { digest: await digestIdentity(), items: await frame().locator('.item[data-item-id]').count() };
   });
+  await check('calibration-disabled-until-real-rating-threshold',async()=>{
+    await route('/','.item[data-item-id]');
+    await frame().locator('.about-brew > summary').click();
+    assert.equal(await frame().locator('#train-ranker-btn').isDisabled(),true);
+    return {disabledWithoutRequiredRatings:true};
+  });
+  const controlsFixture=readerControlsFixture(backupText);
+  await writeFile(`${output}/reader-controls-fixture.json`,JSON.stringify(controlsFixture.backup));
+  try {
+    await importFixture(JSON.stringify(controlsFixture.backup));
+    await check('inline-name-save-persists-in-heading',async()=>{
+      await route('/','.name-prompt');
+      await frame().locator('.name-prompt input[name="name"]').fill('Mira Control');
+      await frame().locator('.name-prompt button[type="submit"]').click();
+      await page.waitForFunction(()=>document.querySelector('#app')?.contentDocument?.querySelector('#page-salutation')?.dataset.profileName==='Mira Control');
+      assert.equal(await frame().locator('.name-prompt').count(),0);
+      await page.reload();await startup();await route('/','#page-salutation');
+      assert.equal(await frame().locator('#page-salutation').getAttribute('data-profile-name'),'Mira Control');
+      assert.match(Buffer.from((await snapshot()).files['data/profile.yaml'],'base64').toString(),/name: Mira Control/);
+      return {savedThroughForm:true,retainedAfterReload:true};
+    });
+    await check('saved-search-preserves-query-across-next-and-previous-pages',async()=>{
+      await route('/saved','.saved-card');
+      await frame().locator('input[name="q"]').fill('Acceptance saved pagination');
+      await frame().locator('form[role="search"] button').click();
+      await frame().locator('#archive-count').filter({hasText:'55 saved items'}).waitFor();
+      assert.equal(await frame().locator('.saved-card').count(),50);
+      const first=await frame().locator('.saved-card').evaluateAll(nodes=>nodes.map(node=>node.dataset.itemId));
+      await frame().getByRole('link',{name:'Next page',exact:true}).click();
+      await frame().getByText('Page 2 of 2',{exact:true}).waitFor();
+      assert.equal(await frame().locator('input[name="q"]').inputValue(),'Acceptance saved pagination');
+      const second=await frame().locator('.saved-card').evaluateAll(nodes=>nodes.map(node=>node.dataset.itemId));
+      assert.equal(second.length,5);assert.equal(new Set([...first,...second]).size,55);
+      assert.equal(await frame().getByRole('link',{name:'Next page',exact:true}).count(),0);
+      await frame().getByRole('link',{name:'Previous page',exact:true}).click();
+      await frame().getByText('Page 1 of 2',{exact:true}).waitFor();
+      assert.deepEqual(await frame().locator('.saved-card').evaluateAll(nodes=>nodes.map(node=>node.dataset.itemId)),first);
+      await frame().locator('input[name="q"]').fill('Acceptance saved pagination 55');
+      await frame().locator('form[role="search"] button').click();
+      await frame().locator('#archive-count').filter({hasText:'1 saved item matching'}).waitFor();
+      assert.equal(await frame().locator('.saved-card').count(),1);
+      assert.equal(await frame().getByRole('navigation',{name:'Saved reading pages'}).count(),0);
+      await frame().locator('input[name="q"]').fill('');
+      await frame().locator('form[role="search"] button').click();
+      await frame().locator('#archive-count').filter({hasText:`${55+controlsFixture.originalSaved} saved items`}).waitFor();
+      assert.equal(await frame().locator('input[name="q"]').inputValue(),'');
+      return {matched:55,firstPage:50,secondPage:5,queryRetained:true,clearRestoresArchive:true};
+    });
+    await check('calibration-button-runs-and-persists-real-calibrator',async()=>{
+      await route('/','.item[data-item-id]');
+      await frame().locator('.about-brew > summary').click();
+      assert.equal(await frame().locator('#train-ranker-btn').isEnabled(),true);
+      await clickCalibration();
+      const status=await completedCalibration();
+      assert.equal(status.training_job.last_result.ok,true);
+      assert.equal(status.training_job.last_result.trained,true);
+      const stored=await snapshot();
+      const calibration=JSON.parse(Buffer.from(stored.files['data/calibrator.json'],'base64').toString());
+      assert.equal(calibration.n,30);assert.equal(calibration.policy,controlsFixture.policy);
+      return {signedRatings:status.status.vote_counts.signed,calibratedVotes:calibration.n,policy:calibration.policy};
+    });
+    await check('calibration-failure-is-visible-and-can-retry',async()=>{
+      const before=(await snapshot()).files['data/calibrator.json'];
+      const blocked=await page.evaluate(()=>window.__rpc({type:'acceptance-calibration-obstruction',block:true}));
+      assert.equal(blocked.status,200,blocked.body);
+      try {
+        await clickCalibration();
+        const status=await completedCalibration();
+        assert.equal(status.training_job.last_result.ok,false);
+        assert.equal(status.training_job.last_result.reason,'training_error');
+        report.calibrationFailure = status.training_job.last_result;
+        await frame().locator('#toast').filter({hasText:/fail|could not/i}).waitFor();
+        await frame().locator('#ranking-message').filter({hasText:/fail|could not/i}).waitFor();
+        assert.equal((await snapshot()).files['data/calibrator.json'],before,'A failed refresh must retain the prior calibration');
+      } finally {
+        const cleared=await page.evaluate(()=>window.__rpc({type:'acceptance-calibration-obstruction',block:false}));
+        assert.equal(cleared.status,200,cleared.body);
+      }
+      await clickCalibration();
+      const retried=await completedCalibration();
+      assert.equal(retried.training_job.last_result.ok,true);
+      return {failedJobVisible:true,priorCalibrationRetained:true,retrySucceeded:true};
+    });
+  } finally {
+    await importFixture(backupText);
+    await route('/','.item[data-item-id]');
+  }
   // Saved reading requires a configured profile; run after fixture import.
   await check('navigation-focus-has-no-black-box-and-keyboard-controls-stay-visible', async () => {
     const evidence = [];
@@ -948,6 +1133,11 @@ try {
     const companionBox = await page.locator('#companion-menu .data-tools').boundingBox();
     assert.ok(companionBox.x >= 0 && companionBox.x + companionBox.width <= 390, JSON.stringify(companionBox));
     await page.locator('#companion-menu > summary').press('Escape');
+    assert.equal(await frame().locator('[data-interest-weight]').first().isHidden(), true);
+    await frame().locator('[data-interest-name]').first().focus(); await page.keyboard.press('Tab');
+    assert.equal(await frame().locator('.interest-heading button').first().evaluate(node => node === document.activeElement), true);
+    await frame().locator('#priority-options > summary').click();
+    await frame().locator('[data-interest-weight]').first().waitFor({state:'visible'});
     await frame().locator('[data-interest-name]').first().focus(); await page.keyboard.press('Tab');
     assert.equal(await frame().locator('[data-interest-weight]').first().evaluate(node => node === document.activeElement), true);
     await page.screenshot({ path: `${output}/mobile-setup.png`, fullPage: true });
@@ -957,12 +1147,17 @@ try {
       return {inner:doc.documentElement.scrollWidth <= doc.documentElement.clientWidth + 1, outer:document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1};
     });
     assert.deepEqual(narrow, {inner:true, outer:true});
+    await frame().locator('#paper-examples > summary').focus();
+    await page.keyboard.press('Enter');
+    assert.notEqual(await frame().locator('#paper-examples').getAttribute('open'), null);
+    await frame().locator('#seed_works').focus();
+    assert.equal(await frame().locator('#seed_works').evaluate(node => node === document.activeElement), true);
     await frame().locator('#advanced-interests > summary').focus();
     await page.keyboard.press('Enter');
     assert.notEqual(await frame().locator('#advanced-interests').getAttribute('open'), null);
     await frame().locator('#authors_of_interest').focus();
     await page.keyboard.press('Tab');
-    assert.equal(await frame().locator('#seed_works').evaluate(node => node === document.activeElement), true);
+    assert.equal(await frame().locator('#context_keywords').evaluate(node => node === document.activeElement), true);
     await frame().locator('.settings-actions button[type="submit"]').focus();
     assert.equal(await frame().locator('.settings-actions button[type="submit"]').evaluate(node => node === document.activeElement), true);
     await page.screenshot({path:`${output}/mobile-320-settings.png`,fullPage:true});
@@ -1031,7 +1226,7 @@ try {
     const before = await digestIdentity();
     await route('/run?reading_mode=usual', '#brew-button');
     await frame().locator('#browser-compute-notice').waitFor({ state: 'visible' });
-    assert.match(await frame().locator('#browser-compute-notice').textContent(), /20 minutes.*CPU core/);
+    assert.match(await frame().locator('#browser-compute-notice').textContent(), /runs locally.*Keep this tab open/);
     await frame().locator('#brew-button').click();
     await frame().locator('#cancel-button').click();
     await frame().locator('#err').waitFor({ state: 'visible', timeout: 300000 });
@@ -1178,8 +1373,9 @@ try {
     const preview=await page.evaluate(()=>window.__qualifiedPreview);
     assert.ok(preview.length>0 && preview.length<=8,JSON.stringify(preview));
     assert.ok(preview.every(title=>titles.includes(title)), 'Provisional picks must belong to the final qualified slate.');
-    assert.match(await frame().locator('.item').first().textContent(), /Fixture Author.*Journal publication/s);
-    assert.match(await frame().locator('.item').first().textContent(), /Shown for|Matched phrase/);
+    assert.match(await frame().locator('.item').first().textContent(), /Fixture Author.*Nature/s);
+    assert.equal(await frame().locator('.item').first().locator('.publication-label').textContent(), 'Publication');
+    assert.match(await frame().locator('.item').first().locator('.match-topic').textContent(), /Text contains|Topic terms found|Related by meaning|Topic fit is uncertain|Title only/);
     await page.screenshot({ path: `${output}/brewed-digest.png`, fullPage: true });
     return { digest: await digestIdentity(), selected: await frame().locator('.item[data-item-id]').count(), slate, fixtureRequests: report.fixtureRequests.length };
   });
@@ -1387,7 +1583,7 @@ try {
   await check('public-snapshot-through-real-browser-httpx', async () => {
     // A separate ephemeral worker reads public metadata only. The other cases
     // use fixture feeds, which cannot expose Pages' real compression headers.
-    const evidence = await page.evaluate(async base => {
+    const evidence = await page.evaluate(async ({base, atCollection}) => {
       const manifest = await (await fetch(base + 'assets/build-manifest.json')).json();
       const probe = [
         'def probe():',
@@ -1398,7 +1594,7 @@ try {
         '        response.raise_for_status()',
         '        snapshot = response.json()',
         '    records = list(snapshot["sources"].values())',
-        '    instant = datetime.now(timezone.utc)',
+        atCollection ? '    instant = datetime.fromisoformat(snapshot["generated_at"])' : '    instant = datetime.now(timezone.utc)',
         '    healthy = [r for r in records if r.get("status") == "ok" and timedelta(minutes=-5) <= instant - datetime.fromisoformat(r["fetched_at"]) <= timedelta(hours=48)]',
         '    fresh = [r for r in healthy if not r.get("carried_forward")]',
         '    fallback = snapshot.get("publication", {}).get("mode") == "push-carry-forward"',
@@ -1437,7 +1633,7 @@ try {
           worker.onerror = finish(event => reject(new Error(event.message)));
         });
       } finally { URL.revokeObjectURL(url); }
-    }, base);
+    }, {base,atCollection:process.env.DAILYDIGEST_BROWSER_SNAPSHOT_AT_COLLECTION === '1'});
     assert.equal(evidence.public_only, true);
     assert.ok(evidence.healthy > 0);
     assert.ok(evidence.eligible / evidence.sources >= 0.5);
@@ -1445,7 +1641,7 @@ try {
     assert.deepEqual(evidence.healthy_sections, evidence.sections);
     assert.equal(evidence.content_encoding, null);
     assert.equal(evidence.content_length, evidence.decoded_bytes);
-    return evidence;
+    return {...evidence,validationClock:process.env.DAILYDIGEST_BROWSER_SNAPSHOT_AT_COLLECTION === '1' ? 'offline collection timestamp; not release freshness' : 'current time'};
   });
   await check('visible-backup-error-and-keyboard-recovery', async () => {
     const before = await digestIdentity();
@@ -1477,8 +1673,14 @@ try {
       return { simulatedMissingCapability: true, clearMessage: true, runtimeNotDownloaded: true };
     } finally { await unsupported.close(); }
   });
-  await check('mixed-html-release-reloads-once-and-preserves-route', async () => {
+  await check('mixed-html-release-and-cpu-preparation-have-bounded-reloads', async () => {
     const mixed = await browser.newContext();
+    await mixed.addInitScript(() => {
+      const Original=Worker;
+      window.Worker=class extends Original {
+        constructor(...args) {super(...args);sessionStorage.setItem('acceptance-worker-count',String(Number(sessionStorage.getItem('acceptance-worker-count')||0)+1));}
+      };
+    });
     let documents = 0;
     await mixed.route('**/*', async request => {
       if (!request.request().url().startsWith(base)) return request.abort('blockedbyclient');
@@ -1494,11 +1696,13 @@ try {
       const testPage = await mixed.newPage();
       await testPage.goto(base + '#/setup');
       await testPage.locator('#app').waitFor({state:'visible', timeout:300000});
-      assert.equal(documents, 2, 'Mixed release must reload exactly once');
+      const isolated=await testPage.evaluate(()=>crossOriginIsolated);
+      assert.equal(documents, isolated ? 3 : 2, 'One release recovery and at most one CPU preparation reload');
+      assert.equal(await testPage.evaluate(()=>sessionStorage.getItem('acceptance-worker-count')), '1');
       assert.equal(new URL(testPage.url()).hash, '#/setup');
       assert.match(new URL(testPage.url()).searchParams.get('__dd_build'), /^[a-f0-9]{16}$/);
       await testPage.frameLocator('#app').locator('#interest-editor').waitFor();
-      return {documents, routePreserved:true, startupRecovered:true};
+      return {documents, isolated, pythonWorkers:1, routePreserved:true, startupRecovered:true};
     } finally { await mixed.close(); }
   });
   await check('corrupt-startup-retains-raw-data-and-can-recover', async () => {

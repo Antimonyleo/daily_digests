@@ -9,6 +9,9 @@ import {chromium} from '../prototypes/browser-compute/node_modules/playwright-co
 const site=resolve(process.env.DAILYDIGEST_STARTUP_SITE || 'browser/dist');
 const output=resolve(process.env.DAILYDIGEST_STARTUP_REPORT || '.full-review/startup-figures');
 const baseline=process.env.DAILYDIGEST_STARTUP_BASELINE === '1';
+const downloadMbps=Number(process.env.DAILYDIGEST_STARTUP_DOWNLOAD_MBPS || 0);
+assert.ok(Number.isFinite(downloadMbps) && downloadMbps >= 0);
+let nextTransferAt=0;
 await mkdir(output,{recursive:true});
 const types={'.mjs':'text/javascript','.js':'text/javascript','.html':'text/html','.css':'text/css','.json':'application/json','.wasm':'application/wasm'};
 const server=createServer(async(request,response)=>{
@@ -23,25 +26,39 @@ const server=createServer(async(request,response)=>{
       response.setHeader('Cross-Origin-Opener-Policy','same-origin');
       response.setHeader('Cross-Origin-Embedder-Policy','require-corp');
     }
-    response.end(await readFile(file));
+    const bytes=await readFile(file);
+    if(downloadMbps) {
+      // One shared link budget covers page AND worker downloads. Page-only CDP
+      // throttling can miss the worker's Python/package requests.
+      await new Promise(done=>setTimeout(done,80));
+      for(let offset=0;offset<bytes.length && !response.destroyed;offset+=65536) {
+        const chunk=bytes.subarray(offset,offset+65536);
+        nextTransferAt=Math.max(nextTransferAt,performance.now())+chunk.length/(downloadMbps*1_000_000/8)*1000;
+        await new Promise(done=>setTimeout(done,Math.max(0,nextTransferAt-performance.now())));
+        if(!response.destroyed)response.write(chunk);
+      }
+      response.end();
+    } else response.end(bytes);
   } catch {response.writeHead(404).end();}
 });
 await new Promise(done=>server.listen(0,'127.0.0.1',done));
 const base=`http://127.0.0.1:${server.address().port}/daily_digests/`;
-const report={baseline,checks:[],samples:[],errors:[],external:[]};
+const report={baseline,downloadMbps,responseDelayMs:downloadMbps?80:0,checks:[],samples:[],errors:[],external:[]};
 const browser=await chromium.launch({executablePath:process.env.CHROME_PATH || '/usr/bin/google-chrome',headless:true,
   args:['--no-sandbox','--enable-experimental-webassembly-jspi']});
 try {
   for(let trial=0;trial<3;trial++) {
+    let bytecodeRequests=0;
     const context=await browser.newContext({viewport:{width:1280,height:900},serviceWorkers:'block'});
     await context.route('**/*',async route=>{
       if(!route.request().url().startsWith(base)){report.external.push(route.request().url());return route.abort();}
+      if(new URL(route.request().url()).pathname.endsWith('/startup-bytecode.zip')) bytecodeRequests++;
       if(new URL(route.request().url()).pathname.endsWith('/worker.mjs')) {
         const response=await route.fetch();
         const source=(await response.text()).replace('self.onmessage = async ({ data }) => {',`self.onmessage = async ({ data }) => {
           if(data.type==='startup-probe'){
             await initialize();
-            self.postMessage({id:data.id,type:'response',body:state.py.runPython("import json,sys; json.dumps({'numpy': 'numpy' in sys.modules, 'pipeline': 'dailydigest.pipeline' in sys.modules, 'scipy': 'scipy' in sys.modules, 'sklearn': 'sklearn' in sys.modules})")});return;
+            self.postMessage({id:data.id,type:'response',body:state.py.runPython("import json,sys; json.dumps({'numpy': 'numpy' in sys.modules, 'pipeline': 'dailydigest.pipeline' in sys.modules, 'ingest': 'dailydigest.ingest' in sys.modules, 'scipy': 'scipy' in sys.modules, 'sklearn': 'sklearn' in sys.modules})")});return;
           }`);
         return route.fulfill({response,body:source});
       }
@@ -53,7 +70,7 @@ try {
       window.__startupEvents=[];
       const Native=Worker;
       window.Worker=class extends Native {
-        constructor(...args){super(...args);window.__startupWorker=this;this.addEventListener('message',({data})=>window.__startupEvents.push(data));}
+        constructor(...args){super(...args);window.__startupWorker=this;this.addEventListener('message',({data})=>{window.__startupEvents.push(data);if(data.type==='ready')window.__startupReadyAt=performance.now();});}
       };
     });
     await page.goto(base+'#/setup');
@@ -80,6 +97,7 @@ try {
     }));
     if(!baseline){
       assert.equal(probe.pipeline,false,'Opening Setup must not import the brew pipeline');
+      assert.equal(probe.ingest,false,'Opening Setup must not import feed adapters');
       assert.equal(probe.numpy,false);assert.equal(probe.scipy,false);assert.equal(probe.sklearn,false);
       if(trial===0){
         assert.deepEqual(await frame.locator('[data-interest-name]').evaluateAll(nodes=>nodes.map(node=>node.value)),['Induced proximity','Asymmetric catalysis']);
@@ -87,7 +105,8 @@ try {
         report.checks.push('topic draft is interactive before Python readiness and transfers to equal-weight editable rows');
       }
     }
-    report.samples.push({inputMs,totalMs:timings.totalMs,stages:timings.stages,probe});
+    report.samples.push({inputMs,bytecodeRequests,navigationReadyMs:await page.evaluate(()=>window.__startupReadyAt),
+      totalMs:timings.totalMs,stages:timings.stages,probe});
     await context.close();
   }
   if(!baseline){

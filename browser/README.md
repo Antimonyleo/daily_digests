@@ -44,6 +44,20 @@ retryable failure before any job is queued. Stop requests made during that
 preparation are retained until the brew start is confirmed. This moves some
 preparation to first compute use; it does not remove all runtime startup work.
 
+Startup modules are precompiled at build time using the pinned Pyodide
+interpreter. Source files remain in the bundle; CPython checks source hashes
+before accepting cached bytecode. The optional dependency bytecode download
+runs alongside runtime preparation and is abandoned if it is not ready when
+imports begin. Missing, slow or damaged caches use the original source. Feed
+adapters initialize once before the first compute request, after settings have
+been restored. Compiler and Python requirements changes invalidate release URLs.
+
+Repeated brews reuse successful language decisions for identical title/abstract
+text and detector identity. The process-local cache holds at most 4,096 entries;
+samples over 8,192 characters are classified in full without being retained.
+Changed text and failed detection are rechecked. Language thresholds, candidate
+coverage, embedding models, token limits and ranking rules remain unchanged.
+
 When an article feed supplies an image, the digest and saved-paper archive offer
 an optional collapsed **Graphical abstract** or **Article preview**. Only explicit
 image labels establish a graphical abstract; generic thumbnails keep the preview
@@ -74,7 +88,13 @@ name to retrieval and ranking while retaining its weights and research details.
 Specialist vocabulary may have no suggestion, and unavailable checks leave the
 interest unchanged.
 
-The **Compute** menu defaults to one CPU core. GPU acceleration is an explicit,
+On eligible desktop browsers, the **Compute** menu defaults to up to four CPU
+cores. A new device with at least four logical cores and at least 4 GB reported
+memory (or no memory estimate) attempts project-scoped browser isolation before
+starting Python, with at most one preparation reload and a one-second deadline.
+The topic draft and Continue action survive that reload. Existing compute or
+isolation choices are preserved; unsupported, constrained or storage-restricted
+devices retain the single-core path. Python initializes only once. GPU acceleration is an explicit,
 per-device opt-in and falls back to CPU if initialization or inference fails.
 Apply and reload saves the choice for the next brew. Finish or stop an active
 brew before switching. Compute shows selected versus completed work and CPU
@@ -85,6 +105,8 @@ runtime's inference promise pending without rejecting it.
 It uses a checksum-pinned, unfused float32 export of the same BGE model because
 the native optimized graph has an attention mask unsupported by this WebGPU
 runtime. Hardware availability is checked before choosing the session's export.
+Adapter detection has a three-second deadline; a stalled check falls back to CPU
+instead of holding startup or the Compute controls indefinitely.
 That export and cache signature stay fixed even if inference later moves to
 CPU, including when cached feedback vectors have already been read. The
 133 MB export is downloaded by the browser
@@ -92,7 +114,8 @@ only when GPU acceleration is used. Physical GPU
 performance and browser/device support vary; this remains experimental.
 Multicore CPU uses at most four cores and is offered only with cross-origin
 isolation and SharedArrayBuffer support. The Compute menu can opt in to a project-scoped service worker that adds
-isolation headers, then reloads once before work starts. If the browser cannot
+isolation headers, then reloads once before work starts. The same mechanism is
+used for the new-device CPU default. If the browser cannot
 enable isolation, computation falls back to one core. Detection uses browser
 capabilities on macOS, Windows and Linux, with no OS allowlist. Actual hardware
 performance still needs device testing.
@@ -103,6 +126,34 @@ Python's stage stream; remaining time is a rough estimate from recent batches.
 Completed stage durations are displayed separately from the active work.
 Cancellation is checked between embedding batches, preserving the native
 publication gates and the previously saved digest.
+
+Identical text comparisons also reuse a bounded memo within the active worker.
+It keeps at most 256 entries, skips text longer than 8,192 characters, and uses
+exact text including query/document prefixes. Editing research context or a topic
+computes its new text; unchanged inputs can be reused. Model exports and worker
+instances never share this memo, failed calls do not populate it, and returned
+vectors are copied so callers cannot alter it. It adds no persisted profile data;
+existing article-vector storage remains authoritative across reloads. Cancellation
+is checked even when every requested vector is already available.
+
+`verify-brew.mjs` exercises Standard, Short and Full brews, repeat use, changed
+research context, reload, source failures, cancellation and a larger synthetic
+candidate pool against a built site. It uses an isolated fictional profile and
+intercepted feeds, with external services blocked. Set `DAILYDIGEST_BREW_SITE`,
+`DAILYDIGEST_BREW_REPORT` and `DAILYDIGEST_BREW_FIXTURES` (a directory containing
+`fixture-backup.json` and `research-feed.xml`) to select its inputs and output.
+The harness fixes page and worker clocks five days after the fixture feed date,
+while keeping a different browser timezone to catch silent date changes. Expired
+production snapshots must not be relabelled fresh to make a release pass.
+Existing profiles retain their configured timezone when other settings are saved;
+only first-time Setup adopts the browser timezone automatically.
+Latest release audit, feature coverage and deployment evidence:
+[release review](../docs/release-review-2026-10-23.md).
+Set `DAILYDIGEST_BREW_COMPUTE=multicore` to repeat the matrix with four CPU cores
+(the harness supplies isolation headers); the default fixture explicitly uses
+one core. `verify-cpu-startup.mjs` separately tests the actual service-worker
+preparation/reload, preserved topic draft and explicit single-core preference.
+It accepts `DAILYDIGEST_CPU_SITE` and `DAILYDIGEST_CPU_REPORT`.
 
 ## Architecture and feature transfer
 
@@ -173,6 +224,41 @@ node browser/verify-startup-figures.mjs
 
 The browser check intercepts external requests with fictional fixtures. It also
 reads the built public metadata; it does not perform a live brew or call providers.
+For an explicitly offline historical fixture only,
+`DAILYDIGEST_BROWSER_SNAPSHOT_AT_COLLECTION=1` evaluates that transport check at
+the snapshot's recorded collection time. Leave this unset for release checks;
+an expired fixture is not a publishable release.
+
+`verify-ranking-parity.mjs` runs complete local extractive Brews for eight captured
+research fields and two opposite topic-priority configurations. It records every
+candidate's numeric features, eligibility stages, selection and order, along with
+the actual backend. Publication dates are rebased to the preceding fixture day;
+article text and research metadata are retained. The source adapter is replaced
+with the captured pool, so this tests computation rather than live retrieval.
+Set `DAILYDIGEST_PARITY_SITE`, `DAILYDIGEST_PARITY_REPORT`,
+`DAILYDIGEST_PARITY_MODE=cpu|multicore|gpu` and `DAILYDIGEST_PARITY_ROUNDS=1..5`.
+`DAILYDIGEST_PARITY_PROFILES` restricts the comma-separated profile IDs.
+The optional `watchlist_boundaries` profile uses three explicitly fictional
+bylines to verify the real pipeline's author-match features and boosts.
+`DAILYDIGEST_PARITY_HEADED=1` uses a temporary visible Chrome window without
+experimental GPU or JSPI flags. `DAILYDIGEST_PARITY_GPU_FLAGS=1` is a separate
+Linux Vulkan hardware diagnostic; its success does not establish default browser
+support. All of these checks block external requests and use fictional desks.
+
+`node browser/verify-pip.mjs` renders the current production template into an
+isolated fictional desk and checks drag/release, retained conversation and leaf,
+position/count persistence, keyboard controls and narrow-screen reduced motion.
+Set `DAILYDIGEST_PIP_REPORT` for its screenshots and JSON evidence. It does not
+start a browser Python runtime, call live sources or read personal state.
+
+For startup download sensitivity, set `DAILYDIGEST_STARTUP_DOWNLOAD_MBPS=10` on
+`verify-startup-figures.mjs`. Its local server shares one transfer budget across
+page and worker requests, with an 80 ms response delay. Reports distinguish
+Python startup from navigation-to-ready time. This is controlled network
+simulation, not a measurement of production hosting or live source latency.
+Optional dependency bytecode is prefetched only when the observed application
+transfer reaches roughly 4 MB/s. Slower connections retain source compilation
+and avoid that extra download; missing or damaged optional caches also fall back.
 
 Build output must be new or empty; `--output PATH` selects another directory.
 Do not publish the entire repository, development caches, `data/`, or `.env`.
@@ -457,8 +543,12 @@ until browser deployment is integrated into main; keep that branch available.
 Local Chrome CPU inference over 16 and 32 captured abstracts (three warm rounds)
 measured approximately 3.2x and 3.1x speedups with four threads, identical vectors
 and measured parallel CPU use. These are component measurements, not full-brew
-latency targets. Physical Intel WebGPU inference was verified separately on two
-inputs. Phone performance, Firefox/WebKit application behavior and production
+latency targets. The October 22 audit exercised physical Intel WebGPU over ten
+profile configurations with cold and repeated Brews. It requires process-local
+Vulkan diagnostic flags on this machine; ordinary isolated Chrome returned no
+adapter and used CPU. GPU and CPU exports are not output-equivalent at every
+selection boundary: see the comprehensive review before choosing GPU for a
+quality-sensitive comparison. Phone performance, Firefox/WebKit application behavior and production
 cold-brew performance remain unverified. English is the validated interface and
 model baseline; multilingual relevance has not been established.
 

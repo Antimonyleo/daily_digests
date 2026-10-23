@@ -30,7 +30,7 @@ def setup_feedback(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("reason", ["already_known", "not_urgent", "duplicate", "access_friction",
-                                   "low_quality", "low_impact", "promotional"])
+                                   "low_quality", "low_impact", "promotional", "too_technical"])
 def test_practical_reasons_do_not_teach_affinity_knn_or_rocchio_aversion(tmp_path, monkeypatch, reason):
     add, vectors, learned_path = setup_feedback(tmp_path, monkeypatch)
     positive = add("liked-engineering", [1., 0.], 1)
@@ -51,11 +51,12 @@ def test_practical_reasons_do_not_teach_affinity_knn_or_rocchio_aversion(tmp_pat
 
 
 @pytest.mark.parametrize("semantic_reason", ["off_topic", "too_contextual"])
-def test_mixed_topic_reason_restores_semantic_aversion_and_removal_rebuilds(tmp_path, monkeypatch, semantic_reason):
+@pytest.mark.parametrize("practical_reason", ["already_known", "too_technical"])
+def test_mixed_topic_reason_restores_semantic_aversion_and_removal_rebuilds(tmp_path, monkeypatch, semantic_reason, practical_reason):
     add, vectors, path = setup_feedback(tmp_path, monkeypatch)
     positive = add("liked", [1., 0.], 1)
     negative = add("known-and-off-topic", [0., 1.], -1)
-    votes.record_vote_reason(negative, "already_known")
+    votes.record_vote_reason(negative, practical_reason)
     assert np.load(path)["profile"][1] == 0
     votes.record_vote_reason(negative, semantic_reason)
     assert votes._load_vote_exemplars()[1][0].tolist() == [negative]
@@ -107,7 +108,7 @@ def test_lr_dataset_excludes_practical_negative_while_retaining_raw_votes(tmp_pa
     assert votes.vote_counts()["signed"] == 3
 
 
-@pytest.mark.parametrize("reason", ["too_contextual", "low_quality"])
+@pytest.mark.parametrize("reason", ["too_contextual", "low_quality", "too_technical"])
 def test_article_specific_reason_does_not_penalize_other_papers_from_source(tmp_path, monkeypatch, reason):
     add, _vectors, _path = setup_feedback(tmp_path, monkeypatch)
     negative = add("rejected", [1., 0.], -1)
@@ -118,6 +119,14 @@ def test_article_specific_reason_does_not_penalize_other_papers_from_source(tmp_
         penalties = votes.reason_penalty_map([row])
     assert penalties[str(negative)] > 0
     assert penalties.get(str(future), 0) == 0
+
+
+def test_difficulty_reason_is_practical_but_does_not_override_explicit_topic_feedback():
+    assert not votes.is_semantic_vote(-1, ["too_technical"])
+    assert not votes.is_semantic_vote(-1, ["too_technical", "access_friction"])
+    assert votes.is_semantic_vote(-1, ["too_technical", "off_topic"])
+    assert votes.is_semantic_vote(1, ["too_technical"])
+    assert not votes.is_semantic_vote(0, ["too_technical"])
 
 
 def test_clearing_rating_removes_only_its_topic_learning(tmp_path, monkeypatch):

@@ -73,7 +73,9 @@ def _clip_weight(value: float) -> float:
     return max(0.05, min(3.0, float(value)))
 
 
-def _profile_parts_with_weights(profile: Profile) -> tuple[list[str], list[float]]:
+def _profile_parts_with_weights(
+    profile: Profile, *, include_anchors: bool = False,
+) -> tuple[list[str], list[float]]:
     """Collect bio sentences, keywords, and weighted facets as query inputs."""
     parts: list[str] = []
     weights: list[float] = []
@@ -84,7 +86,7 @@ def _profile_parts_with_weights(profile: Profile) -> tuple[list[str], list[float
         sentences = _SENT_RE.split(profile.bio.strip())
         for sentence in sentences:
             text = sentence.strip()
-            if text and len(text) > 10:
+            if any(char.isalpha() for char in text):
                 parts.append(text)
                 weights.append(1.5)  # bio sentences carry more context than individual keywords
 
@@ -94,7 +96,10 @@ def _profile_parts_with_weights(profile: Profile) -> tuple[list[str], list[float
     keywords = list(profile.keywords)
     keyword_names = {keyword.casefold() for keyword in keywords}
     for name, spec in canonical.items():
-        if name.casefold() not in keyword_names and (spec.aliases or spec.description):
+        substantive_anchors = [anchor for anchor in spec.anchors if include_anchors
+                               if anchor.strip().casefold() != name.strip().casefold()]
+        if name.casefold() not in keyword_names and (
+                spec.aliases or spec.description or substantive_anchors):
             # Older profiles can retain more specific retrieval keywords while
             # editing a distinct visible facet. Explicit reader detail must
             # still affect relevance in that case, as one additional interest.
@@ -105,11 +110,13 @@ def _profile_parts_with_weights(profile: Profile) -> tuple[list[str], list[float
             continue
         spec = configured.get(text.casefold())
         detail = _clean_facet_texts(
-            [getattr(spec, "description", ""), *getattr(spec, "aliases", [])[:3]]
+            [getattr(spec, "description", ""),
+             *(getattr(spec, "anchors", []) if include_anchors else []),
+             *getattr(spec, "aliases", [])[:3]]
         ) if spec is not None else []
         # One semantic row per interest: adding synonyms must not add extra
         # top-k votes or silently strengthen an interest's relative priority.
-        parts.append("; ".join([text, *detail]) if detail else text)
+        parts.append("; ".join(_clean_facet_texts([text, *detail])))
         weights.append(interest_lc.get(text.lower(), 1.0))
         seen.add(text.lower())
 
@@ -132,13 +139,12 @@ def _profile_parts_with_weights(profile: Profile) -> tuple[list[str], list[float
         parts.append(text)
         weights.append(_clip_weight(weight))
 
-    # Seed works (the user's own / exemplar papers) are the strongest interest
-    # signal: real title+abstract text rather than isolated keywords. Embed each
-    # as a high-weight anchor row so top-k cosine matches the user's actual line
-    # of work, not just topical vocabulary.
+    # Preserve representative text, including short titles and non-Latin goals.
+    # Row weights above one do not boost _multi_cosine: it bounds each row to
+    # unit cosine. Examples supply semantic content, not guaranteed precedence.
     for work in getattr(profile, "seed_works", None) or []:
         text = str(work).strip()
-        if len(text) > 10:
+        if any(char.isalpha() for char in text):
             parts.append(text)
             weights.append(2.0)
     return parts, weights
@@ -157,11 +163,13 @@ def build_profile_matrix(profile: Profile, *, mode: str = "legacy") -> np.ndarra
     (e.g. drug discovery AND climate science) matches either topic well instead of
     getting a blended centroid that misses both. ``canonical`` and ``additive``
     are opt-in offline ablation modes using detailed facet descriptions; the
-    serving default remains ``legacy``. Their gate thresholds require evaluation.
+    serving default remains ``legacy``. ``detailed`` includes explicit anchors
+    in relevance rows. It remains an offline experiment: fixed-pool evaluation
+    found lost positives when these richer queries used the existing thresholds.
     """
-    if mode not in {"legacy", "canonical", "additive"}:
-        raise ValueError("Profile mode must be legacy, canonical, or additive")
-    if mode != "legacy":
+    if mode not in {"legacy", "detailed", "canonical", "additive"}:
+        raise ValueError("Profile mode must be legacy, detailed, canonical, or additive")
+    if mode in {"canonical", "additive"}:
         anchors, _labels = build_core_facet_matrix(profile)
         if anchors.size:
             if mode == "canonical":
@@ -171,7 +179,7 @@ def build_profile_matrix(profile: Profile, *, mode: str = "legacy") -> np.ndarra
             if not np.any(static):
                 return anchors.copy()
             return np.vstack([static, anchors]).astype(np.float32)
-    parts, weights = _profile_parts_with_weights(profile)
+    parts, weights = _profile_parts_with_weights(profile, include_anchors=mode == "detailed")
     if not parts:
         logger.warning(
             "Profile has no bio sentences or keywords; "

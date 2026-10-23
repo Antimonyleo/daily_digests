@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'none'; img-src 'none'; base-uri 'none'; form-action 'none'">
+<title>DailyDigest · 论文盲评</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:linear-gradient(130deg,#f0f5f4,#f5f3fb);color:#253c37;font:16px/1.55 ui-sans-serif,system-ui,sans-serif}main{max-width:760px;margin:auto;padding:30px 22px}h1{font-size:28px;margin:0}h2{font-size:23px;line-height:1.35}p{margin:12px 0}label{display:block;font-weight:600}input,select,button{font:inherit;color:inherit;border:1px solid #7f918c;border-radius:7px;padding:9px;background:#fff;max-width:100%}button{cursor:pointer;min-height:44px}button:disabled{opacity:.45;cursor:default}button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid #267a64;outline-offset:2px}.intro{color:#50635f}.controls{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:22px 0}select,input[type=text]{width:100%}.wide{grid-column:1/-1}.check{font-size:14px;font-weight:400}article{margin:24px 0;padding:22px;background:#fff;border-radius:12px;box-shadow:0 4px 24px #253c3709}.abstract{white-space:pre-wrap;overflow-wrap:anywhere}.goal{border-left:3px solid #6a9b87;padding-left:14px}fieldset{border:0;padding:0;margin:24px 0 12px}.choices{display:flex;gap:8px;flex-wrap:wrap}.choices button[aria-pressed=true]{background:#245a49;color:#fff;border-color:#245a49}.bar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;justify-content:space-between}.small{font-size:14px;color:#50635f}.error{color:#9b2020}#import{display:none}a{color:#276b55}summary{cursor:pointer}#status{min-height:24px}@media(max-width:480px){main{padding:20px 14px}.controls{grid-template-columns:1fr}article{padding:16px}h2{font-size:21px}}
+</style>
+<main>
+<h1>哪些论文值得读？</h1>
+<p class="intro">选择熟悉的方向，按给定目标判断。可跳过；原排名和已有评分已隐藏。</p>
+<div class="controls">
+<label>方向<select id="profile"></select></label>
+<label>背景<select id="role"><option value="graduate">研究生</option><option value="undergraduate">本科生</option><option value="technician">技术人员</option><option value="faculty">教师 / 研究员</option><option value="industry">产业研发</option><option value="other">其他</option></select></label>
+<label class="wide">评审代号<input id="reader" type="text" placeholder="不用真实姓名" maxlength="80"></label>
+<label class="wide check"><input id="independent" type="checkbox"> 我没有参与这些候选的标注或算法调参</label>
+</div>
+<p id="progress" class="small" aria-live="polite"></p>
+<div id="paper"></div>
+<div class="bar"><button id="prev">上一篇</button><button id="next">下一篇 →</button></div>
+<hr style="border:0;border-top:1px solid #cbd6d2;margin:28px 0">
+<div class="bar"><button id="export">导出评价</button><button id="resume">导入继续</button><input id="import" type="file" accept="application/json,.json"></div>
+<p id="status" role="status" class="small"></p>
+<p class="small">评价仅在此页内存中。关闭前请导出；页面不会上传数据。真实读者结论仍待收集。</p>
+</main>
+<script id="study" type="application/json">{{ packet|tojson }}</script>
+<script>
+'use strict';
+const study=JSON.parse(document.getElementById('study').textContent);
+const $=id=>document.getElementById(id), answers=new Map();let index=0;
+const labels={useful:'直接有用',transferable:'可能借鉴',off_task:'与目标无关',unsure:'无法判断'};
+const pids=[...new Set(study.cases.map(c=>c.profile_id))];
+for(const pid of pids){const o=document.createElement('option');o.value=pid;o.textContent=pid.replaceAll('_',' ');$('profile').append(o)}
+function rows(){return study.cases.filter(c=>c.profile_id===$('profile').value)}
+function el(tag,text,cls){const node=document.createElement(tag);node.textContent=text;if(cls)node.className=cls;return node}
+function render(){const list=rows(),c=list[index];$('paper').replaceChildren();if(!c)return;
+$('progress').textContent=`${index+1} / ${list.length} · 本方向已评 ${list.filter(r=>answers.has(r.id)).length} 篇 · 全部已评 ${answers.size} 篇`;
+const a=el('article',''),goal=el('p',c.intent,'goal');a.append(goal,el('h2',c.article.title));
+if(Object.keys(c.topic_intents).length)a.append(el('p',Object.entries(c.topic_intents).map(([k,v])=>`${k}: ${v}`).join('\n'),'small'));
+a.append(el('p',c.article.abstract||'暂无摘要，可选择「无法判断」。','abstract'));
+try{const u=new URL(c.article.url);if(['https:','http:'].includes(u.protocol)){const link=el('a','查看原文 ↗');link.href=u.href;link.target='_blank';link.rel='noreferrer noopener';a.append(link)}}catch{}
+const field=el('fieldset','');field.append(el('legend','对这个目标，这篇论文：'));const choices=el('div','','choices');
+for(const [key,title] of Object.entries(labels)){const b=el('button',title);b.type='button';b.setAttribute('aria-pressed',String(answers.get(c.id)===key));b.onclick=()=>{answers.set(c.id,key);render();const replacement=$('paper').querySelector(`[data-label="${key}"]`);replacement?.focus()};b.dataset.label=key;choices.append(b)}field.append(choices);a.append(field);
+const clear=el('button','清除本篇评价');clear.onclick=()=>{answers.delete(c.id);render()};a.append(clear);$('paper').append(a);$('prev').disabled=index===0;$('next').disabled=index===list.length-1;
+}
+$('profile').onchange=()=>{index=0;render()};$('prev').onclick=()=>{index--;render()};$('next').onclick=()=>{index++;render()};
+function status(message,error=false){$('status').textContent=message;$('status').className=error?'small error':'small'}
+$('export').onclick=()=>{const reader=$('reader').value.trim();if(!reader){status('请填写一个评审代号。',true);$('reader').focus();return}
+const data={schema_version:1,study_id:study.study_id,reader,role:$('role').value,independent:$('independent').checked,judgments:[...answers].map(([id,label])=>({id,label}))};
+const url=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:'application/json'}));const a=document.createElement('a');a.href=url;a.download='dailydigest-reader-response.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);status(`已导出 ${answers.size} 条评价。`)};
+$('resume').onclick=()=>$('import').click();$('import').onchange=async()=>{const file=$('import').files[0];if(!file)return;try{const data=JSON.parse(await file.text()),known=new Set(study.cases.map(c=>c.id)),next=new Map();
+if(data.schema_version!==1||data.study_id!==study.study_id||typeof data.reader!=='string'||!data.reader.trim()||!study.roles.includes(data.role)||typeof data.independent!=='boolean'||!Array.isArray(data.judgments))throw Error('文件不属于本次盲评，或格式错误。');
+for(const r of data.judgments){if(!known.has(r.id)||next.has(r.id)||!study.labels.includes(r.label))throw Error('评价包含未知或重复条目。');next.set(r.id,r.label)}
+answers.clear();for(const [id,label] of next)answers.set(id,label);$('reader').value=data.reader;$('role').value=data.role;$('independent').checked=data.independent;render();status(`已载入 ${answers.size} 条评价。`)
+}catch(e){status(e.message,true)}finally{$('import').value=''}};
+window.addEventListener('beforeunload',e=>{if(answers.size){e.preventDefault();e.returnValue=''}});render();
+</script>
+</html>

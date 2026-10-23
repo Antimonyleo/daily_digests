@@ -19,8 +19,9 @@ from functools import lru_cache
 from typing import Any
 
 from ..models import SourceSpec
+from ..publications import publication_label
 
-RANKER_VERSION = "2026-10-15-advanced-science-alias-v16"
+RANKER_VERSION = "2026-10-22-daily-reading-order-v21"
 
 _ARXIV_CS_RE = re.compile(r"\barxiv[\s:_\-]*cs[\s:./\-]", re.IGNORECASE)
 
@@ -302,7 +303,7 @@ ACCESS_FRICTION_TERMS = (
 
 CONTENT_TYPE_TERMS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("editorial", ("editorial", "opinion", "viewpoint", "perspective", "news and views", "news & views")),
-    ("commentary", ("commentary", "correspondence", "letter to the editor")),
+    ("commentary", ("commentary", "correspondence", "letter to the editor", "research highlight", "research highlights")),
     ("podcast", ("podcast",)),
     ("review", ("review", "primer", "overview")),
     ("clinical", ("clinical trial", "trial results", "phase 3", "phase iii", "approval", "approved")),
@@ -384,11 +385,28 @@ NON_RESEARCH_TITLE_PATTERNS = (
 )
 
 
+_OPINION_SELF_DESCRIPTION = re.compile(
+    r"(?:^|(?<=[.!?])\s+)(?P<description>In\s+this\s+opinion\s+(?:article|piece),\s+we\b)",
+    re.IGNORECASE,
+)
+_QUOTED_PASSAGE = re.compile(
+    r'''"[^"]*"|“[^”]*”|‘[^’]*’|(?<!\w)'[^']*'(?!\w)''', re.DOTALL,
+)
+
+
+def _self_described_opinion(row: Any) -> str | None:
+    """Recognize an author's explicit sentence, never incidental/quoted words."""
+    abstract = _safe_str(getattr(row, "abstract", "")).strip()
+    unquoted = _QUOTED_PASSAGE.sub(" ", abstract)
+    match = _OPINION_SELF_DESCRIPTION.search(unquoted)
+    return match.group("description") if match else None
+
+
 def research_exclusion_metadata(row: Any) -> dict[str, Any]:
     """Return explicit publication exclusions that can follow the same work's ID.
 
-    Title heuristics deliberately stay out: matching titles alone cannot prove
-    that a correction, commentary or retraction describes this specific record.
+    Title heuristics deliberately stay out. Explicit abstract self-description
+    carries a distinct text-evidence field, never invented publisher metadata.
     """
     if _row_section(row).lower() != "research":
         return {}
@@ -404,16 +422,24 @@ def research_exclusion_metadata(row: Any) -> dict[str, Any]:
         "editorial", "news", "comment", "commentary", "correction", "erratum",
         "published erratum", "retraction", "retracted publication",
         "retraction of publication", "retraction notice", "expression of concern",
-        "news and views", "news & views",
+        "news and views", "news & views", "opinion",
+        "research highlight", "research highlights",
     }
     rejected_types = sorted({
         value.strip().casefold()
         for value in declared_types
         if isinstance(value, str) and value.strip().casefold() in non_research_types
     })
+    self_description = _self_described_opinion(row)
+    if self_description and "opinion" not in rejected_types:
+        rejected_types = sorted([*rejected_types, "opinion"])
     if rejected_types:
         evidence["publication_types"] = rejected_types
         provenance = _publication_type_provenance(metadata, rejected_types)
+        if self_description:
+            record = {"field": "abstract_self_description", "value": self_description}
+            if record not in provenance:
+                provenance.append(record)
         if provenance:
             evidence["publication_type_evidence"] = provenance
     return evidence
@@ -429,6 +455,27 @@ def _publication_type_provenance(metadata: dict, declared_types) -> list[dict]:
         if not isinstance(record, dict):
             continue
         field, value = record.get("field"), record.get("value")
+        if field == "abstract_self_description" and isinstance(value, str):
+            if "opinion" in declared_types and _OPINION_SELF_DESCRIPTION.fullmatch(value):
+                entry = {"field": field, "value": value}
+                if entry not in provenance:
+                    provenance.append(entry)
+            continue
+        if isinstance(field, str) and field in {"europepmc_pub_type", "crossref_type"} and isinstance(value, str):
+            normalized = " ".join(value.casefold().replace("-", " ").split())
+            source, url = record.get("source"), record.get("url", "")
+            trusted = (
+                field == "europepmc_pub_type" and source == "Europe PMC"
+                and isinstance(url, str) and url.startswith("https://europepmc.org/article/")
+            ) or (
+                field == "crossref_type" and source == "Crossref"
+                and isinstance(url, str) and url.startswith("https://api.crossref.org/works/")
+            )
+            if trusted and (normalized in declared_types or aliases.get(normalized) in declared_types):
+                entry = {"field": field, "value": value, "source": source, "url": url}
+                if entry not in provenance:
+                    provenance.append(entry)
+            continue
         if not isinstance(field, str) or field not in {"dc_type", "prism_genre", "prism_section"} or not isinstance(value, str):
             continue
         normalized = " ".join(value.casefold().split())
@@ -454,7 +501,7 @@ def research_publication_metadata(row: Any) -> dict[str, Any]:
     if not isinstance(declared, (list, tuple)):
         declared = []
     genres = {term for _label, terms in CONTENT_TYPE_TERMS[:4] for term in terms}
-    genres.update({"systematic review", "meta-analysis"})
+    genres.update({"systematic review", "meta-analysis", "research article", "preprint"})
     types = set(evidence.get("publication_types", []))
     types.update(value.strip().casefold() for value in [*declared, metadata.get("work_type", "")]
                  if isinstance(value, str) and value.strip().casefold() in genres)
@@ -462,7 +509,10 @@ def research_publication_metadata(row: Any) -> dict[str, Any]:
         evidence["publication_types"] = sorted(types)
         provenance = _publication_type_provenance(metadata, types)
         if provenance:
-            evidence["publication_type_evidence"] = provenance
+            merged = evidence.setdefault("publication_type_evidence", [])
+            for record in provenance:
+                if record not in merged:
+                    merged.append(record)
     return evidence
 
 
@@ -860,6 +910,8 @@ def content_type(row: Any) -> str:
         declared = []
     declared = {value.strip().casefold() for value in [*declared, metadata.get("work_type", "")]
                 if isinstance(value, str)}
+    if _self_described_opinion(row):
+        return "editorial"
     genre_terms = CONTENT_TYPE_TERMS[:4]
     for label, terms in genre_terms:
         if declared.intersection(terms) or (label == "commentary" and "comment" in declared):
@@ -883,6 +935,10 @@ def content_type(row: Any) -> str:
 
 def should_skip_item(row: Any) -> bool:
     """Return True for feed entries that should not enter ranking at all."""
+    from ..publications import is_companion
+
+    if is_companion(row):
+        return True
     section = (getattr(row, "section", None) or "").lower()
     title = (getattr(row, "title", None) or "").strip()
     if not title:
@@ -1130,6 +1186,7 @@ def breakdown_payload(
     contribution_claims: dict[str, Any] | None = None,
     article_evidence: dict[str, Any] | None = None,
     topic_alignment: dict[str, Any] | None = None,
+    topic_support: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Return a JSON-serializable rank explanation for persistence/UI."""
     breakdown = score_breakdown(
@@ -1182,6 +1239,8 @@ def breakdown_payload(
         payload["contribution_claims"] = dict(contribution_claims)
     if article_evidence is not None:
         payload["article_evidence"] = dict(article_evidence)
+    if topic_support is not None:
+        payload["topic_support"] = dict(topic_support)
     if topic_alignment is not None:
         payload["topic_alignment"] = dict(topic_alignment)
     return payload
@@ -1277,6 +1336,11 @@ def quality_adjusted_score(row: Any, base_score: float) -> float:
         # the retrieval floor (~0.68) to full by ~0.80, exactly across the band where
         # research items cluster, so it discriminates where it matters.
         rel_gate = max(0.0, min(1.0, (float(base) - 0.68) / 0.12))
+        # Explicit secondary literature retains its relevance and other quality
+        # checks; a journal reputation bonus does not make it a new research result.
+        if publication_label(row) in {"Review", "Perspective", "News & Views",
+                                      "Research Highlight", "Commentary", "Editorial", "News"}:
+            prestige_excess = 0.0
         quality_relevance = 0.36 * Q * prestige_excess * rel_gate
         score = base + quality_relevance + (0.08 * novelty) - (0.35 * promo)
         low_prestige = (

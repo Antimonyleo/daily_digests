@@ -272,14 +272,15 @@ def frozen_selection(snapshot: dict, feedback: dict | None = None) -> dict[str, 
 
     from .ranker import apply_exploration, pick_top_per_section
     from .source_quality import RANKER_VERSION
-    from ..pipeline import apply_reading_mode
+    from ..pipeline import apply_reading_mode, _restore_research_order
 
     recorded_version = snapshot.get("scorer_version")
     # v15 fixes upstream journal identity; historical source facts and scores
     # remain frozen. This compatibility proves selection only, not rescoring
     # with the corrected identities. Revisit when selection policy changes.
     compatible_versions = {
-        RANKER_VERSION, "2026-10-15-local-topic-verification-v14",
+        RANKER_VERSION, "2026-10-22-short-reader-text-v20",
+        "2026-10-15-local-topic-verification-v14",
         "2026-10-14-cross-field-venues-v13", "2026-10-02-quality-guards-v10",
     }
     if recorded_version is not None and recorded_version not in compatible_versions:
@@ -336,8 +337,14 @@ def frozen_selection(snapshot: dict, feedback: dict | None = None) -> dict[str, 
                                    caps=snapshot["section_budgets"],
                                    catch_up=bool(snapshot["catch_up"]), score_features=features,
                                    settings=SimpleNamespace(**frozen_settings), selection_facts=facts)
+    order_policy = snapshot.get("reading_order_policy", "score")
+    if order_policy not in {"score", "selection_priority"}:
+        raise IncompleteReplay("unknown reading order policy")
+    if order_policy == "selection_priority":
+        picked = _restore_research_order(picked, scored)
     picked = apply_reading_mode(picked, snapshot["reading_mode"],
-                               as_of_date=date.fromisoformat(snapshot["decision_local_date"]))
+                               as_of_date=date.fromisoformat(snapshot["decision_local_date"]),
+                               preserve_research_order=order_policy == "selection_priority")
     slate = {section: [] for section in snapshot["section_budgets"]}
     for row, _score in picked:
         slate[row.section].append(row.id)

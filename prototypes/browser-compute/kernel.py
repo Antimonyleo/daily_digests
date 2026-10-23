@@ -31,6 +31,7 @@ def install_bundle(bundle):
     config.settings = types.SimpleNamespace(**bundle["settings"])
     config.get_settings = lambda: config.settings
     config.load_sources = lambda: [types.SimpleNamespace(**row) for row in bundle["sources"]]
+    _module("browser_digest.publications", bundle["publications_source"])
     quality = _module("browser_digest.rank.source_quality", bundle["quality_source"])
     dedupe = _module("browser_digest.dedupe", bundle["dedupe_source"])
     ranker = _module("browser_digest.rank.ranker", bundle["ranker_source"])

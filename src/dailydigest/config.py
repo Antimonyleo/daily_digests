@@ -146,6 +146,8 @@ class Settings(BaseSettings):
     # Live citation/impact enrichment via OpenAlex (network at runtime). Off by
     # default to keep the daily run local and reproducible.
     citation_enrichment: bool = False
+    # Optional public-DOI lookup; standalone/local ranking remains offline.
+    publication_enrichment: bool = False
     citation_polite_email: str = ""
 
     # Cross-day near-duplicate suppression: drop a candidate whose embedding is

@@ -39,6 +39,10 @@
   .saved-title:hover { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
   .saved-meta { color: var(--muted); font-size: 12px; margin-top: 7px; }
   .saved-summary { color: var(--text); opacity: 0.82; font-size: 13px; line-height: 1.55; margin-top: 10px; }
+  .related-commentaries { margin: 10px 0; padding: 0 0 0 12px; border-left: 2px solid var(--border); list-style: none; font-size: 14px; line-height: 1.45; }
+  .related-commentaries li + li { margin-top: 6px; }
+  .related-commentaries .publication-label { color: var(--muted); }
+  .related-commentaries a { overflow-wrap: anywhere; text-underline-offset: 3px; }
   .vote-row, .reason-chip-row, .feedback-actions { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
   .vote-btn, .reason-chip { min-height:44px; border:1px solid var(--control-border); border-radius:8px; padding:8px; background:var(--panel); color:var(--text); cursor:pointer; }
   .vote-btn.active, .reason-chip.active { border-color:var(--accent); font-weight:750; }
@@ -81,10 +85,17 @@
       <div>
         <a class="saved-title" href="{{ item.url }}" target="_blank" rel="noopener">{{ item.title }}</a>
         <div class="saved-meta">
-          {{ item.section }} · {{ item.source }}{% if item.published %} · Published {{ item.published }}{% endif %}{% if item.saved %} · Saved {{ item.saved }}{% endif %}
+          {{ item.section }} · {{ item.source }}{% if item.publication_label %} · {{ item.publication_label }}{% endif %}{% if item.published %} · Published {{ item.published }}{% endif %}{% if item.saved %} · Saved {{ item.saved }}{% endif %}
         </div>
         {% if item.summary %}<div class="saved-summary">{{ item.summary }}</div>{% endif %}
         {% include "_article_figure.html.j2" %}
+        {% if item.related_commentaries %}
+        <ul class="related-commentaries" aria-label="Commentary on {{ item.title }}">
+          {% for commentary in item.related_commentaries %}
+          <li><span class="publication-label">{{ commentary.publication_label }}</span> · <a href="{{ commentary.url }}" target="_blank" rel="noopener noreferrer">{{ commentary.title }}</a></li>
+          {% endfor %}
+        </ul>
+        {% endif %}
         {{ feedback_controls(item) }}
         <div class="save-state" aria-live="polite"></div>
       </div>
@@ -107,11 +118,22 @@
 <script>
 (function () {
   const CSRF_TOKEN = {{ csrf_token|tojson }};
+  let reloadRequested = false;
+  function reloadSavedOnce() {
+    if (reloadRequested) return;
+    reloadRequested = true;
+    window.location.reload();
+  }
 
   window.addEventListener('dd-storage-committed', () => {
     document.querySelectorAll('.save-state.pending').forEach(status => {
       status.classList.remove('pending'); status.textContent='Saved in this browser';
     });
+    const removed = document.querySelectorAll('.remove-saved[data-pending-removal]');
+    if (removed.length) {
+      removed.forEach(button => {delete button.dataset.pendingRemoval;});
+      reloadSavedOnce();
+    }
   });
 
   document.querySelectorAll(".saved-card").forEach(card => {
@@ -170,7 +192,9 @@
         const payload=await write(`/vote/${card.dataset.itemId}/reason/${button.dataset.reason}`, removing ? "DELETE" : "POST");
         button.classList.toggle("active", !removing);
         button.setAttribute("aria-pressed", String(!removing));
-        feedbackStatus((removing ? 'Reason removed.' : 'Reason saved.')+(payload.storagePending ? ' Saving browser copy…' : ''),payload.storagePending);
+        feedbackStatus(payload.storagePending
+          ? (removing ? 'Reason removed' : 'Reason recorded')+' · saving browser copy…'
+          : (removing ? 'Reason removed.' : 'Reason saved.'),payload.storagePending);
       } catch(error) { feedbackStatus(error.message); }
       finally { busy(false); }
     }));
@@ -186,10 +210,23 @@
           headers: { "X-CSRF-Token": CSRF_TOKEN },
         });
         if (!response.ok) throw new Error("HTTP " + response.status);
-        window.location.reload();
+        if (response.headers.get("x-dailydigest-storage") === "pending") {
+          button.dataset.pendingRemoval = "true";
+          button.disabled = false;
+          button.textContent = "Retry removal";
+          const status = card.querySelector(".save-state");
+          status.classList.add("pending");
+          status.textContent = "Removal recorded · saving browser copy…";
+        } else {
+          delete button.dataset.pendingRemoval;
+          reloadSavedOnce();
+        }
       } catch (error) {
         button.disabled = false;
         button.textContent = "Try again";
+        const status = card.querySelector(".save-state");
+        status.classList.remove("pending");
+        status.textContent = "Could not remove this item. Try again.";
       }
     });
   });

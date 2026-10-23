@@ -81,6 +81,7 @@ def build_bundle():
     from dailydigest.config import Settings, load_sources
     quality_path = "src/dailydigest/rank/source_quality.py"
     dedupe_path = "src/dailydigest/dedupe.py"
+    publications_path = "src/dailydigest/publications.py"
     rank_path = "src/dailydigest/rank/ranker.py"
     pipeline_path = "src/dailydigest/pipeline.py"
     quality = _source(quality_path)
@@ -122,10 +123,11 @@ logger = logging.getLogger(__name__)
     settings["adaptive_relevance_floor"] = False  # Learned calibration is outside this prototype.
     return {"schema_version": 1, "settings": settings, "sources": sources,
             "quality_source": quality, "dedupe_source": dedupe,
+            "publications_source": _source(publications_path),
             "ranker_source": rank_header + _extract(rank_path, RANK_FUNCTIONS),
             "gates_source": gate_header + blocklist + "\n" + _extract(pipeline_path, {"_audit_item", "_quality_gate", "_research_relevant", "_filter_off_topic"}),
             "production_source_sha256": {path: hashlib.sha256(_source(path).encode()).hexdigest()
-                                         for path in (quality_path, dedupe_path, rank_path, pipeline_path)}}
+                                         for path in (quality_path, dedupe_path, publications_path, rank_path, pipeline_path)}}
 
 
 def build_policy_cases():

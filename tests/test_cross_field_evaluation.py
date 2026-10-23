@@ -152,3 +152,59 @@ def test_replay_rejects_unsupported_personalization_before_creating_state(tmp_pa
     with pytest.raises(ValueError, match="without negative interests or watched authors"):
         replay_offline(corpus, state=state, model_cache=tmp_path)
     assert not state.exists()
+
+
+def test_profile_database_does_not_reuse_previous_metadata_or_source_variants(tmp_path, monkeypatch):
+    from datetime import datetime, timezone
+    from dailydigest import config, store
+    from dailydigest.models import Item
+    from dailydigest.rank.cross_field_evaluation import _isolated_profile_store
+
+    settings = config.Settings(_env_file=None, db_path=str(tmp_path / 'unused.db'))
+    monkeypatch.setattr(config, 'get_settings', lambda: settings)
+    original = Item(source='openalex', section='research', external_id='shared',
+                    url='https://doi.org/10.1234/shared', title='Shared work',
+                    abstract='Earlier, much richer metadata. ' * 15,
+                    published_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
+    incoming = original.model_copy(update={
+        'abstract': 'Current captured abstract.',
+        'published_at': datetime(2026, 2, 1, tzinfo=timezone.utc)})
+    with _isolated_profile_store(tmp_path, 0, settings):
+        store.upsert_items([original, original.model_copy(update={'source': 'Nature'})])
+        assert len(store.recent_items(days=36500)) == 2
+    assert store._ENGINE is None and store._SessionLocal is None
+    with _isolated_profile_store(tmp_path, 1, settings):
+        assert store.recent_items(days=36500) == []
+        store.upsert_items([incoming])
+        rows = store.recent_items(days=36500)
+        assert len(rows) == 1
+        assert rows[0].source == incoming.source
+        assert rows[0].abstract == incoming.abstract
+        assert rows[0].published_at.date() == incoming.published_at.date()
+    assert settings.db_path == str(tmp_path / 'unused.db')
+    assert store._ENGINE is None and store._SessionLocal is None
+
+
+def test_claims_representation_is_scoped_to_scoring_not_deduplication(monkeypatch):
+    import numpy as np
+    from dailydigest import pipeline
+    from dailydigest.models import Profile
+    from dailydigest.rank import embedding_cache, profile as profile_module
+    from dailydigest.rank.cross_field_evaluation import _score_captured_research
+
+    row = SimpleNamespace(title='Shared topic', abstract=(
+        'Background describes related systems. We introduce a reusable analysis tool. '
+        'Previous work cannot measure this quantity.'))
+    original_text = embedding_cache.item_text(row)
+    observed = []
+    monkeypatch.setattr(profile_module, 'build_profile_matrix', lambda *a, **kw: np.ones((1, 2)))
+    monkeypatch.setattr(profile_module, 'build_attribution_context', lambda *a: {})
+    def score(rows, *args):
+        observed.extend(embedding_cache.item_text(item) for item in rows)
+        return [(row, .9)], {}
+    monkeypatch.setattr(pipeline, '_score_items_for_pipeline', score)
+    _score_captured_research([row], Profile(bio='', keywords=['analysis']),
+                             profile_matrix='legacy', paper_text='claims')
+    assert observed == ['Shared topic. We introduce a reusable analysis tool.']
+    # The subsequent serving dedupe path calls this same function after scoring.
+    assert embedding_cache.item_text(row) == original_text

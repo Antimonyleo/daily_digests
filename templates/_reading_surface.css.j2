@@ -1,0 +1,25 @@
+  body {
+    position: relative; min-height: 100vh; margin: 0; overflow-x: hidden;
+    background:
+      linear-gradient(180deg, var(--bg-top) 0%, var(--bg) 260px);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color: var(--text);
+    -webkit-font-smoothing: antialiased;
+    transition: background-color 0.18s ease, color 0.18s ease;
+  }
+  body::before, body::after {
+    content: ""; position: fixed; inset: 0; z-index: 0; pointer-events: none;
+  }
+  body::before {
+    background:
+      radial-gradient(circle at 8% 7%, var(--ambient-mint), transparent 25%),
+      radial-gradient(circle at 92% 12%, var(--ambient-gold), transparent 22%),
+      radial-gradient(circle at 78% 72%, var(--ambient-blue), transparent 24%);
+  }
+  body::after {
+    height: 430px;
+    background-image: radial-gradient(circle, var(--ambient-dot) 1px, transparent 1.4px);
+    background-size: 34px 34px;
+    -webkit-mask-image: linear-gradient(to bottom, #000, transparent 88%);
+    mask-image: linear-gradient(to bottom, #000, transparent 88%);
+  }

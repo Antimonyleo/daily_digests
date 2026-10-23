@@ -1,0 +1,266 @@
+  .tea-break {
+    --idle-direction: 1; --steam-drift: 2px;
+    display: grid; grid-template-columns: 72px minmax(0, 1fr); align-items: center;
+    gap: 12px; margin: 0 0 12px; padding: 10px 12px;
+    border: 1px solid var(--border); border-radius: 14px;
+    background: linear-gradient(115deg, var(--accent-soft), var(--panel) 44%, var(--gold-soft));
+    color: var(--copy-secondary); font-size: 13px; line-height: 1.45;
+    box-shadow: 0 10px 28px rgba(21, 34, 27, 0.05);
+  }
+  .pip-stage {
+    position: relative; width: 68px; height: 68px; justify-self: center; align-self: start;
+  }
+  .tea-pet {
+    --pet-look-x: 0px; --pet-look-y: 0px; --pet-tilt: 0deg;
+    position: absolute; inset: auto 0 0; width: 64px; height: 62px; touch-action: pan-y;
+    cursor: default; outline: none;
+  }
+  .tea-pet:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 12px; }
+  .pet-steam {
+    position: absolute; top: 0; width: 7px; height: 17px;
+    border-left: 2px solid var(--accent); border-radius: 50%; opacity: 0;
+  }
+  .pet-steam.one { left: 23px; }
+  .pet-steam.two { left: 37px; }
+  .pet-cup {
+    position: absolute; left: 8px; bottom: 7px; width: 44px; height: 33px;
+    border: 2px solid var(--accent-strong); border-radius: 5px 5px 17px 17px;
+    background: var(--card); box-shadow: inset 0 -5px 0 var(--accent-soft);
+    transform: rotate(var(--pet-tilt));
+    transform-origin: 50% 90%;
+    transition: transform 0.24s ease;
+  }
+  .pet-rim {
+    position: absolute; left: -2px; right: -2px; top: -4px; height: 8px;
+    border: 1.5px solid var(--accent-strong); border-radius: 50%;
+    background: var(--gold-soft); overflow: hidden;
+  }
+  .pet-ripple {
+    position: absolute; inset: 1px 25%; border: 1px solid var(--accent);
+    border-radius: 50%; opacity: 0;
+  }
+  .pet-cup::after {
+    content: ""; position: absolute; right: -13px; top: 6px; width: 13px; height: 15px;
+    border: 2px solid var(--accent-strong); border-left: 0; border-radius: 0 9px 9px 0;
+  }
+  .pet-eye {
+    position: absolute; top: 10px; width: 3px; height: 5px;
+    border-radius: 50%; background: var(--accent-strong);
+    transform: translate(var(--pet-look-x), var(--pet-look-y));
+    transition: transform 0.18s ease;
+    transform-origin: center;
+  }
+  .pet-eye.left { left: 13px; }
+  .pet-eye.right { right: 13px; }
+  .pet-mouth {
+    position: absolute; left: 50%; top: 19px; width: 7px; height: 4px;
+    border: 1.5px solid var(--accent-strong); border-top: 0; border-radius: 0 0 7px 7px;
+    transform: translateX(-50%);
+  }
+  .pet-cheek {
+    position: absolute; top: 18px; width: 6px; height: 3px; border-radius: 50%;
+    background: var(--gold); opacity: 0.28;
+  }
+  .pet-cheek.left { left: 7px; }
+  .pet-cheek.right { right: 7px; }
+  .pip-drag-copy { display: none; }
+  .tea-break.is-dragging .tea-break-copy { display: none; }
+  .tea-break.is-dragging .pip-drag-copy { display: block; }
+  .tea-break.is-dragging .tea-pet { cursor: grabbing; }
+  .tea-break.is-dragging .pet-cup {
+    transform: translateY(-4px) rotate(-4deg);
+    box-shadow: inset 0 -7px 0 var(--accent-soft), 0 12px 18px rgba(21, 34, 27, 0.18);
+  }
+  .tea-break.is-dragging .pet-eye { transform: translateY(-1px); }
+  .tea-break.is-dragging .pet-mouth {
+    width: 5px; height: 5px;
+    border: 1.5px solid var(--accent-strong); border-radius: 50%;
+  }
+  .pet-saucer {
+    position: absolute; left: 5px; bottom: 2px; width: 56px; height: 8px;
+    border: 2px solid var(--accent-strong); border-top: 0; border-radius: 0 0 50% 50%;
+  }
+  .tea-dialog {
+    position: relative; min-width: 0; padding: 8px 11px 9px;
+    border: 1px solid var(--border); border-radius: 10px; background: var(--card);
+    background: color-mix(in srgb, var(--card) 91%, transparent);
+  }
+  .tea-dialog::before {
+    content: ""; position: absolute; left: -7px; top: 20px; width: 12px; height: 12px;
+    border-left: 1px solid var(--border); border-bottom: 1px solid var(--border);
+    background: var(--card); transform: rotate(45deg);
+  }
+  .tea-leaf-count {
+    position: absolute; right: -3px; bottom: -4px; z-index: 5;
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 29px; min-height: 18px; padding: 0 4px;
+    border: 1px solid var(--border); border-radius: 999px; background: var(--card);
+    color: var(--muted); font-size: 12px; font-weight: 800; white-space: nowrap;
+  }
+  .tea-break-copy { display: block; min-width: 0; }
+  .tea-leaf-drop {
+    position: absolute; left: 27px; top: -8px; z-index: 6;
+    width: 34px; height: 34px; padding: 0; border: 0; border-radius: 50%;
+    background: transparent; color: var(--accent); cursor: pointer;
+  }
+  .tea-leaf-shape {
+    position: absolute; left: 9px; top: 10px; width: 15px; height: 10px;
+    border-radius: 14px 3px 14px 3px;
+    background: linear-gradient(135deg, var(--accent), var(--accent-strong));
+    box-shadow: 0 2px 5px rgba(21, 76, 56, 0.18);
+    transform: rotate(-30deg); transform-origin: center;
+    transition: transform 0.24s ease, opacity 0.24s ease;
+  }
+  .tea-leaf-shape::after {
+    content: ""; position: absolute; right: -4px; bottom: -1px;
+    width: 7px; height: 1.5px; border-radius: 2px; background: var(--accent-strong);
+    transform: rotate(28deg); transform-origin: left center;
+  }
+  .tea-leaf-drop:hover .tea-leaf-shape { transform: rotate(-20deg) scale(1.12); }
+  .tea-leaf-drop:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; }
+  .tea-leaf-drop:disabled { cursor: default; }
+  .tea-leaf-drop:disabled .tea-leaf-shape { opacity: 0; }
+  @keyframes pet-steam-rise {
+    0% { opacity: 0; transform: translateY(5px) scaleX(0.8); }
+    35% { opacity: 0.4; }
+    100% { opacity: 0; transform: translateY(-7px) translateX(var(--steam-drift)) scaleX(1.1); }
+  }
+  @keyframes leaf-sway {
+    0%, 100% { transform: rotate(-30deg); }
+    30% { transform: translate(calc(var(--idle-direction) * -2px), -1px) rotate(-38deg); }
+    60% { transform: translate(calc(var(--idle-direction) * 2px), -1.5px) rotate(-18deg); }
+    80% { transform: rotate(-30deg); }
+  }
+  @keyframes pet-curious-look {
+    0%, 100% { transform: translate(var(--pet-look-x), var(--pet-look-y)); }
+    30% { transform: translate(calc(var(--idle-direction) * -0.8px), -1.5px); }
+    60% { transform: translate(calc(var(--idle-direction) * 0.8px), -1.5px); }
+    80% { transform: none; }
+    90% { transform: scaleY(0.15); }
+  }
+  @keyframes pet-curious-tilt {
+    0%, 80%, 100% { transform: rotate(var(--pet-tilt)); }
+    40% { transform: rotate(calc(var(--idle-direction) * -1deg)); }
+    60% { transform: rotate(calc(var(--idle-direction) * 1deg)); }
+  }
+  @keyframes pet-settle {
+    0%, 100% { transform: none; }
+    30% { transform: translateY(1.5px) scale(1.025, 0.97); }
+    65% { transform: translateY(0) scale(0.995, 1.01); }
+  }
+  @keyframes pet-blink {
+    0%, 100% { transform: translate(var(--pet-look-x), var(--pet-look-y)) scaleY(1); }
+    45% { transform: translate(var(--pet-look-x), var(--pet-look-y)) scaleY(0.1); }
+  }
+  @keyframes pet-follow-leaf {
+    0%, 25% { transform: translateY(-2px) scaleY(1.08); }
+    100% { transform: translateY(0); }
+  }
+  @keyframes tea-ripple {
+    0% { opacity: 0.7; transform: scaleX(0.25); }
+    100% { opacity: 0; transform: scaleX(2); }
+  }
+  @keyframes leaf-drop {
+    0% { opacity: 1; transform: translate(0, 0) rotate(-30deg) scale(1); }
+    65% { opacity: 1; transform: translate(calc(var(--leaf-land-x) * 0.6), calc(var(--leaf-land-y) * 0.5)) rotate(12deg) scale(0.85); }
+    90% { opacity: 1; }
+    100% { opacity: 0; transform: translate(var(--leaf-land-x), var(--leaf-land-y)) rotate(35deg) scale(0.2); }
+  }
+  /* The replacement leaf unfurls instead of popping into place, after a short
+     beat with an empty stem — otherwise the drop reads as a stutter, not a fall. */
+  @keyframes leaf-regrow {
+    0% { opacity: 0; transform: translate(2px, -5px) rotate(-72deg) scale(0.35); }
+    55% { opacity: 1; transform: translate(0, 1px) rotate(-18deg) scale(1.08); }
+    100% { opacity: 1; transform: translate(0, 0) rotate(-30deg) scale(1); }
+  }
+  @keyframes pet-land {
+    0% { transform: translateY(-3px); }
+    55% { transform: translateY(1px) scale(1.01, 0.99); }
+    100% { transform: none; }
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .tea-break.is-blinking .pet-eye { animation: pet-blink 0.22s ease-in-out 1; }
+    .tea-break.is-steaming .pet-steam { animation: pet-steam-rise 1.5s ease-out 1 both; }
+    .tea-break.is-steaming .pet-steam.two { animation-delay: 0.28s; }
+    .tea-break.is-curious .tea-leaf-shape { animation: leaf-sway 2s ease-in-out 1; }
+    .tea-break.is-curious .pet-eye { animation: pet-curious-look 2s ease-in-out 1; }
+    .tea-break.is-curious .pet-cup { animation: pet-curious-tilt 2s ease-in-out 1; }
+    .tea-break.is-feeding .pet-eye { animation: pet-follow-leaf 0.48s ease-in 1 both; }
+    .tea-break.is-feeding .pet-cup { transform: none; transition: none; }
+    .tea-break.is-feeding .tea-leaf-shape { animation: leaf-drop 0.48s ease-in 1 forwards; }
+    .tea-break.is-sipping .tea-leaf-shape { opacity: 0; transition: none; }
+    .tea-break.is-sipping .pet-cup { animation: pet-settle 0.42s ease-out 1; }
+    .tea-break.is-sipping .pet-ripple { animation: tea-ripple 0.42s ease-out 1; }
+    .tea-break.is-sipping .pet-eye {
+      height: 4px; width: 6px; background: transparent; border-top: 1.8px solid var(--accent-strong);
+      border-radius: 50% 50% 0 0; transform: translateY(1px);
+    }
+    .tea-break.is-sipping .pet-cheek { opacity: 0.65; }
+    .tea-break.is-sipping .pet-mouth { height: 5px; }
+    .tea-break.is-regrowing .tea-leaf-shape { animation: leaf-regrow 0.3s ease-out 1 backwards; }
+    .tea-break.is-dropping .pet-cup { animation: pet-land 0.36s ease-out 1; }
+  }
+  @media (hover: hover) and (pointer: fine) and (prefers-reduced-motion: no-preference) {
+    .pip-stage:has(.tea-leaf-drop:hover) .pet-mouth { height: 5px; }
+  }
+  html[data-display="compact"] .tea-break {
+    grid-template-columns: 54px minmax(0, 1fr); gap: 8px; padding: 6px 8px; margin-bottom: 8px;
+  }
+  html[data-display="compact"] .pip-stage { width: 52px; height: 54px; }
+  html[data-display="compact"] .tea-pet { transform: scale(0.82); transform-origin: bottom left; }
+  html[data-display="compact"] .tea-dialog { padding: 6px 9px 7px; }
+  @media (min-width: 1440px) {
+    .tea-break,
+    html[data-display="compact"] .tea-break {
+      position: fixed; left: max(12px, calc(50% - 714px)); bottom: 18px; z-index: 35;
+      width: 196px; margin: 0; padding: 0; grid-template-columns: 1fr; gap: 8px;
+      border: 0; background: transparent; box-shadow: none;
+    }
+    .tea-dialog,
+    html[data-display="compact"] .tea-dialog {
+      order: 1; padding: 9px 10px 10px;
+      box-shadow: 0 10px 28px rgba(21, 34, 27, 0.10);
+    }
+    .tea-dialog::before {
+      left: calc(50% - 6px); top: auto; bottom: -7px;
+      border-left: 0; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border);
+    }
+    .pip-stage,
+    html[data-display="compact"] .pip-stage {
+      order: 2; justify-self: center; width: 106px; height: 96px;
+    }
+    .tea-pet,
+    html[data-display="compact"] .tea-pet {
+      width: 94px; height: 88px; left: 6px;
+      transform: none; transform-origin: center;
+      touch-action: none; cursor: grab;
+    }
+    .tea-pet .pet-cup { left: 16px; bottom: 10px; width: 60px; height: 45px; border-width: 2.5px; }
+    .tea-pet .pet-cup::after { right: -17px; top: 8px; width: 17px; height: 21px; border-width: 2.5px; border-left: 0; }
+    .tea-pet .pet-eye { top: 14px; width: 4px; height: 6px; }
+    .tea-pet .pet-eye.left { left: 17px; }
+    .tea-pet .pet-eye.right { right: 17px; }
+    .tea-pet .pet-mouth { top: 27px; width: 9px; height: 6px; }
+    .tea-pet .pet-rim { top: -5px; height: 10px; }
+    .tea-pet .pet-cheek { top: 25px; width: 8px; height: 4px; }
+    .tea-pet .pet-cheek.left { left: 10px; }
+    .tea-pet .pet-cheek.right { right: 10px; }
+    .tea-pet .pet-saucer { left: 10px; bottom: 3px; width: 75px; height: 10px; border-width: 2.5px; border-top: 0; }
+    .tea-pet .pet-steam { top: 0; height: 22px; }
+    .tea-pet .pet-steam.one { left: 34px; }
+    .tea-pet .pet-steam.two { left: 52px; }
+    .tea-leaf-drop { left: 39px; top: -5px; }
+    .tea-leaf-count { right: 0; bottom: 0; }
+    .tea-break-copy { font-size: 12px; line-height: 1.45; }
+  }
+  @media (max-width: 760px) {
+    .tea-break { grid-template-columns: 60px minmax(0, 1fr); align-items: center; gap: 8px; padding: 8px; }
+    .pip-stage { width: 58px; height: 62px; }
+    .tea-pet { transform: scale(0.9); transform-origin: bottom left; }
+  }
+  .tea-leaf-drop { min-height: 44px; }
+  @media (pointer: coarse) {
+    .tea-leaf-drop { width: 44px; height: 44px; }
+  }
+  html[data-pip="hidden"] .tea-break { display: none; }
+  @media print { .tea-break { display: none !important; } }

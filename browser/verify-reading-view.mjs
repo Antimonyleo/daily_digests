@@ -22,15 +22,22 @@ for name,encoded in value['files'].items():
  if name in {'data/digest.db','data/digest.db-wal','data/digest.db-shm'}:
   (root/Path(name).name).write_bytes(base64.b64decode(encoded))
 source=sqlite3.connect(root/'digest.db')
+source.execute("UPDATE items SET summary=? WHERE section='research'", ('Key finding: Fictional reading-cache result. Why read: A supplied source rationale, not independent validation. Caveat: Fictional caveat — only tested in simulation.',))
 source.execute('CREATE TABLE reader_benchmark_padding (value BLOB)')
 source.execute('INSERT INTO reader_benchmark_padding VALUES (randomblob(?))',(int(sys.argv[3])*1024*1024,))
 source.commit()
+latest_date=source.execute('SELECT MAX(id) FROM digests').fetchone()[0]
+print(latest_date)
 target=sqlite3.connect(root/'closed.db');source.backup(target);target.close();source.close()
 value['files']['data/digest.db']=base64.b64encode((root/'closed.db').read_bytes()).decode()
 value['files'].pop('data/digest.db-wal',None);value['files'].pop('data/digest.db-shm',None)
 Path(sys.argv[2]).write_text(json.dumps(value))
 `,resolve(fixturePath),inflated,String(cacheMiB)],{encoding:'utf8',maxBuffer:1024*1024});
 assert.equal(inflate.status,0,inflate.stderr);
+const fixtureDate=inflate.stdout.trim();
+assert.match(fixtureDate,/^\d{4}-\d{2}-\d{2}$/);
+const fixtureClock=fixtureDate+'T12:00:00Z';
+const nextDayClock=new Date(Date.parse(fixtureClock)+86400000).toISOString();
 const fixturePayload=await readFile(inflated,'utf8');
 const fixture=JSON.parse(fixturePayload);
 const mime={'.html':'text/html','.mjs':'text/javascript','.js':'text/javascript','.css':'text/css','.json':'application/json','.wasm':'application/wasm','.svg':'image/svg+xml'};
@@ -55,10 +62,13 @@ const browser=await chromium.launch({executablePath:process.env.CHROME_PATH||'/u
 const report={scope:'Fictional desk with incompressible SQLite padding, actual runtime and UI, no brew/providers.',url:base,cacheMiB,checks:[],reloads:[],errors:[],blocked:[]};
 try{
   const context=await browser.newContext({viewport:{width:1360,height:900}});
+  let workerDate=fixtureClock;
   await context.route('**/*',async route=>{
     if(route.request().url().startsWith(base)){
       if(new URL(route.request().url()).pathname.endsWith('/worker.mjs')){
         const response=await route.fetch();let source=await response.text();
+        // Worker clocks are separate from Playwright's window clock.
+        source=`const FixtureDate=Date;globalThis.Date=class extends FixtureDate {constructor(...args){super(...(args.length?args:[${JSON.stringify(workerDate)}]));}static now(){return FixtureDate.parse(${JSON.stringify(workerDate)});}};\n`+source;
         source=source.replace("function saveSnapshot(snapshot, key = 'snapshot') {", "async function saveSnapshot(snapshot, key = 'snapshot') { if(self.__readerHold && key==='snapshot') await new Promise(done=>{self.__readerRelease=done;});");
         source=source.replace('self.onmessage = async ({ data }) => {', `self.onmessage = async ({ data }) => {
           if(data.type==='reader-save-config'){
@@ -83,6 +93,8 @@ try{
     await context.route(base+'__fixture__',route=>route.fulfill({contentType:'application/json',body:fixturePayload}));
   }
   const page=await context.newPage();page.setDefaultTimeout(30000);
+  // Fixture edition dates are fixed; explicitly exercise the next-day return.
+  await page.clock.setFixedTime(new Date(fixtureClock));
   page.on('dialog',async dialog=>{(report.dialogs ||= []).push({type:dialog.type(),message:dialog.message()});await dialog.accept();});
   page.on('pageerror',error=>report.errors.push(error.stack));
   await page.addInitScript(()=>{
@@ -115,13 +127,21 @@ try{
     const request=indexedDB.open('dailydigest:/daily_digests/',1);
     request.onupgradeneeded=()=>request.result.createObjectStore('state');
     const db=await new Promise(done=>{request.onsuccess=()=>done(request.result);});
-    await new Promise((done,fail)=>{const tx=db.transaction('state','readwrite');tx.objectStore('state').put(value,'snapshot');tx.oncomplete=done;tx.onerror=()=>fail(tx.error);});db.close();
+    // Pin this instrumented fixture to one core. Blocking service workers via
+    // Playwright injects a script that throws in opaque read-only frames.
+    // Real isolation/reload behavior is covered by verify-cpu-startup.mjs.
+    await new Promise((done,fail)=>{const tx=db.transaction('state','readwrite');tx.objectStore('state').put(value,'snapshot');tx.objectStore('state').put('cpu','compute');tx.oncomplete=done;tx.onerror=()=>fail(tx.error);});db.close();
   });
+  const startupStarted=performance.now();
   await page.goto(base+'#/');await page.waitForFunction(()=>window.__ready,undefined,{timeout:180000});
+  report.runtimeStartupMs=Math.round(performance.now()-startupStarted);
   report.buildId=await page.locator('meta[name="dailydigest-build"]').getAttribute('content');
   const frame=()=>page.frameLocator('#app');
   await frame().locator('.item[data-section="research"]').first().waitFor();
   const title=await frame().locator('.title-link').first().textContent();
+  const originalDetails=await frame().locator('.item[data-section="research"]').first().locator('.item-details-body')
+    .evaluate(node=>Array.from(node.children,child=>child.textContent.trim()).filter(Boolean).join('\n\n'));
+  assert.match(originalDetails,/Fictional caveat — only tested in simulation/);
   // A held IndexedDB save must not delay a route response. The model cache is
   // deliberately large; unchanged binary files must not be read/re-encoded.
   console.log('reading benchmark: runtime ready');
@@ -153,8 +173,14 @@ try{
   console.log('reading benchmark: rating and saving');
   const card=frame().locator('.item[data-section="research"]').first();
   const itemId=await card.getAttribute('data-item-id');
+  const feedbackStarted=performance.now();
   await card.locator('.vote-btn[data-grade="70"]').click();
   await card.locator('.vote-btn[data-grade="70"][aria-pressed="true"]').waitFor();
+  report.firstFeedbackVisibleMs=Math.round(performance.now()-feedbackStarted);
+  await page.waitForFunction(id=>window.__completedPaths.includes('/vote/'+id+'/70'),itemId);
+  report.firstFeedbackResponseMs=Math.round(performance.now()-feedbackStarted);
+  assert.equal((await page.evaluate(()=>window.__readingRPC({type:'flush-state'}))).status,200);
+  report.firstFeedbackDurableMs=Math.round(performance.now()-feedbackStarted);
   await card.locator('.bookmark-btn:not(.known-btn)').click();
   await card.locator('.bookmark-btn:not(.known-btn)[aria-pressed="true"]').waitFor();
   await page.waitForFunction(id=>window.__completedPaths.includes('/bookmark/'+id)&&window.__completedPaths.includes('/vote/'+id+'/70'),itemId);
@@ -166,14 +192,32 @@ try{
   while(!(projection=await stored('reading-view')) && Date.now()<deadline) await page.waitForTimeout(50);
   assert.ok(projection, 'The digest must regenerate its reading copy after feedback commits');
   assert.ok(projection.items.some(item=>item.title===title));
-  assert.deepEqual(Object.keys(projection).sort(),['date','items','savedAt','version']);
+  const savedArticle=projection.items.find(item=>item.title===title);
+  assert.equal(projection.version,4);
+  assert.ok(projection.profileName,'The saved greeting must carry its reader name');
+  assert.ok(projection.notes.length,'Pip must retain the supplied daily notes');
+  assert.equal(savedArticle.details.replace(/\s/g,''),originalDetails.replace(/\s/g,''),'All original evidence text survives; only block separators may change');
+  assert.match(savedArticle.details,/Abstract\s+We introduce/);
+  assert.match(savedArticle.details,/A supplied source rationale, not independent validation/);
+  assert.ok(Object.keys(projection).every(key=>['date','items','savedAt','version','related','profileName','notes'].includes(key)));
   report.checks.push('real digest and feedback produce a bounded reading copy without credentials');
   console.log('reading benchmark: reading copy available');
   const canonical=await canonicalHash();
   for(let trial=0;trial<3;trial++){
+    await page.clock.setFixedTime(new Date(fixtureDate+['T06:00:00Z','T19:00:00Z','T12:00:00Z'][trial]));
     const start=Date.now();await page.reload({waitUntil:'domcontentloaded'});
     await page.locator('#reading-view-notice').waitFor({state:'visible'});
     await frame().getByRole('link',{name:title,exact:true}).waitFor();
+    await page.locator('#cached-pip[data-state=ready]').waitFor({state:'attached'});
+    assert.equal(await page.locator('#cached-pip .tea-break').count(),1);
+    const expectedGreeting=await page.evaluate(name=>{const hour=new Date().getHours();return (hour<5?'You’re up early':hour<12?'Good morning':hour<18?'Good afternoon':'Good evening')+', '+name;},projection.profileName);
+    assert.equal(await frame().locator('#page-salutation').textContent(),expectedGreeting);
+    await page.frames().find(frame=>frame.parentFrame()).waitForFunction(()=>getComputedStyle(document.body).backgroundImage.includes('linear-gradient'));
+    assert.match(await frame().locator('body').evaluate(node=>getComputedStyle(node).backgroundImage),/linear-gradient/);
+    assert.match(await frame().locator('body').evaluate(node=>getComputedStyle(node,'::before').backgroundImage),/radial-gradient/);
+    const cachedArticle=frame().locator('article').filter({hasText:title});
+    assert.match(await cachedArticle.textContent(),/Fictional caveat — only tested in simulation/);
+    assert.match(await cachedArticle.textContent(),/A supplied source rationale, not independent validation/);
     report.reloads.push({milliseconds:Date.now()-start,workerStarts:await page.evaluate(()=>window.__workerStarts)});
     assert.equal(await page.evaluate(()=>window.__workerStarts),0,'Cached reading must not initialize Python');
     assert.equal(await page.locator('#export').isDisabled(),true);
@@ -183,6 +227,7 @@ try{
     assert.equal(await canonicalHash(),canonical,'Read-only refresh must leave canonical bytes unchanged');
   }
   report.checks.push('three refreshes show the saved articles without starting any worker or changing saved bytes');
+  report.checks.push('structured source rationale and caveat survive each reload and remain accessible in Details without starting Python');
   const readingURL=page.url();
   await page.locator('body > .skip-link').focus();
   await page.locator('body > .skip-link').press('Enter');
@@ -194,19 +239,57 @@ try{
   assert.equal(page.url(),readingURL,'Skipping to saved reading must preserve the hash route');
   assert.equal(await page.evaluate(()=>window.__workerStarts),0);
   report.checks.push('keyboard skip link enters the isolated saved reading frame and reaches its first article without changing the route or starting Python');
+  const cachedArticle=frame().locator('article').filter({hasText:title});
+  await cachedArticle.locator('summary').click();
+  await cachedArticle.getByText(/Fictional caveat — only tested in simulation/).waitFor();
+  assert.equal(await page.evaluate(()=>window.__workerStarts),0);
+  await page.setViewportSize({width:1500,height:900});
+  await page.locator('#cached-pip .tea-break').waitFor({state:'visible'});
   await page.screenshot({path:output+'/desktop-reading.png',fullPage:true});
   await page.setViewportSize({width:390,height:844});
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+  await page.locator('#cached-pip').waitFor({state:'hidden'});
+  assert.equal(await page.locator('#cached-pip').isVisible(),false,'Mobile Pip starts collapsed to preserve reading space');
+  assert.equal(await page.locator('#cached-pip-toggle').textContent(),'Visit Pip');
   await page.screenshot({path:output+'/mobile-reading.png',fullPage:true});
+  await page.locator('#cached-pip-toggle').click();
+  await page.locator('#cached-pip .tea-break').waitFor({state:'visible'});
+  assert.ok(projection.notes.includes(await page.locator('#tea-note-text').textContent()));
+  await page.emulateMedia({reducedMotion:'reduce'});
+  await page.locator('#tea-another').click();
+  await page.waitForFunction(()=>document.querySelector('#tea-leaf-count').textContent==='1');
+  assert.equal(await page.evaluate(date=>localStorage.getItem('dailydigest-tea-leaves:'+date),fixtureDate),'1');
+  assert.equal(await page.evaluate(()=>window.__workerStarts),0);
+  await page.screenshot({path:output+'/mobile-pip-open.png',fullPage:true});
+  await page.locator('#cached-pip-toggle').click();
+  assert.equal(await page.evaluate(()=>localStorage.getItem('dailydigest-pip')),'hidden');
+  await page.reload({waitUntil:'domcontentloaded'});
+  await page.locator('#cached-pip[data-state=ready]').waitFor({state:'attached'});
+  assert.equal(await page.locator('#cached-pip').isVisible(),false);
+  assert.equal(await page.locator('#cached-pip-toggle').textContent(),'Show Pip');
+  await page.locator('#cached-pip-toggle').click();
+  assert.equal(await page.locator('#tea-leaf-count').textContent(),'1');
+  await page.setViewportSize({width:320,height:700});
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+  await page.locator('#cached-pip-toggle').click();
+  await page.screenshot({path:output+'/mobile320-reading.png',fullPage:true});
+  assert.equal(await canonicalHash(),canonical);
+  report.checks.push('cached greeting/name and shared gradient survive reload; real Pip uses saved notes with zero workers, persists leaf count and hide preference, and stays collapsed by default on mobile');
   console.log('reading benchmark: cached reloads complete');
+  workerDate=nextDayClock;
+  await page.clock.setFixedTime(new Date(workerDate));
   await page.locator('#reading-view-open').click();
   await page.waitForFunction(()=>window.__ready,undefined,{timeout:180000});
   await page.locator('#reading-view-notice').waitFor({state:'hidden'});
   await frame().locator('.vote-btn[data-grade="70"][aria-pressed="true"]').first().waitFor();
   await frame().locator('.bookmark-btn:not(.known-btn)[aria-pressed="true"]').first().waitFor();
   assert.equal(await page.evaluate(()=>window.__workerStarts),1);
+  assert.equal(await page.locator('#cached-pip, #cached-pip-toggle').count(),0,'Full runtime must dispose the parent component');
+  assert.equal(await frame().locator('#tea-break').count(),1);
+  assert.equal(await frame().locator('#tea-leaf-count').textContent(),'1');
   assert.match(await page.locator('#app').getAttribute('sandbox'),/allow-scripts/);
-  report.checks.push('opening controls starts exactly one runtime and restores real vote/save controls');
+  assert.equal(new URLSearchParams(new URL(page.url()).hash.split('?')[1]).get('digest_id'),fixtureDate);
+  report.checks.push('opening controls the next day preserves the displayed edition and restores its vote/save controls with one runtime');
   // Fence the old worker before corrupting the disposable cache: an in-flight
   // checkpoint must not regenerate a valid copy between this write and reload.
   assert.equal((await page.evaluate(()=>window.__readingRPC({type:'prepare-reload'}))).status,200);

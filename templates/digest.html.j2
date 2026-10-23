@@ -36,7 +36,7 @@
                 <a href="{{ item.url }}" style="color:#0a66c2;text-decoration:none;font-weight:600;">{{ item.title }}</a>
               </div>
               <div style="font-size: 12px;color:#888;margin-top:3px;">
-                {{ item.source }}{% if item.published %} &middot; {{ item.published }}{% endif %}
+                {{ item.source }}{% if item.published %} &middot; {{ item.published }}{% endif %}{% if item.publication_label %} &middot; {{ item.publication_label }}{% endif %}
               </div>
               {% if item.opportunity %}
               <div style="font-size:12px;line-height:1.55;margin-top:6px;padding:7px 9px;background:#f6f8f6;border-radius:5px;color:#3d4a40;">
@@ -62,6 +62,13 @@
               <div style="font-size:13px;line-height:1.5;margin-top:6px;color:#333;">
                 {{ item.summary }}
               </div>
+              {% endif %}
+              {% if item.related_commentaries %}
+              <ul style="margin:8px 0 0;padding-left:18px;font-size:12px;line-height:1.5;">
+                {% for child in item.related_commentaries %}
+                <li>{{ child.publication_label }}: <a href="{{ child.url }}">{{ child.title }}</a></li>
+                {% endfor %}
+              </ul>
               {% endif %}
             </td>
           </tr>

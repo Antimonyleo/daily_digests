@@ -116,3 +116,16 @@ def test_interest_counts_describe_attributed_candidates_not_provider_supply():
     assert rows[0]["searches"] == []
     assert rows[1]["candidates"] == 1
     assert "shared searches cannot establish an individual supply count" in rows[0]["explanation"]
+
+
+def test_interest_coverage_does_not_report_missing_attribution_as_zero(monkeypatch):
+    from dailydigest import web
+    monkeypatch.setattr(web, '_profile_data', lambda: {'keywords': ['Chemistry', 'Physics']})
+    missing = [{'entries': [{'ranking': {}}]}]
+    assert all(row['selected'] is None for row in web._interest_coverage(missing, []))
+    known = [{'entries': [{'ranking': {'primary_facet': 'Chemistry'}}]}]
+    assert [row['selected'] for row in web._interest_coverage(known, [])] == [1, 0]
+    partial = [{'entries': known[0]['entries'] + missing[0]['entries']}]
+    assert [row['selected'] for row in web._interest_coverage(partial, [])] == [1, None]
+    recorded = [{'title': 'Physics', 'selected': 0, 'candidates': 0}]
+    assert web._interest_coverage(missing, recorded)[1]['selected'] == 0

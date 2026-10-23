@@ -260,6 +260,7 @@ def prune() -> None:
     )
 
 
+@app.command("eval-ranking")
 @app.command("eval")
 def eval_ranking(
     k: int = typer.Option(10, "--k", help="Cutoff for nDCG@k / precision@k."),

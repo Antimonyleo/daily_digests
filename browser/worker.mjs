@@ -6,6 +6,8 @@ import { computeCapabilities, computeSelection, createEmbeddingEngine, formatCom
 import { createSnapshotWriter, validateRecoverySnapshot, validateStoredSnapshot, capturePrivateSnapshot } from './storage.mjs';
 import { createBrowserHttpBridge } from './http.mjs';
 import { createSemanticEngine } from './semantic.mjs';
+import { withEmbeddingMemo } from './embedding-memo.mjs';
+import { defaultComputeMode } from './cpu-startup.mjs';
 import { createPublicEmbeddingCache } from './public-embeddings.mjs';
 import { validateReadingView } from './reading-view.mjs';
 
@@ -100,10 +102,16 @@ async function ownStorage({ timeoutMs = 60000 } = {}) {
   });
   return ownership;
 }
-async function probeGPU() {
+async function probeGPU({ timeoutMs = 3000 } = {}) {
   if (!navigator.gpu) return { available: false, reason: 'no-api', message: 'This browser does not expose WebGPU. Try a browser with WebGPU enabled.' };
+  let timer;
+  const timeout = Symbol('GPU probe timeout');
   try {
-    const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
+    const adapter = await Promise.race([
+      navigator.gpu.requestAdapter({ powerPreference: 'high-performance' }),
+      new Promise(resolve => { timer = setTimeout(() => resolve(timeout), timeoutMs); }),
+    ]);
+    if (adapter === timeout) return { available: false, reason: 'probe-timeout', message: 'The GPU check timed out. Continuing on CPU; you can retry the check in Compute.' };
     if (!adapter) return { available: false, reason: 'no-adapter', message: 'WebGPU is exposed, but the browser could not find a usable GPU adapter. Check browser GPU settings and graphics drivers.' };
     const info = adapter.info || {};
     if (info.isFallbackAdapter) return { available: false, reason: 'software-adapter', message: 'Only a software GPU adapter is available; using CPU instead.' };
@@ -111,12 +119,39 @@ async function probeGPU() {
       info: { vendor: info.vendor || 'not disclosed', architecture: info.architecture || 'not disclosed' }, adapter };
   } catch {
     return { available: false, reason: 'probe-failed', message: 'The browser could not check the GPU adapter. Check browser GPU settings and graphics drivers.' };
+  } finally {
+    clearTimeout(timer);
   }
 }
 async function fetchAsset(path, kind) {
   const result = await fetch(path);
   if (!result.ok) throw new Error(`Could not load ${path}: HTTP ${result.status}`);
   return result[kind]();
+}
+function preloadStartupBytecode({ applicationBytes, applicationMs } = {}) {
+  // Below roughly 4 MB/s the optional archive costs more transfer time than
+  // source compilation saves. Use observed application transfer speed rather
+  // than navigator.connection, which is absent or capped on many browsers.
+  if (applicationMs > 0 && applicationBytes / applicationMs < 4096) {
+    return { cancel() {}, install() {} };
+  }
+  const controller = new AbortController();
+  let cached;
+  // Never wait for this optional download. Slow or unavailable acceleration
+  // must not prevent the authoritative source modules from opening the desk.
+  void fetch('./assets/startup-bytecode.zip', { signal: controller.signal })
+    .then(response => response.ok ? response.arrayBuffer() : null)
+    .then(bytes => { cached = bytes; }).catch(() => {});
+  return {
+    cancel: () => controller.abort(),
+    install(py) {
+      controller.abort();
+      if (cached) {
+        try { py.unpackArchive(cached, 'zip', { extractDir: '/' }); }
+        catch { /* CPython can import the original source without this cache. */ }
+      }
+    },
+  };
 }
 async function loadPythonPackages(py, dependencies) {
   const wheels = dependencies.micropip || [];
@@ -248,14 +283,26 @@ async function initialize() {
     await ownStorage();
     database = await openDatabase();
     stage('application-assets', 'Loading application', 'Opening the local application…');
+    const applicationStarted = performance.now();
+    let applicationMs;
     const [bundle, source, dependencies, snapshot, savedCompanion, savedCompute] = await Promise.all([
-      fetchAsset('./assets/app.zip?compute=v1', 'arrayBuffer'), fetchAsset('./assets/runtime.py?compute=v1', 'text'),
+      fetchAsset('./assets/app.zip?compute=v1', 'arrayBuffer').then(value => {
+        applicationMs = performance.now() - applicationStarted; return value;
+      }), fetchAsset('./assets/runtime.py?compute=v1', 'text'),
       fetchAsset('./assets/dependencies.json', 'json'), readSnapshot(), readSnapshot('companion'), readSnapshot('compute'),
     ]);
     stage('python-runtime', 'Loading Python', 'Starting the Python runtime…');
-    const py = await loadPyodide({ indexURL: new URL('./node_modules/pyodide/', self.location.href).href });
-    stage('python-packages', 'Loading libraries', 'Preparing application libraries…');
-    await loadPythonPackages(py, dependencies);
+    const bytecode = preloadStartupBytecode({ applicationBytes: bundle.byteLength, applicationMs });
+    let py;
+    try {
+      py = await loadPyodide({ indexURL: new URL('./node_modules/pyodide/', self.location.href).href });
+      stage('python-packages', 'Loading libraries', 'Preparing application libraries…');
+      await loadPythonPackages(py, dependencies);
+      // Built with this interpreter; CPython validates each source hash.
+      bytecode.install(py);
+    } finally {
+      bytecode.cancel();
+    }
     deferredPackages = dependencies.compute || [];
     stage('application-import', 'Opening application', 'Preparing your reading desk…');
     py.unpackArchive(bundle, 'zip', { extractDir: '/app' });
@@ -277,22 +324,20 @@ async function initialize() {
       py.runPython('del startup_snapshot');
     }
     stage('application-setup', 'Preparing reading desk', 'Connecting the local application…');
-    // Native ingest imports bind config.SETTINGS: restore .env before them.
-    await py.runPythonAsync('network.install_public_source_fallback(public_source_url)');
     env.allowRemoteModels = false;
     env.allowLocalModels = true;
     env.localModelPath = new URL('./assets/models/', self.location.href).href;
     env.backends.onnx.wasm.wasmPaths = new URL('./node_modules/onnxruntime-web/dist/', self.location.href).href;
     env.backends.onnx.wasm.proxy = false;
-    computeMode = ['cpu', 'gpu', 'multicore'].includes(savedCompute) ? savedCompute : 'cpu';
     const capabilities = computeCapabilities();
+    computeMode = defaultComputeMode(savedCompute, capabilities);
     if (computeMode === 'gpu' && capabilities.gpu) {
       progress('Checking GPU', 'Checking hardware acceleration on this device…');
       gpuProbe = await probeGPU();
       capabilities.gpu = gpuProbe.available;
       if (gpuProbe.available) env.backends.onnx.webgpu.adapter = gpuProbe.adapter;
     }
-    const engine = createEmbeddingEngine({ mode: computeMode, capabilities, env: env.backends.onnx,
+    const engine = withEmbeddingMemo(createEmbeddingEngine({ mode: computeMode, capabilities, env: env.backends.onnx,
       loadTokenizer: options => AutoTokenizer.from_pretrained('bge-small', { local_files_only: true, ...options }),
       loadModel: async ({ exportKind, ...options }) => {
         const model = await AutoModel.from_pretrained(exportKind === 'gpu' ? 'bge-small-webgpu' : 'bge-small', {
@@ -305,7 +350,7 @@ async function initialize() {
       shouldCancel: () => Boolean(state.py.globals.get('browser_cancelled')()),
       progress: info => self.postMessage({ type: 'progress', stage: info.phase === 'loading' ? 'Loading embedding model'
         : info.phase === 'complete' ? 'Embeddings complete' : 'Computing embeddings', message: formatComputeProgress(info), compute: info }),
-    });
+    }), { shouldCancel: () => Boolean(state.py.globals.get('browser_cancelled')()) });
     // Absolute same-origin paths bypass env.localModelPath without enabling
     // remote models or racing embedding loads by changing their global root.
     const semanticPath = new URL('semantic-matcher', new URL('./assets/semantic-models/', self.location.href)).pathname;
@@ -382,6 +427,9 @@ async function prepareComputePackages() {
     progress('Preparing brew libraries', 'Loading calculation libraries for this session…');
     computePackagesPending = (async () => {
       if (deferredPackages.length) await state.py.loadPackage(deferredPackages);
+      // Feed adapters are needed only for compute. Settings have been restored
+      // before importing them, and installation happens once before queuing work.
+      await state.py.runPythonAsync('network.install_public_source_fallback(public_source_url)');
       computePackagesReady = true;
     })().finally(() => { computePackagesPending = null; });
   }
@@ -612,13 +660,20 @@ self.onmessage = async ({ data }) => {
       if (stateReplacing || configurationChanging || reloadPending || emailSending) throw new Error('Application state changed while preparing libraries. Retry after it finishes.');
     }
     const result = await state.py.globals.get('handle_request').callPromising(JSON.stringify(data), emit);
-    // A committed route response reaches the UI before an idle checkpoint.
-    // Forced flushes still fence reload, imports, exports and tab handoff.
     const delivered = JSON.parse(result);
+    const mutating = data.method && data.method.toUpperCase() !== 'GET';
+    const startsJob = ['/run/start', '/refresh', '/ranking/train'].includes(data.path.split('?')[0]);
+    // A successful save/rating/settings response must survive an immediate
+    // reload. Background jobs retain their asynchronous start and checkpoint
+    // path; failed storage still reports pending with the existing warning.
+    if (mutating && delivered.status < 400 && !startsJob && !jobRunning &&
+        !state.py.globals.get('has_jobs')() && storageWriter.status().dirty) {
+      await persist({force:true});
+    }
     delivered.headers = { ...delivered.headers,
       'x-dailydigest-generation': String(state.py.globals.get('state_generation')()),
       'x-dailydigest-storage': storageWriter.status().durable ? 'saved' : 'pending' };
-    if (data.method && data.method.toUpperCase() !== 'GET' && delivered.status < 400 && storageWriter.status().dirty) self.postMessage({type:'storage-dirty'});
+    if (mutating && delivered.status < 400 && storageWriter.status().dirty) self.postMessage({type:'storage-dirty'});
     emit(JSON.stringify(delivered));
     storageWriter.schedule();
     // Start native background targets only after the start response reaches UI.

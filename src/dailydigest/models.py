@@ -79,7 +79,8 @@ class Profile(BaseModel):
     context_keywords: list[str] = Field(default_factory=list)
     # Optional per-interest weights. Keys are embedded as additional profile
     # facets, so broad interests can be strengthened or softened without
-    # duplicating keywords. Values below 1.0 downweight; above 1.0 upweight.
+    # duplicating keywords. The default cosine scorer downweights values below
+    # 1.0 and bounds larger values at unit cosine; they are not numeric boosts.
     interest_weights: dict[str, float] = Field(default_factory=dict)
     # Backward-compatible alias used in older docs/conversations.
     facet_weights: dict[str, float] = Field(default_factory=dict)
@@ -88,8 +89,8 @@ class Profile(BaseModel):
     # any entry are boosted in ranking and exposed as a learnable feature.
     authors_of_interest: list[str] = Field(default_factory=list)
     # Representative texts (your own paper titles+abstracts, or exemplar papers)
-    # used as high-weight positive anchors for the interest vector — a far
-    # stronger query than a keyword bag.
+    # used as additional semantic anchors. Their nominal construction weight
+    # does not guarantee precedence over keyword matches in the default scorer.
     seed_works: list[str] = Field(default_factory=list)
     # Interests to suppress: embedded as negative query vectors during ranking.
     # Items semantically similar to these topics will be penalized.

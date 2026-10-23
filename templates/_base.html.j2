@@ -24,33 +24,11 @@
   .article-figure summary { cursor: pointer; min-height: 44px; padding: 10px 0; }
   .article-figure figure { margin: 8px 0; }
   .article-figure img { display: block; width: 100%; max-width: 480px; height: 220px; object-fit: contain; }
+  .article-figure img[hidden], .figure-unavailable[hidden] { display: none; }
+  .figure-retry { min-height: 44px; padding: 4px 12px; color: var(--accent); background: var(--card); border: 1px solid var(--border); border-radius: 6px; cursor: pointer; }
   .article-figure figcaption, .figure-hint { color: var(--muted); font-size: 12px; }
   @media print { .article-figure { display: none; } }
-  body {
-    position: relative; min-height: 100vh; margin: 0; overflow-x: hidden;
-    background:
-      linear-gradient(180deg, var(--bg-top) 0%, var(--bg) 260px);
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-    color: var(--text);
-    -webkit-font-smoothing: antialiased;
-    transition: background-color 0.18s ease, color 0.18s ease;
-  }
-  body::before, body::after {
-    content: ""; position: fixed; inset: 0; z-index: 0; pointer-events: none;
-  }
-  body::before {
-    background:
-      radial-gradient(circle at 8% 7%, var(--ambient-mint), transparent 25%),
-      radial-gradient(circle at 92% 12%, var(--ambient-gold), transparent 22%),
-      radial-gradient(circle at 78% 72%, var(--ambient-blue), transparent 24%);
-  }
-  body::after {
-    height: 430px;
-    background-image: radial-gradient(circle, var(--ambient-dot) 1px, transparent 1.4px);
-    background-size: 34px 34px;
-    -webkit-mask-image: linear-gradient(to bottom, #000, transparent 88%);
-    mask-image: linear-gradient(to bottom, #000, transparent 88%);
-  }
+{% include "_reading_surface.css.j2" %}
   .wrap { position: relative; z-index: 1; max-width: 1100px; margin: 0 auto; padding: 28px 16px 78px; }
   .card {
     background: var(--card);
@@ -267,16 +245,35 @@
 </script>
 <script>
   document.querySelectorAll('.article-figure').forEach(preview => {
-    preview.addEventListener('toggle', () => {
-      const image = preview.querySelector('img[data-src]');
-      if (!preview.open || !image) return;
-      image.addEventListener('error', () => {
-        image.hidden = true;
-        preview.querySelector('.figure-unavailable').hidden = false;
-      }, {once: true});
+    const image = preview.querySelector('img[data-src]');
+    if (!image) return;
+    const unavailable = preview.querySelector('.figure-unavailable');
+    const retry = preview.querySelector('.figure-retry');
+    let state = 'idle';
+    let restoreFocus = false;
+    const load = () => {
+      if (!preview.open || state === 'loading') return;
+      restoreFocus = document.activeElement === retry;
+      state = 'loading';
+      unavailable.hidden = true;
+      image.hidden = false;
+      image.removeAttribute('src');
       image.src = image.dataset.src;
-      image.removeAttribute('data-src');
+    };
+    image.addEventListener('error', () => {
+      state = 'error';
+      image.hidden = true;
+      unavailable.hidden = false;
+      if (restoreFocus) retry.focus();
     });
+    image.addEventListener('load', () => {
+      state = 'loaded';
+      image.hidden = false;
+      unavailable.hidden = true;
+      if (restoreFocus) preview.querySelector('.figure-link').focus();
+    });
+    retry.addEventListener('click', load);
+    preview.addEventListener('toggle', () => { if (state === 'idle') load(); });
   });
 </script>
 {% block scripts %}{% endblock %}

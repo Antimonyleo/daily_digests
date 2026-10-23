@@ -128,8 +128,9 @@ def _entry_metadata(entry) -> dict:
     # Feed categories/subjects and relation links may instead describe a topic
     # or another work; they must never exclude this record.
     publication_types = {
-        "editorial": "Editorial", "news": "News", "news and views": "News",
-        "news & views": "News", "comment": "Comment", "commentary": "Commentary",
+        "editorial": "Editorial", "news": "News", "news and views": "News & Views",
+        "news & views": "News & Views", "comment": "Comment", "commentary": "Commentary",
+        "research highlight": "Research Highlight", "research highlights": "Research Highlights",
         "correction": "Correction", "erratum": "Erratum", "published erratum": "Published Erratum",
         "retraction": "Retraction", "retraction notice": "Retraction Notice",
         "retracted publication": "Retracted Publication", "expression of concern": "Expression of Concern",
@@ -161,6 +162,21 @@ def _entry_metadata(entry) -> dict:
             if doi:
                 metadata["doi"] = doi
                 break
+    # Directed publisher relation links identify the subject of commentary;
+    # ordinary related/alternate/reference links are not sufficient evidence.
+    from ..publications import RELATION_NAMES, normalize_doi
+
+    targets, relation_evidence = set(), []
+    for link in entry.get("links", []):
+        if not isinstance(link, dict) or link.get("rel") not in RELATION_NAMES:
+            continue
+        doi = normalize_doi(link.get("href"))
+        if doi:
+            targets.add(doi)
+            relation_evidence.append({"field": "links", "rel": link["rel"], "doi": doi})
+    if targets:
+        metadata["companion_of_dois"] = sorted(targets)
+        metadata["companion_relation_evidence"] = relation_evidence
     for key, source in (("published_parsed", "published"), ("updated_parsed", "updated")):
         value = entry.get(key)
         if value:

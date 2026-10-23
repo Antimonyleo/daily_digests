@@ -78,7 +78,7 @@ def test_interest_coverage_never_calls_zero_selection_zero_supply(monkeypatch):
     monkeypatch.setattr(web, '_profile_data', lambda **_: profile)
     rows = web._interest_coverage([], [])
     assert len(rows) == 9
-    assert all(row['selected'] == 0 and row['candidates'] is None for row in rows)
+    assert all(row['selected'] is None and row['candidates'] is None for row in rows)
     assert all('not recorded' in row['explanation'].lower() for row in rows)
 
 
@@ -319,9 +319,15 @@ def test_openalex_overlapping_aliases_do_not_shrink_unique_supply(monkeypatch):
     monkeypatch.setattr(openalex, '_get_json', fetch)
     source = openalex.OpenAlexSource()
     assert len(source.fetch(SourceSpec(name='OpenAlex', kind='openalex', profile_driven=True))) == 20
-    assert len(requests) == 1
-    assert requests[0]['search.title_abstract_keywords'] == '((protein degradation) OR "targeted protein degradation" OR "PROTAC" OR "degraders")'
-    assert source.last_fetch_diagnostics['queries'][0]['interest'] == 'protein degradation'
+    assert len(requests) == 2
+    assert requests[0]['search.title_abstract_keywords'] == 'protein degradation'
+    assert requests[1]['search.title_abstract_keywords'] == '"targeted protein degradation" OR "PROTAC" OR "degraders"'
+    queries = source.last_fetch_diagnostics['queries']
+    assert all(query['interest'] == 'protein degradation' for query in queries)
+    assert [query['query_role'] for query in queries] == ['core', 'alias']
+    assert [query['unique_yield'] for query in queries] == [20, 0]
+    assert sum(query['fetched_count'] for query in queries) == 40
+    assert sum(query['fetched_count'] for query in queries) <= source.PROFILE_MAX_ITEMS
 
 
 def test_setup_preserves_canonical_priority_fallback_by_legacy_alias(tmp_path, monkeypatch):

@@ -31,7 +31,12 @@
   #interest-editor:not(.show-priorities) .interest-heading { grid-template-columns: minmax(0, 1fr) auto; }
   .interest-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
   .interest-row textarea { min-height: 70px; }
-  @media(max-width: 480px) { .interest-heading { grid-template-columns: minmax(0, 1fr) 80px; } .interest-heading button { grid-column: 1 / -1; justify-self: start; } }
+  @media(max-width: 480px) {
+    .interest-heading, #interest-editor:not(.show-priorities) .interest-heading { grid-template-columns: minmax(0, 1fr) auto; }
+    .interest-heading label:first-child { grid-column: 1 / -1; }
+    .interest-heading label:nth-child(2) { max-width: 90px; }
+    .interest-heading button { grid-column: 2; justify-self: end; }
+  }
   #topics { min-height: 245px; font-size: 15px; }
   textarea::placeholder, input::placeholder { color: var(--muted); opacity: 1; }
   .example-note { color: var(--muted); font-size: 12px; line-height: 1.5; margin: 8px 0; }
@@ -52,6 +57,10 @@
   }
   .disclosure-note { display: block; color: var(--muted); font-size: 12px; font-weight: 400; }
   .settings-disclosure[open] > summary { margin-bottom: 14px; }
+  #bio { min-height: 0; }
+  #paper-examples { border-top: 0; margin-top: 8px; padding-top: 0; }
+  #paper-examples[open] > summary { margin-bottom: 6px; }
+  #seed_works { min-height: 0; }
   .section-required .section-desc { margin-left: 0; }
   .always-included { font-size: 12px; color: var(--muted); }
   .chip-input {
@@ -163,13 +172,13 @@
 
 	  <form method="post" action="/setup">
 	    <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-      <input type="hidden" id="user-timezone" name="user_tz" value="{{ form.user_tz }}">
+      <input type="hidden" id="user-timezone" name="user_tz" value="{{ form.user_tz }}" data-detect-timezone="{{ 'true' if first_run else 'false' }}">
     <div class="step">
       <h2>Your research interests</h2>
       <div id="interests-label">What would you like to read about?</div>
       <div id="interest-editor" hidden>
         <div id="interest-rows"></div>
-        <details id="priority-options" class="settings-disclosure"{% if form.topics %} open{% endif %}><summary>Set topic priorities (optional)</summary><p class="hint">Topics start with equal shares. Adjust individual percentages above when useful; the total must be 100%.</p></details>
+        <details id="priority-options" class="settings-disclosure"{% if errors %} open{% endif %}><summary>Set topic priorities (optional)</summary><p class="hint">Topics start with equal shares. Adjust individual percentages above when useful; the total must be 100%.</p></details>
         <div class="interest-actions"><button type="button" class="btn" id="add-interest">Add interest</button><button type="button" class="btn priority-control" id="even-interests">Distribute evenly</button><button type="button" class="btn priority-control" id="normalize-interests">Normalize to 100%</button><output class="priority-control" id="interest-total" aria-live="polite"></output></div>
         <p class="hint priority-control">Give each topic a percentage. The total must be 100%. Use Distribute evenly or Normalize to 100% to adjust the shares.</p>
       </div>
@@ -191,44 +200,44 @@
       </div>
       {% endif %}
       <p class="example-note" id="example-profile-note">{% if not form.topics %}Examples are editable starting points. {% endif %}Nothing is saved until you save your settings.</p>
+      <label for="bio">Current research or learning goal (optional)</label>
+      <textarea id="bio" name="bio" rows="2" aria-describedby="bio-hint" placeholder="I’m learning how ... works and need clear reviews.&#10;I’m developing ... and looking for methods I can use.">{{ form.bio }}</textarea>
+      <div class="hint" id="bio-hint">What would make a paper useful for your current work?</div>
+      <details class="settings-disclosure" id="paper-examples"{% if errors %} open{% endif %}>
+        <summary>Example papers (optional)</summary>
+        <label for="seed_works">Paper titles or short descriptions</label>
+        <textarea id="seed_works" name="seed_works" rows="3" aria-describedby="seed-works-hint" placeholder="A paper title you found useful&#10;Another title, or a short description of the work">{{ form.seed_works }}</textarea>
+        <p class="hint" id="seed-works-hint">One per line. Include the title with a DOI; identifiers and linked papers are not fetched automatically.</p>
+      </details>
       <aside id="browser-storage-note" class="browser-storage-note" aria-label="Your data in this browser" hidden>
         <p>Saved in this browser. Other browsers and profiles have separate data.
         <button type="button" data-browser-action="open-backup">Backup &amp; transfer</button><button type="button" data-browser-action="open-guide">Quick guide</button></p>
       </aside>
       <details class="settings-disclosure" id="search-tips">
         <summary>Search tips and wording checks (optional)</summary>
-        <p class="hint">Priorities guide relative emphasis, not guaranteed digest slots. Adding or removing a topic adjusts the shares; old relative weights are converted to percentages when saved. Search details let you add alternative terms or describe useful papers.</p>
-        <p class="hint">Suggest wording variants works locally from your supplied acronym or hyphenated wording. Check wording sends only the chosen interest to PubMed for spelling suggestions. Both are optional, and nothing is checked automatically. Accepting a suggestion changes searches and ranking only after saving. Specialist terms may have no suggestion.</p>
+        <p class="hint">Priorities guide relative emphasis, not guaranteed digest slots. Adding or removing a topic adjusts the shares; old relative weights are converted to percentages when saved. Matching &amp; terminology lets you describe useful papers and add alternative search terms.</p>
+        <p class="hint">Suggest wording variants works locally from your supplied acronym or hyphenated wording. Check spelling in PubMed sends only the chosen interest to PubMed for spelling suggestions. PubMed is focused on biomedical literature; it may not recognize terms from other fields. Both are optional, and nothing is checked automatically. Accepting a suggestion changes searches and ranking only after saving. Specialist terms may have no suggestion.</p>
       </details>
 
-      <p class="hint">Prefer examples of papers you like? Add their titles or short descriptions under Advanced interests below to refine matching. Topic names above still guide source searches.</p>
       <details class="settings-disclosure" id="advanced-interests"{% if errors %} open{% endif %}>
-        <summary>Advanced interests<span class="disclosure-note">Authors, representative works, and background topics (optional).</span></summary>
+        <summary>Advanced interests<span class="disclosure-note">Authors and background topics (optional).</span></summary>
         <p class="hint">One entry per line, up to 20 entries of 300 characters in each field. These refine matching; they do not guarantee a pick.</p>
-        <label for="authors_of_interest">Authors, labs &amp; institutions to follow</label>
-        <textarea id="authors_of_interest" name="authors_of_interest" rows="3">{{ form.authors_of_interest }}</textarea>
-        <label for="seed_works">Example paper titles or short descriptions</label>
-        <textarea id="seed_works" name="seed_works" rows="3" aria-describedby="seed-works-hint">{{ form.seed_works }}</textarea>
-        <p class="hint" id="seed-works-hint">Paper titles and short descriptions anchor relevance. Include the title when pasting a DOI; identifiers and linked papers are not fetched automatically. Keep specific topic names above for source searches.</p>
+        <label for="authors_of_interest">Researchers to follow</label>
+        <textarea id="authors_of_interest" name="authors_of_interest" rows="3" aria-describedby="authors-hint">{{ form.authors_of_interest }}</textarea>
+        <p class="hint" id="authors-hint">Use full names. Unique exact-name matches are searched in OpenAlex; ambiguous names are skipped. Labs match author bylines only. See identity checks under the digest’s source details.</p>
         <label for="context_keywords">Background interests</label>
         <textarea id="context_keywords" name="context_keywords" rows="3" aria-describedby="context-keywords-hint">{{ form.context_keywords }}</textarea>
         <p class="hint" id="context-keywords-hint">Topics to stay informed about with less influence on research relevance than your core interests.</p>
       </details>
 
       <details class="settings-disclosure" id="profile-options"{% if errors %} open{% endif %}>
-        <summary>Personal details &amp; topics to see less often
-          <span class="disclosure-note">Optional context to help refine your picks.</span>
-        </summary>
+        <summary>Name &amp; topics to see less often (optional)</summary>
         <div class="field-grid">
           <div>
             <label for="name">First name</label>
             <input id="name" name="name" type="text" autocomplete="given-name" placeholder="Ada" value="{{ form.name }}">
           </div>
         </div>
-        <label for="bio">A short bio (optional)</label>
-        <textarea id="bio" name="bio" aria-describedby="bio-hint" placeholder="I research DNA and RNA nanotechnology, biomolecular delivery, protein engineering and self-assembling materials. Prioritize new engineering methods, transferable design rules and prediction tools. Keep clinical trials and biotech developments as background context.">{{ form.bio }}</textarea>
-        <div class="hint" id="bio-hint">Describe your priorities in your own words: new methods, engineered systems, mechanisms, applications, or reviews and synthesis. This context helps match papers and news to your interests.</div>
-
         <label for="dw-text">Topics to see less often</label>
         <div class="chip-input" id="dw-input">
           <input type="text" id="dw-text" placeholder="e.g. cryptocurrency, stock market predictions" aria-describedby="downweight-hint">
@@ -239,6 +248,11 @@
     </div>
     <div class="step">
       <h2>What’s in your digest</h2>
+      <label title="Look up public DOIs in Europe PMC and Crossref for publication types and linked commentary. Your profile and ratings stay local.">
+        <input type="hidden" name="publication_enrichment" value="false">
+        <input type="checkbox" name="publication_enrichment" value="true"{% if form.publication_enrichment == 'true' %} checked{% endif %}>
+        Verify article types online
+      </label>
       <p class="hint">Research is always included. Choose which additional sections you want to read.</p>
       <div class="section-options">
         <div class="section-option section-required">
@@ -479,7 +493,9 @@
         </label>
       </div>
 
-      <p class="hint">AI-backed summaries send selected article metadata and your short reader profile to the provider you choose. Extractive stays local.</p>
+      <details class="settings-disclosure"><summary>What is sent for AI summaries?</summary>
+        <p class="hint">Your chosen provider receives selected article titles, sources, sections, dates, internal item IDs, abstract excerpts (up to 1,500 characters), and derived contribution, claim and evidence labels. Personalization includes the first 400 characters of your current research or learning goal and up to 20 core topics; derived labels may also name your configured topics. Catch-up briefings include up to 60 titles and sources and the number of days away. Extractive stays local.</p>
+      </details>
 
       <div class="api-fields" id="api-fields"{% if form.llm_backend == "extractive" %} hidden{% endif %}>
         <div id="api-auth-fields"{% if form.llm_backend not in ["api", "anthropic"] %} hidden{% endif %}>
@@ -556,7 +572,8 @@
     const raw = weights.map(weight => 100 * weight / sum);
     const allocated = raw.map(weight => Math.max(1, Math.floor(weight)));
     let difference = 100 - allocated.reduce((a, b) => a + b, 0);
-    const order = raw.map((weight, index) => ({index, fraction: weight % 1})).sort((a, b) => b.fraction - a.fraction || a.index - b.index);
+    // A forced 1% minimum has already received its rounding point.
+    const order = raw.map((weight, index) => ({index, fraction: weight - allocated[index]})).sort((a, b) => b.fraction - a.fraction || a.index - b.index);
     for (let i = 0; difference > 0; i++, difference--) allocated[order[i % count].index]++;
     // Very small legacy weights can require the 1% floor. Remove those
     // extra points from the most overallocated remaining interests.
@@ -592,7 +609,7 @@
     const originalFacetName = detail.previous_name || name;
     if (detail.previous_name) row.dataset.correctedFrom = detail.previous_name;
     // This markup is constant; reader text is assigned through .value only.
-    row.innerHTML = '<div class="interest-heading"><label>Interest<input data-interest-name type="text" required maxlength="160" placeholder="e.g. targeted protein degradation"></label><label>Priority %<input data-interest-weight type="number" min="1" max="100" step="1" required></label><button class="btn" type="button">Remove</button></div><details><summary>Search details (optional)</summary><label>Alternative search terms, separated by semicolons<input data-interest-aliases type="text" placeholder="targeted protein degradation; PROTAC; molecular glue"></label><label>What would make a paper useful?<textarea data-interest-description maxlength="600" placeholder="e.g. New degrader designs and transferable methods; basic signaling is lower priority."></textarea></label></details>';
+    row.innerHTML = '<div class="interest-heading"><label>Interest<input data-interest-name type="text" required maxlength="160" placeholder="e.g. battery materials or galaxy formation"></label><label>Priority %<input data-interest-weight type="number" min="1" max="100" step="1" required></label><button class="btn" type="button">Remove</button></div><details><summary>Matching &amp; terminology (optional)</summary><label>What would make a paper useful?<textarea data-interest-description maxlength="600" placeholder="e.g. Explain mechanisms and compare methods; include introductory reviews for concepts I am learning."></textarea></label><p class="hint">This description guides ranking within this topic. Mention useful methods, applications or background; topic names and alternative terms guide searches.</p><label>Alternative search terms, separated by semicolons<input data-interest-aliases type="text" placeholder="Other names or established abbreviations for this topic"></label></details>';
     const number = ++rowSequence;
     for (const [selector, label] of [['[data-interest-name]', 'Research topic'], ['[data-interest-weight]', 'Priority percentage'], ['[data-interest-aliases]', 'Alternative terms'], ['[data-interest-description]', 'Useful paper description']]) {
       row.querySelector(selector).setAttribute('aria-label', `${label} ${number}`);
@@ -603,7 +620,13 @@
     row.querySelector('[data-interest-weight]').value = weight;
     row.querySelector('[data-interest-aliases]').value = (detail.aliases || []).join('; ');
     row.querySelector('[data-interest-description]').value = detail.description || '';
-    row.querySelector('button').addEventListener('click', () => { row.remove(); if (!rows.children.length) addRow(); distribute(false); });
+    row.querySelector('button').addEventListener('click', () => {
+      const next = row.nextElementSibling || row.previousElementSibling;
+      row.remove();
+      if (!rows.children.length) { weightsEdited = false; addRow(); }
+      distribute(!weightsEdited);
+      (next || rows.firstElementChild).querySelector('[data-interest-name]').focus();
+    });
     const aliasInput = row.querySelector('[data-interest-aliases]');
     const variantActions = document.createElement('div'); variantActions.className = 'interest-actions';
     const variantStatus = document.createElement('p'); variantStatus.className = 'hint'; variantStatus.setAttribute('aria-live', 'polite');
@@ -634,7 +657,7 @@
     const spelling = document.createElement('div'); spelling.className = 'interest-spelling';
     const spellingActions = document.createElement('div'); spellingActions.className = 'interest-actions';
     const spellingStatus = document.createElement('p'); spellingStatus.className = 'hint'; spellingStatus.setAttribute('aria-live', 'polite');
-    const check = document.createElement('button'); check.type = 'button'; check.className = 'btn'; check.dataset.checkWording = ''; check.textContent = 'Check wording'; check.disabled = checkingWording;
+    const check = document.createElement('button'); check.type = 'button'; check.className = 'btn'; check.dataset.checkWording = ''; check.textContent = 'Check spelling in PubMed'; check.disabled = checkingWording;
     const accept = document.createElement('button'); accept.type = 'button'; accept.className = 'btn'; accept.textContent = 'Use suggestion'; accept.hidden = true;
     const dismiss = document.createElement('button'); dismiss.type = 'button'; dismiss.className = 'btn'; dismiss.textContent = 'Keep wording'; dismiss.hidden = true;
     spellingActions.append(check, accept, dismiss); spelling.append(spellingActions, spellingStatus); row.querySelector('details').append(spelling);
@@ -648,7 +671,7 @@
       if (!original) { spellingStatus.textContent = 'Enter an interest first.'; nameInput.focus(); return; }
       checkingWording = true;
       rows.querySelectorAll('[data-check-wording]').forEach(button => { button.disabled = true; });
-      spellingStatus.textContent = 'Checking this interest’s spelling…';
+      spellingStatus.textContent = 'Checking this interest’s spelling in PubMed…';
       try {
         const response = await fetch('/setup/check-wording?' + new URLSearchParams({topic: original}), {
           method: 'POST', headers: {'X-CSRF-Token': topics.form.querySelector('[name="_csrf_token"]').value},
@@ -689,6 +712,8 @@
     const weights = configured.map(row => row.weight);
     // Keep invalid submitted percentages visible on a validation error.
     const converted = {{ 'true' if errors and form.topic_weight_mode | default('') == 'percentage' else 'false' }} ? weights : percentages(weights);
+    const equalShares = percentages(weights.map(() => 1));
+    weightsEdited = converted.some((weight, index) => weight !== equalShares[index]);
     rows.replaceChildren();
     configured.forEach((row, index) => addRow(row.name, converted[index], metadata[row.name] || {}));
     if (!configured.length) addRow();
@@ -713,7 +738,7 @@
     serialize();
   }
   document.getElementById('normalize-interests').addEventListener('click', () => distribute(false));
-  document.getElementById('even-interests').addEventListener('click', () => distribute(true));
+  document.getElementById('even-interests').addEventListener('click', () => { weightsEdited = false; distribute(true); });
   topics.form.addEventListener('submit', event => {
     serialize();
     if (!topics.form.checkValidity()) { event.preventDefault(); topics.form.reportValidity(); }
@@ -737,7 +762,7 @@
   const timezoneInput = document.getElementById("user-timezone");
   try {
     const browserTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-    if (timezoneInput && browserTimezone) timezoneInput.value = browserTimezone;
+    if (timezoneInput?.dataset.detectTimezone === "true" && browserTimezone) timezoneInput.value = browserTimezone;
   } catch (_) {}
 
   function makeChipInput(wrapId, textId, hiddenId) {
@@ -754,7 +779,10 @@
 	        c.type = "button";
 	        c.textContent = val + " ✕";
 	        c.setAttribute("aria-label", `Remove ${val}`);
-	        c.addEventListener("click", () => { chips.splice(idx, 1); render(); });
+	        c.addEventListener("click", () => {
+            chips.splice(idx, 1); render();
+            (wrap.querySelectorAll('.chip')[idx] || text).focus();
+          });
 	        wrap.insertBefore(c, text);
       });
       hidden.value = chips.join(",");
@@ -798,6 +826,10 @@
     if (event.target.closest('#add-interest, #even-interests, #normalize-interests, .interest-heading button, .chip')) markUnsaved();
   });
   settingsForm.addEventListener("invalid", (event) => {
+    if (event.target.matches('[data-interest-weight]')) {
+      priorities.open = true;
+      showPriorities();
+    }
     for (let node = event.target.parentElement; node && node !== settingsForm; node = node.parentElement) {
       if (node.tagName === "DETAILS") node.open = true;
       if (node.hidden) node.hidden = false;
