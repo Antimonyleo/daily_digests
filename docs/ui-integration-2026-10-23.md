@@ -168,3 +168,15 @@ cup check and screenshot. It retains the 30-second timeout, full-page capture,
 font waiting, reduced-motion assertions and all 51 scenarios. Ten fresh Chrome
 155 processes passed this gate with screenshots taken before Python readiness
 (180–1347 ms per capture). No application code changed for this test correction.
+
+A later unsupported-file-picker gate exposed an earlier startup interval: the
+static HTML allowed a header click before the deferred app module bound any
+handlers. A controlled module hold reproduced a normal Backup click being lost;
+after loading, the fallback text was correct but its dialog remained closed.
+Backup, Guide and Data now start disabled and become enabled immediately after
+their early-intent handlers bind, before CPU preparation or Python startup.
+The existing disabled styling supplies the visual state without new labels.
+Three additional real-browser cases hold module loading, verify all three
+controls are disabled, then verify they accept their normal action while CPU
+preparation is held and preserve it through preparation. The original twelve
+Guide/backup scenarios, including the failing unsupported-picker case, remain.

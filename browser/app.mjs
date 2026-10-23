@@ -482,6 +482,9 @@ async function boot() {
   document.getElementById('open-backup').onclick = () => openDataSection('backup');
   document.getElementById('open-guide').onclick = () => openDataSection('guide');
   document.getElementById('backup-reminder-open').onclick = () => openDataSection('backup');
+  for (const id of ['open-backup', 'open-guide', 'open-data-settings']) {
+    document.getElementById(id).disabled = false;
+  }
   const topicDraftForm = document.getElementById('startup-topics-form');
   const topicDraft = document.getElementById('startup-topics');
   const topicDraftKey = `dailydigest:startup-topics:${location.pathname}`;

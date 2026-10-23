@@ -73,6 +73,48 @@ async function waitForCopy(page, expected) {
   assert.fail('The automatic file copy did not match the committed full export.');
 }
 try {
+ for(const section of ['backup','guide','data']){
+  const loading=await context();
+  await loading.addInitScript(()=>{window.showSaveFilePicker=undefined;});
+  let releaseModule,requestedModule;
+  const moduleRequested=new Promise(resolve=>{requestedModule=resolve;});
+  const moduleGate=new Promise(resolve=>{releaseModule=resolve;});
+  await loading.route(base+'app.mjs*',async route=>{
+    const response=await route.fetch();let source=await response.text();
+    const marker='cpuStartup = await prepareDefaultCPU(';
+    assert.equal(source.split(marker).length,2);
+    source=source.replace(marker,"if(!sessionStorage.getItem('__moduleCPUReleased')){window.__moduleCPUHeld=true;await new Promise(resolve=>{window.__releaseModuleCPU=()=>{sessionStorage.setItem('__moduleCPUReleased','true');resolve();};});} "+marker);
+    requestedModule();await moduleGate;
+    return route.fulfill({response,body:source});
+  });
+  const loadingPage=await newPage(loading);
+  try{
+    await loadingPage.goto(base+'#/setup',{waitUntil:'commit'});
+    await moduleRequested;
+    for(const id of ['open-backup','open-guide','open-data-settings']){
+      const button=loadingPage.locator('#'+id);await button.waitFor();
+      assert.equal(await button.isDisabled(),true,'Visible startup controls must not accept clicks before their handlers bind');
+      assert.equal(await button.evaluate(node=>node.onclick),null);
+    }
+    assert.equal(await loadingPage.evaluate(()=>window.__workers),0);
+    // A normal action waits for the control to become usable; no forced click.
+    const click=loadingPage.locator(section==='backup'?'#open-backup':section==='guide'?'#open-guide':'#open-data-settings').click();
+    releaseModule();
+    await loadingPage.waitForFunction(()=>window.__moduleCPUHeld===true);
+    await click;
+    for(const id of ['open-backup','open-guide','open-data-settings'])assert.equal(await loadingPage.locator('#'+id).isEnabled(),true);
+    assert.equal(await loadingPage.evaluate(()=>window.__workers),0,'Header controls must work before Python starts');
+    assert.equal(await loadingPage.locator('#status').textContent(),section==='backup'?'Opening backup…':section==='guide'?'Opening guide…':'Opening device settings…');
+    await loadingPage.evaluate(()=>window.__releaseModuleCPU());
+    if(section==='guide')await loadingPage.locator('#quick-guide').waitFor();
+    else{
+      await loadingPage.locator('#data-settings').waitFor();
+      assert.equal(await loadingPage.locator('#browser-data-menu').getAttribute('open'),section==='backup'?'':null);
+      if(section==='backup')await loadingPage.locator('#linked-backup-status').filter({hasText:'Download backup and Restore backup'}).waitFor();
+    }
+    report.checks.push(`Module-loading ${section} control waits for handler binding, accepts intent before Python and survives CPU preparation`);
+  }finally{releaseModule();await loading.close();}
+ }
  for(const {reload,last} of [{reload:false,last:'data'},{reload:true,last:'backup'},{reload:true,last:'guide'}]){
   const early=await context();
   await early.addInitScript(()=>{window.showSaveFilePicker=undefined;});
