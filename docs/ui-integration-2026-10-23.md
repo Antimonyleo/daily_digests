@@ -155,3 +155,16 @@ and existing-topic editors at 1280, 390 and 320 px. Before the fix, all four mob
 cases failed the column-width assertion (90 px versus 196/126 px available);
 afterward all six passed, alongside the original 18 Settings scenarios. The
 affected reading-page suite also passed all 12 checks, including dark mode.
+
+Two CI attempts at `f0f240e` passed every preceding release gate, but the first
+diagnostic startup screenshot timed out before the 51-scenario suite could run.
+The same revision passed all 51 scenarios and all 5 semantic checks locally on
+Chrome 155. A separate capture probe reproduced a screenshot protocol failure
+once in ten attempts; all ten applications still reached Settings without page
+errors. CPU isolation can automatically reload the page before Worker creation,
+so capturing before that boundary races document navigation. The verifier now
+waits for its already-instrumented actual app Worker before the existing visible
+cup check and screenshot. It retains the 30-second timeout, full-page capture,
+font waiting, reduced-motion assertions and all 51 scenarios. Ten fresh Chrome
+155 processes passed this gate with screenshots taken before Python readiness
+(180–1347 ms per capture). No application code changed for this test correction.

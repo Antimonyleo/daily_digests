@@ -468,6 +468,9 @@ let itemId;
 try {
   await page.goto(base + '#/setup');
   initialReady = Boolean(await check('startup-and-deep-setup', async () => {
+    // CPU preparation may reload this document. The actual worker starts after
+    // that boundary, while Python is still loading and the warming UI is visible.
+    await page.waitForFunction(() => Boolean(window.__appWorker));
     await page.locator('#startup .tea-cup').waitFor({ state: 'visible' });
     await page.screenshot({ path: `${output}/warming-kettle.png`, fullPage: true });
     await page.emulateMedia({ reducedMotion: 'reduce' });
