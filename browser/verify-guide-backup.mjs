@@ -73,6 +73,76 @@ async function waitForCopy(page, expected) {
   assert.fail('The automatic file copy did not match the committed full export.');
 }
 try {
+ for(const {reload,last} of [{reload:false,last:'data'},{reload:true,last:'backup'},{reload:true,last:'guide'}]){
+  const early=await context();
+  await early.addInitScript(()=>{window.showSaveFilePicker=undefined;});
+  await early.route(base+'__early-seed__',route=>route.fulfill({contentType:'text/html',body:'<title>Isolated early-action fixture</title>'}));
+  await early.route(base+'app.mjs*',async route=>{
+    const response=await route.fetch();let source=await response.text();
+    const marker='cpuStartup = await prepareDefaultCPU(';
+    assert.equal(source.split(marker).length,2,'The CPU-preparation gate must instrument exactly one production call');
+    source=source.replace(marker,"if(!sessionStorage.getItem('__guideForcedReload')){window.__guideCPUHeld=true; await new Promise(resolve=>{window.__guideReleaseCPU=resolve;});} "+marker);
+    if(reload){
+      const boundary='isolationRequested = cpuStartup.isolate;';
+      assert.equal(source.split(boundary).length,2);
+      source=source.replace(boundary,"if(!sessionStorage.getItem('__guideForcedReload')){sessionStorage.setItem('__guideForcedReload','true');cpuStartup.reload=true;} "+boundary);
+    }
+    return route.fulfill({response,body:source});
+  });
+  const earlyPage=await newPage(early);
+  try {
+    await earlyPage.goto(base+'__early-seed__');
+    await earlyPage.evaluate(async()=>{
+      const request=indexedDB.open('dailydigest:/daily_digests/',1);
+      request.onupgradeneeded=()=>request.result.createObjectStore('state');
+      const database=await new Promise(resolve=>{request.onsuccess=()=>resolve(request.result);});
+      await new Promise(resolve=>{const transaction=database.transaction('state','readwrite');transaction.objectStore('state').put('cpu','compute');transaction.oncomplete=resolve;});database.close();
+    });
+    await earlyPage.goto(base+'#/setup');
+    await earlyPage.waitForFunction(()=>window.__guideCPUHeld===true);
+    assert.equal(await earlyPage.evaluate(()=>window.__workers),0);
+    await earlyPage.locator('#open-backup').click();
+    assert.equal(await earlyPage.locator('#status').textContent(),'Opening backup…','Visible Backup must acknowledge its action while CPU preparation is pending');
+    assert.equal(await earlyPage.locator('#data-settings').evaluate(node=>node.open),false,'Controls must be bound before exposing the dialog');
+    await earlyPage.locator('#open-guide').click();
+    assert.equal(await earlyPage.locator('#status').textContent(),'Opening guide…');
+    assert.equal(await earlyPage.locator('#quick-guide').isVisible(),false);
+    await earlyPage.locator('#open-data-settings').click();
+    assert.equal(await earlyPage.locator('#status').textContent(),'Opening device settings…');
+    if(last!=='data')await earlyPage.locator(last==='guide'?'#open-guide':'#open-backup').click();
+    await earlyPage.evaluate(()=>window.__guideReleaseCPU());
+    if(last==='guide'){
+      await earlyPage.locator('#quick-guide').waitFor();
+      assert.equal(await earlyPage.locator('#data-settings').evaluate(node=>node.open),false);
+      await earlyPage.locator('#close-guide').click();
+      await earlyPage.locator('#open-backup').click();
+    }else{
+      await earlyPage.locator('#data-settings').waitFor();
+      assert.equal(await earlyPage.locator('#data-settings').evaluate(node=>node.open),true);
+      assert.equal(await earlyPage.locator('#browser-data-menu').getAttribute('open'),last==='backup'?'':null,'The latest queued action must win');
+    }
+    assert.equal(await earlyPage.evaluate(()=>sessionStorage.getItem('dailydigest:startup-data-intent:'+location.pathname)),null);
+    assert.equal(await earlyPage.locator('#import').evaluate(node=>typeof node.onchange),'function');
+    if(last==='data'){
+      await earlyPage.locator('#close-data-settings').click();
+      await earlyPage.locator('#open-backup').click();
+    }
+    await earlyPage.locator('#linked-backup-status').filter({hasText:'Download backup and Restore backup'}).waitFor();
+    await earlyPage.locator('#close-data-settings').click();
+    await earlyPage.locator('#open-data-settings').click();
+    await earlyPage.locator('#compute-menu > summary').click();
+    assert.equal(await earlyPage.locator('#compute-menu').getAttribute('open'),'');
+    await earlyPage.locator('#close-data-settings').click();
+    if(reload){
+      assert.equal(await earlyPage.evaluate(()=>sessionStorage.getItem('__guideForcedReload')),'true');
+      await earlyPage.reload();
+      await earlyPage.waitForFunction(()=>document.getElementById('linked-backup-status').textContent.includes('Download backup and Restore backup'));
+      assert.equal(await earlyPage.locator('#data-settings').evaluate(node=>node.open),false,'Consumed startup intent must not reopen Backup on a later reload');
+      assert.equal(await earlyPage.locator('#quick-guide').isVisible(),false,'Consumed Guide intent must not replay on a later reload');
+    }
+    report.checks.push(`Early Backup/Guide/Data clicks acknowledge immediately; latest ${last} opens fully bound ${reload?'across the automatic CPU reload exactly once':'after held CPU preparation without Python readiness'}`);
+  } finally { await early.close(); }
+ }
   const owner=await context(),page=await newPage(owner);
   await page.goto(base+'#/setup');
   await page.locator('#welcome-guide').waitFor();

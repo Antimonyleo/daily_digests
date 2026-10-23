@@ -120,3 +120,13 @@ DOMContentLoaded runs pass 10/10 cases, including 16 touch positions and 144 lea
 points per run, with real leaf clicks. No forced clicks or arbitrary waits were
 added. The native interaction module passes 39 tests. Full final CI remains a
 mandatory deployment gate.
+
+The next exact-commit CI run passed Pip and daily reading, then exposed an early
+startup navigation race: visible header buttons could be clicked while CPU
+preparation still awaited, before their modal handlers were bound. An automatic
+CPU startup reload could also discard that click. Backup, Guide and Data & compute
+now acknowledge the latest request immediately and replay it after handlers bind;
+only the section name is retained in tab storage when that reload is necessary.
+It is cleared after use. Held-CPU and actual-reload tests verify all three entries,
+latest-action coalescing and one-time consumption. All 12 Guide/backup cases and
+all 259 browser unit tests passed locally after the fix.

@@ -454,6 +454,34 @@ async function boot() {
   const status = document.getElementById('status');
   const startupStatus = document.getElementById('startup-status');
   let ready = false, companionBackends = [], themeObserver, restoringBackup = false;
+  const dataSettings = document.getElementById('data-settings');
+  const startupDataIntentKey = `dailydigest:startup-data-intent:${location.pathname}`;
+  let dataControlsReady = false, pendingDataSection = null;
+  try {
+    const section = sessionStorage.getItem(startupDataIntentKey);
+    if (['backup', 'data', 'guide'].includes(section)) pendingDataSection = section;
+  } catch { /* An ordinary startup still works without tab storage. */ }
+  function openDataSection(section) {
+    if (!dataControlsReady) {
+      pendingDataSection = section;
+      status.textContent = section === 'backup' ? 'Opening backup…' : section === 'guide' ? 'Opening guide…' : 'Opening device settings…';
+      document.getElementById('announcements').textContent = status.textContent;
+      return;
+    }
+    pendingDataSection = null;
+    try { sessionStorage.removeItem(startupDataIntentKey); } catch { /* Optional startup intent. */ }
+    if (section === 'guide') { guide.open(); return; }
+    if (!dataSettings.open) dataSettings.showModal();
+    if (section === 'data') return;
+    const menu = document.getElementById(section === 'backup' ? 'browser-data-menu' : `${section}-menu`);
+    menu.open = true;
+    menu.scrollIntoView({block:'nearest'});
+  }
+  document.getElementById('open-data-settings').onclick = () => openDataSection('data');
+  document.getElementById('close-data-settings').onclick = () => dataSettings.close();
+  document.getElementById('open-backup').onclick = () => openDataSection('backup');
+  document.getElementById('open-guide').onclick = () => openDataSection('guide');
+  document.getElementById('backup-reminder-open').onclick = () => openDataSection('backup');
   const topicDraftForm = document.getElementById('startup-topics-form');
   const topicDraft = document.getElementById('startup-topics');
   const topicDraftKey = `dailydigest:startup-topics:${location.pathname}`;
@@ -571,7 +599,10 @@ async function boot() {
       register: registerWorker});
   } catch { /* Storage-restricted browsers retain their existing CPU path. */ }
   isolationRequested = cpuStartup.isolate;
-  if (cpuStartup.reload) { location.reload(); return; }
+  if (cpuStartup.reload) {
+    try { if (pendingDataSection) sessionStorage.setItem(startupDataIntentKey, pendingDataSection); } catch { /* Tab storage is optional. */ }
+    location.reload(); return;
+  }
   if ('serviceWorker' in navigator) registerWorker(isolationRequested)
     .catch(error => { setStatus(`App shortcut unavailable: ${error.message}`); });
   let token = crypto.randomUUID();
@@ -743,22 +774,11 @@ async function boot() {
   document.querySelector('.companion-command').textContent = `dd companion --allowed-origin ${location.origin}`;
   const companionEndpoint = document.getElementById('companion-endpoint');
   const companionToken = document.getElementById('companion-token');
-  const dataSettings = document.getElementById('data-settings');
-  function openDataSection(section) {
-    if (!dataSettings.open) dataSettings.showModal();
-    const menu = document.getElementById(section === 'backup' ? 'browser-data-menu' : `${section}-menu`);
-    menu.open = true;
-    menu.scrollIntoView({block:'nearest'});
-  }
   const guideKey = `dailydigest:guide:${location.pathname}`;
   const guide = initializeQuickGuide({document,
     hasSeen: () => { try { return localStorage.getItem(guideKey) === 'seen'; } catch { return false; } },
     remember: () => { try { localStorage.setItem(guideKey, 'seen'); } catch { /* optional guide history */ } },
     openSection:openDataSection, restore:() => document.getElementById('import').click()});
-  document.getElementById('open-data-settings').onclick = () => { dataSettings.showModal(); };
-  document.getElementById('close-data-settings').onclick = () => dataSettings.close();
-  document.getElementById('open-backup').onclick = () => openDataSection('backup');
-  document.getElementById('backup-reminder-open').onclick = () => openDataSection('backup');
   const linkedBackup = createLinkedBackup(linkedBackupStore(indexedDB, `dailydigest:backup-file:${new URL('.', import.meta.url).pathname}`));
   const linkedStatus = document.getElementById('linked-backup-status');
   const automaticBackup = document.getElementById('automatic-backup');
@@ -1406,6 +1426,8 @@ async function boot() {
   };
   document.getElementById('reading-view-open').onclick = () => startRuntime(readingViewRoute(preview));
   document.getElementById('reading-view-brew').onclick = () => startRuntime('/run');
+  dataControlsReady = true;
+  if (pendingDataSection) openDataSection(pendingDataSection);
   // Read one small derived record, never the full database or vector cache.
   // Unavailable browser storage falls back to the existing startup/recovery path.
   let preview;
