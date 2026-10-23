@@ -169,6 +169,8 @@ function mountPip(root, { digestId, notes = [] } = {}) {
   if (teaDialog && typeof window.ResizeObserver !== "undefined") {
     bubbleObserver = new window.ResizeObserver(fitPipBubble);
     bubbleObserver.observe(teaDialog);
+    if (teaPet) bubbleObserver.observe(teaPet);
+    if (teaButton) bubbleObserver.observe(teaButton);
   }
   if (pipDock.addEventListener) pipDock.addEventListener("change", restorePipPosition, { signal: controller.signal });
   window.addEventListener("resize", restorePipPosition, { signal: controller.signal });

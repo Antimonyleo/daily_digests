@@ -20,6 +20,10 @@ os.chdir(sys.argv[2])
 Path('data').mkdir()
 Path('data/profile.yaml').write_text('name: Fictional reader\\nbio: Research\\nkeywords: []\\ndownweight: []\\n')
 from dailydigest import web
+from dailydigest.tea_break import TEA_NOTE_BANK
+failed_joke=next(note for note in TEA_NOTE_BANK if 'The assay was robust right up until' in note)
+long_note=max(TEA_NOTE_BANK,key=len)
+web.daily_tea_deck=lambda day: (failed_joke,long_note,failed_joke,*TEA_NOTE_BANK[:12])
 web.templates.env.loader = FileSystemLoader(str(Path(sys.argv[1])/'templates'))
 request=Request({'type':'http','method':'GET','path':'/','query_string':b'',
  'headers':[(b'host',b'pip.test')],'scheme':'http','server':('pip.test',80),'client':('test',1)})
@@ -50,7 +54,9 @@ try {
   });
   const page = await context.newPage();
   page.on('pageerror', error => report.errors.push(String(error)));
-  await page.goto('http://pip.test/');
+  await page.goto('http://pip.test/',{waitUntil:process.env.DAILYDIGEST_PIP_FONT_READY==='false'?'domcontentloaded':'load'});
+  report.fontStateAtLoad=await page.evaluate(()=>document.fonts.status);
+  if(process.env.DAILYDIGEST_PIP_FONT_READY!=='false')await page.evaluate(()=>document.fonts.ready);
   const pet = page.locator('#tea-pet'), note = page.locator('#tea-note-text');
   const start = await page.locator('#tea-break').boundingBox();
   assert.equal(await note.isVisible(), false, 'Pip starts as a quiet cup');
@@ -106,16 +112,31 @@ try {
     assert.equal(await pet.getAttribute('role'), 'button');
     assert.equal(await note.isVisible(), true);
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
-    const beforeTouch=await pet.boundingBox(),currentNote=await note.innerText();
+    const beforeTouch=await page.locator('#tea-pet .pet-cup').boundingBox(),currentNote=await note.innerText();
+    (report.touchStarts||=[]).push(await pet.evaluate(node=>{
+      const pet=node.getBoundingClientRect(),cup=node.querySelector('.pet-cup').getBoundingClientRect();
+      const target=(box,x,y)=>{const hit=document.elementFromPoint(box.x+box.width*x,box.y+box.height*y);return{id:hit?.id,className:hit?.className,isCup:node.contains(hit)};};
+      return{wholePetCenter:target(pet,.5,.5),visibleCupCenter:target(cup,.5,.5),visibleCupGrip:target(cup,.25,.5)};
+    }));
+    assert.equal(report.touchStarts.at(-1).visibleCupGrip.isCup,true,JSON.stringify(report.touchStarts.at(-1)));
     const touch=await context.newCDPSession(page);
-    await touch.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x:beforeTouch.x+beforeTouch.width/2,y:beforeTouch.y+beforeTouch.height/2}]});
+    await touch.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x:beforeTouch.x+beforeTouch.width*.25,y:beforeTouch.y+beforeTouch.height/2}]});
     await touch.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:20,y:200}]});
+    assert.equal(await page.locator('#tea-break').evaluate(node=>node.classList.contains('is-dragging')),true);
     assert.equal(await note.isVisible(),true,'Touch dragging also retains the current note');
     assert.equal(await note.innerText(),currentNote);
     const bubble=await page.locator('.tea-dialog').boundingBox();
     assert.ok(bubble.x>=7 && bubble.y>=7 && bubble.x+bubble.width<=width-7);
     await touch.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
     await touch.detach();
+    const hit=await page.locator('#tea-another').evaluate(button=>{
+      const leaf=button.getBoundingClientRect(),dialog=document.querySelector('.tea-dialog').getBoundingClientRect();
+      const target=document.elementFromPoint(leaf.x+leaf.width/2,leaf.y+leaf.height/2);
+      return{width:innerWidth,leaf:leaf.toJSON(),dialog:dialog.toJSON(),style:document.querySelector('.tea-dialog').getAttribute('style'),target:target?.id||target?.className,clickable:button.contains(target),overlap:dialog.left<leaf.right&&dialog.right>leaf.left&&dialog.top<leaf.bottom&&dialog.bottom>leaf.top};
+    });
+    (report.leafHits||=[]).push(hit);
+    assert.equal(hit.clickable,true,JSON.stringify(hit));
+    assert.equal(hit.overlap,false,'The dialog must leave the entire leaf target clear: '+JSON.stringify(hit));
     await page.locator('#tea-another').click();
     await page.screenshot({path: resolve(output, `mobile-${width}.png`)});
   }
@@ -208,6 +229,50 @@ try {
   await openDisplay(); await page.locator('#pip-toggle').click();
   assert.equal(await page.locator('#tea-break').isVisible(), true);
   report.checks.push('Compact view respects the real Pip visibility toggle and restores its saved hidden preference');
+  report.dragHitTargets=[];
+  await page.keyboard.press('Escape');
+  for(const motion of ['reduce','no-preference'])for(const width of [390,320]){
+    await page.emulateMedia({reducedMotion:motion});
+    await page.setViewportSize({width,height:844});
+    await page.evaluate(({width,motion})=>{
+      const notes=JSON.parse(document.querySelector('#reading-personalization').textContent).notes;
+      const digestId=`hit-target-${width}-${motion}`;
+      localStorage.removeItem('dailydigest-tea-leaves:'+digestId);
+      localStorage.setItem('dailydigest-pip-chat','open');
+      mountPip(document.querySelector('#tea-break'),{digestId,notes});
+    },{width,motion});
+    await page.locator('#tea-pet .pet-cup').click({trial:true,position:{x:8,y:16}});
+    const touch=await context.newCDPSession(page);
+    for(const [index,point] of [{x:width/2,y:200},{x:width/2,y:270},{x:45,y:700},{x:width-45,y:110}].entries()){
+      const grip=await pet.evaluate(node=>{
+        const box=node.querySelector('.pet-cup').getBoundingClientRect(),x=box.x+box.width*.25,y=box.y+box.height/2,target=document.elementFromPoint(x,y);
+        return{x,y,isCup:node.contains(target),target:target?.className};
+      }),currentNote=await note.innerText();
+      assert.equal(grip.isCup,true,JSON.stringify({width,motion,point,grip}));
+      await touch.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x:grip.x,y:grip.y}]});
+      await touch.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[point]});
+      const dragState=await page.locator('#tea-break').evaluate(node=>({dragging:node.classList.contains('is-dragging'),rect:node.getBoundingClientRect().toJSON()}));
+      assert.equal(dragState.dragging,true,JSON.stringify({width,motion,point,grip,dragState}));
+      assert.equal(await note.isVisible(),true);
+      assert.equal(await note.innerText(),currentNote);
+      await touch.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+      const hit=await page.locator('#tea-another').evaluate(button=>{
+        const leaf=button.getBoundingClientRect(),dialog=document.querySelector('.tea-dialog').getBoundingClientRect();
+        const hits=[.2,.5,.8].flatMap(x=>[.2,.5,.8].map(y=>{const target=document.elementFromPoint(leaf.x+leaf.width*x,leaf.y+leaf.height*y);return button.contains(target);}));
+        return{leaf:leaf.toJSON(),dialog:dialog.toJSON(),hits,rootTransition:getComputedStyle(document.querySelector('#tea-break')).transitionProperty,dialogTransition:getComputedStyle(document.querySelector('.tea-dialog')).transitionProperty,overlap:dialog.left<leaf.right&&dialog.right>leaf.left&&dialog.top<leaf.bottom&&dialog.bottom>leaf.top};
+      });
+      report.dragHitTargets.push({width,motion,point,...hit});
+      assert.equal(hit.rootTransition,'none');assert.equal(hit.dialogTransition,'none');
+      assert.equal(hit.hits.every(Boolean),true,JSON.stringify(report.dragHitTargets.at(-1)));
+      assert.equal(hit.overlap,false,JSON.stringify(report.dragHitTargets.at(-1)));
+      if(index%2===1){
+        await page.locator('#tea-another').click();
+        await page.waitForFunction(()=>!document.querySelector('#tea-another').hasAttribute('aria-disabled'));
+      }
+    }
+    await touch.detach();
+  }
+  report.checks.push('Long supplied notes leave all nine leaf hit points clear after real touch moves at390/320px with reduced and normal motion; real leaf clicks advance normally');
   assert.deepEqual(report.errors, []);
   report.success = true;
 } catch (error) {

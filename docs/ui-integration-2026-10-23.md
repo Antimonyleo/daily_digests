@@ -106,3 +106,17 @@ and the reading/Saved page checks. The shared Pip counter now uses the configure
 digest day on Settings/Saved as on Digest, rather than browser UTC; its regression
 and the full Settings interface module passed 31 tests. Final packaged-source
 verification found 108 matches and no changes in the 43 algorithm modules.
+
+The first publication attempt passed exact-commit native/unit CI but was blocked
+by a real mobile Pip click failure. A short note could remain over the leaf after
+responsive movement. The reduced-motion reset unintentionally gave positioning
+containers a tiny transition, and bubble fitting observed only note dimensions.
+The follow-up scopes `transition-property: none` to Pip's positioning root and
+bubble, and observes cup/leaf sizes too. Authored descendant animations remain.
+
+The deterministic regression uses the failed supplied joke and longest bank
+note, real visible-cup grips and active-drag assertions. Both font-ready and fresh
+DOMContentLoaded runs pass 10/10 cases, including 16 touch positions and 144 leaf hit
+points per run, with real leaf clicks. No forced clicks or arbitrary waits were
+added. The native interaction module passes 39 tests. Full final CI remains a
+mandatory deployment gate.
