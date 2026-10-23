@@ -35,6 +35,8 @@ let companionProviderIdentity = 'a'.repeat(64);
 let companionSummaryMarker = 'Mock API A summary';
 let providerSnapshotSequence = 0;
 const browser = await chromium.launch({ executablePath: process.env.CHROME_PATH || '/usr/bin/google-chrome', headless: true, args: ['--no-sandbox', '--enable-experimental-webassembly-jspi'] });
+report.browserVersion = browser.version();
+console.log(JSON.stringify({browserVersion:report.browserVersion}));
 const context = await browser.newContext({ viewport: { width: 1360, height: 900 }, acceptDownloads: true });
 let sourceMode = 'success';
 let pendingSlowSource;
@@ -253,9 +255,17 @@ async function check(name, work) {
     console.log(JSON.stringify({ check: name, passed: true, evidence }));
     return evidence;
   } catch (error) {
-    const pageState = await page.evaluate(() => ({ status: document.getElementById('status')?.textContent, hash: location.hash, text: document.querySelector('#app')?.contentDocument?.body?.innerText })).catch(() => null);
+    const pageState = await page.evaluate(() => {
+      const iframe=document.querySelector('#app'),doc=iframe?.contentDocument;
+      const describe=node=>node?{tag:node.tagName,id:node.id,type:node.type,role:node.getAttribute('role'),label:node.getAttribute('aria-label')}:null;
+      return {status:document.getElementById('status')?.textContent,hash:location.hash,text:doc?.body?.innerText,
+        focus:{outer:describe(document.activeElement),reading:describe(doc?.activeElement),frameInert:iframe?.inert,
+          frameHidden:iframe?.hidden,dataSettingsOpen:document.querySelector('#data-settings')?.open,
+          openDialogs:[...document.querySelectorAll('dialog[open]')].map(node=>node.id),
+          openReadingGroups:[...doc?.querySelectorAll('details[open]')||[]].map(node=>node.id||node.className)}};
+    }).catch(() => null);
     report.checks.push({ name, passed: false, elapsedMs: Math.round(performance.now() - started), error: error.stack, pageState });
-    console.log(JSON.stringify({ check: name, passed: false, error: error.message }));
+    console.log(JSON.stringify({ check: name, passed: false, error: error.message, stack:error.stack, focus:pageState?.focus }));
     await page.screenshot({ path: `${output}/failure-${name.replace(/[^a-z0-9]/gi, '-')}.png`, fullPage: true }).catch(() => {});
     return null;
   } finally {
@@ -1233,7 +1243,7 @@ try {
       await rejectedNavigation;
       assert.deepEqual(discardedDraftPrompts.slice(promptsBefore), [false]);
       assert.equal(await page.evaluate(() => location.hash), draftHash);
-      assert.equal(await page.evaluate(() => document.querySelector('#app').contentDocument === window.__retainedDraftDocument), true);
+      assert.equal(await page.evaluate(() => document.querySelector('#app').contentDocument === window.__retainedDraftDocument), true,'Rejecting draft navigation retains the same Settings document');
       assert.equal(await draftRow.locator('[data-interest-name]').inputValue(), 'Unsaved draft navigation sample');
       assert.deepEqual((await snapshot()).files, draftSnapshot.files);
       acceptDiscardedDraft = true;
@@ -1257,18 +1267,20 @@ try {
     const companionBox = await page.locator('#companion-menu .data-tools').boundingBox();
     assert.ok(companionBox.x >= 0 && companionBox.x + companionBox.width <= 390, JSON.stringify(companionBox));
     await page.locator('#companion-menu > summary').press('Escape');
-    assert.equal(await frame().locator('[data-interest-weight]').first().isVisible(), true);
+    assert.equal(await frame().locator('[data-interest-weight]').first().isVisible(), true,'390px: inline topic priority remains visible after Companion Escape');
     const firstRow=frame().locator('.interest-row').first();
     await editInterest(firstRow);
     await firstRow.locator('[data-interest-name]').focus(); await page.keyboard.press('Tab');
-    assert.equal(await firstRow.locator('[data-interest-weight]').evaluate(node => node === document.activeElement), true);
+    assert.equal(await firstRow.locator('[data-interest-weight]').evaluate(node => node === document.activeElement), true,'390px: Tab from topic name focuses its inline percentage');
     await page.keyboard.press('Tab');
-    assert.equal(await firstRow.locator('[data-interest-edit]').evaluate(node => node === document.activeElement), true);
+    assert.equal(await firstRow.locator('[data-interest-edit]').evaluate(node => node === document.activeElement), true,'390px: Tab from inline percentage focuses Edit');
     await firstRow.locator('[data-interest-done]').click();
     await firstRow.locator('[data-interest-edit]').press('Enter');
-    assert.equal(await firstRow.locator('[data-interest-name]').isVisible(),true);
+    assert.equal(await firstRow.locator('[data-interest-name]').isVisible(),true,'390px: Enter on Edit reopens the topic-name editor');
     await frame().locator('#priority-options > summary').focus(); await page.keyboard.press('Enter');
-    assert.equal(await frame().locator('#normalize-interests').isVisible(),true);
+    // Native details dispatches toggle after Enter; that handler reveals these controls.
+    await frame().locator('#normalize-interests').waitFor({state:'visible'});
+    assert.equal(await frame().locator('#normalize-interests').isVisible(),true,'390px: Enter on Balance priorities reveals Normalize');
     await page.screenshot({ path: `${output}/mobile-setup.png`, fullPage: true });
     await page.setViewportSize({ width: 320, height: 720 });
     const narrow = await page.evaluate(() => {
@@ -1279,13 +1291,13 @@ try {
     await frame().locator('#author-settings > summary').focus(); await page.keyboard.press('Enter');
     assert.notEqual(await frame().locator('#author-settings').getAttribute('open'), null);
     await frame().locator('#authors_of_interest').focus(); await page.keyboard.press('Tab');
-    assert.equal(await frame().locator('#author-settings .settings-help>summary').evaluate(node=>node===document.activeElement),true);
+    assert.equal(await frame().locator('#author-settings .settings-help>summary').evaluate(node=>node===document.activeElement),true,'320px: Tab from followed researchers focuses its Help disclosure');
     await frame().locator('#advanced-interests > summary').focus(); await page.keyboard.press('Enter');
     assert.notEqual(await frame().locator('#advanced-interests').getAttribute('open'), null);
     await frame().locator('#seed_works').focus(); await page.keyboard.press('Tab');
-    assert.equal(await frame().locator('#context_keywords').evaluate(node => node === document.activeElement), true);
+    assert.equal(await frame().locator('#context_keywords').evaluate(node => node === document.activeElement), true,'320px: Tab from paper examples focuses background interests');
     await frame().locator('.settings-actions button[type="submit"]').focus();
-    assert.equal(await frame().locator('.settings-actions button[type="submit"]').evaluate(node => node === document.activeElement), true);
+    assert.equal(await frame().locator('.settings-actions button[type="submit"]').evaluate(node => node === document.activeElement), true,'320px: Save settings accepts keyboard focus');
     await page.screenshot({path:`${output}/mobile-320-settings.png`,fullPage:true});
     await page.setViewportSize({ width: 1280, height: 900 });
     const zoomed = await page.evaluate(() => {

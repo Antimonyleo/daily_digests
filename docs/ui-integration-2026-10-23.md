@@ -130,3 +130,13 @@ only the section name is retained in tab storage when that reload is necessary.
 It is cleared after use. Held-CPU and actual-reload tests verify all three entries,
 latest-action coalescing and one-time consumption. All 12 Guide/backup cases and
 all 259 browser unit tests passed locally after the fix.
+
+The remaining CI keyboard failure was reproduced with CI's Chrome 155.0.8059.39;
+local Chrome 152 passed the same 51 scenarios. Enter opened Balance priorities, but
+the native queued `toggle` event had not yet added its visibility class when the
+test made an immediate `isVisible` check. The event arrived 15.8 ms later and the
+control displayed correctly. The verifier now waits for actual visibility before
+the unchanged assertion, with the same 30-second deadline. All 51 scenarios remain.
+The exact 155 mobile sequence passed 20 consecutive runs after this test-only fix;
+product behavior was unchanged. Diagnostics now include browser version, named
+assertions, stack and focus state so any future CI failure is directly locatable.
