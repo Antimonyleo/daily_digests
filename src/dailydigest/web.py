@@ -2286,7 +2286,9 @@ async def setup_post(request: Request) -> Response:
     reload_settings()
     globals()["SETTINGS"] = get_settings()
 
-    response = RedirectResponse(url="/run", status_code=303)
+    after_save = str(raw.get("after_save", ""))
+    destination = {"brew": "/run?reading_mode=usual&autostart=1", "save": "/"}.get(after_save, "/run")
+    response = RedirectResponse(url=destination, status_code=303)
     response.headers["Cache-Control"] = "no-store"
     return response
 

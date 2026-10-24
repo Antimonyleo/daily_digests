@@ -128,6 +128,31 @@ def test_plain_interests_default_to_equal_weights_and_explicit_weights_survive()
     assert _parse_ranked_topics("RNA | nope")[1]
 
 
+@pytest.mark.parametrize("action,destination", [
+    ("brew", "/run?reading_mode=usual&autostart=1"),
+    ("save", "/"),
+    ("", "/run"),
+    ("https://untrusted.example/", "/run"),
+])
+def test_setup_action_has_one_explicit_destination_and_never_starts_during_save(
+    monkeypatch, tmp_path, action, destination,
+):
+    from dailydigest import web
+
+    profile = tmp_path / "profile.yaml"
+    monkeypatch.setattr(web, "_get_profile_path", lambda: profile)
+    monkeypatch.setattr(web, "_ENV_PATH", tmp_path / ".env")
+    monkeypatch.setattr(web, "_kick_off_run", lambda *args: pytest.fail("Saving must not start a brew"))
+    response = asyncio.run(web.setup_post(_request("POST", "/setup", form={
+        "_csrf_token": web._CSRF_TOKEN, "topics": "DNA origami assembly",
+        "llm_backend": "extractive", "after_save": action,
+    })))
+    assert response.status_code == 303
+    assert response.headers["location"] == destination
+    assert response.headers["cache-control"] == "no-store"
+    assert yaml.safe_load(profile.read_text())["keywords"] == ["DNA origami assembly"]
+
+
 @pytest.mark.parametrize("weights", ["RNA delivery | 40\nProtein design | 50", "RNA delivery | 60\nProtein design | 50", "RNA delivery | 49.5\nProtein design | 50.5"])
 def test_percentage_editor_rejects_invalid_totals_without_writing(monkeypatch, tmp_path, weights):
     from dailydigest import web
@@ -230,6 +255,10 @@ def test_browser_validation_reveals_nested_closed_details():
         }};
         const document = {querySelector: () => form, getElementById: () => ({})};
         const priorities = {open: false};
+        let singlePriorityReveals = 0;
+        const editor = {classList: {remove(name) {
+            assert.equal(name, 'single-topic'); singlePriorityReveals++;
+        }}};
         let priorityReveals = 0;
         const showPriorities = () => { priorityReveals++; };
     ''' + script + '''
@@ -243,6 +272,7 @@ def test_browser_validation_reveals_nested_closed_details():
         invalid({target: {matches: selector => selector === '[data-interest-weight]', parentElement: form}});
         assert.equal(priorities.open, true);
         assert.equal(priorityReveals, 1, 'Priority CSS must update synchronously before native focus');
+        assert.equal(singlePriorityReveals, 1, 'An invalid single priority must become focusable');
     '''], capture_output=True, text=True, timeout=10)
     assert result.returncode == 0, json.dumps(result.stderr)
 

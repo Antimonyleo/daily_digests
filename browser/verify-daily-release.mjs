@@ -134,17 +134,33 @@ async function advance(page,advanceMs){
 const cardFor=(frame,paper)=>frame().locator('.item[data-section="research"]').filter({has:frame().locator('.title-link').filter({hasText:paper.title})});
 
 export async function beforeDesk({browser,base,report,out}){
- const context=await browser.newContext({timezoneId:'America/Phoenix',serviceWorkers:'block'});
+ const context=await browser.newContext({timezoneId:'America/Phoenix',serviceWorkers:'block',viewport:{width:390,height:844}});
  const errors=[],external=[];
- await context.route('**/*',route=>{
-  if(route.request().url().startsWith(base))return route.continue();
+ await context.route('**/*',async route=>{
+  if(route.request().url().startsWith(base)){
+   if(new URL(route.request().url()).pathname.endsWith('/worker.mjs')){
+    const response=await route.fetch();let source=await response.text();
+    const boundary='self.onmessage = async ({ data }) => {';
+    assert.equal(source.split(boundary).length,2);
+    source=source.replace(boundary,boundary+`
+      if(data.type==='request' && data.method==='POST' && data.path?.split('?')[0]==='/run/start'){
+        self.postMessage({type:'first-brew-request',body:data.body});
+        self.postMessage(response(data.id,JSON.stringify({detail:'Controlled first-brew transport probe'}),503));
+        return;
+      }
+    `);
+    return route.fulfill({response,body:source});
+   }
+   return route.continue();
+  }
   external.push(route.request().url());return route.abort();
  });
  const page=await context.newPage();
  page.on('pageerror',error=>errors.push(error.message));
  await page.addInitScript(()=>{
   const Native=Worker;
-  window.Worker=class extends Native{constructor(...args){super(...args);this.addEventListener('message',({data})=>{if(data.type==='ready')window.__ready=true;});}};
+  window.__firstBrewRequests=[];
+  window.Worker=class extends Native{constructor(...args){super(...args);this.addEventListener('message',({data})=>{if(data.type==='ready')window.__ready=true;if(data.type==='first-brew-request')window.__firstBrewRequests.push(JSON.parse(data.body));});}};
  });
  try{
   await page.goto(base+'__seed__');
@@ -166,8 +182,17 @@ export async function beforeDesk({browser,base,report,out}){
   const frame=page.frameLocator('#app');
   await frame.locator('#interest-editor').waitFor();
   assert.deepEqual(await frame.locator('[data-interest-name]').evaluateAll(nodes=>nodes.map(node=>node.value)),['DNA origami assembly','Protein design']);
+  const primary=frame.getByRole('button',{name:'Brew',exact:true});
+  const box=await primary.boundingBox();
+  const footer=await page.locator('.browser-bar').boundingBox();
+  assert.ok(box.y+box.height<=844-footer.height,'The first Brew action must fit above the phone toolbar');
+  assert.ok((await page.locator('#welcome-guide').boundingBox()).height<=56,'Getting-started shortcuts must fit one compact row');
+  await primary.click();
+  await page.waitForFunction(()=>window.__firstBrewRequests.length===1,{},{timeout:30000});
+  assert.equal(await page.evaluate(()=>window.__firstBrewRequests[0].reading_mode),'usual');
+  assert.equal(await page.evaluate(()=>window.__firstBrewRequests.length),1);
   assert.deepEqual(errors,[]);assert.deepEqual(external,[]);
-  const check={name:'first-visit-topic-entry',passed:true,firstInteractiveMs,runtimeAndSetupReadyMs:performance.now()-started,topicDraftTransferred:true};
+  const check={name:'first-visit-topic-entry',passed:true,firstInteractiveMs,runtimeAndSetupReadyMs:performance.now()-started,topicDraftTransferred:true,oneActionStandardBrew:true,startIntercepted:true};
   report.checks.push(check);console.log(JSON.stringify(check));
   await writeFile(out+'/report.json',JSON.stringify(report,null,2));
  }finally{await context.close();}
@@ -184,7 +209,7 @@ export async function beforeMatrix({page,frame,route,record,report}){
   if(await sections.getAttribute('open')===null)await sections.locator(':scope>summary').click();
   await setting().check();
   await frame().locator('form[action="/setup"] button[type="submit"]').click();
-  await frame().locator('#brew-button').waitFor();
+  await frame().locator('#digest-date').waitFor();
   await page.reload();await page.waitForFunction(()=>window.__ready,undefined,{timeout:120000});
   await route('/setup','#interest-editor');
   assert.equal(await setting().isChecked(),true,'The explicit setting must survive reload');

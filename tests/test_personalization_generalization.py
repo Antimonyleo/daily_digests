@@ -286,6 +286,7 @@ function row(name, raw, displayed) {
 const children = [row('A','0.1','1'), row('B','100','99')];
 const rows = {children, querySelectorAll: key => children.map(row => row.querySelector(key))};
 const topics = {value:''}, details = {value:''};
+const editor = {classList:{toggle(){}}};
 const controls = new Map();
 const document = {getElementById(id) {if (!controls.has(id)) controls.set(id, {}); return controls.get(id);}};
 let baselineFormState = null, weightsTouched = false, loadedCount = children.length, activeRow = null;

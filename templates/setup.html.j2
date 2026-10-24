@@ -170,13 +170,15 @@
   .settings-refined #interest-editor .interest-heading label.interest-name-field { display: block; }
   .settings-refined .interest-name-field { margin: 0; font-size: 13px; }
   .settings-refined .interest-name-field input { margin-top: 4px; }
-  .settings-refined .interest-heading > .interest-edit-button { grid-column: 3; grid-row: 1; justify-self: end; }
-  .settings-refined .interest-edit-button { padding: 8px 0; min-height: 40px; border: 0; background: transparent; color: var(--accent-strong); font-size: 14px; cursor: pointer; }
+  .settings-refined .interest-heading > :is(.interest-edit-button, .interest-remove-button) { grid-column: 3; grid-row: 1; justify-self: end; }
+  .settings-refined :is(.interest-edit-button, .interest-remove-button) { padding: 8px 0; min-height: 40px; border: 0; background: transparent; color: var(--accent-strong); font-size: 14px; cursor: pointer; }
+  .settings-refined .interest-heading:has(.interest-name-field:not([hidden])) > :is(.interest-weight-label, .interest-remove-button) { align-self: end; margin-bottom: 1px; }
+  .settings-refined #interest-editor.single-topic :is(.interest-list-head, .interest-weight-label, #priority-options, .priority-control) { display: none; }
+  .settings-refined #interest-editor.single-topic .interest-heading { grid-template-columns: minmax(0, 1fr) 48px; gap: 12px; }
+  .settings-refined #interest-editor.single-topic .interest-heading > button { grid-column: 2; }
   .settings-refined .interest-edit-panel { padding: 4px 0 16px; }
   .settings-refined .interest-edit-panel details { margin-top: 0; }
   .settings-refined .interest-edit-panel summary { font-size: 14px; min-height: 36px; padding: 7px 0; }
-  .settings-refined .interest-edit-actions { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
-  .settings-refined .interest-edit-actions [data-interest-remove] { margin-left: auto; }
   .settings-refined .interest-actions { margin-top: 12px; }
   .settings-refined #interest-total { color: var(--muted); font-size: 13px; }
   .settings-refined #priority-options { border: 0; padding: 0; margin: 0 0 0 auto; max-width: 100%; }
@@ -601,7 +603,7 @@
 
     <div class="settings-actions">
       <p class="hint" id="settings-save-status" role="status" aria-live="polite">{% if errors %}Changes have not been saved. Correct the highlighted fields.{% else %}Changes take effect after saving.{% endif %}</p>
-      <button class="brew" type="submit">Save settings and choose today’s digest</button>
+      <button class="brew" type="submit" name="after_save" value="{{ 'brew' if first_run | default(not form.topics) else 'save' }}">{{ 'Brew' if first_run | default(not form.topics) else 'Save changes' }}</button>
     </div>
   </form>
 </div>
@@ -613,6 +615,7 @@
   const details = document.getElementById("topic-details");
   const rows = document.getElementById("interest-rows");
   const editor = document.getElementById("interest-editor");
+  const firstUse = {{ 'true' if first_run | default(not form.topics) else 'false' }};
   let metadata = {};
   try { metadata = JSON.parse(details.value || "{}"); } catch (_) {}
   const spellingCache = new Map();
@@ -680,6 +683,7 @@
     const sum = inputs.reduce((total, input) => total + Number(input.value || 0), 0);
     const individuallyValid = inputs.every(input => Number.isInteger(Number(input.value)) && Number(input.value) >= 1 && Number(input.value) <= 101 - inputs.length);
     const valid = sum === 100 && individuallyValid;
+    editor.classList.toggle('single-topic', inputs.length === 1 && valid);
     const reminder = sum < 100 ? ` · ${100 - sum}% left to assign` : sum > 100 ? ` · ${sum - 100}% over` : ' · use whole percentages';
     document.getElementById('interest-total').textContent = valid ? '' : `Total: ${sum}%${reminder}`;
     inputs.forEach(input => { input.max = String(101 - inputs.length); input.setCustomValidity(''); });
@@ -710,6 +714,8 @@
     row.querySelector('[data-interest-title]').hidden = false;
     row.querySelector('.interest-edit-panel').hidden = true;
     row.querySelector('[data-interest-edit]').setAttribute('aria-expanded', 'false');
+    row.querySelector('[data-interest-edit]').hidden = false;
+    row.querySelector('[data-interest-remove]').hidden = true;
     if (activeRow === row) activeRow = null;
     delete row.creationSnapshot; serialize(); return true;
   }
@@ -721,9 +727,12 @@
     row.querySelector('[data-interest-title]').hidden = true;
     row.querySelector('.interest-edit-panel').hidden = false;
     row.querySelector('[data-interest-edit]').setAttribute('aria-expanded', 'true');
+    row.querySelector('[data-interest-edit]').hidden = true;
+    row.querySelector('[data-interest-remove]').hidden = false;
     if (focus) row.querySelector('[data-interest-name]').focus();
     return true;
   }
+  function forgetAdditionWeights() { [...rows.children].forEach(row => { delete row.additionSnapshot; }); }
   function commitPriority(input) {
     const value = Number(input.value), others = [...rows.querySelectorAll('[data-interest-weight]')].filter(field => field !== input);
     if (!Number.isInteger(value) || value < 1 || value > 100 - others.length || (!others.length && value !== 100)) { serialize(); return; }
@@ -735,7 +744,7 @@
     const originalFacetName = detail.previous_name || name;
     if (detail.previous_name) row.dataset.correctedFrom = detail.previous_name;
     // This markup is constant; reader text is assigned through .value only.
-    row.innerHTML = '<div class="interest-heading"><div><span class="interest-title" data-interest-title></span><label class="interest-name-field" hidden>Topic<input data-interest-name type="text" required maxlength="160" placeholder="e.g. battery materials or galaxy formation"></label></div><label class="interest-weight-label"><span class="sr-only">Priority percentage</span><span class="interest-weight-wrap"><input data-interest-weight type="number" min="1" max="100" step="1" required><span aria-hidden="true">%</span></span></label><button class="interest-edit-button" data-interest-edit type="button" aria-expanded="false">Edit</button></div><div class="interest-edit-panel" hidden><details class="topic-aliases"><summary>Other names (optional)</summary><label><span class="sr-only">Other names, one per line</span><textarea data-interest-aliases rows="2" maxlength="500" placeholder="e.g. quantum error correction&#10;QEC"></textarea></label><label class="saved-topic-focus" hidden>Saved focus<textarea data-interest-description maxlength="600"></textarea></label></details><div class="interest-edit-actions"><button class="btn" data-interest-done type="button">Done</button><button class="btn" data-interest-cancel type="button">Cancel</button><button class="btn" data-interest-remove type="button">Remove</button></div></div>';
+    row.innerHTML = '<div class="interest-heading"><div><span class="interest-title" data-interest-title></span><label class="interest-name-field" hidden>Topic<input data-interest-name type="text" required maxlength="160" placeholder="e.g. battery materials or galaxy formation"></label></div><label class="interest-weight-label"><span class="sr-only">Priority percentage</span><span class="interest-weight-wrap"><input data-interest-weight type="number" min="1" max="100" step="1" required><span aria-hidden="true">%</span></span></label><button class="interest-edit-button" data-interest-edit type="button" aria-expanded="false">Edit</button><button class="interest-remove-button" data-interest-remove type="button" hidden>Remove</button></div><div class="interest-edit-panel" hidden><details class="topic-aliases"><summary>Other names (optional)</summary><label><span class="sr-only">Other names, one per line</span><textarea data-interest-aliases rows="2" maxlength="500" placeholder="e.g. quantum error correction&#10;QEC"></textarea></label><label class="saved-topic-focus" hidden>Saved focus<textarea data-interest-description maxlength="600"></textarea></label></details></div>';
     const number = ++rowSequence;
     for (const [selector, label] of [['[data-interest-name]', 'Research topic'], ['[data-interest-weight]', 'Priority percentage'], ['[data-interest-aliases]', 'Other names']]) {
       row.querySelector(selector).setAttribute('aria-label', `${label} ${number}`);
@@ -750,10 +759,8 @@
       if (event.key === 'Enter') { event.preventDefault(); if (finishEditing(row)) editButton.focus(); }
       if (event.key === 'Escape') { event.preventDefault(); finishEditing(row, false); editButton.focus(); }
     });
-    row.querySelector('[data-interest-done]').addEventListener('click', () => { if (finishEditing(row)) editButton.focus(); });
-    row.querySelector('[data-interest-cancel]').addEventListener('click', () => { finishEditing(row, false); editButton.focus(); });
     const weightInput = row.querySelector('[data-interest-weight]');
-    weightInput.addEventListener('input', () => { weightsEdited = true; weightsTouched = true; });
+    weightInput.addEventListener('input', () => { forgetAdditionWeights(); weightsEdited = true; weightsTouched = true; });
     weightInput.addEventListener('change', () => commitPriority(weightInput));
     weightInput.addEventListener('keydown', event => { if (event.key === 'Enter') { event.preventDefault(); commitPriority(weightInput); } });
     row.querySelector('[data-interest-name]').value = name;
@@ -765,14 +772,20 @@
       row.querySelector('.topic-aliases > summary').textContent = 'More about this topic';
     }
     row.querySelector('[data-interest-remove]').addEventListener('click', () => {
+      const draft = row.additionSnapshot;
+      const restoreWeights = draft && draft.afterWeights.length === rows.children.length && draft.afterWeights.every(([item, value]) => item.isConnected && item.querySelector('[data-interest-weight]').value === value);
       const next = row.nextElementSibling || row.previousElementSibling;
       removedTopic = {row, next: row.nextElementSibling, weights: [...rows.children].map(item => [item, item.querySelector('[data-interest-weight]').value]), touched: weightsTouched, edited: weightsEdited};
       row.cancelSpelling(); row.remove(); activeRow = null; weightsTouched = true;
       document.getElementById('topic-undo').hidden = false;
       if (!rows.children.length) { weightsEdited = false; addRow(); removedTopic.placeholder = rows.lastElementChild; }
-      distribute(!weightsEdited);
+      if (restoreWeights) {
+        for (const [item, value] of draft.weights) item.querySelector('[data-interest-weight]').value = value;
+        weightsTouched = draft.touched; weightsEdited = draft.edited; serialize();
+      } else distribute(!weightsEdited);
       removedTopic.afterWeights = [...rows.children].map(item => [item, item.querySelector('[data-interest-weight]').value]);
-      (next || rows.firstElementChild).querySelector('[data-interest-edit]').focus();
+      const target = next || rows.firstElementChild;
+      target.querySelector(activeRow === target ? '[data-interest-name]' : '[data-interest-edit]').focus();
     });
     const nameInput = row.querySelector('[data-interest-name]');
     const spelling = document.createElement('div'); spelling.className = 'interest-spelling'; spelling.hidden = true;
@@ -863,8 +876,10 @@
     if (rows.children.length >= 10) return;
     if (activeRow && !finishEditing(activeRow)) return;
     const snapshot = {weights: [...rows.children].map(row => [row, row.querySelector('[data-interest-weight]').value]), touched: weightsTouched, edited: weightsEdited};
-    addRow('', 1); rows.lastElementChild.creationSnapshot = snapshot; weightsTouched = true;
-    distribute(!weightsEdited); beginEditing(rows.lastElementChild);
+    addRow('', 1); rows.lastElementChild.creationSnapshot = snapshot; rows.lastElementChild.additionSnapshot = snapshot; weightsTouched = true;
+    distribute(!weightsEdited);
+    snapshot.afterWeights = [...rows.children].map(item => [item, item.querySelector('[data-interest-weight]').value]);
+    beginEditing(rows.lastElementChild);
   });
   function distribute(even) {
     weightsTouched = true;
@@ -881,6 +896,7 @@
     if (!removedTopic) return;
     const saved = removedTopic;
     const unchanged = saved.afterWeights.length === rows.children.length && saved.afterWeights.every(([row, weight]) => row.isConnected && row.querySelector('[data-interest-weight]').value === weight);
+    if (activeRow === saved.placeholder) activeRow = null;
     saved.placeholder?.remove();
     rows.insertBefore(saved.row, saved.next?.isConnected ? saved.next : null);
     if (unchanged) {
@@ -894,10 +910,10 @@
     removedTopic = null; undoTopic.hidden = true;
     if (saved.row.querySelector('[data-interest-name]').value.trim()) finishEditing(saved.row);
     else beginEditing(saved.row, false);
-    serialize(); markUnsaved(); saved.row.querySelector('[data-interest-edit]').focus();
+    serialize(); markUnsaved(); saved.row.querySelector(activeRow === saved.row ? '[data-interest-name]' : '[data-interest-edit]').focus();
   });
-  document.getElementById('normalize-interests').addEventListener('click', () => distribute(false));
-  document.getElementById('even-interests').addEventListener('click', () => { weightsEdited = false; distribute(true); });
+  document.getElementById('normalize-interests').addEventListener('click', () => { forgetAdditionWeights(); distribute(false); });
+  document.getElementById('even-interests').addEventListener('click', () => { forgetAdditionWeights(); weightsEdited = false; distribute(true); });
   topics.form.addEventListener('submit', event => {
     if (activeRow && !finishEditing(activeRow)) { event.preventDefault(); return; }
     serialize();
@@ -984,7 +1000,7 @@
   const markUnsaved = () => {
     const dirty = baselineFormState !== null && formState() !== baselineFormState;
     settingsForm.dataset.dirty = String(dirty);
-    saveStatus.textContent = dirty ? 'Unsaved changes. Save to apply your settings.' : '';
+    saveStatus.textContent = dirty && !firstUse ? 'Unsaved changes.' : '';
   };
   settingsForm.addEventListener('input', markUnsaved);
   settingsForm.addEventListener('change', markUnsaved);
@@ -994,6 +1010,7 @@
   settingsForm.addEventListener("invalid", (event) => {
     if (event.target.matches('[data-interest-name]')) beginEditing(event.target.closest('.interest-row'), false);
     if (event.target.matches('[data-interest-weight]')) {
+      editor.classList.remove('single-topic');
       priorities.open = true;
       showPriorities();
     }
@@ -1168,6 +1185,7 @@
   topicHelpSummary.innerHTML = '<svg aria-hidden="true" viewBox="0 0 20 20"><circle cx="10" cy="10" r="7.5"></circle><path d="M7.8 7.5a2.3 2.3 0 0 1 4.5.5c0 1.7-2.3 1.8-2.3 3.4M10 13.3v1"></path></svg>';
   const topicHelpBody = document.createElement('div'); topicHelpBody.className = 'settings-topic-help-body';
   for (const node of [...searchTips.children]) if (node !== topicHelpSummary) topicHelpBody.append(node);
+  topicHelpBody.append(document.getElementById('browser-storage-note'));
   searchTips.append(topicHelpBody);
   searchTips.addEventListener('pointerenter', event => { if (event.pointerType === 'mouse') searchTips.open = true; });
   searchTips.addEventListener('pointerleave', () => { if (!searchTips.contains(document.activeElement)) searchTips.open = false; });
@@ -1209,12 +1227,19 @@
   const profileGroup = document.getElementById('profile-options'); profileGroup.classList.add('settings-row');
   profileGroup.querySelector('summary').replaceChildren(...labelWithValue('Research context', ''));
   profileGroup.querySelector('summary').title = 'Your current goal, name and topics to see less often.';
-  if (!{{ 'true' if first_run | default(not form.topics) else 'false' }}) {
-    const bio = document.getElementById('bio'); profileGroup.querySelector('summary').after(document.querySelector('label[for="bio"]'), bio, document.getElementById('bio-hint'));
-  }
+  const bio = document.getElementById('bio'); profileGroup.querySelector('summary').after(document.querySelector('label[for="bio"]'), bio, document.getElementById('bio-hint'));
   const actions = document.querySelector('.settings-actions');
-  actions.querySelector('button[type="submit"]').textContent = 'Save settings';
+  actions.querySelector('button[type="submit"]').textContent = firstUse ? 'Brew' : 'Save changes';
   actions.before(sectionGroup, summaryGroup, authorGroup, advanced, profileGroup);
+  const examples = document.querySelector('.example-start');
+  if (examples) {
+    const choice = document.createElement('details'); choice.id = 'profile-examples'; choice.className = 'settings-help';
+    const heading = document.createElement('summary'); heading.textContent = 'Use an example'; choice.append(heading);
+    examples.before(choice); choice.append(examples);
+    examples.querySelector('label').textContent = 'Field';
+    document.getElementById('example-profile-note').hidden = true;
+  }
+  if (firstUse) { document.querySelector('.lede').textContent = 'Add a research topic to get started.'; topicStep.after(actions); }
   if ({{ 'true' if errors else 'false' }}) for (const group of [sectionGroup, authorGroup, advanced, profileGroup, summaryGroup]) group.open = true;
   function updateSettingsSummaries() {
     const enabled = [...document.querySelectorAll('input[role="switch"]')].filter(toggle => toggle.checked).length + 1;
@@ -1230,7 +1255,7 @@
   settingsForm.addEventListener('input', updateSettingsSummaries); settingsForm.addEventListener('change', updateSettingsSummaries); updateSettingsSummaries();
   document.querySelectorAll('#browser-storage-note button').forEach(button => button.classList.add('btn'));
   const firstFields = [...settingsForm.elements].filter(field => field.name && !field.matches('[data-interest-name], [data-interest-weight], [data-interest-aliases], [data-interest-description]')).map(field => ({field, value: field.value, checked: field.checked}));
-  const cancelChanges = document.createElement('button'); cancelChanges.type = 'button'; cancelChanges.id = 'cancel-settings'; cancelChanges.className = 'btn'; cancelChanges.textContent = 'Cancel changes'; actions.append(cancelChanges);
+  const cancelChanges = document.createElement('button'); cancelChanges.type = 'button'; cancelChanges.id = 'cancel-settings'; cancelChanges.className = 'btn'; cancelChanges.textContent = 'Reset changes'; cancelChanges.hidden = firstUse; actions.append(cancelChanges);
   cancelChanges.addEventListener('click', () => {
     for (const {field, value, checked} of firstFields) { field.value = value; if (typeof checked === 'boolean') field.checked = checked; }
     loadRows(); removedTopic = null; undoTopic.hidden = true; resetDownweight();

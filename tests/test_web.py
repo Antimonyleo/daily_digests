@@ -2742,7 +2742,7 @@ def test_setup_and_completion_pages_use_time_neutral_copy(monkeypatch, tmp_path)
         web.done(_request("GET", "/done"), digest_id="2026-08-10", n=3)
     )
 
-    assert "Save settings and choose today’s digest" in setup
+    assert "Save changes" in setup
     assert "Your digest is ready" in complete
     assert "morning cup" not in (setup + complete).lower()
 

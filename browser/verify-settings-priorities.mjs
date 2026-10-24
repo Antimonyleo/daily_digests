@@ -117,6 +117,66 @@ async function check(name, fixture, run, width = 1280) {
 }
 
 try {
+  for (const width of [1280, 390, 320]) {
+    await check('first-use-one-commit-and-no-single-priority', 'empty', async ({page, submissions}) => {
+      const row = page.locator('.interest-row').first();
+      assert.equal(await row.locator('[data-interest-weight]').isVisible(), false);
+      assert.equal(await row.locator('[data-interest-done], [data-interest-cancel]').count(), 0);
+      assert.equal(await page.locator('#priority-options').isVisible(), false);
+      assert.equal(await page.getByRole('button', {name: 'Brew', exact: true}).count(), 1);
+      const input = row.locator('[data-interest-name]');
+      await input.fill('DNA origami assembly');
+      const button = page.getByRole('button', {name: 'Brew', exact: true});
+      await page.evaluate(() => scrollTo(0, 0));
+      const box = await button.boundingBox();
+      assert.ok(box.y + box.height <= 740, 'The primary first-use action must fit the phone first view');
+      await page.screenshot({path: resolve(output, `first-use-${width}.png`)});
+      await button.click();await page.getByText('Fictional settings submitted').waitFor();
+      assert.equal(submissions[0].get('after_save'), 'brew');
+      assert.match(submissions[0].get('topics'), /^DNA origami assembly \|/);
+    }, width);
+  }
+  await check('single-priority-restores-after-discarding-new-blank', 'legacy', async ({page}) => {
+    await page.locator('#add-interest').click();
+    await page.getByRole('button', {name:'Remove research topic 3', exact:true}).click();
+    assert.equal(await page.locator('#topics').inputValue(), fixtures.legacy);
+    assert.equal(await page.locator('#topic-weight-mode').inputValue(), 'relative');
+    assert.equal(await page.locator('button[type="submit"]').innerText(), 'Save changes');
+    assert.equal(await page.locator('[data-interest-weight]:visible').count(), 2);
+    await page.locator('#topic-undo button').click();
+    assert.equal(await page.locator('[data-interest-name]').last().evaluate(node => node === node.ownerDocument.activeElement), true, 'Undoing a blank topic must focus its editable name');
+  });
+  await check('draft-removal-preserves-raw-weights-and-undo', 'legacy', async ({page}) => {
+    await page.locator('#add-interest').click();
+    await page.locator('[data-interest-name]').last().fill('Protein design');
+    await page.locator('[data-interest-name]').last().press('Enter');
+    await page.getByRole('button', {name:'Edit research topic 3',exact:true}).click();
+    await page.getByRole('button', {name:'Remove research topic 3',exact:true}).click();
+    assert.equal(await page.locator('#topics').inputValue(), fixtures.legacy);
+    assert.equal(await page.locator('#topic-weight-mode').inputValue(), 'relative');
+    await page.locator('#topic-undo button').click();
+    assert.equal(await page.locator('[data-interest-name]').last().inputValue(), 'Protein design');
+    assert.equal(await page.locator('#topic-weight-mode').inputValue(), 'percentage');
+  });
+  await check('draft-removal-keeps-explicit-priority-edits', 'legacy', async ({page}) => {
+    await page.locator('#add-interest').click();
+    await page.locator('[data-interest-weight]').first().fill('80');
+    await page.locator('[data-interest-weight]').first().press('Enter');
+    await page.getByRole('button', {name:'Remove research topic 3',exact:true}).click();
+    assert.equal(await page.locator('#topic-weight-mode').inputValue(), 'percentage');
+    assert.notEqual(await page.locator('#topics').inputValue(), fixtures.legacy);
+  });
+  await check('undo-last-empty-topic-restores-working-editor', 'empty', async ({page, submissions}) => {
+    await page.getByRole('button', {name:'Remove research topic 1',exact:true}).click();
+    await page.locator('#topic-undo button').click();
+    const name = page.locator('[data-interest-name]');
+    assert.equal(await name.count(),1);
+    assert.equal(await name.evaluate(node => node === node.ownerDocument.activeElement),true);
+    await name.fill('DNA origami assembly');
+    await page.getByRole('button',{name:'Brew',exact:true}).click();
+    await page.getByText('Fictional settings submitted').waitFor();
+    assert.match(submissions[0].get('topics'),/^DNA origami assembly \|/);
+  });
   await check('automatic-spelling-debounce-and-reader-control', 'custom', async ({page, wordingRequests}) => {
     await page.clock.install();
     await page.clock.runFor(1500);
@@ -207,7 +267,7 @@ try {
       assert.equal(await row.locator('[data-interest-description]').isVisible(), false);
       assert.equal(await row.locator('[data-interest-aliases]').isVisible(), false);
       await row.locator('[data-interest-name]').fill('induced provimity');
-      await row.locator('[data-interest-done]').click();
+      await row.locator('[data-interest-name]').press('Enter');
       await row.getByRole('button', {name: 'Use suggestion', exact: true}).waitFor();
       assert.equal(await row.locator('[data-interest-title]').innerText(), 'induced provimity');
       await row.getByRole('button', {name: 'Keep wording', exact: true}).click();
@@ -234,7 +294,7 @@ try {
         assert.ok(geometry.input >= 125, 'A mobile topic needs usable typing space');
         await page.screenshot({path: resolve(output, `topic-input-${fixture}-${width}.png`)});
         await input.fill('DNA origami lattice assembly');
-        await page.locator('[data-interest-done]').first().click();
+        await page.locator('[data-interest-name]').first().press('Enter');
         assert.equal(await page.locator('[data-interest-title]').first().innerText(), 'DNA origami lattice assembly');
         assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
         await page.screenshot({path: resolve(output, `topic-editor-${fixture}-${width}.png`)});
@@ -296,12 +356,12 @@ try {
     assert.equal(await page.locator('.interest-name-field').first().isVisible(), false);
     await page.getByRole('button', {name:'Edit research topic 1', exact:true}).click();
     await page.locator('[data-interest-name]').first().fill('Unsaved rename');
-    await page.locator('[data-interest-cancel]').first().click();
+    await page.locator('[data-interest-name]').first().press('Escape');
     assert.equal(await page.locator('[data-interest-title]').first().innerText(), 'Battery materials');
     assert.equal(await page.locator('form[action="/setup"]').getAttribute('data-dirty'), 'false');
     await page.locator('#add-interest').click();
     assert.equal(await page.locator('.interest-edit-panel:visible').count(), 1);
-    await page.locator('.interest-row').last().locator('[data-interest-cancel]').click();
+    await page.locator('.interest-row').last().locator('[data-interest-name]').press('Escape');
     assert.equal(await page.locator('.interest-row').count(), 2);
     assert.deepEqual(await weights(), [90, 10]);
     assert.equal(await page.locator('form[action="/setup"]').getAttribute('data-dirty'), 'false');
@@ -334,7 +394,7 @@ try {
   await check('topic-rename-preserves-origin', 'legacy', async ({page, submissions}) => {
     await page.getByRole('button', {name:'Edit research topic 1', exact:true}).click();
     await page.locator('[data-interest-name]').first().fill('RNA delivery platforms');
-    await page.locator('[data-interest-done]').first().click();
+    await page.locator('[data-interest-name]').first().press('Enter');
     await page.locator('button[type="submit"]').click();
     await page.getByText('Fictional settings submitted').waitFor();
     assert.equal(submissions[0].get('topics').replace(/\r\n/g, '\n'), 'RNA delivery platforms | 17.5\nHydrogels | 1');

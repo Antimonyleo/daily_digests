@@ -198,7 +198,7 @@ try {
   await page.locator('#close-data-settings').click();
   await page.reload();await ready(page);
   assert.equal(await page.locator('#welcome-guide').isHidden(),true);
-  await page.frameLocator('#app').locator('[data-browser-action="open-guide"]').click();
+  await page.locator('#open-guide').click();
   await page.locator('#quick-guide').waitFor();await page.locator('#close-guide').click();
   report.checks.push('first visit offers guide and restore; guide explains storage and reopens from Setup after dismissal');
 

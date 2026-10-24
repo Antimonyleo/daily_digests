@@ -480,7 +480,8 @@ try {
     const evidence = await startup();
     report.buildId = (await (await page.request.get(base + 'assets/build-manifest.json')).json()).build_id;
     await frame().locator('#interest-editor').waitFor();
-    await frame().locator('#browser-storage-note').waitFor({ state: 'visible' });
+    await frame().locator('#browser-storage-note').waitFor({ state: 'attached' });
+    assert.equal(await page.locator('#open-backup').isEnabled(), true);
     assert.match(await page.locator('#data-settings > .storage-location').textContent(), /Saved in this browser/);
     assert.ok((await page.locator('.browser-bar').boundingBox()).height <= 60);
     return evidence;
@@ -492,7 +493,7 @@ try {
       return {top:box.top,bottom:box.bottom,viewport:innerHeight};
     });
     assert.ok(interest.top >= 0 && interest.bottom <= interest.viewport, JSON.stringify(interest));
-    assert.equal(await frame().locator('[data-interest-weight]').first().isVisible(), true);
+    assert.equal(await frame().locator('[data-interest-weight]').first().isVisible(), false, 'A single topic has no priority decision');
     assert.equal(await frame().getByText('Back to today’s digest', {exact:true}).count(), 0);
     assert.equal(await frame().locator('input[id^="include_"]:checked').count(), 0);
     await frame().locator('[data-interest-name]').first().fill('DNA nanotechnology');
@@ -588,7 +589,7 @@ try {
     await toggleMenu('compute-menu');
     // A fresh Settings navigation explicitly discards this fictional draft.
     await route('/setup', '#interest-editor');
-    await frame().locator('[data-browser-action="open-guide"]').click();
+    await page.locator('#open-guide').click();
     await page.locator('#quick-guide').waitFor();
     await page.locator('#close-guide').click();
     const current = await page.evaluate(async () => JSON.parse((await window.__rpc({ type: 'compute-status' })).body));
@@ -623,6 +624,7 @@ try {
     const disciplines = [];
     for (const [discipline, count, topic] of [['biomolecular',10,'RNA nanotechnology'], ['engineering',4,'Battery materials'], ['chemistry',4,'Asymmetric catalysis'], ['ecology',4,'Biodiversity monitoring'], ['astronomy',4,'Exoplanet atmospheres']]) {
       if (disciplines.length) await route('/setup', '#interest-editor');
+      await frame().locator('#profile-examples > summary').click();
       await frame().locator('#example-discipline').selectOption(discipline);
       assert.equal(await topics.inputValue(), '', 'Choosing a discipline must not load or save it.');
       await frame().locator('#use-example-profile').click();
@@ -709,7 +711,7 @@ try {
     await assertPercentagesReady();
     assert.deepEqual((await snapshot()).files, before.files, 'Optional other names change only the unsaved form');
     assert.equal(spellingRequests.length, spellingBefore);
-    await row.locator('[data-interest-cancel]').click();
+    await row.locator('[data-interest-name]').press('Escape');
     assert.equal(await row.locator('[data-interest-aliases]').inputValue(), '');
     await route('/setup','#interest-editor');
     return {optionalOtherNames:true,noAutosave:true,noManualVariantControls:true,topicAndPercentagePreserved:true,cancelRestores:true};
@@ -778,8 +780,10 @@ try {
     await openSettingsGroup('advanced-interests');
     await frame().locator('#seed_works').fill('Fictional representative paper');
     await frame().locator('#context_keywords').fill('Fictional background topic');
-    await frame().locator('form[action="/setup"] button[type="submit"]').click();
-    await page.waitForFunction(() => location.hash.startsWith('#/run'));
+    // Exercise legacy save-only clients without a submitter. First-use Brew's
+    // one-click action is covered separately by verify-daily-release.mjs.
+    await frame().locator('form[action="/setup"]').evaluate(form => form.requestSubmit());
+    await page.waitForFunction(() => location.hash === '#/run');
     const saved = await snapshot();
     const parsed = spawnSync(new URL('../.venv/bin/python', import.meta.url).pathname,
       ['-c', 'import yaml,json,sys; print(json.dumps(yaml.safe_load(sys.stdin.read())))'],
@@ -896,7 +900,7 @@ try {
     await openSettingsGroup('profile-options');
     await frame().locator('#name').fill('Renamed reader');
     await frame().locator('form[action="/setup"] button[type="submit"]').click();
-    await page.waitForFunction(() => location.hash.startsWith('#/run'));
+    await page.waitForFunction(() => location.hash === '#/');
     const stored = await snapshot();
     const yaml = Buffer.from(stored.files['data/profile.yaml'], 'base64').toString();
     assert.match(yaml, /priority: 0\.1\b/);
@@ -1253,8 +1257,8 @@ try {
     await firstRow.locator('[data-interest-name]').focus(); await page.keyboard.press('Tab');
     assert.equal(await firstRow.locator('[data-interest-weight]').evaluate(node => node === document.activeElement), true,'390px: Tab from topic name focuses its inline percentage');
     await page.keyboard.press('Tab');
-    assert.equal(await firstRow.locator('[data-interest-edit]').evaluate(node => node === document.activeElement), true,'390px: Tab from inline percentage focuses Edit');
-    await firstRow.locator('[data-interest-done]').click();
+    assert.equal(await firstRow.locator('[data-interest-remove]').evaluate(node => node === document.activeElement), true,'390px: Tab from inline percentage focuses Remove');
+    await firstRow.locator('[data-interest-name]').press('Enter');
     await firstRow.locator('[data-interest-edit]').press('Enter');
     assert.equal(await firstRow.locator('[data-interest-name]').isVisible(),true,'390px: Enter on Edit reopens the topic-name editor');
     await frame().locator('#priority-options > summary').focus(); await page.keyboard.press('Enter');
@@ -1642,7 +1646,7 @@ try {
     await frame().locator('#llm_api_key').fill('');
     await frame().locator('#llm_model').fill('fictional-companion-model');
     await frame().locator('form[action="/setup"] button[type="submit"]').click();
-    await page.waitForFunction(() => document.querySelector('#app')?.contentWindow?.ddLocation?.startsWith('http://127.0.0.1:8765/run'));
+    await page.waitForFunction(() => document.querySelector('#app')?.contentWindow?.ddLocation === 'http://127.0.0.1:8765/');
     const configured = await snapshot();
     assert.match(Buffer.from(configured.files['.env'], 'base64').toString(), /LLM_BACKEND="?api"?/);
     const initialRequests = companionRequests.filter(row => row.path === '/summarize').length;
@@ -1673,7 +1677,7 @@ try {
     await openSettingsGroup('summary-options');
     await frame().locator('#summary-backend').selectOption('extractive');
     await frame().locator('form[action="/setup"] button[type="submit"]').click();
-    await page.waitForFunction(() => document.querySelector('#app')?.contentWindow?.ddLocation?.startsWith('http://127.0.0.1:8765/run'));
+    await page.waitForFunction(() => document.querySelector('#app')?.contentWindow?.ddLocation === 'http://127.0.0.1:8765/');
     const restored = await snapshot();
     assert.match(Buffer.from(restored.files['.env'], 'base64').toString(), /LLM_BACKEND="?extractive"?/);
     await openCompanionMenu();
