@@ -30,6 +30,11 @@ try{
   const context=await browser.newContext();
   await context.route('**/*',async route=>{
     const url=route.request().url();
+    if(url.split('?')[0]==='https://eutils.ncbi.nlm.nih.gov/entrez/eutils/espell.fcgi'){
+      assert.deepEqual(Object.fromEntries(new URL(url).searchParams),{db:'pubmed',term:'Unsaved topic draft'});
+      return route.fulfill({contentType:'application/xml',headers:{'access-control-allow-origin':'*'},
+        body:'<eSpellResult><CorrectedQuery/><ERROR/></eSpellResult>'});
+    }
     if(!url.startsWith(base)){report.blocked.push(new URL(url).hostname);return route.abort();}
     if(new URL(url).pathname.endsWith('/__seed__'))return route.fulfill({contentType:'text/html',body:'<title>Fictional test desk</title>'});
     if(new URL(url).pathname.endsWith('/worker.mjs')){
