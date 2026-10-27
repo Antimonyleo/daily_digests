@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html
+import json
 import re
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
@@ -24,13 +25,16 @@ _TAG_RE = re.compile(r"<[^>]+>")
     reraise=True,
 )
 def _post_json(url: str, payload: dict[str, Any]) -> dict:
+    # The API gateway rejects CORS preflight (OPTIONS returns 403), so a JSON
+    # content type blocks every browser brew. A text/plain body is a "simple"
+    # request that needs no preflight; the API parses it as JSON either way.
     with httpx.Client(timeout=30.0, follow_redirects=True) as client:
         response = client.post(
             url,
-            json=payload,
+            content=json.dumps(payload).encode(),
             headers={
                 "Accept": "application/json",
-                "Content-Type": "application/json",
+                "Content-Type": "text/plain;charset=UTF-8",
                 "User-Agent": "dailydigest/0.1",
             },
         )

@@ -20,7 +20,7 @@ const endpoint = spec => {
     case 'openalex_venues': return { url: 'https://api.openalex.org/works?' + new URLSearchParams({ filter: `primary_location.source.id:${spec.venue_ids[0]}`, 'per-page': '1' }) };
     case 'fda_api': return { url: 'https://api.fda.gov/' + spec.endpoint + '?limit=1&search=submissions.submission_status:AP' };
     case 'clinicaltrials': return { url: 'https://clinicaltrials.gov/api/v2/studies?pageSize=1&format=json' };
-    case 'grants_gov': return { url: 'https://api.grants.gov/v1/api/search2', method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ rows: 1, keyword: 'research', oppStatuses: 'forecasted|posted' }) };
+    case 'grants_gov': return { url: 'https://api.grants.gov/v1/api/search2', method: 'POST', headers: { 'Content-Type': 'text/plain;charset=UTF-8' }, body: JSON.stringify({ rows: 1, keyword: 'research', oppStatuses: 'forecasted|posted' }) };
     default: throw new Error('Unknown source kind: ' + spec.kind);
   }
 };
@@ -72,7 +72,7 @@ try {
   for (let i = 0; i < specs.length; i += 4) await Promise.all(specs.slice(i, i + 4).map(probe));
   for (const spec of supplementary) await probe(spec);
   const id = results.find(row => row.kind === 'grants_gov' && row.opportunityId)?.opportunityId;
-  if (id) await probe({ section: 'supplementary', name: 'Grants.gov official detail', kind: 'grants_gov', url: 'https://api.grants.gov/v1/api/fetchOpportunity', method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ opportunityId: id }) });
+  if (id) await probe({ section: 'supplementary', name: 'Grants.gov official detail', kind: 'grants_gov', url: 'https://api.grants.gov/v1/api/fetchOpportunity', method: 'POST', headers: { 'Content-Type': 'text/plain;charset=UTF-8' }, body: JSON.stringify({ opportunityId: id }) });
   const summary = {};
   for (const row of results) { summary[row.kind] ||= {}; summary[row.kind][row.outcome] = (summary[row.kind][row.outcome] || 0) + 1; }
   const configuredSummary = {};

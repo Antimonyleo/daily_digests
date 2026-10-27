@@ -635,6 +635,41 @@ def test_openalex_preserves_unrecognized_venue_metadata(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
+def test_grants_gov_post_needs_no_cors_preflight(monkeypatch):
+    # api.grants.gov answers OPTIONS with 403, so browsers block any request
+    # that would need a preflight. Only CORS-safelisted headers may be sent
+    # (browsers drop User-Agent themselves).
+    import json
+
+    import httpx
+
+    from dailydigest.ingest import grants_gov
+
+    seen = {}
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def post(self, url, **kwargs):
+            seen.update(kwargs)
+            return httpx.Response(200, json={"errorcode": 0},
+                                  request=httpx.Request("POST", url))
+
+    monkeypatch.setattr(grants_gov.httpx, "Client", FakeClient)
+    assert grants_gov._post_json(grants_gov.GrantsGovSource.SEARCH_URL, {"keyword": "RNA"}) == {"errorcode": 0}
+    assert "json" not in seen
+    assert json.loads(seen["content"]) == {"keyword": "RNA"}
+    assert seen["headers"]["Content-Type"] == "text/plain;charset=UTF-8"
+    assert {name.lower() for name in seen["headers"]} <= {"accept", "content-type", "user-agent"}
+
+
 @pytest.mark.parametrize("stage", ["search", "detail"])
 def test_grants_gov_missing_official_response_is_a_source_failure(monkeypatch, stage):
     from dailydigest.ingest.grants_gov import GrantsGovSource
