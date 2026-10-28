@@ -183,7 +183,7 @@
         </div>
       </fieldset>
       <p class="serving-note">Digest size controls how many picks you receive. Every size uses the same source coverage, quality checks and recommendation profile.</p>
-      <p class="serving-note" id="browser-compute-notice">Brewing uses processor and memory and may increase heat, fan noise and battery use. Keep this tab open. A large first browser brew can take 20 minutes or more; cached comparisons reduce later work.</p>
+      {% if browser_mode %}<p class="serving-note" id="browser-compute-notice">Brewing uses processor and memory and may increase heat, fan noise and battery use. Keep this tab open. A large first browser brew can take 20 minutes or more; cached comparisons reduce later work.</p>{% endif %}
       <button class="btn primary brew-button" id="brew-button" type="submit">Brew today’s digest</button>
     </form>
   </section>
@@ -195,7 +195,7 @@
     </div>
     <h1 id="brew-title">Brewing your cup of research</h1>
     <p class="brew-whisper" id="brew-whisper">Putting the kettle on. Your interests make this blend yours.</p>
-    <p class="lede">We’ll gather the sources, steep them in your interests, and serve your best matches. A first browser brew with thousands of new papers may take 20 minutes or more on one core. Cached brews can be much faster; total time depends on sources and your device.</p>
+    <p class="lede">We’ll gather the sources, steep them in your interests, and serve your best matches.{% if browser_mode %} A first browser brew with thousands of new papers may take 20 minutes or more on one core. Cached brews can be much faster; total time depends on sources and your device.{% endif %}</p>
 
     <section id="brew-preview" hidden aria-label="Provisional selected papers">
       <h2>Qualified papers taking shape</h2>
@@ -226,7 +226,7 @@
     <a class="btn retry" id="new-brew-link" href="{{ restart_url }}" hidden>Start a new brew</a>
     <button class="btn retry" id="cancel-button" type="button">Stop before publishing</button>
   </section>
-  <p><a href="{{ saved_reading_url }}">Read latest saved digest</a></p>
+  {% if has_saved_digest %}<p><a href="{{ saved_reading_url }}">Read latest saved digest</a></p>{% else %}<p><a href="/setup">Settings</a></p>{% endif %}
 </div>
 {% endblock %}
 {% block scripts %}
@@ -234,6 +234,7 @@
 (function () {
   const RUN_ID = {{ run_id|tojson }};
   const CSRF_TOKEN = {{ csrf_token|tojson }};
+  const HAS_SAVED_DIGEST = {{ has_saved_digest | default(false) | tojson }};
   const AUTOSTART = {{ autostart|tojson }};
   const RESUME = {{ resume|tojson }};
   const RESUME_URL = {{ resume_url|tojson }};
@@ -261,7 +262,7 @@
     computeCurrent.textContent = event.detail.message;
   });
   const friendlyStages = {ingestion: "Gathering the tea leaves from your sources…",
-    calibration: "Getting your blend ready…", profile_encoding: "Getting to know your research taste…",
+    calibration: "Getting your blend ready…", learned_profile: "Refreshing what your ratings taught us…", profile_encoding: "Getting to know your research taste…",
     deduplication: "Picking out repeated leaves…", ranking: "Letting your interests steep…",
     summary: "Preparing the highlights for your cup…", publication: "Saving your brew…", render: "Setting your reading desk…"};
 
@@ -306,9 +307,9 @@
     progressPanel.dataset.state = "paused";
     computeCurrent.hidden = true;
     document.getElementById("brew-title").textContent = reconnect ? "Let’s check on your brew" : "This brew needs attention";
-    whisper.textContent = "Your latest saved digest is still available below.";
+    whisper.textContent = HAS_SAVED_DIGEST ? "Your latest saved digest is still available below." : "Try again, or return to Settings.";
     errEl.hidden = false;
-    errEl.textContent = message;
+    errEl.textContent = /failed to fetch|networkerror|load failed/i.test(message) ? "Connection lost. Is the DailyDigest window still open? Reconnect to check your brew." : message;
     retryButton.hidden = reconnect;
     reconnectButton.hidden = !reconnect;
     newBrewLink.hidden = !reconnect;
@@ -330,7 +331,7 @@
       streamFailures += 1;
       if (es.readyState === EventSource.CLOSED || streamFailures >= 3) {
         es.close();
-        showError("Lost the brew status. The brew may still be running. Reconnect to check, or read your latest saved digest.", true);
+        showError("Lost the brew status. The brew may still be running. Reconnect to check." + (HAS_SAVED_DIGEST ? " Your latest saved digest is available below." : ""), true);
       }
     };
     es.onmessage = (event) => {
@@ -358,7 +359,7 @@
       if (stage === "stage_start" || stage === "stage_done") {
         if (stage === "stage_start" && friendlyStages[payload.name]) whisper.textContent = friendlyStages[payload.name];
         const names = {ingestion: "Fetching sources", calibration: "Loading feedback",
-          profile_encoding: "Understanding your interests", deduplication: "Merging repeated items",
+          learned_profile: "Refreshing your learned profile", profile_encoding: "Understanding your interests", deduplication: "Merging repeated items",
           ranking: "Ranking qualified candidates", summary: "Preparing summaries",
           publication: "Saving the digest", render: "Preparing the preview"};
         const name = names[payload.name] || payload.name;
@@ -436,8 +437,11 @@
         cancelButton.disabled = true;
         const digestId = encodeURIComponent(payload.digest_id || "");
         const count = payload.total_items || 0;
+        window.dispatchEvent(new CustomEvent('dd-brew-complete', {detail:{digestId:payload.digest_id}}));
         setTimeout(() => {
-          window.location.href = `/done?digest_id=${digestId}&n=${count}&preview_warning=${Boolean(payload.warnings && payload.warnings.length)}`;
+          window.location.href = payload.warnings?.length
+            ? `/done?digest_id=${digestId}&n=${count}&preview_warning=true`
+            : `/?digest_id=${digestId}`;
         }, 600);
       }
     };
@@ -464,7 +468,10 @@
         headers: { "Content-Type": "application/json", "X-CSRF-Token": CSRF_TOKEN },
         body: JSON.stringify({ run_id: RUN_ID, reading_mode: readingMode }),
       });
-      if (!response.ok) throw new Error("HTTP " + response.status);
+      if (!response.ok) {
+        const failure = await response.json().catch(() => ({}));
+        throw new Error(failure.detail || "Could not start this brew (HTTP " + response.status + ").");
+      }
       connectStream();
       startPending = false;
       if (stopBeforeStart) await stopBrew();
@@ -477,7 +484,17 @@
     event.preventDefault();
     startBrew();
   });
-  retryButton.addEventListener("click", () => { window.location.href = restartUrl; });
+  function requestNewBrew(event) {
+    event?.preventDefault();
+    const restartForm = document.createElement('form');
+    restartForm.method = 'post'; restartForm.action = '/run';
+    for (const [name, value] of [['_csrf_token', CSRF_TOKEN], ['reading_mode', new FormData(form).get('reading_mode') || 'usual']]) {
+      const input = document.createElement('input'); input.type = 'hidden'; input.name = name; input.value = value; restartForm.append(input);
+    }
+    document.body.append(restartForm); restartForm.requestSubmit();
+  }
+  retryButton.addEventListener('click', requestNewBrew);
+  newBrewLink.addEventListener('click', requestNewBrew);
   reconnectButton.addEventListener("click", connectStream);
   async function stopBrew() {
     cancelButton.disabled = true;

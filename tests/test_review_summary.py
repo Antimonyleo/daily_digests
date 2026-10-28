@@ -16,13 +16,13 @@ def key_finding(summary):
     return summary.splitlines()[0].removeprefix("Key finding: ")
 
 
-def test_structured_summary_strips_labels_and_prioritizes_results_and_conclusion():
+def test_structured_summary_strips_labels_and_uses_the_result_alone():
     item = row("BACKGROUND: An important question remains. "
                "METHODS: The trial screened 5000 patients across 300 sites for 30 months. "
                "RESULTS: Treatment reduced symptoms. "
                "CONCLUSIONS: The effect was limited to adults.")
     finding = key_finding(summarize._extractive(item))
-    assert finding == "Treatment reduced symptoms. The effect was limited to adults."
+    assert finding == "Treatment reduced symptoms."
 
 
 def test_figure_abbreviation_does_not_fragment_an_extracted_sentence():
@@ -45,21 +45,20 @@ def test_profile_contribution_excerpt_also_strips_structured_labels(monkeypatch)
     assert "We engineer proteins" in finding
 
 
-def test_long_extraction_has_a_bounded_honest_excerpt():
+def test_long_extraction_keeps_a_complete_sentence_instead_of_a_cut_excerpt():
     original = "The study reports " + "an experimentally tested formulation " * 40 + "with improved activity."
     finding = key_finding(summarize._extractive(row(original)))
-    assert len(finding) <= 400
-    assert finding.endswith("…")
-    assert original.startswith(finding[:-1])
+    assert finding == original
+    assert "…" not in finding
 
 
 @pytest.mark.parametrize("abstract", ["", "   ", "METHODS: RESULTS: "])
-def test_missing_abstract_has_three_explicit_fields_without_title_as_a_finding(abstract):
+def test_missing_abstract_says_summary_unavailable_without_invented_fields(abstract):
     summary = summarize._extractive(row(abstract))
-    assert summary.startswith("Key finding: No abstract is available.")
-    assert "Why read:" in summary and "Caveat:" in summary
+    assert summary == ("Key finding: No abstract is available, so the findings cannot be "
+                       "assessed from the title alone.")
+    assert "Why read:" not in summary and "Caveat:" not in summary
     assert "An exciting treatment" not in summary
-    assert "title alone" in summary
 
 
 def test_prompt_exposes_missing_abstract_and_prohibits_invented_claims():
@@ -108,25 +107,28 @@ def test_caveat_preserves_explicit_abstract_limitation():
     assert "No major limitation" not in caveat
 
 
-def test_preprint_caveat_keeps_warning_and_stated_limitation():
-    item = row("The study is limited to a small sample of experimental designs.")
+def test_preprint_status_is_metadata_not_a_caveat_while_stated_limitation_remains():
+    limitation = "The study is limited to a small sample of experimental designs."
+    item = row("We developed an assembly method and tested 40 designs across three conditions. "
+               + limitation)
     item.source = "bioRxiv"
-    caveat = summarize._extractive(item).split("Caveat: ", 1)[1]
-    assert "not yet peer-reviewed" in caveat
-    assert "limited to a small sample" in caveat
+    summary = summarize._extractive(item)
+    assert summary.split("Caveat: ", 1)[1] == limitation
+    assert "peer-reviewed" not in summary and "Preprint" not in summary
 
 
-def test_unrecognized_limitations_are_unknown_instead_of_asserted_absent():
+def test_unrecognized_limitations_leave_caveat_empty_instead_of_boilerplate():
     item = row("The method reports improved performance across 300 formulations and six "
                "test conditions, achieving reproducible targeting of the selected material.")
-    caveat = summarize._extractive(item).split("Caveat: ", 1)[1]
-    assert "No major limitation" not in caveat
-    assert "check" in caveat.lower()
+    summary = summarize._extractive(item)
+    assert "Caveat:" not in summary
+    assert "No major limitation" not in summary and "not assessed" not in summary
 
 
-def test_stated_limitation_excerpt_is_bounded():
-    item = row("The study is limited to " + "a specific experimental condition " * 40 + ".")
+def test_long_stated_limitation_is_a_complete_sentence_not_an_excerpt():
+    limitation = "The study is limited to " + "a specific experimental condition " * 12 + "in one laboratory."
+    item = row("We developed a synthesis method and evaluated 300 formulations with improved "
+               "efficiency across six test conditions. " + limitation)
     caveat = summarize._extractive(item).split("Caveat: ", 1)[1]
-    assert "limited to" in caveat
-    assert len(caveat) <= 300
-    assert caveat.endswith("…")
+    assert caveat == limitation
+    assert not caveat.endswith("…")

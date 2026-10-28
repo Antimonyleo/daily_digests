@@ -160,6 +160,14 @@ def test_unwanted_browser_redirect_fails_explicitly(monkeypatch):
         assert response.extensions["browser_final_url"] == xhr.responseURL
 
 
+@pytest.fixture(autouse=True)
+def _restore_preprint_adapter(monkeypatch):
+    # install_public_source_fallback wraps BiorxivSource.fetch process-wide.
+    from dailydigest.ingest.biorxiv import BiorxivSource
+
+    monkeypatch.setattr(BiorxivSource, "fetch", BiorxivSource.fetch)
+
+
 @pytest.fixture
 def snapshot(monkeypatch):
     from dailydigest.ingest.arxiv import ArxivSource
@@ -495,3 +503,30 @@ def test_carried_snapshot_reports_actual_latest_attempt_status(snapshot, status,
     assert source.last_fetch_diagnostics['snapshot_carried_forward'] is True
     assert source.last_fetch_diagnostics['snapshot_latest_attempt_failed'] is failed
     assert source.last_fetch_diagnostics['snapshot_latest_attempt'] == instant.isoformat()
+
+
+def test_snapshot_language_decisions_reach_filter_and_mismatch_is_ignored(refreshable_snapshot,
+                                                                          monkeypatch):
+    from dailydigest import dedupe
+    from dailydigest.models import Item
+
+    monkeypatch.setattr(dedupe, "_registered_language_decisions", (None, "absent"))
+    source, spec, response, clock, calls = refreshable_snapshot
+    row = response["value"]["sources"][spec.name]["items"][0]
+    row["abstract"] = ("Cette étude présente une nouvelle méthode de recherche pour assembler des "
+                       "protéines avec une amélioration importante de la précision. ") * 3
+    expected = [it.external_id for it in dedupe.filter_english([Item.model_validate(row)])]
+    response["value"]["language_decisions"] = dedupe.precompute_language_decisions(
+        [Item.model_validate(row)])
+    items = source.fetch(spec)
+    assert dedupe._registered_language_decisions[1] == "current"
+    assert [it.external_id for it in dedupe.filter_english(items)] == expected == []
+    assert dedupe.last_language_filter_stats["precomputed"] == 1
+
+    clock["now"] += timedelta(hours=12)
+    response["value"]["sources"][spec.name]["fetched_at"] = clock["now"].isoformat()
+    response["value"]["language_decisions"]["rule_version"] = "english-filter-r0"
+    items = source.fetch(spec)
+    assert dedupe._registered_language_decisions == (None, "version-mismatch")
+    assert [it.external_id for it in dedupe.filter_english(items)] == expected
+    assert dedupe.last_language_filter_stats["detector"] == 1

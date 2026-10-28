@@ -10,12 +10,18 @@
   .saved-card { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:16px; padding:24px; border-bottom:1px solid var(--border); }
   .saved-card:last-child { border-bottom:0; }
   .saved-content { min-width:0; }
-  .saved-title { color:var(--text); font-size:22px; font-weight:650; line-height:1.3; letter-spacing:-.015em; text-decoration:none; overflow-wrap:anywhere; }
+  .saved-title { color:var(--text); font-size:21px; font-weight:550; line-height:1.35; letter-spacing:-.01em; text-decoration:none; overflow-wrap:anywhere; }
   .saved-title:hover { color:var(--accent); text-decoration:underline; text-underline-offset:3px; }
   .saved-meta { color:var(--muted); font-size:14px; line-height:1.5; margin-top:8px; overflow-wrap:anywhere; }
   .summary-primary { margin:16px 0 12px; }
-  .summary-primary .summary-label { font-size:12px; color:var(--muted); margin-bottom:4px; }
-  .summary-primary .summary-text, .saved-summary { color:var(--text); font-size:17px; line-height:1.5; max-width:70ch; }
+  .summary-primary .summary-label { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; font-size:12px; color:var(--muted); margin-bottom:4px; }
+  .summary-primary .summary-text, .saved-summary { color:var(--text); font-size:16px; line-height:1.5; max-width:70ch; }
+  /* A study caveat sits in Details, as on the digest card. */
+  .saved-card .item-details { margin-top:2px; }
+  .saved-card .item-details > summary { cursor:pointer; width:fit-content; min-height:40px; padding:8px 0; color:var(--accent-strong); font-size:14px; font-weight:550; }
+  .saved-card .item-details .summary-field { display:grid; grid-template-columns:86px minmax(0,1fr); gap:10px; max-width:74ch; }
+  .saved-card .item-details .summary-label { color:var(--muted); font-size:13px; font-weight:550; }
+  .saved-card .item-details .summary-text { color:var(--copy-secondary); font-size:15px; line-height:1.45; }
   .saved-summary { margin-top:14px; }
   .reading-context-field { display:grid; grid-template-columns:86px minmax(0,1fr); gap:10px; margin:7px 0; max-width:74ch; }
   .reading-context-field .summary-label { font-size:13px; font-weight:550; color:var(--muted); }
@@ -58,7 +64,7 @@
     .saved-actions { margin-left:auto; }
     .saved-card { display:block; position:relative; padding:20px 16px; }
     .saved-title { display:block; padding-right:52px; font-size:20px; line-height:1.35; }
-    .reading-context-field { grid-template-columns:1fr; gap:2px; }
+    .reading-context-field, .saved-card .item-details .summary-field { grid-template-columns:1fr; gap:2px; }
     .vote-btn { padding-inline:6px; font-size:13px; }
     .remove-saved { position:absolute; top:20px; right:12px; padding-inline:6px; font-size:13px; }
   }
@@ -66,3 +72,14 @@
     .saved-feedback > .vote-row { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); width:100%; }
     .vote-btn { margin:0; border-radius:0 !important; }
   }
+
+  .saved-feedback .vote-row { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); width:min(100%,650px); }
+  .saved-feedback .vote-btn { position:relative; padding-inline:22px 8px; }
+  .saved-feedback .vote-btn.active::before { content:'✓'; position:absolute; left:7px; top:50%; transform:translateY(-50%); }
+  @media(max-width:480px) { .saved-feedback .vote-row { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+  .version-links { margin:4px 0 0; padding:0; list-style:none; color:var(--muted); font-size:14px; line-height:1.5; }
+  .version-links li { overflow-wrap:anywhere; }
+  .version-links cite { font-style:italic; }
+  .version-links a { color:var(--accent-strong); text-underline-offset:3px; }
+  .version-links .version-status { color:var(--down); font-weight:600; }
+  .version-rating-note { margin:0 0 4px; color:var(--muted); font-size:13px; line-height:1.45; }

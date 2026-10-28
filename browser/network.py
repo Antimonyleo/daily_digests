@@ -208,8 +208,13 @@ def install_public_source_fallback(snapshot_url, *, loader=None, now=None):
     The worker supplies a same-origin asset URL; no reader information is sent.
     Missing, failed, mismatched, insufficient-capacity, or stale snapshots fail the
     source normally so existing pipeline coverage gates remain authoritative.
+    bioRxiv/medRxiv records replay the native adapter for the reader's window and
+    fall back to a direct fetch when that replay could differ from native output.
     """
+    from dailydigest.dedupe import register_language_decisions
+    from dailydigest.ingest import biorxiv
     from dailydigest.ingest.arxiv import ArxivSource
+    from dailydigest.ingest.biorxiv import BiorxivSource
     from dailydigest.ingest.rss import RSSSource
     from dailydigest.models import Item
 
@@ -248,6 +253,9 @@ def install_public_source_fallback(snapshot_url, *, loader=None, now=None):
                         or not isinstance(refreshed.get("sources"), dict)):
                     raise RuntimeError("Invalid public source snapshot manifest")
                 cached, refresh_error = refreshed, None
+                # Optional CI language decisions; another rule version or a
+                # malformed map is ignored entirely and the detector runs.
+                register_language_decisions(refreshed.get("language_decisions"))
             except Exception as exc:
                 refresh_error = f"{type(exc).__name__}: {exc}"[:500]
         if cached is None:
@@ -255,7 +263,7 @@ def install_public_source_fallback(snapshot_url, *, loader=None, now=None):
         record = cached.get("sources", {}).get(spec.name)
         if not record or record.get("status") != "ok":
             raise RuntimeError(f"Public source snapshot missing or failed for {spec.name}")
-        for field in ("kind", "section", "url", "category"):
+        for field in ("kind", "section", "url", "category", "server"):
             if record.get(field) != getattr(spec, field):
                 raise RuntimeError(f"Public source snapshot configuration mismatch for {spec.name}")
         fetched = datetime.fromisoformat(record["fetched_at"])
@@ -277,19 +285,73 @@ def install_public_source_fallback(snapshot_url, *, loader=None, now=None):
         items = [Item.model_validate(row) for row in record["items"]]
         if any(item.source != spec.name or item.section != spec.section for item in items):
             raise RuntimeError(f"Public source snapshot item identity mismatch for {spec.name}")
+        if spec.kind == "biorxiv":
+            return (*preprint_replay(spec, days, record, items, instant), record)
         # RSS deliberately ignores days in the native adapter. Preserve its
         # current feed and dates; ranking handles the reader's recency window.
-        return items[:requested_cap] if requested_cap is not None else items, record
+        return items[:requested_cap] if requested_cap is not None else items, [], {}, record
+
+    def preprint_replay(spec, days, record, items, instant):
+        """Native ``BiorxivSource.fetch`` output for this window, or an error.
+
+        The snapshot holds every parsed revision of a complete, uncapped
+        collection. Selecting the reader's posting-date window and then running
+        the adapter's own revision/withdrawal selection equals a direct fetch of
+        that window, except for postings after the snapshot (bounded by 48 h).
+        """
+        coverage, window = record.get("coverage") or {}, record.get("window") or {}
+        if (coverage.get("exhausted") is not True or coverage.get("truncated") is not False
+                or coverage.get("stop_reason") != "exhausted"):
+            raise RuntimeError(f"Public source snapshot truncated or capped for {spec.name}")
+        undated = coverage.get("undated") or {}
+        if undated.get("entries", 0):
+            raise RuntimeError(f"Public source snapshot has undated entries for {spec.name}")
+        start, end = biorxiv.request_window(days, today=instant.date())
+        if not isinstance(window.get("from"), str) or window["from"] > start:
+            raise RuntimeError(f"Public source snapshot window too short for {spec.name}")
+        counts = [value for key, value in (coverage.get("dates") or {}).items() if start <= key <= end]
+        entries = sum(value["entries"] for value in counts)
+        # Native fetch stops paging at its row cap. Never claim that outcome.
+        if entries >= biorxiv._MAX_ROWS:
+            raise RuntimeError(f"Public source snapshot window exceeds the native row cap for {spec.name}")
+        selected = [item for item in items if item.published_at is not None
+                    and start <= item.published_at.date().isoformat() <= end]
+        withdrawals = [Item.model_validate(row["item"]) for row in record.get("withdrawals") or []
+                       if row.get("date") and start <= row["date"] <= end]
+        if any(notice.source != spec.name for notice in withdrawals):
+            raise RuntimeError(f"Public source snapshot item identity mismatch for {spec.name}")
+        out = biorxiv.current_versions(selected, withdrawals)
+        dates = [item.published_at.date().isoformat() for item in out]
+        server = (spec.server or "biorxiv").lower()
+        query = {
+            "query": f"{server}:{start}/{end}", "attempted": True, "request_count": 0,
+            "request_count_includes_retries": False, "fetched_count": entries,
+            "returned_count": len(out), "unique_yield": len(out), "total_available": entries,
+            "item_cap": biorxiv._MAX_ROWS, "exhausted": True, "truncated": False,
+            "stop_reason": "exhausted", "failure": None,
+            "skipped_withdrawn": sum(value["withdrawn"] for value in counts),
+            "skipped_invalid": sum(value["invalid"] for value in counts),
+            "oldest_publication_date": min(dates) if dates else None,
+            "newest_publication_date": max(dates) if dates else None, "indexing_delay": None,
+            # Postings after the collection are absent until the next snapshot.
+            "snapshot_covered_to": window.get("to"),
+        }
+        return out, withdrawals, {"queries": [query], "returned_count": len(out)}
 
     def wrap(original):
         @wraps(original)
         def fetch(self, spec, days=2):
             self.last_fetch_diagnostics = {}
+            if isinstance(self, BiorxivSource):
+                self.last_fetch_withdrawals = []
             if spec.profile_driven:
                 return original(self, spec, days=days)
             try:
-                items, record = snapshot_items(spec, days)
+                items, withdrawals, replay, record = snapshot_items(spec, days)
+                if isinstance(self, BiorxivSource):
+                    self.last_fetch_withdrawals = withdrawals
                 self.last_fetch_diagnostics = {
+                    **replay,
                     "transport": "public_snapshot", "snapshot_url": snapshot_url,
                     "snapshot_fetched_at": record["fetched_at"],
                     "snapshot_generated_at": cached.get("generated_at"),
@@ -305,13 +367,24 @@ def install_public_source_fallback(snapshot_url, *, loader=None, now=None):
                     self.last_fetch_diagnostics["snapshot_refresh_error"] = refresh_error
                 return items
             except Exception as snapshot_error:
-                self.last_fetch_diagnostics = {"snapshot_error": str(snapshot_error)[:500],
-                                               "transport": "direct"}
+                fallback = {"snapshot_error": str(snapshot_error)[:500], "transport": "direct"}
                 if refresh_error:
-                    self.last_fetch_diagnostics["snapshot_refresh_error"] = refresh_error
+                    fallback["snapshot_refresh_error"] = refresh_error
+                self.last_fetch_diagnostics = dict(fallback)
+
+                def keep_fallback_evidence():
+                    # Adapters such as bioRxiv replace their diagnostics on fetch;
+                    # retain why the snapshot was not used beside native query data.
+                    current = self.last_fetch_diagnostics
+                    self.last_fetch_diagnostics = {**(current if isinstance(current, dict) else {}),
+                                                   **fallback}
+
                 try:
-                    return original(self, spec, days=days)
+                    items = original(self, spec, days=days)
+                    keep_fallback_evidence()
+                    return items
                 except Exception as direct_error:
+                    keep_fallback_evidence()
                     self.last_fetch_diagnostics["direct_error"] = (
                         f"{type(direct_error).__name__}: {direct_error}"[:500]
                     )
@@ -322,6 +395,6 @@ def install_public_source_fallback(snapshot_url, *, loader=None, now=None):
         return fetch
 
     # Reinstalling updates the URL/cache without stacking wrappers.
-    for source in (RSSSource, ArxivSource):
+    for source in (RSSSource, ArxivSource, BiorxivSource):
         original = getattr(source.fetch, "_public_snapshot_original", source.fetch)
         source.fetch = wrap(original)

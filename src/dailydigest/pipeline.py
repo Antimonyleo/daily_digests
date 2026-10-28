@@ -31,6 +31,7 @@ from .dedupe import (
     dedupe_by_url,
     dedupe_ranking_candidates,
     filter_english,
+    publication_version_links,
 )
 from .email_render import SECTION_ORDER, render_digest
 from .email_send import send_digest
@@ -647,6 +648,133 @@ def _source_request_group(spec: Any) -> str:
     return f"adapter:{kind or 'unknown'}"
 
 
+_LEARNED_PROFILE_CAUSES = {
+    "missing": "the file was missing",
+    "stale_semantics_version": "feedback format update",
+    "stale_reasons_signature": "feedback reasons changed",
+    "stale_votes_signature": "ratings changed",
+    "corrupt": "the file was unreadable",
+    "incompatible_embedding": "embedding model changed",
+    "feedback_unreadable": "saved feedback could not be read",
+    "loader_unavailable": "the profile loader is not available",
+    "recovery_error": "an unexpected recovery error",
+}
+
+
+def _learned_profile_audit(status: str, reason: str, **extra: Any) -> dict[str, Any]:
+    """One ``learned_profile`` digest-audit payload (see ``_LearnedProfileRecovery``)."""
+    cause = _LEARNED_PROFILE_CAUSES.get(reason, reason.replace("_", " "))
+    if status == "ok":
+        message = "Learned profile from your ratings is in use."
+    elif status == "rebuilt":
+        message = f"Learned profile rebuilt from your ratings ({cause})."
+    elif status == "static":
+        message = "No topic ratings yet: ranking uses your topics only."
+    else:
+        message = f"Learned profile unavailable ({cause}): static topics only."
+    return {"status": status, "reason": reason, "message": message, **extra}
+
+
+class _LearnedProfileRecovery:
+    """Brew-scoped recovery of ``learned_profile.npz``; rebuilds at most once.
+
+    The file is derived from votes, so a stale or broken one is rebuilt inside
+    the user-started brew (reusing cached item vectors), never on page load.
+    ``audit`` reports only what the ranking actually used: ``rebuilt`` requires
+    a verified file that the profile loader then accepted.
+    """
+
+    def __init__(self, progress_callback: ProgressCallback | None, timings: dict[str, int]):
+        self._progress = progress_callback
+        self._timings = timings
+        self.attempted = False
+        self.result = None
+        self.audit: dict[str, Any] = _learned_profile_audit("static", "no_topic_votes")
+
+    def _rebuild(self, reason: str) -> None:
+        from .votes import _rebuild_rocchio_profile
+
+        self.attempted = True
+        _emit(self._progress, "stage_start", {"name": "learned_profile"})
+        logger.warning("learned profile rejected (%s); rebuilding from saved ratings", reason)
+        result = _rebuild_rocchio_profile(keep_backup=True)
+        self.result = result
+        self._timings["learned_profile"] = result.duration_ms
+        _emit(self._progress, "stage_done", {"name": "learned_profile", "duration_ms": result.duration_ms})
+        details = {
+            "duration_ms": result.duration_ms,
+            "topic_votes": result.topic_votes,
+            "vectors_total": result.vectors_total,
+            "vectors_missing": result.vectors_missing,
+        }
+        if result.status == "written":
+            logger.info(
+                "learned profile rebuilt in %dms (%d topic votes, %s of %d vectors not cached)",
+                result.duration_ms, result.topic_votes,
+                "unknown" if result.vectors_missing is None else result.vectors_missing,
+                result.vectors_total,
+            )
+            # Provisional until the loader accepts it (see ``confirm``).
+            self.audit = _learned_profile_audit("rebuilt", reason, **details)
+        elif result.status == "no_topic_votes":
+            self.audit = _learned_profile_audit("static", "no_topic_votes")
+        else:
+            logger.warning("learned profile rebuild failed (%s): %s", result.failure, result.detail)
+            self.audit = _learned_profile_audit(
+                "unavailable", reason, failure=result.failure, **details)
+
+    def prepare(self, vote_count: int) -> None:
+        """Before scoring: validate the file and rebuild a repairable one once."""
+        from .rank.profile import REBUILDABLE_LEARNED_PROFILE_REASONS, inspect_learned_profile
+
+        if vote_count <= 0:
+            return
+        state = inspect_learned_profile()
+        if state.usable:
+            self.audit = _learned_profile_audit("ok", "current")
+        elif state.reason == "no_topic_votes":
+            self.audit = _learned_profile_audit("static", "no_topic_votes")
+        elif state.reason in REBUILDABLE_LEARNED_PROFILE_REASONS:
+            self._rebuild(state.reason)
+        else:
+            logger.warning("learned profile unavailable (%s): %s", state.reason, state.detail)
+            self.audit = _learned_profile_audit("unavailable", state.reason or "corrupt")
+
+    def confirm(self, profile_vec: Any, used: dict[str, Any]) -> Any:
+        """After composition: report the loader's verdict; repair a dimension gap once."""
+        from .rank.profile import append_learned_profile, inspect_learned_profile
+
+        if "reason" not in used:
+            return profile_vec  # a loader that does not report keeps prepare()'s verdict
+        reason = used["reason"]
+        status = self.audit["status"]
+        if reason is None:
+            if status != "rebuilt":
+                self.audit = _learned_profile_audit("ok", "current")
+            return profile_vec
+        # This brew's rebuild found nothing to learn and wrote no file, so a
+        # missing file is the expected static state, not a failure.
+        nothing_to_learn = reason == "missing" and getattr(self.result, "status", None) == "no_topic_votes"
+        if (reason == "no_topic_votes" or nothing_to_learn) and status != "unavailable":
+            self.audit = _learned_profile_audit("static", "no_topic_votes")
+            return profile_vec
+        if reason == "incompatible_embedding" and not self.attempted and getattr(profile_vec, "ndim", 0) == 2:
+            # Only the composed matrix knows the active dimension. The loader
+            # returned the static matrix, so a verified vector can be appended.
+            self._rebuild(reason)
+            if self.audit["status"] != "rebuilt":
+                return profile_vec
+            state = inspect_learned_profile(expected_dim=int(profile_vec.shape[1]))
+            if state.usable:
+                return append_learned_profile(profile_vec, state.vector, state.vote_count)
+            reason = state.reason or reason
+        elif status == "unavailable":
+            return profile_vec  # keep the more specific failure from prepare()
+        extra = {k: v for k, v in self.audit.items() if k not in {"status", "reason", "message"}}
+        self.audit = _learned_profile_audit("unavailable", str(reason), **extra)
+        return profile_vec
+
+
 def _catch_up_window(digest_id: str, backfill_days: int | None) -> int:
     """Look-back window (days) for ingest + ranking, widened after a usage gap.
 
@@ -654,6 +782,9 @@ def _catch_up_window(digest_id: str, backfill_days: int | None) -> int:
     of any kind (brewed or sent — so local/dry-run use counts too) sets the
     window to gap+1, floored at 2 and capped at ``max_backfill_days``. So after
     a week away the digest reaches back a week instead of only yesterday.
+
+    The gap is counted in calendar days in the reader's timezone (see
+    ``store.days_since_last_digest``): a gap of N calendar days gives N+1.
     """
     if backfill_days and backfill_days > 0:
         return backfill_days
@@ -1072,6 +1203,18 @@ def _apply_contribution_ordering(scored, features, profile, settings):
     )
 
 
+def _with_publication_versions(row: ItemRow, payload: dict[str, Any]) -> dict[str, Any]:
+    """Record the survivor's other publication versions with this digest entry.
+
+    Digest features are digest-scoped, so the link reaches the reader without
+    rewriting either version's stored item row.
+    """
+    links = publication_version_links(row)
+    if links:
+        payload["publication_versions"] = links
+    return payload
+
+
 def _annotate_research_evidence(picked, features):
     from .rank.article_evidence import assess_article_evidence
     from .rank.contribution_claims import contribution_claims
@@ -1430,15 +1573,36 @@ def run_all(
         _vote_count_now = _vc_now()
     except Exception:  # noqa: BLE001
         pass
-    stage_start("profile_encoding")
+    learned_recovery = _LearnedProfileRecovery(progress_callback, timings)
     if _build_profile_with_rocchio is not None:
         try:
-            profile_vec = _build_profile_with_rocchio(profile, vote_count=_vote_count_now)
+            learned_recovery.prepare(_vote_count_now)
+        except Exception as _e:  # noqa: BLE001 - never block a brew on a derived file
+            logger.warning("learned profile recovery failed: %s", _e)
+            learned_recovery.audit = _learned_profile_audit("unavailable", "recovery_error")
+        check_cancel()
+    elif _vote_count_now > 0:
+        learned_recovery.audit = _learned_profile_audit("unavailable", "loader_unavailable")
+    stage_start("profile_encoding")
+    # Leading static rows of profile_vec; the rest is the learned direction.
+    # The snapshot records it so an offline first-use replay can drop the latter.
+    profile_static_rows: int | None = None
+    if _build_profile_with_rocchio is not None:
+        _learned_used: dict[str, Any] = {}
+        try:
+            profile_vec = _build_profile_with_rocchio(
+                profile, vote_count=_vote_count_now, state_out=_learned_used)
+            profile_vec = learned_recovery.confirm(profile_vec, _learned_used)
+            profile_static_rows = _learned_used.get("static_rows")
         except Exception as _e:  # noqa: BLE001
             logger.warning("Rocchio blend failed, using static profile: %s", _e)
             profile_vec = build_profile_matrix(profile)
+            profile_static_rows = len(profile_vec)
+            if _vote_count_now > 0:
+                learned_recovery.audit = _learned_profile_audit("unavailable", "recovery_error")
     else:
         profile_vec = build_profile_matrix(profile)
+        profile_static_rows = len(profile_vec)
     logger.info("ranker: profile_rows=%d votes=%d", len(profile_vec), _vote_count_now)
     stage_done("profile_encoding")
     check_cancel()
@@ -1840,7 +2004,7 @@ def run_all(
         candidates=recent_raw, scored=scored, eligible=pickable, labeled=labeled,
         features=score_features, section_budgets=section_caps,
         settings=section_settings, profile=profile, profile_matrix=profile_vec,
-        catch_up=window_days > 2, ingest_stats=ingest_stats,
+        profile_static_rows=profile_static_rows, catch_up=window_days > 2, ingest_stats=ingest_stats,
         feedback_before=feedback_before, feedback_after=feedback_state(),
         selection_facts=selection_facts,
         stages={
@@ -1959,7 +2123,7 @@ def run_all(
                 label,
                 int(row.id),
                 float(score),
-                breakdown_payload(
+                _with_publication_versions(row, breakdown_payload(
                     row,
                     float(_feature(row).get("topic_score", score)),
                     learned_score=float(_feature(row).get("learned_score", 0.0)),
@@ -1996,7 +2160,7 @@ def run_all(
                     article_evidence=_feature(row).get("article_evidence"),
                     topic_alignment=_feature(row).get("topic_alignment"),
                     topic_support=_feature(row).get("topic_support"),
-                ),
+                )),
             )
             for row, score, label in labeled
         ]
@@ -2073,6 +2237,7 @@ def run_all(
         _audits: dict[str, list[dict]] = {
             "missed_top_journals": top_journal_audit,
             "reading_mode_overflow": reading_mode_overflow,
+            "learned_profile": [learned_recovery.audit],
             "candidate_funnel": [funnel_audit],
             "interest_coverage": _interest_coverage_audit(ranking_snapshot),
             # An ordinary same-day rebrew must clear a catch-up briefing that

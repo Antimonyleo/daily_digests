@@ -36,6 +36,42 @@ def _get_json(client: httpx.Client, url: str) -> dict:
     return resp.json()
 
 
+def request_window(days: int, today=None) -> tuple[str, str]:
+    """Inclusive ``(from, to)`` posting-date interval that ``fetch`` requests."""
+    today = today or datetime.now(timezone.utc).date()
+    return (today - timedelta(days=max(1, days))).isoformat(), today.isoformat()
+
+
+def entry_date(entry: dict) -> str | None:
+    """The posting date ``fetch`` assigns to an API entry, or None if unparseable."""
+    pub = entry.get("date") or ""
+    try:
+        y, m, d = (int(x) for x in pub.split("-"))
+        return datetime(y, m, d, tzinfo=timezone.utc).date().isoformat()
+    except Exception:
+        return None
+
+
+def current_versions(items: list[Item], withdrawals: list[Item]) -> list[Item]:
+    """Keep the newest revision per preprint and drop withdrawn ones.
+
+    URL deduplication later keeps the first item. Choose the authoritative
+    revision here so upstream ordering cannot discard a newer abstract.
+    """
+    withdrawn_ids = {item.external_id for item in withdrawals}
+    newest: dict[str, Item] = {}
+    for item in items:
+        if item.external_id in withdrawn_ids:
+            continue
+        prior = newest.get(item.external_id)
+        version = str(item.metadata.get("preprint_version") or "")
+        prior_version = str(prior.metadata.get("preprint_version") or "") if prior else ""
+        if prior is None or (version.isdecimal() and
+                             (not prior_version.isdecimal() or int(version) > int(prior_version))):
+            newest[item.external_id] = item
+    return list(newest.values())
+
+
 class BiorxivSource:
     """Pulls the most recent 2 days from the bioRxiv/medRxiv details API.
 
@@ -47,18 +83,35 @@ class BiorxivSource:
     def __init__(self) -> None:
         self.last_fetch_diagnostics: dict = {"queries": []}
         self.last_fetch_withdrawals: list[Item] = []
+        # Public-snapshot collection only: every parsed revision before
+        # ``current_versions``, posting dates for each withdrawal notice, and
+        # per-date counts of raw API entries. Native brews ignore these.
+        self.last_fetch_versions: list[Item] = []
+        self.last_fetch_withdrawal_dates: list[str | None] = []
+        self.last_fetch_entry_dates: dict[str | None, dict[str, int]] = {}
+        # None keeps the native module cap; the public collector raises it.
+        self.max_rows: int | None = None
+
+    def _count_entry(self, entry: dict, outcome: str) -> None:
+        counts = self.last_fetch_entry_dates.setdefault(
+            entry_date(entry), {"entries": 0, "withdrawn": 0, "invalid": 0})
+        counts["entries"] += 1
+        if outcome != "entries":
+            counts[outcome] += 1
 
     def fetch(self, spec: SourceSpec, days: int = 2) -> list[Item]:
         self.last_fetch_withdrawals = []
+        self.last_fetch_versions = []
+        self.last_fetch_withdrawal_dates = []
+        self.last_fetch_entry_dates = {}
+        max_rows = _MAX_ROWS if self.max_rows is None else self.max_rows
         server = (spec.server or "biorxiv").lower()
-        today = datetime.now(timezone.utc).date()
-        frm = (today - timedelta(days=max(1, days))).isoformat()
-        to = today.isoformat()
+        frm, to = request_window(days)
         diagnostic = {
             "query": f"{server}:{frm}/{to}", "attempted": True,
             "request_count": 0, "request_count_includes_retries": False,
             "fetched_count": 0, "returned_count": 0, "unique_yield": 0,
-            "total_available": None, "item_cap": _MAX_ROWS,
+            "total_available": None, "item_cap": max_rows,
             "exhausted": False, "truncated": False, "stop_reason": None,
             "failure": None, "skipped_withdrawn": 0, "skipped_invalid": 0,
             "oldest_publication_date": None, "newest_publication_date": None,
@@ -108,6 +161,7 @@ class BiorxivSource:
                     title = (entry.get("title") or "").strip()
                     if not title:
                         diagnostic["skipped_invalid"] += 1
+                        self._count_entry(entry, "invalid")
                         continue
                     # bioRxiv marks retracted/withdrawn work in-band and keeps
                     # serving it in the daily feed. Keep notices separate from
@@ -116,8 +170,10 @@ class BiorxivSource:
                     entry_type = str(entry.get("type") or "").strip().lower()
                     if entry_type == "withdrawn" or title.upper().startswith("WITHDRAWN"):
                         diagnostic["skipped_withdrawn"] += 1
+                        self._count_entry(entry, "withdrawn")
                         canonical_doi = _canonical_doi(doi)
                         if canonical_doi:
+                            self.last_fetch_withdrawal_dates.append(entry_date(entry))
                             self.last_fetch_withdrawals.append(Item(
                                 source=spec.name, section=spec.section,
                                 external_id=canonical_doi, url=f"https://doi.org/{canonical_doi}",
@@ -132,7 +188,9 @@ class BiorxivSource:
                     link = f"https://doi.org/{doi}" if doi else entry.get("link", "")
                     if not link:
                         diagnostic["skipped_invalid"] += 1
+                        self._count_entry(entry, "invalid")
                         continue
+                    self._count_entry(entry, "entries")
                     abstract = (entry.get("abstract") or "").strip()
                     authors = entry.get("authors") or ""
                     pub = entry.get("date") or ""
@@ -192,27 +250,15 @@ class BiorxivSource:
                 if cursor >= total:
                     diagnostic.update(exhausted=True, stop_reason="exhausted")
                     break
-                if cursor >= _MAX_ROWS:
+                if cursor >= max_rows:
                     diagnostic.update(truncated=True, stop_reason="item_cap")
                     logger.warning(
                         "biorxiv %s hit pagination cap (%d/%d); some items may be dropped",
                         server, cursor, total,
                     )
                     break
-        # URL deduplication later keeps the first item. Choose the authoritative
-        # revision here so upstream ordering cannot discard a newer abstract.
-        withdrawn_ids = {item.external_id for item in self.last_fetch_withdrawals}
-        newest: dict[str, Item] = {}
-        for item in out:
-            if item.external_id in withdrawn_ids:
-                continue
-            prior = newest.get(item.external_id)
-            version = str(item.metadata.get("preprint_version") or "")
-            prior_version = str(prior.metadata.get("preprint_version") or "") if prior else ""
-            if prior is None or (version.isdecimal() and
-                                 (not prior_version.isdecimal() or int(version) > int(prior_version))):
-                newest[item.external_id] = item
-        out = list(newest.values())
+        self.last_fetch_versions = list(out)
+        out = current_versions(out, self.last_fetch_withdrawals)
         diagnostic.update(returned_count=len(out), unique_yield=len(out))
         self.last_fetch_diagnostics["returned_count"] = len(out)
         dates = [item.published_at.date().isoformat() for item in out if item.published_at]

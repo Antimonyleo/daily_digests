@@ -59,7 +59,7 @@ Changed text and failed detection are rechecked. Language thresholds, candidate
 coverage, embedding models, token limits and ranking rules remain unchanged.
 
 When an article feed supplies an image, the digest and saved-paper archive offer
-an optional collapsed **Graphical abstract** or **Article preview**. Only explicit
+an optional collapsed **Graphical abstract** or **Article image**. Only explicit
 image labels establish a graphical abstract; generic thumbnails keep the preview
 label. Opening the disclosure loads the publisher image without cross-origin
 cookies or referrer information; the image links to an enlarged view and the

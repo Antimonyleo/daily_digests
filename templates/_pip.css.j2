@@ -289,6 +289,9 @@
   }
   .tea-break[data-chat="open"] .tea-dialog,
   html[data-display="compact"] .tea-break[data-chat="open"] .tea-dialog { display: block; }
+  /* An open note follows its cup; it is not pinned over the article while an
+     inline Pip is scrolled out of view. */
+  html .tea-break[data-chat][data-bubble="away"] .tea-dialog { display: none; }
   .tea-dialog::before { display: none; }
   .tea-break-copy { font-size: 14px; line-height: 1.45; color: var(--text); }
   @media (min-width: 1440px) {
@@ -296,6 +299,17 @@
       position: fixed; left: max(12px, calc(50% - 630px)); bottom: 18px;
       margin: 0; padding: 0; z-index: 35;
     }
+  }
+  /* In the page flow, the open note sits beside the cup and takes its own
+     space instead of floating over the article. */
+  .tea-break[data-placement="inline"],
+  html[data-display="compact"] .tea-break[data-placement="inline"] {
+    flex-direction: row; align-items: flex-start; gap: 12px;
+    width: auto; max-width: min(100%, 560px);
+  }
+  html .tea-break[data-placement="inline"] .tea-dialog,
+  html[data-display="compact"] .tea-break[data-placement="inline"] .tea-dialog {
+    position: static; flex: 1 1 auto; width: auto; max-height: none; margin-top: 8px;
   }
   /* Visibility preferences also win over the compact presentation. */
   html[data-pip="hidden"] .tea-break { display: none; }

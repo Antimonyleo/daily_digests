@@ -92,6 +92,7 @@ def test_clear_vote_route_returns_actionable_state_failure(monkeypatch):
 def test_run_recovery_offers_reading_and_reconnect(monkeypatch):
     from dailydigest import web
     monkeypatch.setattr(web, "_profile_exists", lambda: True)
+    monkeypatch.setattr(web, "_recent_digest_ids", lambda *_a, **_kw: ["2026-10-24"])
     page = _text_payload(web.run_get(_request("GET", "/run")))
     assert "Read latest saved digest" in page
     assert "Reconnect" in page

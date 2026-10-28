@@ -236,7 +236,8 @@ try{
     assert.equal(await page.locator('#export').isDisabled(),true);
     assert.equal(await page.locator('#compute-mode').isDisabled(),true);
     assert.match(await page.locator('#compute-status').textContent(), /paused while you read/);
-    assert.equal(await page.locator('#app').getAttribute('sandbox'),'allow-popups allow-popups-to-escape-sandbox');
+    // Same origin lets the shell restyle the page in place; the page itself runs no script.
+    assert.equal(await page.locator('#app').getAttribute('sandbox'),'allow-same-origin allow-popups allow-popups-to-escape-sandbox');
     assert.equal(await canonicalHash(),canonical,'Read-only refresh must leave canonical bytes unchanged');
   }
   report.checks.push('three refreshes show the saved articles without starting any worker or changing saved bytes');
@@ -267,8 +268,8 @@ try{
   await page.screenshot({path:output+'/mobile-reading.png',fullPage:true});
   await page.locator('#cached-pip-toggle').click();
   await page.locator('#cached-pip .tea-break').waitFor({state:'visible'});
-  assert.equal(await page.locator('#cached-pip #tea-pet').getAttribute('aria-expanded'),'false');
-  await page.locator('#cached-pip #tea-pet').click();
+  // A first display greets with its current note; no tap is needed (U7).
+  assert.equal(await page.locator('#cached-pip #tea-pet').getAttribute('aria-expanded'),'true');
   await page.locator('#cached-pip #tea-note-text').waitFor({state:'visible'});
   assert.ok(projection.notes.includes(await page.locator('#tea-note-text').textContent()));
   await page.emulateMedia({reducedMotion:'reduce'});

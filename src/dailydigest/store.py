@@ -2167,14 +2167,23 @@ def days_since_last_sent(exclude_digest_id: str | None = None) -> int:
     return max(0, (datetime.now(timezone.utc) - last_sent).days)
 
 
-def days_since_last_digest(exclude_digest_id: str | None = None) -> int:
+def days_since_last_digest(exclude_digest_id: str | None = None, *, now: datetime | None = None) -> int:
     """Return calendar days since the most-recent digest of *any* kind.
 
     Unlike :func:`days_since_last_sent`, this counts brewed/rendered digests
     too (``sent_at`` may be null for local or dry-run use), so the catch-up
     window works whether the digest is emailed by the cron or previewed locally.
     Returns -1 when no prior digest exists (first ever run).
+
+    The gap is the difference between the two *calendar dates* in the reader's
+    timezone (``user_tz``), not the truncated number of elapsed 24-hour periods:
+    23:50 yesterday -> 00:10 today is 1, and 3 days 23 hours that crosses four
+    midnights is 4. DST days of 23 or 25 hours count as one day each. A
+    timestamp stored without a zone is UTC. Coverage time remains
+    ``DigestRow.created_at`` (first creation of that edition).
     """
+    from .config import user_local_date
+
     init_db()
     with session_scope() as s:
         q = select(func.max(DigestRow.created_at))
@@ -2185,7 +2194,8 @@ def days_since_last_digest(exclude_digest_id: str | None = None) -> int:
         return -1
     if last.tzinfo is None:
         last = last.replace(tzinfo=timezone.utc)
-    return max(0, (datetime.now(timezone.utc) - last).days)
+    current = now or datetime.now(timezone.utc)
+    return max(0, (user_local_date(current) - user_local_date(last)).days)
 
 
 def db_path_exists() -> bool:

@@ -109,7 +109,8 @@ def test_evidence_roundtrips_through_real_store_and_web_details(tmp_path, monkey
         assert "Data and code are available at https://example.com/research?a=1&amp;b=2." in html
         assert "A limitation is the small sample" in html
     else:
-        assert html.count("Unknown from supplied text") >= 4
+        # Unknown dimensions collapse into one line instead of repeating per row.
+        assert html.count("Unknown from supplied text") == 1
         assert "quality_score" not in rendered["article_evidence"]
 
 
@@ -192,6 +193,7 @@ def test_normal_brew_annotates_after_reading_mode_and_captures_evidence(tmp_path
         assert payload["confidence_score"] == .61
     runs = store.list_ranking_snapshots(digest_id="2026-05-05")
     captured = store.load_ranking_snapshot(runs[0]["run_id"])
+    assert captured["profile_static_rows"] == 1  # static-only matrix: every row is static
     for candidate in captured["candidates"]:
         if candidate["selected"]:
             assert "article_evidence" in candidate["features"]

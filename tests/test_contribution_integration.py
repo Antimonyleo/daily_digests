@@ -49,8 +49,12 @@ def test_extractive_explanation_uses_contribution_evidence_and_marks_context():
     try:
         engineering = row(1, 'Protein engineering is promising. Here we engineer proteins with enhanced specificity and experimentally validate their performance across several conditions.')
         context = row(2, 'Protein engineering motivates this work. Here we reveal the native protein signaling mechanism and characterize its physiological cellular role.')
-        assert 'engineering' in summarize._why_read(engineering)
-        assert 'background context' in summarize._why_read(context)
+        reason = summarize._why_read(engineering)
+        assert 'Protein engineering and design' in reason
+        assert engineering.abstract.split('. ')[1] in reason
+        background = summarize._why_read(context)
+        assert background.startswith('Background for ')
+        assert context.abstract.split('. ')[1] in background
         assert engineering.abstract.split('. ')[1] in summarize._extractive(engineering)
         prompt, payload = summarize._build_prompt([engineering])
         assert 'supporting evidence' in prompt
@@ -65,7 +69,8 @@ def test_background_keyword_and_prestige_do_not_create_confident_relevance_expla
     try:
         item = row(1, 'Protein engineering is a growing field. Here we develop a clinical model for hospital mortality and evaluate it across several patient cohorts.')
         reason = summarize._why_read(item)
-        assert 'match remains unclear' in reason
+        assert reason == ''
+        assert 'Why read:' not in summarize._extractive(item)
         assert 'selective venue' not in reason
         assert 'it connects to your interest' not in reason
     finally:

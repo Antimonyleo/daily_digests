@@ -32,7 +32,22 @@ h1 { font-size: clamp(28px, 5vw, 44px); line-height: 1.15; }
 #cached-pip button { margin: 0; }
 @media (min-width: 1440px) { #cached-pip { max-height: none; overflow: visible; } #cached-pip .tea-break { bottom: var(--cached-pip-bottom, 18px); } }
 @media (prefers-reduced-motion: reduce) { #cached-pip *, #cached-pip *::before, #cached-pip *::after { animation: none !important; transition: none !important; } }
-@media print { #cached-pip { display: none !important; } }
+@media print { #cached-pip, .cached-display { display: none !important; } }
+/* The saved page's Display menu: same place and look as the native one. */
+.cached-display { position: fixed; z-index: 60; width: max-content; margin: 0; right: max(16px, env(safe-area-inset-right, 0px) + 10px); bottom: max(var(--cached-display-bottom, 16px), env(safe-area-inset-bottom, 0px) + 10px); }
+.cached-display > summary, .cached-display-option { min-height: 38px; padding: 8px 13px; border: 1px solid var(--border); border-radius: 999px; background: var(--card); color: var(--muted); box-shadow: 0 8px 24px rgba(0,0,0,.12); cursor: pointer; font-size: 12px; font-weight: 740; }
+.cached-display > summary { display: flex; align-items: center; gap: 9px; list-style: none; }
+.cached-display > summary::-webkit-details-marker { display: none; }
+.cached-display > summary::after { content: "+"; color: var(--accent); }
+.cached-display[open] > summary::after { content: "−"; }
+.cached-display > summary:hover, .cached-display-option:hover { color: var(--text); border-color: var(--accent); }
+.cached-display > summary:focus-visible, .cached-display-option:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.cached-display-options { position: absolute; bottom: calc(100% + 8px); right: 0; display: flex; flex-direction: column; gap: 4px; width: 240px; max-width: calc(100vw - 32px); padding: 8px; border: 1px solid var(--border); border-radius: 12px; background: var(--card); box-shadow: var(--shadow); }
+#cached-display-options .cached-display-option { display: flex; justify-content: space-between; align-items: center; gap: 16px; width: 100%; min-height: 40px; margin: 0; border: 0; border-radius: 6px; box-shadow: none; background: transparent; color: var(--text); text-align: left; }
+#cached-display-options .cached-display-option:hover { background: var(--surface-hover); }
+.cached-display-option[aria-pressed]::after { content: "Off"; color: var(--muted); font-size: 12px; font-weight: 500; }
+.cached-display-option[aria-pressed="true"]::after { content: "On"; color: var(--accent); }
+@media (pointer: coarse) { .cached-display > summary, #cached-display-options .cached-display-option { min-height: 44px; } }
 :root[data-theme="dark"] .reading-view-notice { background: #1b3426; border-color: #314038; }
 @media (max-width: 720px) {
   .browser-bar { gap: 4px; padding-inline: 8px; }

@@ -352,6 +352,17 @@ def ranking_runs(
     typer.echo(json.dumps({"count": len(runs), "limit": limit, "runs": runs}, indent=2))
 
 
+@app.command("eval-offline", context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
+def eval_offline(ctx: typer.Context) -> None:
+    """Frozen serving-parity comparison of ranking configs; never changes defaults.
+
+    Arguments are passed to ``dailydigest.rank.offline_eval`` (see its --help).
+    """
+    from .rank.offline_eval import main as offline_main
+
+    raise typer.Exit(code=offline_main(list(ctx.args)))
+
+
 @app.command()
 def calibrate() -> None:
     """Fit the score→probability calibrator from your vote history.

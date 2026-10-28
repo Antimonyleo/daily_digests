@@ -182,6 +182,75 @@ export function mountCachedReadingPip(frame, view) {
   return {ready, dispose};
 }
 
+/** The saved page's Display menu, in the trusted shell: the script-free frame
+ * cannot run the native one. Uses the native preference keys, so the full
+ * desk opens with the same theme and density; a change re-renders the frame. */
+export function mountCachedDisplayMenu(frame, render) {
+  const document = frame.ownerDocument, window = document.defaultView, root = document.documentElement;
+  const controller = new window.AbortController(), signal = controller.signal;
+  const menu = document.createElement('details'); menu.id = 'cached-display-menu'; menu.className = 'cached-display';
+  const summary = document.createElement('summary'); summary.className = 'cached-display-toggle';
+  summary.id = 'cached-display-toggle'; summary.textContent = 'Display'; summary.setAttribute('aria-controls', 'cached-display-options');
+  const options = document.createElement('div'); options.id = 'cached-display-options'; options.className = 'cached-display-options';
+  options.setAttribute('role', 'group'); options.setAttribute('aria-label', 'Display preferences');
+  const button = (id, label, title) => {
+    const element = document.createElement('button'); element.type = 'button'; element.id = id;
+    element.className = 'cached-display-option'; element.textContent = label; element.title = title;
+    options.append(element); return element;
+  };
+  const theme = button('cached-theme-toggle', 'Night theme', 'Use the dark reading theme');
+  const density = button('cached-display-toggle-compact', 'Compact view', 'Fit more recommendations on screen');
+  menu.append(summary, options);
+  const read = (key, fallback) => { try { return window.localStorage.getItem(key) || fallback; } catch { return fallback; } };
+  const save = (key, value) => { try { window.localStorage.setItem(key, value); } catch { /* Optional preference. */ } };
+  const sync = () => {
+    theme.setAttribute('aria-pressed', String(root.dataset.theme === 'dark'));
+    density.setAttribute('aria-pressed', String(root.dataset.display === 'compact'));
+  };
+  root.dataset.display = read('dailydigest-display', 'comfortable') === 'compact' ? 'compact' : 'comfortable';
+  sync();
+  const change = (key, attribute, value) => {
+    root.dataset[attribute] = value; save(key, value); sync();
+    // Restyle the open page in place so the reader keeps their place and open
+    // Details; only a page still loading is rendered again.
+    const page = frame.contentDocument?.documentElement;
+    if (page?.hasAttribute('data-display')) restyle(page, attribute, value); else render();
+  };
+  // Density changes card heights; keep the card being read at the same place.
+  const restyle = (page, attribute, value) => {
+    const anchor = [...(page.querySelectorAll?.('article') ?? [])].find(node => node.getBoundingClientRect().bottom > 0);
+    const before = anchor?.getBoundingClientRect();
+    page.dataset[attribute] = value;
+    if (!before?.height) return;
+    const after = anchor.getBoundingClientRect();
+    const target = before.top >= 0 ? before.top : before.top * after.height / before.height;
+    // Absolute, so it holds whether or not the browser's own scroll anchoring
+    // already moved the page during the restyle.
+    const view = page.ownerDocument?.defaultView;
+    view?.scrollTo(0, view.scrollY + after.top - target);
+  };
+  theme.addEventListener('click', () => change('dailydigest-theme', 'theme', root.dataset.theme === 'dark' ? 'light' : 'dark'), {signal});
+  density.addEventListener('click', () => change('dailydigest-display', 'display', root.dataset.display === 'compact' ? 'comfortable' : 'compact'), {signal});
+  menu.addEventListener('keydown', event => {
+    if (event.key !== 'Escape' || !menu.open) return;
+    event.preventDefault(); menu.open = false; summary.focus();
+  }, {signal});
+  const dismiss = event => { if (!menu.contains(event.target)) menu.open = false; };
+  document.addEventListener('pointerdown', dismiss, {signal});
+  document.addEventListener('focusin', dismiss, {signal});
+  // Sit above the shell's bottom bar at the frame's bottom-right, as natively.
+  const place = () => menu.style.setProperty('--cached-display-bottom', `${Math.max(16, window.innerHeight - frame.getBoundingClientRect().bottom + 16)}px`);
+  const placement = new window.ResizeObserver(place);
+  placement.observe(frame);
+  window.addEventListener('resize', place, {signal});
+  frame.after(menu); place();
+  let disposed = false;
+  return {dispose() {
+    if (disposed) return;
+    disposed = true; controller.abort(); placement.disconnect(); menu.remove();
+  }};
+}
+
 export async function settleRenderedEdits(frame, {timeoutMs = 5000} = {}) {
   if (!frame.contentDocument) return;
   const pending = frame.contentWindow?.ddFlushRatings?.();
@@ -371,6 +440,7 @@ function frameBridge(token, path, origin, publicBase) {
       notice.textContent = 'API keys entered here are stored in this browser. A Companion can keep provider credentials on your own computer instead. Portable backups exclude credentials unless you choose to include them.';
       field.parentElement.append(notice);
     }
+    notify({type:'frame-ready'});
   });
   if (publicBase && typeof MutationObserver !== 'undefined') {
     const rewrite = node => {
@@ -388,6 +458,7 @@ function frameBridge(token, path, origin, publicBase) {
     }).observe(document.documentElement, { subtree: true, childList: true, attributes: true, attributeFilter: ['href'] });
   }
   window.addEventListener('dd-compute-stop', () => notify({ type: 'compute-stop' }));
+  window.addEventListener('dd-brew-complete', event => notify({type:'brew-complete', digestId:event.detail?.digestId}));
   document.addEventListener('click', (event) => {
     const anchor = event.target.closest?.('a[href]');
     if (!anchor || event.defaultPrevented || event.button || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
@@ -612,7 +683,7 @@ async function boot() {
   const worker = new DeferredWorker(() => new Worker(new URL('./worker.mjs?compute=v1', import.meta.url), { type: 'module' }));
   const client = new WorkerClient(worker);
   const streams = new Map();
-  let runtimeStarted = false, frameGeneration = null, cacheTimer, cachedPip;
+  let runtimeStarted = false, frameGeneration = null, cacheTimer, cachedPip, cachedDisplay;
   const scrollPositions = new Map();
   const aboutDisclosureStates = new Map();
   let tabMoved = false, dirtySetup = false, hasUnflushedEdits = false, handoff;
@@ -685,6 +756,7 @@ async function boot() {
 
   const sendCompanionCapabilities = () => frame.contentWindow.postMessage({ type: 'companion-capabilities', token, backends: companionBackends }, location.origin);
   let navigation = 0;
+  let frameNavigation = 0;
   let activePath = '/';
   let computeTimer, latestCompute, computeReceivedAt, lastAnnouncement;
   const computeNotice = 'Brew runs locally on this device. Keep this tab open until it finishes. Change computation mode in Data & compute.';
@@ -1015,6 +1087,7 @@ async function boot() {
       scrollPositions.delete('/'); aboutDisclosureStates.delete('/');
     }
     const version = ++navigation;
+    let awaitingFrame = false;
     setStatus('Opening DailyDigest…');
     frame.inert = true; frame.setAttribute('aria-busy', 'true');
     try {
@@ -1058,8 +1131,12 @@ async function boot() {
       clearInterval(computeTimer); latestCompute = null;
       history.replaceState(null, '', '#' + path);
       token = crypto.randomUUID();
+      cachedDisplay?.dispose(); cachedDisplay = null; // the desk has its own Display menu
       frame.setAttribute('sandbox', interactiveSandbox);
-      frame.srcdoc = renderedDocument(response.body, token, path, location.href);
+      const documentHTML = renderedDocument(response.body, token, path, location.href);
+      frameNavigation = version;
+      awaitingFrame = true;
+      frame.srcdoc = documentHTML;
       frame.hidden = false; startup.hidden = true;
       previewNotice.hidden = true;
       document.getElementById('backup-runtime-notice').hidden = true;
@@ -1068,7 +1145,7 @@ async function boot() {
         : headers.get('x-dailydigest-storage') === 'pending' ? 'Saving recent changes…' : 'Saved in this profile · Backup');
       if (response.status < 400 && options.method && options.method.toUpperCase() !== 'GET') scheduleLinkedBackup();
     } catch (error) { if (version === navigation) report(error); }
-    finally { if (version === navigation) { frame.inert = false; frame.removeAttribute('aria-busy'); } }
+    finally { if (version === navigation && !awaitingFrame) { frame.inert = false; frame.removeAttribute('aria-busy'); } }
   }
   worker.addEventListener('message', ({ data }) => {
     if (data.type === 'ready') {
@@ -1154,7 +1231,18 @@ async function boot() {
     if (data.type === 'compute-stop') { clearInterval(computeTimer); latestCompute = null; setStatus('Brew needs attention'); return; }
     const reply = (payload) => source.postMessage({ ...payload, token: data.token, id: data.id }, location.origin);
     try {
-      if (data.type === 'navigate') {
+      if (data.type === 'frame-ready') {
+        if (frameNavigation === navigation) { frame.inert = false; frame.removeAttribute('aria-busy'); }
+      }
+      else if (data.type === 'brew-complete') {
+        if (typeof data.digestId !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(data.digestId)) return;
+        for (const path of ['/', '/?digest_id=' + data.digestId]) {
+          scrollPositions.delete(path); aboutDisclosureStates.delete(path);
+        }
+        firstBrewBackupDue = true;
+        try { remindBackup(localStorage.getItem(backupKey)); } catch { /* optional reminder */ }
+      }
+      else if (data.type === 'navigate') {
         const path = localPath(data.path, activePath);
         if (/^\/calendar\/[^/]+\.ics$/.test(path) || location.hash === '#' + path) navigate(path);
         else location.hash = path;
@@ -1442,9 +1530,17 @@ async function boot() {
   }
   if (preview && !runtimeStarted) {
     guide.showWelcome(true);
-    frame.setAttribute('sandbox', 'allow-popups allow-popups-to-escape-sandbox');
+    // Same origin lets the shell restyle the page; without allow-scripts and
+    // under script-src 'none', the saved page itself still runs nothing.
+    frame.setAttribute('sandbox', 'allow-same-origin allow-popups allow-popups-to-escape-sandbox');
     document.title = `Saved DailyDigest ${preview.date}`;
-    frame.srcdoc = readingViewDocument(preview, document.documentElement.dataset.theme, import.meta.url, new Date(), SHARED_READING_STYLES);
+    const renderPreview = () => {
+      if (cachedDisplay === null) return; // the full desk has replaced the saved page
+      frame.srcdoc = readingViewDocument(preview, document.documentElement.dataset.theme, import.meta.url, new Date(),
+        SHARED_READING_STYLES, document.documentElement.dataset.display);
+    };
+    cachedDisplay = mountCachedDisplayMenu(frame, renderPreview);
+    renderPreview();
     frame.hidden = false; startup.hidden = true;
     previewNotice.hidden = false;
     cachedPip = mountCachedReadingPip(frame, preview);

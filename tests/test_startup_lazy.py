@@ -12,7 +12,7 @@ import importlib.abc
 import sys
 class NoBrew(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path=None, target=None):
-        if fullname in {'dailydigest.pipeline', 'numpy', 'dailydigest.rank.embedding_cache'}:
+        if fullname in {'dailydigest.pipeline', 'dailydigest.ingest', 'numpy', 'dailydigest.rank.embedding_cache'}:
             raise AssertionError('Reading desk imported compute dependency: ' + fullname)
 sys.meta_path.insert(0, NoBrew())
 from dailydigest import web

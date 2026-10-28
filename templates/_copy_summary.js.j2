@@ -5,7 +5,8 @@
       const title = item.querySelector('.title-link, .saved-title');
       const meta = item.querySelector('.meta, .saved-meta');
       const finding = item.querySelector('.summary-primary .summary-text, .summary, .saved-summary');
-      const context = Array.from(item.querySelectorAll('.reading-context-field'), field => {
+      // Why read sits beside the finding; a study caveat lives in Details.
+      const context = Array.from(item.querySelectorAll('[data-summary-label]'), field => {
         const label = field.querySelector('.summary-label')?.textContent.trim();
         const value = field.querySelector('.summary-text')?.textContent.trim();
         return label && value ? `${label}: ${value}` : field.textContent.trim();

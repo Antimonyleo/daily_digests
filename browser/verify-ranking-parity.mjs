@@ -149,9 +149,9 @@ try {
         await page.evaluate(()=>window.__events=[]);
         const started=performance.now();
         await frame().locator('#brew-button').click();
-        await page.waitForFunction(()=>location.hash.startsWith('#/done')||document.querySelector('#app')?.contentDocument?.querySelector('#err:not([hidden])'),undefined,{timeout:600000});
+        await page.waitForFunction(()=>(location.hash.startsWith('#/done')||location.hash.startsWith('#/?digest_id='))||document.querySelector('#app')?.contentDocument?.querySelector('#err:not([hidden])'),undefined,{timeout:600000});
         const elapsedMs=performance.now()-started;
-        assert.ok((await page.evaluate(()=>location.hash)).startsWith('#/done'),await frame().locator('body').innerText());
+        assert.ok(/^#\/(?:done|\?digest_id=)/.test(await page.evaluate(()=>location.hash)),await frame().locator('body').innerText());
         await page.waitForFunction(()=>window.__events.some(event=>event.type==='compute-state'&&event.busy===false),undefined,{timeout:60000});
         const evidence=JSON.parse(await page.evaluate(()=>window.__rpc({type:'parity-evidence'})));
         assert.ok(evidence.snapshot?.complete_candidate_pool);

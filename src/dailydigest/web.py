@@ -7,6 +7,7 @@ Routes:
 - ``GET /``                — render today's digest (or redirect to /setup if no profile)
 - ``POST /vote/{id}/{v}``  — record a +1/0/-1 vote for an item
 - ``POST|DELETE /bookmark/{id}`` — save or remove an item from the reading archive
+  (``?versions=1,2`` also covers that card's other versions of the same work)
 - ``GET /saved``           — search the local saved-reading archive
 - ``POST|DELETE /known/{id}`` — manually flag an item as known so future digests skip it
 - ``POST /overflow/save``  — pin today's reading-mode overflow for tomorrow's brew
@@ -35,6 +36,7 @@ import ipaddress
 import json
 import logging
 import os
+import math
 import re
 import secrets
 import tempfile
@@ -42,9 +44,10 @@ import threading
 import uuid
 from collections import Counter
 from contextlib import contextmanager
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from functools import wraps
 from pathlib import Path
+from time import monotonic
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -91,7 +94,6 @@ from .store import (
     add_carryover_items,
     bookmarked_item_ids,
     carryover_item_ids,
-    count_bookmarks,
     exclude_publication_companions,
     init_db,
     item_metadata,
@@ -237,6 +239,8 @@ _RUN_CANCEL: dict[str, threading.Event] = {}
 _RUN_PUBLISHED: set[str] = set()
 _MAX_RETAINED_RUNS = 32
 _RUN_LOCK = threading.Lock()
+_RUN_START_PERMITS: dict[str, tuple[str, float]] = {}
+BROWSER_MODE = False
 _TRAIN_LOCK = threading.Lock()
 _TRAIN_JOB: dict[str, Any] = {"running": False, "last_result": None}
 _BREW_LOCK = threading.Lock()
@@ -265,6 +269,322 @@ def _format_date(row: ItemRow) -> str:
     if row.published_at is None:
         return ""
     return row.published_at.strftime("%Y-%m-%d")
+
+
+# ---------------------------------------------------------------------------
+# Reader display transforms. These shape what a card shows; stored fields
+# (raw authors, ``source`` ids, summaries) stay untouched for search,
+# follow-matching, training and source caps.
+# ---------------------------------------------------------------------------
+
+_ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _friendly_date(value: object, reference: date | None = None) -> dict[str, str]:
+    """Return ``{"label": "Oct 12", "iso": "2026-10-12"}`` without a timezone shift.
+
+    The stored calendar date is shown as-is: a date-only publication value is
+    never converted to the reader's zone, where it could become the previous
+    day. The year is added only when it differs from ``reference``.
+    """
+    day: date | None = None
+    if isinstance(value, datetime):
+        day = value.date()
+    elif isinstance(value, date):
+        day = value
+    elif isinstance(value, str) and _ISO_DATE_RE.match(value.strip()):
+        try:
+            day = date.fromisoformat(value.strip())
+        except ValueError:
+            day = None
+    if day is None:
+        text = str(value or "").strip()
+        return {"label": text, "iso": ""}
+    label = f"{day:%b} {day.day}"
+    if reference is None or day.year != reference.year:
+        label += f", {day.year}"
+    return {"label": label, "iso": day.isoformat()}
+
+
+def _friendly_span(value: object, reference: date | None = None) -> str:
+    """Format ``start–end`` ISO spans (event dates) and leave other text alone."""
+    text = str(value or "").strip()
+    parts = text.split("–") if "–" in text else [text]
+    if len(parts) == 2 and all(_ISO_DATE_RE.match(part.strip()) for part in parts):
+        try:
+            start, end = (date.fromisoformat(part.strip()) for part in parts)
+        except ValueError:
+            return text  # an impossible calendar date is shown as stored, never a page error
+        first = _friendly_date(start, end)["label"]
+        last = _friendly_date(end, reference)["label"]
+        if start.year == end.year and start.month == end.month:
+            last = last.split(" ", 1)[1]  # "Nov 3–5"
+        return f"{first}–{last}" if start.year == end.year else (
+            f"{_friendly_date(start, None)['label']}–{_friendly_date(end, None)['label']}"
+        )
+    if _ISO_DATE_RE.match(text):
+        return _friendly_date(text, reference)["label"]
+    return text
+
+
+# Feed-registry qualifiers that describe how a source is polled, not what it is.
+_INTERNAL_SOURCE_SUFFIX_RE = re.compile(
+    r"\s*\((?:recent|recent updates|front|your topics)\)\s*$", re.IGNORECASE
+)
+
+
+# Feed names that abbreviate a journal title; readers see the title. Publisher
+# qualifiers such as ``Chem (Cell Press)`` stay, since they disambiguate.
+_JOURNAL_DISPLAY_NAMES = {
+    "angew. chem. int. ed.": "Angewandte Chemie International Edition",
+    "chem. soc. rev.": "Chemical Society Reviews",
+    "energy and environmental science": "Energy & Environmental Science",
+}
+_TITLE_SMALL_WORDS = frozenset({"a", "an", "and", "as", "at", "by", "for", "in", "of", "on", "or", "the", "to", "&"})
+
+
+def _title_case_venue(text: str) -> str:
+    """Restore capitals to a sentence-cased journal title from an index.
+
+    PubMed often lists ``Genomics, proteomics & bioinformatics``. Only titles
+    of three or more words whose later words are all lowercase change, so
+    names such as ``eLife``, ``bioRxiv`` or ``arXiv q-bio.QM`` and feed names
+    with a qualifier in parentheses keep their form.
+    """
+    words = text.split(" ")
+    if len(words) < 3 or "(" in text or not all(word.islower() or word == "&" for word in words[1:]):
+        return text
+    return " ".join(
+        [words[0], *(word if word in _TITLE_SMALL_WORDS else word[:1].upper() + word[1:] for word in words[1:])]
+    )
+
+
+def _display_source_name(source: str) -> str:
+    """Drop internal polling qualifiers such as ``bioRxiv (recent)`` and show
+    a journal's own title rather than a feed abbreviation."""
+    text = str(source or "").strip()
+    cleaned = _INTERNAL_SOURCE_SUFFIX_RE.sub("", text).strip() or text
+    return _JOURNAL_DISPLAY_NAMES.get(cleaned.lower()) or _title_case_venue(cleaned)
+
+
+def _display_publication_label(label: str) -> str:
+    """Hide the uninformative fallback; never relabel unknown as a research article."""
+    return "" if not label or label == "Publication" else label
+
+
+_NON_PERSON_WORDS = frozenset({
+    "university", "universität", "université", "universidad", "department", "dept",
+    "institute", "institutes", "institut", "instituto", "school", "hospital", "center",
+    "centre", "laboratory", "laboratories", "lab", "college", "faculty", "inc", "ltd",
+    "llc", "group", "consortium", "collaboration", "division", "national", "foundation",
+    "program", "programme", "council", "agency", "ministry", "office", "committee",
+    "society", "association", "network", "team", "investigators", "authors", "study",
+    "street", "road", "avenue", "province", "china", "usa", "france", "germany",
+    "switzerland", "japan", "kingdom",
+})
+
+
+def _is_initials(segment: str) -> bool:
+    tokens = [token for token in re.split(r"[\s.\-‐]+", segment) if token]
+    if not tokens or len(tokens) > 4:
+        return False
+    if all(len(token) <= 2 and token.isupper() for token in tokens):
+        return True
+    return "." in segment and all(len(token) <= 2 and token[0].isupper() for token in tokens)
+
+
+def _looks_like_person(segment: str) -> bool:
+    if not segment or len(segment) > 60 or any(ch.isdigit() for ch in segment):
+        return False
+    if any(ch in segment for ch in "@()[]{}<>/\\|:"):
+        return False
+    tokens = segment.split()
+    if not 1 <= len(tokens) <= 6:
+        return False
+    if any(token.strip(".,'’-").casefold() in _NON_PERSON_WORDS for token in tokens):
+        return False
+    return all(token[0].isalpha() for token in tokens)
+
+
+def _parse_author_names(raw: str) -> list[str] | None:
+    """Split an author string only when its structure is unambiguous.
+
+    Returns ``None`` when the list looks truncated, mixes in affiliations, or
+    could be either ``Last, First`` pairs or separate people.
+    """
+    text = " ".join(str(raw or "").split())
+    if not text:
+        return []
+    if re.search(r"\bet\.?\s+al\b|…|\.\.\.", text, re.IGNORECASE):
+        return None
+    if ";" in text:
+        names: list[str] = []
+        for part in (piece.strip() for piece in text.split(";")):
+            if not part:
+                continue
+            if "," in part:
+                last, _, given = (piece.strip() for piece in part.partition(","))
+                if "," in given or not given or not _looks_like_person(last):
+                    return None
+                part = f"{given} {last}"
+            if not _looks_like_person(part):
+                return None
+            names.append(part)
+        return names
+    parts = [piece.strip() for piece in re.split(r",|\s+(?:and|&)\s+", text) if piece.strip()]
+    if len(parts) == 1:
+        return parts if _looks_like_person(parts[0]) else None
+    odd, even = parts[1::2], parts[0::2]
+    if len(parts) % 2 == 0 and all(map(_is_initials, odd)) and not any(map(_is_initials, even)):
+        names = [f"{given} {last}" for last, given in zip(even, odd, strict=True)]
+    elif any(map(_is_initials, parts)) or any(len(part.split()) < 2 for part in parts):
+        # "Smith, John, Doe, Jane" cannot be told apart from four people.
+        return None
+    else:
+        names = parts
+    return names if all(map(_looks_like_person, names)) else None
+
+
+_AUTHOR_DETAILS_LIMIT = 6000
+
+
+def _author_display(raw: object) -> dict[str, Any]:
+    """Shorten authors for the source line; the complete string stays in Details.
+
+    Shows ``First … Last (N authors)`` only when parsing is reliable. Anything
+    ambiguous falls back to ``First et al.`` without a count. OpenAlex lists may
+    stop at 100 authorships, so a count at that size is not trusted either.
+    """
+    full = " ".join(str(raw or "").split())
+    if not full:
+        return {"short": "", "full": "", "count": None}
+    names = _parse_author_names(full)
+    count: int | None = None
+    if names and len(names) < 100:
+        count = len(names)
+        if count == 1:
+            short = names[0]
+        elif count == 2:
+            short = f"{names[0]} and {names[1]}"
+        else:
+            short = f"{names[0]} … {names[-1]} ({count} authors)"
+    else:
+        first = (names[0] if names else re.split(r"[;,]|\s+and\s+", full, maxsplit=1)[0].strip())
+        if names is None and len(full) <= 80 and not re.search(r"[;,]|\s(?:and|&)\s", full):
+            short = full  # One named entity, such as a funding agency.
+        elif first and not _is_initials(first) and len(first) > 1 and (
+            names or _looks_like_person(first)
+        ):
+            short = f"{first} et al."
+        else:
+            short = ""
+    if len(full) > _AUTHOR_DETAILS_LIMIT:
+        full = full[:_AUTHOR_DETAILS_LIMIT].rstrip() + " …"
+    return {"short": short, "full": full, "count": count}
+
+
+def _highlight_segments(text: str, term: str | list[str], limit: int = 12) -> list[dict[str, Any]]:
+    """Split text into plain/matched runs for autoescaped template rendering.
+
+    Uses the same Unicode-aware whole-phrase boundaries as the topic evidence,
+    so a term never highlights inside a longer word. Several terms match
+    longest first, so "DNA origami" is one mark rather than "origami".
+    """
+    from .text_matching import term_pattern
+
+    text = str(text or "")
+    if not text:
+        return []
+    terms = [term] if isinstance(term, str) else list(term)
+    terms = sorted({t.strip() for t in terms if isinstance(t, str) and t.strip() and len(t.strip()) <= 160},
+                   key=lambda t: (-len(t), t.casefold()))
+    if not terms:
+        return [{"text": text, "match": False}]
+    pattern = "|".join(f"(?:{term_pattern(t)})" for t in terms)
+    segments: list[dict[str, Any]] = []
+    position = 0
+    for count, found in enumerate(re.finditer(pattern, text, re.IGNORECASE)):
+        if count >= limit:
+            break
+        if found.start() > position:
+            segments.append({"text": text[position:found.start()], "match": False})
+        segments.append({"text": found.group(0), "match": True})
+        position = found.end()
+    if position < len(text):
+        segments.append({"text": text[position:], "match": False})
+    return segments
+
+
+# A finding marks at most this many reader terms; more would be noise.
+_FINDING_MARKS = 4
+
+
+_EVIDENCE_DIMENSIONS = (
+    ("validation", "Validation evidence"),
+    ("data_code", "Data/code availability"),
+    ("limitations", "Limitations"),
+)
+
+
+def _evidence_view(ranking: dict) -> dict[str, Any] | None:
+    """Show supplied quotes; collapse every unknown dimension into one line."""
+    rows: list[tuple[str, list[str]]] = []
+
+    def quotes(claims: object) -> list[str]:
+        out: list[str] = []
+        for claim in claims if isinstance(claims, list) else []:
+            quote = str((claim or {}).get("quote") or "").strip() if isinstance(claim, dict) else ""
+            if quote and quote not in out:
+                out.append(quote)
+        return out
+
+    contribution = ranking.get("contribution_claims")
+    if contribution is not None:
+        claims = contribution.get("claims") if isinstance(contribution, dict) else None
+        rows.append(("Contribution evidence", quotes(claims)))
+    article = ranking.get("article_evidence")
+    if article is not None:
+        dimensions = article.get("dimensions") if isinstance(article, dict) else None
+        dimensions = dimensions if isinstance(dimensions, dict) else {}
+        for key, label in _EVIDENCE_DIMENSIONS:
+            dimension = dimensions.get(key)
+            rows.append((label, quotes(dimension.get("claims") if isinstance(dimension, dict) else None)))
+    if not rows:
+        return None
+    unknown = [label for label, found in rows if not found]
+    return {
+        "known": [{"label": label, "quotes": found} for label, found in rows if found],
+        "unknown": unknown,
+        "unknown_text": _join_labels(unknown),
+        "attributed": article is not None,
+    }
+
+
+def _join_labels(labels: list[str]) -> str:
+    if len(labels) <= 2:
+        return " and ".join(labels)
+    return ", ".join(labels[:-1]) + " and " + labels[-1]
+
+
+_SELECTION_NOTES = {
+    "protected published-journal slot": "One of today’s published-journal picks.",
+    "published-paper database slot": "Found through a published-paper database.",
+    "capped arxiv cs slot": "One of a few AI and computing preprints shown each day.",
+    "capped preprint slot": "One of a few preprints shown each day.",
+    "capped aggregator slot": "One of a few aggregator picks shown each day.",
+    "score-ranked slot": "",
+}
+
+
+def _selection_note(reason: object) -> str:
+    """Translate internal slot names into plain reader wording."""
+    text = " ".join(str(reason or "").split())
+    if not text:
+        return ""
+    note = _SELECTION_NOTES.get(text.casefold())
+    if note is not None:
+        return note
+    return text[:1].upper() + text[1:] + ("" if text.endswith(".") else ".")
 
 
 def _bar_pct(value: float) -> int:
@@ -374,6 +694,21 @@ def _digest_overview(sections: list[dict]) -> dict:
     }
 
 
+def _learned_profile_note(digest_id: str) -> str:
+    """One quiet line when this brew rebuilt or could not use the learned profile.
+
+    ``ok``/``static`` brews, and older digests without the audit, show nothing.
+    """
+    try:
+        raw = load_digest_audit(digest_id, "learned_profile")
+    except Exception:  # noqa: BLE001 - diagnostics never block reading.
+        return ""
+    audit = raw[-1] if isinstance(raw, list) and raw else raw
+    if not isinstance(audit, dict) or audit.get("status") not in {"rebuilt", "unavailable"}:
+        return ""
+    return " ".join(str(audit.get("message") or "").split())[:500]
+
+
 def _prepare_candidate_funnel(raw: list[dict]) -> dict:
     if not raw:
         return {}
@@ -388,27 +723,148 @@ def _prepare_candidate_funnel(raw: list[dict]) -> dict:
     return funnel
 
 
-# Match the field labels anywhere (not only at line start) so a summary whose
-# fields are space-separated on one line still splits into three rows.
-_SUMMARY_FIELD_RE = re.compile(r"(Key finding|Why read|Caveat)\s*:\s*")
+def _display_summary(summary: str | None, section: str = "", row: Any = None) -> str:
+    """Read a stored summary under the current field contract (display only).
+
+    Older digests carry generic Why read/Caveat boilerplate; the summarizer's
+    normalizer drops it for display, checking a caveat against the item's own
+    title and abstract when ``row`` is given. Nothing is written back to the store.
+    """
+    text = summary or ""
+    if not text:
+        return ""
+    try:
+        from .summarize import normalize_cached_summary
+
+        context = f"{getattr(row, 'title', '') or ''} {getattr(row, 'abstract', '') or ''}"
+        return normalize_cached_summary(text, section or "", context=context)
+    except Exception:  # noqa: BLE001 - an unreadable summary still shows as stored.
+        logger.debug("summary normalization failed", exc_info=True)
+        return text
+
+
+def _finding_label(section: str, publication: str = "") -> str:
+    """Name the lead sentence by what it is; storage keeps "Key finding"."""
+    if section in {"opportunities", "events"}:
+        return "Purpose"
+    if publication in {"Review", "Perspective", "Primer", "Commentary", "Editorial",
+                       "News & Views", "Research Highlight"}:
+        return "Scope"
+    return "Key finding"
 
 
 def _summary_fields(summary: str) -> dict[str, str]:
-    """Parse stored three-field summaries for denser UI rendering."""
-    if not summary:
-        return {}
-    matches = list(_SUMMARY_FIELD_RE.finditer(summary))
-    if not matches:
-        return {}
-    out: dict[str, str] = {}
-    for idx, match in enumerate(matches):
-        label = match.group(1)
-        start = match.end()
-        end = matches[idx + 1].start() if idx + 1 < len(matches) else len(summary)
-        value = summary[start:end].strip()
-        if value:
-            out[label] = value
+    """Parse stored three-field summaries for denser UI rendering.
+
+    One parser for the field contract: the summarizer's, which also matches a
+    label anywhere on a line ("Key finding: … Why read: …").
+    """
+    from .summarize import _summary_parts
+
+    return _summary_parts(summary or "")
+
+
+_GRADE_LABELS = {100: "Very relevant", 70: "Relevant", 40: "Less relevant", 10: "Not relevant"}
+
+
+def _version_link_view(link: dict[str, Any]) -> dict[str, Any]:
+    """One quiet "Also published in" line, from that version's own fields only.
+
+    The status shown is the linked record's own withdrawal/retraction; nothing
+    here is copied from, or onto, the card's primary record.
+    """
+    venue = _display_source_name(str(link.get("venue") or link.get("source") or "").strip())
+    doi = str(link.get("doi") or "").strip()
+    href = safe_url(f"https://doi.org/{doi}" if doi else str(link.get("url") or ""))
+    if bool(link.get("is_preprint")):
+        lead = "Preprint version on" if venue else "Preprint version"
+    else:
+        lead = "Also published in" if venue else "Also published"
+    item_id = link.get("item_id")
+    return {
+        "lead": lead,
+        "venue": venue,
+        "href": "" if href == "#" else href,
+        "link_text": f"DOI {doi}" if doi else "Open this version",
+        "doi": doi,
+        "status": str(link.get("retraction") or ""),
+        "item_id": item_id if isinstance(item_id, int) and not isinstance(item_id, bool) else None,
+        "in_digest": bool(link.get("in_digest")),
+    }
+
+
+def _apply_work_group(entry: dict, group: Any) -> dict:
+    """Decorate the primary's card with its work group, for display only.
+
+    Ratings stay per record: the card's controls and ``current_grade`` belong
+    to ``group.primary``; another version's differing rating is a note, never
+    merged or averaged. Saved/known are shown when ANY version carries them,
+    and the card lists every carrying ID so clearing reaches all of them.
+    """
+    links = [_version_link_view(link) for link in group.links]
+    venue_by_id = {link["item_id"]: link["venue"] for link in links if link["item_id"] is not None}
+    notes = []
+    for item_id, grade in group.other_version_ratings:
+        if grade == group.primary_rating or grade not in _GRADE_LABELS:
+            continue
+        notes.append({"item_id": int(item_id), "venue": venue_by_id.get(item_id) or "other",
+                      "grade": int(grade), "grade_label": _GRADE_LABELS[grade]})
+    search_terms = [str(getattr(row, "title", "") or "") for row in group.versions]
+    search_terms += [f"{link['venue']} {link['doi']}".strip() for link in links]
+    entry.update({
+        "version_links": links,
+        "version_item_ids": [int(item_id) for item_id in group.item_ids[1:]],
+        "version_rating_notes": notes,
+        "version_search": " ".join(term for term in search_terms if term),
+        "bookmarked": group.saved,
+        "saved_item_ids": [int(item_id) for item_id in group.saved_item_ids],
+        "known": group.known,
+        "known_item_ids": [int(item_id) for item_id in group.known_item_ids],
+    })
+    return entry
+
+
+def _group_entries(
+    rows: list[Any],
+    entries: dict[int, dict],
+    *,
+    ratings: dict[int, Any],
+    saved: set[int],
+    known: set[int],
+    recorded_links: dict[int, list[dict]] | None = None,
+) -> list[dict]:
+    """One card per unique work, in the rows' order; no row is added or removed."""
+    from .dedupe import group_publication_versions
+
+    groups = group_publication_versions(
+        rows, ratings=ratings, saved=saved, known=known, recorded_links=recorded_links or {},
+    )
+    return [_apply_work_group(entries[int(group.primary.id)], group) for group in groups]
+
+
+def _recorded_version_links(features: dict[int, dict]) -> dict[int, list[dict]]:
+    """Brew-time ``publication_versions`` links recorded in digest features."""
+    out: dict[int, list[dict]] = {}
+    for item_id, payload in features.items():
+        links = payload.get("publication_versions") if isinstance(payload, dict) else None
+        if isinstance(links, list) and links:
+            out[int(item_id)] = [link for link in links if isinstance(link, dict)]
     return out
+
+
+def _parse_version_ids(raw: str, primary: int) -> list[int]:
+    """Other version IDs a card asks to clear together with its own ID."""
+    ids: list[int] = []
+    for part in str(raw or "").split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if not part.isdigit() or len(ids) >= 20:
+            raise HTTPException(status_code=400, detail="versions must be up to 20 item ids")
+        value = int(part)
+        if value != primary and value not in ids:
+            ids.append(value)
+    return ids
 
 
 def _load_today(
@@ -483,14 +939,20 @@ def _load_today(
             for item_id in item_ids
         }
         persisted_features = load_digest_features(digest_id)
+        try:
+            reference_day: date | None = date.fromisoformat(digest_id)
+        except ValueError:
+            reference_day = None
         from .reader_insights import match_evidence
         from .config import load_profile
 
         try:
             reader_profile = load_profile(_get_profile_path())
             facets = reader_profile.canonical_facets
+            reader_terms = list(reader_profile.keywords or [])
         except Exception:  # Historical digests remain readable without a profile.
             facets = {}
+            reader_terms = []
         opportunity_profile = None
         if any((row.section or "") in {"opportunities", "events"} for row in rows):
             try:
@@ -516,13 +978,12 @@ def _load_today(
         rendered_sections: list[dict] = []
         seen_keys: list[str] = []
         by_section: dict[str, list[dict]] = {}
+        section_rows: dict[str, list[ItemRow]] = {}
         for row in rows:
             key = row.section or "other"
-            genre_label = publication_label(row)
-            if key != "research" and genre_label == "Publication":
-                genre_label = ""
-            source = display_source(row)
+            source = _display_source_name(display_source(row))
             ranking = _breakdown_payload(row, persisted_features.get(int(row.id)))
+            genre_label = _display_publication_label(publication_label(row))
             confidence_score = _entry_confidence(
                 {"ranking": ranking, "score_raw": _slate_score(row)}
             )
@@ -537,7 +998,9 @@ def _load_today(
             evidence = match_evidence(row, topic, getattr(facet, 'aliases', [])) if topic else None
             if key not in by_section:
                 by_section[key] = []
+                section_rows[key] = []
                 seen_keys.append(key)
+            section_rows[key].append(row)
             opportunity = (
                 opportunity_display(item_metadata(row), opportunity_profile)
                 if key in {"opportunities", "events"}
@@ -545,6 +1008,22 @@ def _load_today(
             )
             if opportunity is not None:
                 opportunity["calendar_url"] = f"/calendar/{int(row.id)}.ics"
+                deadline = _friendly_date(opportunity.get("deadline"), reference_day)
+                opportunity["deadline_label"] = deadline["label"] or "Not stated"
+                opportunity["deadline_iso"] = deadline["iso"]
+                opportunity["event_dates_label"] = _friendly_span(
+                    opportunity.get("event_dates"), reference_day
+                )
+            published = _friendly_date(row.published_at, reference_day)
+            display_summary = _display_summary(row.summary, key, row)
+            # Feed headers ("Journal, Published online: …; doi:…") are not the
+            # abstract; the summary path already reads the same cleaned text.
+            from .ingest.rss import strip_feed_metadata  # Setup must not load feed adapters.
+
+            display_abstract = strip_feed_metadata(row.abstract or "")
+            authors = _author_display(row.authors)
+            summary_fields = _summary_fields(display_summary)
+            finding_terms = [*reader_terms, topic, *getattr(facet, "aliases", [])]
             by_section[key].append(
                 {
                     "id": row.id,
@@ -553,16 +1032,28 @@ def _load_today(
                     "url": safe_url(row.url),
                     "source": source,
                     "published": _format_date(row),
-                    "summary": row.summary or "",
-                    "abstract": row.abstract or "",
-                    "summary_fields": _summary_fields(row.summary or ""),
+                    "published_label": published["label"],
+                    "published_iso": published["iso"],
+                    "summary": display_summary,
+                    "abstract": display_abstract,
+                    "summary_fields": summary_fields,
+                    "finding_segments": _highlight_segments(
+                        summary_fields.get("Key finding") or display_summary, finding_terms, _FINDING_MARKS
+                    ),
+                    "finding_label": _finding_label(key, genre_label),
                     "figure": display_figure(item_metadata(row)),
                     "score_raw": _slate_score(row),
                     "confidence_score": confidence_score,
                     "ranking": ranking,
                     "reason_line": reason,
                     "match_evidence": evidence,
-                    "authors": str(row.authors or '').strip()[:400],
+                    "abstract_segments": _highlight_segments(
+                        display_abstract, (evidence or {}).get("term", "")
+                    ),
+                    "evidence": _evidence_view(ranking),
+                    "selection_note": _selection_note(ranking.get("selection_reason")),
+                    "authors": authors["short"],
+                    "authors_full": authors["full"],
                     "publication_label": genre_label,
                     "related_commentaries": [
                         {**child, "url": safe_url(child.get("url", ""))}
@@ -577,6 +1068,18 @@ def _load_today(
                     "known": int(row.id) in known_ids,
                 }
             )
+
+        # One card per unique work (preprint + journal version of one paper).
+        # Display only: every row, vote, bookmark and known flag keeps its ID,
+        # and a history is never refilled with another item.
+        recorded_links = _recorded_version_links(persisted_features)
+        for key, section_entries in by_section.items():
+            by_section[key] = _group_entries(
+                section_rows[key], {int(entry["id"]): entry for entry in section_entries},
+                ratings=current_grade, saved=saved_item_ids, known=known_ids,
+                recorded_links=recorded_links,
+            )
+            _mark_top_picks(by_section[key])
 
         for r in rows:
             s.expunge(r)
@@ -601,25 +1104,33 @@ def _load_today(
     return rendered_sections, current_vote
 
 
+# Top picks are the strongest of every section, in slate order: about a third
+# of each section and at least one. Sections score on different scales, so one
+# absolute cutoff would show only research.
+_TOP_PICK_SHARE = 0.3
+
+
+def _mark_top_picks(entries: list[dict]) -> None:
+    count = math.ceil(len(entries) * _TOP_PICK_SHARE)
+    for index, entry in enumerate(entries):
+        entry["top_pick"] = index < max(1, count)
+
+
 def _digest_exists(digest_id: str) -> bool:
     init_db()
     with session_scope() as s:
         return s.get(DigestRow, digest_id) is not None
 
 
-def _recent_digest_ids(today_id: str, limit: int = 3) -> list[str]:
-    """Return the latest actual brews, so calendar gaps do not hide history."""
+def _recent_digest_ids(today_id: str, limit: int | None = 3) -> list[str]:
+    """Return retained editions by date, independent of later rebrews."""
     init_db()
     with session_scope() as session:
-        return [
-            str(value)
-            for value in session.execute(
-                select(DigestRow.id)
-                .where(DigestRow.id <= today_id)
-                .order_by(DigestRow.created_at.desc(), DigestRow.id.desc())
-                .limit(max(1, min(int(limit), 30)))
-            ).scalars()
-        ]
+        query = (select(DigestRow.id).where(DigestRow.id <= today_id)
+                 .order_by(DigestRow.id.desc(), DigestRow.created_at.desc()))
+        if limit is not None:
+            query = query.limit(max(1, min(int(limit), 30)))
+        return [str(value) for value in session.execute(query).scalars()]
 
 
 def _as_int(value: object) -> int | None:
@@ -723,10 +1234,15 @@ def _require_local_origin(request: Request) -> None:
 async def _loopback_host_only(request: Request, call_next):
     """Reject non-loopback Host headers for every UI and asset route."""
     if not _is_local_host(_host_name(request.headers.get("host"))):
-        return JSONResponse(
+        response = JSONResponse(
             {"detail": "local UI only accepts loopback hosts"}, status_code=403
         )
-    return await call_next(request)
+    else:
+        response = await call_next(request)
+    response.headers["X-Frame-Options"] = "SAMEORIGIN"
+    response.headers["Content-Security-Policy"] = "frame-ancestors 'self'"
+    response.headers["Referrer-Policy"] = "same-origin"
+    return response
 
 
 def _ics_text(value: object) -> str:
@@ -1362,8 +1878,21 @@ def index(request: Request, digest_id: str = "") -> Response:
         return RedirectResponse(url="/setup", status_code=302)
     today_id = _digest_id()
     today_date = date.fromisoformat(today_id)
+    requested_missing = False
+    edition_ids = _recent_digest_ids(today_id, limit=None)
+    if digest_id and digest_id != today_id and digest_id not in edition_ids:
+        try:
+            valid_date = date.fromisoformat(digest_id).isoformat() == digest_id
+        except ValueError:
+            valid_date = False
+        if valid_date and _digest_exists(digest_id):
+            # Only a date after today can be absent from the list (a timezone
+            # change); keep the list newest-first so navigation stays in order.
+            edition_ids = sorted({*edition_ids, digest_id}, reverse=True)
+        else:
+            requested_missing = True
     recent_brews = []
-    for brew_id in _recent_digest_ids(today_id, limit=3):
+    for brew_id in edition_ids:
         try:
             brew_date = date.fromisoformat(brew_id)
         except ValueError:
@@ -1373,6 +1902,10 @@ def index(request: Request, digest_id: str = "") -> Response:
             label, cup_kicker = "Today", "Today’s cup"
         elif offset == 1:
             label, cup_kicker = "Yesterday", "Yesterday’s cup"
+        elif offset == -1:
+            label, cup_kicker = "Tomorrow", "Tomorrow’s cup"
+        elif offset < 0:
+            label, cup_kicker = f"In {-offset} days", f"Cup dated {-offset} days ahead"
         else:
             label, cup_kicker = f"{offset} days ago", f"Cup from {offset} days ago"
         recent_brews.append(
@@ -1380,7 +1913,7 @@ def index(request: Request, digest_id: str = "") -> Response:
                 "id": brew_id,
                 "label": label,
                 "cup_kicker": cup_kicker,
-                "date_label": brew_date.strftime("%b %d").replace(" 0", " "),
+                "date_label": brew_date.strftime("%b %d" if brew_date.year == today_date.year else "%b %d, %Y").replace(" 0", " "),
                 "href": "/" if offset == 0 else f"/?digest_id={brew_id}",
             }
         )
@@ -1480,6 +2013,7 @@ def index(request: Request, digest_id: str = "") -> Response:
         {
             "digest_id": digest_id,
             "viewing_today": digest_id == today_id,
+            "requested_digest_missing": requested_missing,
             "today_label": today_date.strftime("%b %d").replace(" 0", " "),
             "cup_kicker": cup_kicker,
             "profile_name": _profile_name(),
@@ -1500,6 +2034,7 @@ def index(request: Request, digest_id: str = "") -> Response:
             "source_coverage": health.coverage_summary(),
             "interest_coverage": _interest_coverage(sections, load_digest_audit(digest_id, "interest_coverage") if brewed else []),
             "top_journal_audit": top_journal_audit,
+            "learned_profile_note": _learned_profile_note(digest_id) if brewed else "",
             "overflow_audit": overflow_audit,
             "overflow_saved": overflow_saved,
             "candidate_funnel": candidate_funnel,
@@ -1531,34 +2066,88 @@ def saved_items(request: Request, q: str = "", page: int = 1) -> Response:
         return RedirectResponse(url="/setup", status_code=302)
     query = str(q or "").strip()[:200]
     page_size = 50
-    total = count_bookmarks(query)
-    pages = max(1, (total + page_size - 1) // page_size)
-    page = max(1, min(int(page), pages))
-    rows = search_bookmarks(query, limit=page_size, offset=(page - 1) * page_size)
-    companions = load_publication_companions(rows)
+    # Group the whole matching library first so the count and the pages are
+    # unique works: a saved preprint and its saved journal version are one card.
+    saved_rows: list[Any] = []
+    while True:
+        batch = search_bookmarks(query, limit=500, offset=len(saved_rows))
+        saved_rows.extend(batch)
+        if len(batch) < 500:
+            break
+    saved_by_id = {int(row.item_id): row for row in saved_rows}
     reasons, warning = _feedback_reasons()
     with session_scope() as session:
-        ratings = {}
+        item_rows = {int(row.id): row for row in session.execute(
+            select(ItemRow).where(ItemRow.id.in_(list(saved_by_id)))).scalars()} if saved_by_id else {}
+        ratings: dict[int, int] = {}
         for iid, value, grade in session.execute(
             select(VoteRow.item_id, VoteRow.value, VoteRow.grade)
-            .where(VoteRow.item_id.in_([row.item_id for row in rows]))
+            .where(VoteRow.item_id.in_(list(saved_by_id)))
             .order_by(VoteRow.created_at.desc(), VoteRow.id.desc())
         ):
             ratings.setdefault(int(iid), grade if grade is not None else votes_mod.value_to_grade(value))
-    items = [{
+        for row in item_rows.values():
+            session.expunge(row)
+    from .dedupe import group_publication_versions
+
+    ordered = [item_rows[iid] for iid in saved_by_id if iid in item_rows]
+    groups = group_publication_versions(ordered, ratings=ratings, saved=saved_by_id, known=())
+    total = len(groups)
+    pages = max(1, (total + page_size - 1) // page_size)
+    page = max(1, min(int(page), pages))
+    page_groups = groups[(page - 1) * page_size:page * page_size]
+    rows = [saved_by_id[int(group.primary.id)] for group in page_groups]
+    companions = load_publication_companions(rows)
+    page_ids = {int(item_id) for group in page_groups for item_id in group.item_ids}
+    recorded: dict[int, list[dict]] = {}
+    if page_ids:
+        from .store import DigestItemFeatureRow
+
+        with session_scope() as session:
+            for item_id, raw in session.execute(
+                select(DigestItemFeatureRow.item_id, DigestItemFeatureRow.features_json)
+                .where(DigestItemFeatureRow.item_id.in_(list(page_ids)))
+                .order_by(DigestItemFeatureRow.digest_id.desc())
+            ):
+                try:
+                    payload = json.loads(raw or "{}")
+                except json.JSONDecodeError:
+                    continue
+                for link_item_id, links in _recorded_version_links({int(item_id): payload}).items():
+                    recorded.setdefault(link_item_id, links)
+    if recorded:
+        # Brew-time links name versions that were not saved; attach them to the
+        # card without counting them as saved items.
+        regrouped = group_publication_versions(
+            [item_rows[iid] for group in page_groups for iid in group.item_ids],
+            ratings=ratings, saved=saved_by_id, known=(), recorded_links=recorded)
+        # Same rows and relations, so the same works; keep the page if not.
+        if [group.item_ids for group in regrouped] == [group.item_ids for group in page_groups]:
+            page_groups = regrouped
+    try:
+        today: date | None = date.fromisoformat(_digest_id())
+    except ValueError:
+        today = None
+    items = [_apply_work_group({
         "id": row.item_id, "label": row.title, "title": row.title, "url": safe_url(row.url),
-        "source": row.source, "figure": display_figure(row.metadata),
-        "publication_label": publication_label(row) if row.section == "research" else "",
+        "source": _display_source_name(display_source(row)), "figure": display_figure(row.metadata),
+        "publication_label": (
+            _display_publication_label(publication_label(row)) if row.section == "research" else ""
+        ),
         "related_commentaries": [
             {**child, "url": safe_url(child.get("url", ""))}
             for child in companions.get(int(row.item_id), [])
         ],
         "section": SECTION_META.get(row.section, {"title": row.section.title() or "Other"})["title"],
-        "summary": row.summary, "summary_fields": _summary_fields(row.summary or ""),
+        "summary": (display_summary := _display_summary(row.summary, row.section, row)),
+        "summary_fields": _summary_fields(display_summary),
+        "finding_label": _finding_label(row.section, publication_label(row)),
         "published": _saved_date(row.published_at),
+        "published_label": _friendly_date(row.published_at, today)["label"],
+        "published_iso": _friendly_date(row.published_at, today)["iso"],
         "saved": _saved_date(row.saved_at), "current_grade": ratings.get(row.item_id),
         "current_reasons": reasons.get(str(row.item_id), []),
-    } for row in rows]
+    }, group) for row, group in zip(rows, page_groups, strict=True)]
     from urllib.parse import urlencode
     def page_url(number):
         return "/saved?" + urlencode({"page": number, **({"q": query} if query else {})})
@@ -1611,37 +2200,49 @@ def vote_clear(request: Request, item_id: int) -> JSONResponse:
                          "ranking_status": _feedback_status()})
 
 
-@app.post("/bookmark/{item_id}")
-def bookmark_add(request: Request, item_id: int) -> JSONResponse:
-    _require_csrf(request)
-    if not set_bookmark(item_id, True):
+def _set_flag_on_versions(setter, item_id: int, versions: str, value: bool) -> list[int]:
+    """Set one flag on a card's own ID and, when named, its other versions.
+
+    Each flag stays on its original item ID; ``versions`` only lets one card
+    clear (or restore) the flags its work already carries on other versions.
+    """
+    others = _parse_version_ids(versions, item_id)
+    if not setter(item_id, value):
         raise HTTPException(status_code=404, detail=f"item {item_id} not found")
-    return JSONResponse({"ok": True, "item_id": item_id, "saved": True})
+    return [item_id, *(other for other in others if setter(other, value))]
+
+
+def _versions_payload(changed: list[int]) -> dict[str, list[int]]:
+    return {"item_ids": changed} if len(changed) > 1 else {}
+
+
+@app.post("/bookmark/{item_id}")
+def bookmark_add(request: Request, item_id: int, versions: str = "") -> JSONResponse:
+    _require_csrf(request)
+    changed = _set_flag_on_versions(set_bookmark, item_id, versions, True)
+    return JSONResponse({"ok": True, "item_id": item_id, "saved": True, **_versions_payload(changed)})
 
 
 @app.delete("/bookmark/{item_id}")
-def bookmark_remove(request: Request, item_id: int) -> JSONResponse:
+def bookmark_remove(request: Request, item_id: int, versions: str = "") -> JSONResponse:
     _require_csrf(request)
-    if not set_bookmark(item_id, False):
-        raise HTTPException(status_code=404, detail=f"item {item_id} not found")
-    return JSONResponse({"ok": True, "item_id": item_id, "saved": False})
+    changed = _set_flag_on_versions(set_bookmark, item_id, versions, False)
+    return JSONResponse({"ok": True, "item_id": item_id, "saved": False, **_versions_payload(changed)})
 
 
 @app.post("/known/{item_id}")
-def known_add(request: Request, item_id: int) -> JSONResponse:
+def known_add(request: Request, item_id: int, versions: str = "") -> JSONResponse:
     """Flag an item as already known so future digests skip it."""
     _require_csrf(request)
-    if not set_item_known(item_id, True):
-        raise HTTPException(status_code=404, detail=f"item {item_id} not found")
-    return JSONResponse({"ok": True, "item_id": item_id, "known": True})
+    changed = _set_flag_on_versions(set_item_known, item_id, versions, True)
+    return JSONResponse({"ok": True, "item_id": item_id, "known": True, **_versions_payload(changed)})
 
 
 @app.delete("/known/{item_id}")
-def known_remove(request: Request, item_id: int) -> JSONResponse:
+def known_remove(request: Request, item_id: int, versions: str = "") -> JSONResponse:
     _require_csrf(request)
-    if not set_item_known(item_id, False):
-        raise HTTPException(status_code=404, detail=f"item {item_id} not found")
-    return JSONResponse({"ok": True, "item_id": item_id, "known": False})
+    changed = _set_flag_on_versions(set_item_known, item_id, versions, False)
+    return JSONResponse({"ok": True, "item_id": item_id, "known": False, **_versions_payload(changed)})
 
 
 @app.post("/overflow/save")
@@ -2287,7 +2888,9 @@ async def setup_post(request: Request) -> Response:
     globals()["SETTINGS"] = get_settings()
 
     after_save = str(raw.get("after_save", ""))
-    destination = {"brew": "/run?reading_mode=usual&autostart=1", "save": "/"}.get(after_save, "/run")
+    destination = "/" if after_save == "save" else "/run"
+    if after_save == "brew":
+        destination = _authorized_run_url("usual")
     response = RedirectResponse(url=destination, status_code=303)
     response.headers["Cache-Control"] = "no-store"
     return response
@@ -2418,6 +3021,50 @@ def _kick_off_run(run_id: str, reading_mode: str) -> None:
     threading.Thread(target=_target, daemon=True).start()
 
 
+def _authorized_run_url(reading_mode: str) -> str:
+    """Authorize one automatic start only after a CSRF-checked reader action."""
+    token = secrets.token_urlsafe(24)
+    now = monotonic()
+    with _RUN_LOCK:
+        for key, (_, expires) in list(_RUN_START_PERMITS.items()):
+            if expires <= now:
+                del _RUN_START_PERMITS[key]
+        while len(_RUN_START_PERMITS) >= _MAX_RETAINED_RUNS:
+            del _RUN_START_PERMITS[next(iter(_RUN_START_PERMITS))]
+        _RUN_START_PERMITS[token] = (reading_mode, now + 300)
+    return f"/run?reading_mode={reading_mode}&autostart=1&start={token}"
+
+
+def _consume_run_start(token: str, reading_mode: str) -> bool:
+    with _RUN_LOCK:
+        permit = _RUN_START_PERMITS.get(token)
+        if permit is None:
+            return False
+        mode, expires = permit
+        if expires <= monotonic():
+            del _RUN_START_PERMITS[token]
+            return False
+        if mode != reading_mode:
+            return False
+        del _RUN_START_PERMITS[token]
+        return True
+
+
+@app.post("/run")
+async def run_prepare(request: Request) -> Response:
+    raw = await _read_urlencoded_form(request)
+    _require_csrf(request, raw)
+    if not _profile_exists():
+        return RedirectResponse(url="/setup", status_code=303)
+    try:
+        mode = normalize_reading_mode(raw.get("reading_mode", "usual"))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    response = RedirectResponse(url=_authorized_run_url(mode), status_code=303)
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
 @app.get("/run", response_class=HTMLResponse)
 def run_get(
     request: Request,
@@ -2425,6 +3072,7 @@ def run_get(
     autostart: bool = False,
     run_id: str = "",
     resume: bool = False,
+    start: str = "",
 ) -> Response:
     if not _profile_exists():
         return RedirectResponse(url="/setup", status_code=302)
@@ -2438,6 +3086,8 @@ def run_get(
     resume = bool(resume or (autostart and retained_identity))
     if not retained_identity:
         run_id = uuid.uuid4().hex[:12]
+    authorized_start = bool(autostart and not resume and _consume_run_start(start, selected_mode))
+    latest = _recent_digest_ids(_digest_id(), limit=1)
     response = templates.TemplateResponse(
         request,
         "run.html.j2",
@@ -2445,14 +3095,16 @@ def run_get(
             "run_id": run_id,
             "csrf_token": _CSRF_TOKEN,
             "reading_mode": selected_mode,
-            "autostart": bool(autostart),
+            "autostart": authorized_start,
+            "browser_mode": BROWSER_MODE,
+            "has_saved_digest": bool(latest),
             "resume": bool(resume),
             "resume_url": (
                 f"/run?reading_mode={selected_mode}&resume=1&run_id={run_id}"
             ),
-            "restart_url": f"/run?reading_mode={selected_mode}&autostart=1",
+            "restart_url": f"/run?reading_mode={selected_mode}",
             "saved_reading_url": (
-                f"/?digest_id={latest[0]}" if (latest := _recent_digest_ids(_digest_id(), limit=1)) else "/"
+                f"/?digest_id={latest[0]}" if latest else "/"
             ),
         },
     )

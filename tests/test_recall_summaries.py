@@ -20,19 +20,20 @@ def _row(title, abstract="", source="bioRxiv", section="research"):
                            section=section, published_at=None)
 
 
-def test_matched_interests_personalizes_why_read():
+def test_topic_match_alone_does_not_generate_a_why_read():
     sm._set_reader_context(_profile())
     row = _row("A new DNA nanotechnology scaffold", "self-assembly of nucleic acids")
     why = sm._why_read(row)
-    assert "DNA nanotechnology" in why
+    assert why == ""
+    assert "Why read:" not in sm._extractive(row)
     sm._set_reader_context(None)
 
 
-def test_no_profile_falls_back_to_generic_why_read():
+def test_no_profile_omits_generic_why_read():
     sm._set_reader_context(None)
     row = _row("Some unrelated finance paper", "markets and trading")
     why = sm._why_read(row)
-    assert "your interest" not in why
+    assert why == ""
 
 
 def test_reader_context_included_in_llm_prompt():

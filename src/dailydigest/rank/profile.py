@@ -622,45 +622,153 @@ def append_learned_profile(
     return np.vstack([static_mat, learned_row]).astype(np.float32)
 
 
-def build_profile_matrix_with_rocchio(profile: Profile, vote_count: int = 0) -> np.ndarray:
-    """Build the default static profile and append the local learned direction."""
+# --- Learned-profile artifact validation ----------------------------------- #
+# Every rejection carries one explicit reason so a brew can recover the derived
+# file and report what happened, instead of silently ranking on static topics.
+LEARNED_PROFILE_MISSING = "missing"
+LEARNED_PROFILE_STALE_SEMANTICS = "stale_semantics_version"
+LEARNED_PROFILE_STALE_REASONS = "stale_reasons_signature"
+LEARNED_PROFILE_STALE_VOTES = "stale_votes_signature"
+LEARNED_PROFILE_CORRUPT = "corrupt"
+LEARNED_PROFILE_INCOMPATIBLE_EMBEDDING = "incompatible_embedding"
+LEARNED_PROFILE_FEEDBACK_UNREADABLE = "feedback_unreadable"
+# The normal static state: no rating currently teaches topic preference.
+LEARNED_PROFILE_NO_TOPIC_VOTES = "no_topic_votes"
+# Reasons a rebuild from canonical votes can repair. Unreadable feedback is not
+# one of them: the rebuild reads the same reasons file and would fail too.
+REBUILDABLE_LEARNED_PROFILE_REASONS = frozenset({
+    LEARNED_PROFILE_MISSING,
+    LEARNED_PROFILE_STALE_SEMANTICS,
+    LEARNED_PROFILE_STALE_REASONS,
+    LEARNED_PROFILE_STALE_VOTES,
+    LEARNED_PROFILE_CORRUPT,
+    LEARNED_PROFILE_INCOMPATIBLE_EMBEDDING,
+})
+
+
+@dataclass(frozen=True)
+class LearnedProfileState:
+    """Result of validating ``learned_profile.npz`` against current feedback.
+
+    ``reason`` is ``None`` only when ``vector`` may be used. Inspection is
+    read-only and never loads an encoder.
+    """
+
+    reason: str | None
+    detail: str = ""
+    vector: np.ndarray | None = None
+    vote_count: int = 0
+    embedding_model: str = ""
+
+    @property
+    def usable(self) -> bool:
+        return self.reason is None
+
+
+def current_embedding_model() -> str:
+    """Configured document-model name; a load-free, backend-independent identity."""
+    from .embed import _embed_config
+
+    return _embed_config()[0]
+
+
+def _npz_text(data, key: str) -> str | None:
+    if key not in data.files:
+        return None
+    values = np.asarray(data[key]).reshape(-1)
+    return str(values[0]) if values.size else None
+
+
+def inspect_learned_profile(path=None, *, expected_dim: int | None = None) -> LearnedProfileState:
+    """Validate the learned profile file and return why it cannot be used, if so.
+
+    Order matters: an unreadable file is ``corrupt`` before any signature is
+    compared; policy, reason and vote signatures are checked before the vector
+    shape, so a stale file is reported as stale even if it also mismatches.
+    """
+    from pathlib import Path
+
+    from .. import votes as votes_mod
+
+    learned_path = Path(path) if path is not None else votes_mod._learned_profile_path()
+    if not learned_path.exists():
+        return LearnedProfileState(LEARNED_PROFILE_MISSING, "learned profile file is missing")
+    try:
+        with np.load(learned_path, allow_pickle=False) as data:
+            vector = np.asarray(data["profile"], dtype=np.float32).copy()
+            count_raw = np.asarray(data["vote_count"]).reshape(-1)
+            vote_count = int(count_raw[0]) if count_raw.size else -1
+            version = _npz_text(data, "feedback_semantics_version")
+            reasons_sig = _npz_text(data, "feedback_reasons_signature")
+            votes_sig = _npz_text(data, "feedback_votes_signature")
+            model = _npz_text(data, "embedding_model") or ""
+    except Exception as exc:  # noqa: BLE001 - any unreadable artifact is corrupt
+        return LearnedProfileState(LEARNED_PROFILE_CORRUPT, f"learned profile file is unreadable: {exc}")
+    if vector.ndim != 1 or vector.size == 0 or not np.isfinite(vector).all() or vote_count < 0:
+        return LearnedProfileState(LEARNED_PROFILE_CORRUPT, "learned profile vector is malformed")
+    if version != votes_mod.FEEDBACK_SEMANTICS_VERSION:
+        return LearnedProfileState(
+            LEARNED_PROFILE_STALE_SEMANTICS,
+            f"built with feedback policy {version or 'unknown'}, expected "
+            f"{votes_mod.FEEDBACK_SEMANTICS_VERSION}",
+        )
+    try:
+        current_reasons = votes_mod.feedback_reasons_signature()
+        current_votes = votes_mod.feedback_votes_signature()
+    except Exception as exc:  # noqa: BLE001 - feedback state, not the artifact, failed
+        return LearnedProfileState(LEARNED_PROFILE_FEEDBACK_UNREADABLE, f"feedback state is unreadable: {exc}")
+    if reasons_sig != current_reasons:
+        return LearnedProfileState(LEARNED_PROFILE_STALE_REASONS, "feedback reasons changed since the build")
+    if votes_sig != current_votes:
+        return LearnedProfileState(LEARNED_PROFILE_STALE_VOTES, "ratings changed since the build")
+    current_model = current_embedding_model()
+    if model and model != current_model:
+        return LearnedProfileState(
+            LEARNED_PROFILE_INCOMPATIBLE_EMBEDDING,
+            f"built with embedding model {model}, current model is {current_model}",
+        )
+    if expected_dim is not None and vector.shape != (int(expected_dim),):
+        return LearnedProfileState(
+            LEARNED_PROFILE_INCOMPATIBLE_EMBEDDING,
+            f"learned vector has {vector.shape[0]} dimensions, profile has {int(expected_dim)}",
+        )
+    if vote_count == 0 or float(np.linalg.norm(vector)) < 1e-6:
+        return LearnedProfileState(LEARNED_PROFILE_NO_TOPIC_VOTES, "no rating teaches topic preference")
+    return LearnedProfileState(None, "", vector=vector, vote_count=vote_count, embedding_model=model)
+
+
+def build_profile_matrix_with_rocchio(
+    profile: Profile, vote_count: int = 0, *, state_out: dict | None = None
+) -> np.ndarray:
+    """Build the default static profile and append the local learned direction.
+
+    Read-only: a rejected file is preserved for an explicit brew-time recovery.
+    ``state_out`` receives ``reason`` (``None`` when the learned row was
+    eligible) and ``detail`` so a caller can report the state it actually used,
+    plus ``static_rows``: the leading rows that are the static profile.
+    """
     static_mat = build_profile_matrix(profile)
+    if state_out is not None:
+        state_out.update(reason=LEARNED_PROFILE_NO_TOPIC_VOTES, detail="no ratings",
+                         static_rows=int(static_mat.shape[0]))
     if vote_count <= 0:
         return static_mat
     try:
-        from pathlib import Path
-
-        from ..config import get_settings
-        from ..votes import FEEDBACK_SEMANTICS_VERSION, feedback_reasons_signature, feedback_votes_signature
-        learned_path = Path(get_settings().db_path).parent / "learned_profile.npz"
-        if not learned_path.exists():
+        expected_dim = int(static_mat.shape[1]) if static_mat.ndim == 2 else None
+        state = inspect_learned_profile(expected_dim=expected_dim)
+        if state_out is not None:
+            state_out.update(reason=state.reason, detail=state.detail)
+        if not state.usable:
+            log = logger.info if state.reason in {
+                LEARNED_PROFILE_NO_TOPIC_VOTES, LEARNED_PROFILE_MISSING,
+            } else logger.warning
+            log("Ignoring learned profile (%s): %s", state.reason, state.detail)
             return static_mat
-        with np.load(learned_path, allow_pickle=False) as data:
-            if (
-                "feedback_semantics_version" not in data.files
-                or str(np.asarray(data["feedback_semantics_version"]).reshape(-1)[0])
-                != FEEDBACK_SEMANTICS_VERSION
-            ):
-                logger.info("Ignoring learned profile from an incompatible feedback policy")
-                return static_mat
-            if (
-                "feedback_reasons_signature" not in data.files
-                or str(np.asarray(data["feedback_reasons_signature"]).reshape(-1)[0])
-                != feedback_reasons_signature()
-            ):
-                logger.info("Ignoring learned profile built before feedback reasons changed")
-                return static_mat
-            if (
-                "feedback_votes_signature" not in data.files
-                or str(np.asarray(data["feedback_votes_signature"]).reshape(-1)[0])
-                != feedback_votes_signature()
-            ):
-                logger.info("Ignoring learned profile built before canonical votes changed")
-                return static_mat
-            # Practical negatives remain raw ratings but do not increase the
-            # strength of a direction learned from fewer informative ratings.
-            informative_count = int(np.asarray(data["vote_count"]).reshape(-1)[0])
-            return append_learned_profile(static_mat, data["profile"], informative_count)
+        # Practical negatives remain raw ratings but do not increase the
+        # strength of a direction learned from fewer informative ratings.
+        return append_learned_profile(static_mat, state.vector, state.vote_count)
     except Exception as e:
         logger.warning("build_profile_matrix_with_rocchio: failed: %s", e)
+        if state_out is not None:
+            state_out.update(reason=LEARNED_PROFILE_CORRUPT, detail=str(e))
         return static_mat

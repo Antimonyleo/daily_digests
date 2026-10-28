@@ -41,11 +41,12 @@ def test_extractive_summary_prefers_informative_sentences_over_title_paraphrase(
 
     summary = _extractive(item)
 
-    assert summary.startswith("Key finding:")
-    assert "120 formulations" in summary
-    assert "4-fold" in summary
-    assert "Why read:" in summary
-    assert "Caveat:" in summary
+    # The measured result stands alone; the method sentence is not appended.
+    assert summary.startswith(
+        "Key finding: In mice, the lead formulation increased liver-sparing spleen delivery by 4-fold.")
+    assert "Why read:" not in summary
+    # No study-specific limitation is stated, so no boilerplate Caveat is invented.
+    assert "Caveat:" not in summary
     assert "RNA delivery platform improves tissue targeting. The study" not in summary
 
 

@@ -1,7 +1,7 @@
 {% extends "_base.html.j2" %}
 {% block title %}Set up DailyDigest{% endblock %}
 {% block extra_styles %}
-  .wrap { max-width: 860px; }
+  .wrap { max-width: 760px; }
   .card { padding: clamp(16px, 4vw, 28px); overflow: visible; }
   .settings-nav { display: flex; justify-content: flex-start; margin-bottom: 18px; }
   h1 { font-size: 30px; line-height: 1.1; margin: 0 0 8px 0; letter-spacing: 0; }
@@ -157,7 +157,7 @@
   }
   .settings-refined .step { margin: 0; padding: 0; }
   .settings-refined .topic-step { position: relative; margin-bottom: 18px; }
-  .settings-refined .topic-step h2 { color: var(--text); font-size: 20px; font-weight: 700; letter-spacing: 0; text-transform: none; margin-bottom: 10px; }
+  .settings-refined .topic-step h2 { color: var(--text); font-size: 20px; font-weight: 650; letter-spacing: 0; text-transform: none; margin-bottom: 10px; }
   .settings-refined #interests-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
   .settings-refined .interest-list-head { display: grid; grid-template-columns: minmax(0, 1fr) 84px 48px; gap: 12px; color: var(--muted); font-size: 13px; padding: 4px 0; }
   .settings-refined .interest-row { border: 0; border-bottom: 1px solid var(--border); border-radius: 0; padding: 0; margin: 0; }
@@ -199,12 +199,14 @@
   .settings-refined .section-desc { margin: 5px 0 0; font-size: 13px; max-width: 66ch; }
   .settings-refined .count-field label { font-size: 13px; }
   .settings-refined .opportunity-profile { padding: 16px 0 0; margin-top: 14px; border: 0; border-top: 1px solid var(--border); border-radius: 0; background: transparent; }
-  .settings-refined label { font-size: 14px; }
+  .settings-refined label { font-size: 14px; line-height: 1.4; }
+  .settings-refined .field-grid { gap: 12px 20px; }
+  .settings-refined .field-grid label { margin-bottom: 5px; }
   .settings-refined textarea, .settings-refined input[type=text], .settings-refined input[type=url], .settings-refined input[type=password], .settings-refined input[type=number], .settings-refined select { font-size: 15px; line-height: 1.45; }
   .settings-refined .hint, .settings-refined .example-note { font-size: 13px; line-height: 1.45; }
   .settings-refined .settings-help { position: relative; color: var(--muted); font-size: 13px; margin: 8px 0 0; }
   .settings-refined .settings-help > summary { cursor: pointer; min-height: 30px; padding: 5px 0; font-size: 13px; font-weight: 500; }
-  .settings-refined .settings-topic-help { position: absolute; top: 0; right: 0; margin: 0; z-index: 10; }
+  .settings-refined .settings-topic-help { border: 0; padding: 0; position: absolute; top: 0; right: 0; margin: 0; z-index: 10; }
   .settings-refined .settings-topic-help > summary { display: grid; place-items: center; width: 30px; height: 30px; min-height: 30px; padding: 5px; list-style: none; }
   .settings-refined .settings-topic-help > summary::-webkit-details-marker { display: none; }
   .settings-refined .settings-topic-help svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.4; }

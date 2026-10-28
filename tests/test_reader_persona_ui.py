@@ -74,16 +74,16 @@ def test_negative_feedback_starts_with_three_reasons_and_discloses_the_rest():
     html = feedback_html()
     primary, secondary = html.split('<details class="more-reasons"', 1)
     assert re.findall('data-reason="([^"]+)"', primary) == [
-        "off_topic", "too_contextual", "too_technical",
+        "off_topic", "too_contextual", "too_technical", "already_known",
     ]
     assert ">Background only</button>" in primary
     assert ">Too technical</button>" in primary
     assert '<summary class="reason-prompt">More reasons</summary>' in secondary
-    assert len(re.findall('data-reason="([^"]+)"', secondary)) == 7
+    assert len(re.findall('data-reason="([^"]+)"', secondary)) == 6
     assert not secondary.startswith(" open")
 
 
-@pytest.mark.parametrize("reason", ["already_known", "access_friction", "low_quality"])
+@pytest.mark.parametrize("reason", ["access_friction", "low_quality"])
 def test_existing_supplementary_reason_stays_visible_and_reversible(reason):
     html = feedback_html(reason)
     assert '<details class="more-reasons" open>' in html
@@ -94,7 +94,7 @@ def test_existing_supplementary_reason_stays_visible_and_reversible(reason):
 def test_guide_describes_the_available_known_paper_feedback_path():
     source = (Path(__file__).resolve().parents[1] / "browser/index.html").read_text()
     guide = source.split('id="quick-guide"', 1)[1].split("</dialog>", 1)[0]
-    assert "Less relevant, then More reasons → Already known" in guide
+    assert "Less relevant, then Not new to me" in guide
     assert "Funding and event cards offer Mark known" in guide
     assert "mark a paper as known" not in guide
     assert 'data-reason="already_known"' in feedback_html("already_known")

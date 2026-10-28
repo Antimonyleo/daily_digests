@@ -10,7 +10,12 @@
   .compact-brew select { min-height: 46px; background: transparent; }
   .digest-card { border-radius: 12px; box-shadow: none; }
   .contents-nav { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 0 16px; border-bottom: 1px solid var(--border); }
-  .contents-links { display: flex; gap: 18px; min-width: 0; overflow-x: auto; }
+  /* One scrollable row of sections. The trailing padding keeps the last tab
+     clear of the edge fade, so the fade only ever covers more tabs. */
+  .contents-links { --tab-fade-start: 0px; display: flex; gap: 18px; min-width: 0; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: thin; padding-right: 28px; scroll-padding-inline: 12px 36px; -webkit-mask-image: linear-gradient(to right, transparent 0, #000 var(--tab-fade-start), #000 calc(100% - 28px), transparent 100%); mask-image: linear-gradient(to right, transparent 0, #000 var(--tab-fade-start), #000 calc(100% - 28px), transparent 100%); }
+  .contents-nav[data-tabs-scrolled] .contents-links { --tab-fade-start: 28px; }
+  .contents-links a:focus-visible { outline-offset: -2px; }
+  @media (pointer: coarse) { .contents-links { scrollbar-width: none; } .contents-links::-webkit-scrollbar { display: none; } }
   .contents-links a { flex-shrink: 0; min-height: 44px; padding: 11px 0 9px; color: var(--muted); text-decoration: none; border-bottom: 2px solid transparent; font-size: 14px; }
   .contents-links a[aria-current="true"] { color: var(--accent-strong); border-bottom-color: var(--accent); font-weight: 650; }
   .contents-links span { margin-left: 4px; font-variant-numeric: tabular-nums; }
@@ -32,25 +37,62 @@
   .section-heading { font-size: 17px; font-weight: 650; }
   .section-mark { display: none; }
   .section-count { font-size: 14px; background: transparent; }
-  .item { padding: 24px; border-left: 0 !important; }
-  .item-head { grid-template-columns: minmax(0,1fr) auto; }
-  .item a.title-link { font-size: 22px; line-height: 1.3; letter-spacing: -.015em; font-weight: 650; }
+  .item { padding: 20px 24px 16px; border-left: 0 !important; }
+  .item-head { grid-template-columns: minmax(0,1fr); }
+  .item a.title-link { font-size: 21px; line-height: 1.32; letter-spacing: -.01em; font-weight: 550; }
   .type-label { display: none; }
-  .item .meta { font-size: 14px; line-height: 1.5; margin-top: 8px; }
-  .match-topic, .reason-line { font-size: 14px; margin-top: 5px; }
-  .summary-primary { grid-template-columns: 1fr; margin: 16px 0 12px; gap: 4px; }
-  .summary-primary .summary-label { font-size: 12px; color: var(--muted); font-weight: 550; text-transform: none; letter-spacing: 0; }
+  .item .meta { font-size: 14px; line-height: 1.5; margin-top: 6px; }
+  .match-topic, .reason-line { font-size: 14px; margin-top: 4px; }
+  .summary-primary { grid-template-columns: 1fr; margin: 10px 0 6px; gap: 4px; }
+  .summary-primary .summary-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; font-size: 13px; color: var(--muted); font-weight: 500; text-transform: none; letter-spacing: 0; }
   .summary-text, .summary { font-size: 16px; line-height: 1.5; max-width: 70ch; }
-  .summary-primary .summary-text { color: var(--text); font-size: 17px; }
-  .reading-context-field { grid-template-columns: 86px minmax(0,1fr); gap: 10px; margin: 7px 0; max-width: 74ch; }
+  .summary-primary .summary-text { color: var(--text); font-size: 16px; line-height: 1.5; }
+  .item[data-section="opportunities"] .summary-primary .summary-text,
+  .item[data-section="events"] .summary-primary .summary-text { color: var(--muted); font-size: 14px; line-height: 1.5; max-width: 72ch; }
+  .reading-context-field { grid-template-columns: 86px minmax(0,1fr); gap: 10px; margin: 4px 0; max-width: 74ch; }
   .reading-context-field .summary-label { color: var(--muted); font-size: 13px; font-weight: 550; text-transform: none; letter-spacing: 0; }
   .reading-context-field .summary-text { font-size: 15px; line-height: 1.45; }
-  .item-details { margin-top: 6px; }
-  .item-details > summary { font-size: 14px; font-weight: 550; }
+  .paper-meta { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 12px; margin: 6px 0 0; color: var(--muted); }
+  .item .paper-meta .meta, .paper-meta .match-topic, .paper-meta .reason-line { margin: 0; color: var(--muted); font-size: 14px; line-height: 1.5; }
+  .paper-meta .match-topic strong { font-weight: 500; }
+  .paper-meta .match-topic { background: transparent; padding: 0; }
+  .paper-meta [data-reading-uncertainty] { background: var(--gold-soft); color: var(--gold); padding: 2px 5px; border-radius: 3px; }
+  .paper-meta .opportunity-facts { flex-basis: 100%; }
+  /* Funding and events lead with the facts a reader acts on. */
+  .item .opportunity-facts { margin: 4px 0 2px; padding: 0; border-radius: 0; background: transparent; color: var(--copy-secondary); font-size: 14px; line-height: 1.5; }
+  .opportunity-facts p { margin: 2px 0 0; overflow-wrap: anywhere; }
+  .opportunity-facts .opportunity-key { color: var(--text); font-size: 15px; font-weight: 600; }
+  .opportunity-facts .fact-label { color: var(--muted); font-weight: 500; }
+  .opportunity-facts .opportunity-fact, .opportunity-facts .opportunity-status { white-space: nowrap; }
+  .opportunity-facts .opportunity-where { white-space: normal; }
+  .item-details-body > p { margin: 0; }
+  .opportunity-facts .opportunity-note { color: var(--muted); }
+  .opportunity-facts a { color: var(--accent-strong); font-weight: 600; text-underline-offset: 3px; }
+  .opportunity-links a { display: inline-block; padding: 4px 0; }
+  mark.match-term { background: var(--gold-soft); color: inherit; padding: 0 2px; border-radius: 2px; box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--gold) 55%, transparent); }
+  .evidence-unknown { color: var(--muted); }
+  .summary-field { grid-template-columns: 120px minmax(0, 1fr); }
+  .summary-field > .summary-text { min-width: 0; }
+  .summary-field .summary-text p { margin: 0 0 8px; }
+  .summary-field .summary-text p:last-child { margin-bottom: 0; }
+  .vote-row .vote-btn { min-height: 44px; position: relative; padding-inline: 22px 8px; }
+  .vote-row .vote-btn.active { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-strong); font-weight: 600; }
+  .vote-row .vote-btn.active::before { content: '✓'; position: absolute; left: 7px; top: 50%; transform: translateY(-50%); }
+  .item-details { margin-top: 2px; }
+  .item-details > summary { font-size: 14px; font-weight: 550; padding: 4px 0; min-height: 32px; }
+  .item-details-body .summary-label { color: var(--muted); font-size: 13px; font-weight: 550; text-transform: none; letter-spacing: 0; }
   .item-details-body { font-size: 14px; max-width: 74ch; }
-  .vote-panel { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-top: 16px; }
+  .vote-panel { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-top: 8px; padding-top: 10px; }
   .vote-panel > .vote-title, .vote-panel > .rating-help { display: none; }
-  .vote-row { display: flex; gap: 0; margin: 0; flex-wrap: wrap; }
+  .vote-row { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); width: min(100%, 560px); gap: 0; margin: 0; }
+  /* Save, Mark known and Copy share one quiet action row with the ratings. */
+  .item-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
+  .item-actions:has(.copy-fallback) { flex-basis: 100%; }
+  .item-actions .bookmark-btn { min-height: 44px; padding: 8px 6px; border: 0; border-radius: 6px; background: transparent; color: var(--accent-strong); font-size: 14px; font-weight: 550; }
+  .item-actions .bookmark-btn:hover { background: var(--surface-hover); color: var(--accent-strong); }
+  .item-actions .bookmark-btn.active { background: transparent; color: #7a4b00; }
+  .item-actions .known-btn.active { color: var(--muted); }
+  .item-actions .bookmark-icon, .item-actions .known-icon { font-size: 15px; }
   .vote-btn { font-size: 14px; font-weight: 500; border-radius: 0; margin-left: -1px; background: var(--card); }
   .vote-btn:first-child { border-radius: 6px 0 0 6px; margin-left: 0; }
   .vote-btn:last-child { border-radius: 0 6px 6px 0; }
@@ -71,13 +113,15 @@
     .reading-toolbar .primary { padding-inline: 16px; }
     .contents-nav { gap: 8px; padding-inline: 12px; }
     .contents-links { gap: 12px; }
-    .edition-nav select { max-width: 100px; font-size: 13px; }
+    .edition-nav select { width: 145px; min-width: 132px; max-width: 145px; padding-inline: 4px; font-size: 14px; }
     .edition-previous { display: none; }
     .reader-tools { padding: 8px 12px; flex-direction: row; align-items: center; }
     .digest-search { flex-basis: 100%; }
     .reader-tools-side { margin-left: auto; gap: 4px; }
-    .item { padding: 20px 16px; }
-    .item a.title-link { font-size: 20px; line-height: 1.35; }
+    .item { padding: 16px 16px 12px; }
+    .item a.title-link { font-size: 19px; line-height: 1.32; }
+    .summary-primary { margin: 8px 0 4px; }
+    .vote-panel { gap: 6px 8px; }
     .reading-context-field { grid-template-columns: 1fr; gap: 2px; }
     .vote-row { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); width: 100%; }
     .vote-btn { padding-inline: 4px; font-size: 13px; min-width: 0; }
@@ -89,3 +133,99 @@
     .vote-row { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px; }
     .vote-btn, .vote-btn:first-child, .vote-btn:last-child { border-radius: 6px; margin: 0; }
   }
+
+  @media (max-width: 480px) {
+    .vote-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .vote-row .vote-btn { font-size: 14px; margin-top: -1px; border-radius: 0; }
+    .vote-row .vote-btn:nth-child(1) { border-top-left-radius: 6px; }
+    .vote-row .vote-btn:nth-child(2) { border-top-right-radius: 6px; }
+    .vote-row .vote-btn:nth-child(3) { border-bottom-left-radius: 6px; }
+    .vote-row .vote-btn:nth-child(4) { border-bottom-right-radius: 6px; }
+    .summary-field { grid-template-columns: minmax(0, 1fr); }
+  }
+  html[data-theme="dark"] .item-actions .bookmark-btn.active { color: var(--gold); }
+  @media print { .item-actions, .copy-status { display: none !important; } }
+  /* Other versions of one work: a quiet line under the source, never a card. */
+  .version-links { flex-basis: 100%; margin: 0; padding: 0; list-style: none; color: var(--muted); font-size: 14px; line-height: 1.5; }
+  .version-links li { overflow-wrap: anywhere; }
+  .version-links cite { font-style: italic; }
+  .version-links a { color: var(--accent-strong); text-underline-offset: 3px; }
+  .version-links .version-status { color: var(--down); font-weight: 600; }
+  .version-rating-note { flex-basis: 100%; margin: 0; color: var(--muted); font-size: 13px; line-height: 1.45; }
+  /* Reading weight and rhythm: slightly heavier reading text, darker metadata,
+     more room between a card's parts, and the reader's own terms marked in
+     the finding. Compact view keeps its own tighter rules. */
+  .item { padding: 24px 28px 20px; }
+  .item a.title-link { font-weight: 600; }
+  .item .meta, .item .paper-meta .meta { color: var(--copy-secondary); font-weight: 450; }
+  .paper-meta .match-topic strong { color: var(--accent-strong); font-weight: 600; }
+  .item .summary-primary { margin: 14px 0 8px; }
+  .item .summary-primary .summary-text, .item .summary { color: var(--text); font-size: 16px; font-weight: 430; line-height: 1.6; max-width: 70ch; margin-top: 14px; }
+  .item .summary-primary .summary-text { margin-top: 0; }
+  .item .reading-context-field .summary-label { color: var(--copy-secondary); font-weight: 600; }
+  .item .reading-context-field .summary-text { color: var(--copy-secondary); font-weight: 430; }
+  mark.finding-term { background: var(--accent-soft); color: var(--accent-strong); font-weight: 600; padding: 0 3px; border-radius: 3px; }
+  .item .vote-panel { margin-top: 14px; }
+  @media (max-width: 760px) {
+    .item { padding: 18px 16px 14px; }
+    .item .summary-primary .summary-text, .item .summary { line-height: 1.55; }
+  }
+  @media print { mark.finding-term { background: transparent; color: inherit; font-weight: 600; } }
+  /* Reasons for a low rating open below the action row, so Clear rating,
+     Save and Copy stay beside the ratings. */
+  .vote-panel > .reason-block { order: 1; }
+  /* Compact view is a scannable list: findings stop at three lines until the
+     reader opens Details, and every card control shares one small height.
+     Touch screens keep full-size targets. */
+  html[data-display="compact"] .item .summary-primary { margin: 6px 0 2px; }
+  html[data-display="compact"] .item .summary-primary .summary-text { margin-top: 0; font-size: 15px; line-height: 1.5; }
+  html[data-display="compact"] .item .summary { margin-top: 6px; font-size: 15px; line-height: 1.5; }
+  html[data-display="compact"] .item:not(:has(.item-details[open])) .summary-primary .summary-text,
+  html[data-display="compact"] .item:not(:has(.item-details[open])) .summary { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; overflow: hidden; }
+  html[data-display="compact"] .item .vote-panel { margin-top: 6px; padding-top: 6px; gap: 6px 8px; }
+  @media (pointer: fine) {
+    html[data-display="compact"] .vote-row .vote-btn,
+    html[data-display="compact"] .feedback-actions .btn,
+    html[data-display="compact"] .item-actions .bookmark-btn,
+    html[data-display="compact"] .item-actions .copy-summary.btn { min-height: 32px; padding-block: 4px; font-size: 13px; }
+    html[data-display="compact"] .reason-chip { min-height: 28px; padding: 2px 9px; }
+  }
+  /* About this digest: one column of sections split by quiet rules, with one
+     heading style, one body size and one muted size for notes. */
+  .about-brew .about-body { display: block; padding: 0 20px 6px; }
+  .about-brew .about-body > * { margin: 0; padding: 16px 0; border: 0; border-top: 1px solid var(--border-soft); border-radius: 0; background: transparent; box-shadow: none; font-size: 14px; line-height: 1.55; }
+  .about-brew .about-body > :first-child { border-top: 1px solid var(--border-soft); }
+  .about-brew .about-heading { margin: 0 0 6px; color: var(--text); font-size: 15px; font-weight: 650; line-height: 1.35; letter-spacing: 0; text-transform: none; }
+  .about-brew .about-body p { margin: 4px 0 0; }
+  .about-brew .about-body p:first-of-type { margin-top: 0; }
+  .about-brew .about-body .source-check-time, .about-brew .about-body .ranking-message, .about-brew .about-body .audit-summary, .about-brew .learned-profile-note { color: var(--muted); font-size: 13px; }
+  .about-brew .about-body details > summary { min-height: 32px; padding: 6px 0 2px; color: var(--accent-strong); font-size: 14px; font-weight: 550; }
+  .about-brew .about-body details[open] > summary { margin-bottom: 4px; }
+  .about-brew .about-body details > p { color: var(--copy-secondary); font-size: 13px; }
+  .about-brew .about-body a { color: var(--accent-strong); text-underline-offset: 3px; }
+  .about-brew .about-body > .learning-summary > a { display: inline-block; margin-top: 6px; }
+  .about-brew .ranking-panel { display: grid; gap: 8px; }
+  .about-brew .ranking-panel .about-heading { margin: 0; }
+  .about-brew .mix-row { margin: 6px 0; font-size: 13px; }
+  .about-brew .about-body .audit-panel > summary { min-height: 0; padding: 0; color: var(--text); font-size: 15px; font-weight: 650; letter-spacing: 0; }
+  .about-brew .audit-panel[open] > summary { margin-bottom: 8px; }
+  .about-brew .audit-body { margin-top: 0; }
+  @media (max-width: 760px) {
+    .about-brew .about-body { padding: 0 16px 4px; }
+    .about-brew .mix-row > span:last-child { grid-row: 1; grid-column: 2; }
+  }
+  /* The venue leads the meta line in the reading color; journals are italic. */
+  .item .meta .venue { color: var(--text); font-weight: 600; }
+  .item[data-section="research"] .meta .venue { font-style: italic; }
+  /* The size hint follows Brew on wide screens and takes its own line on phones. */
+  .reading-toolbar .compact-brew-form { margin-right: 0; }
+  .reading-toolbar .brew-size-hint { margin-right: auto; }
+  @media (max-width: 760px) {
+    .reading-toolbar { flex-wrap: wrap; }
+    .reading-toolbar .compact-brew-form { margin-right: auto; }
+    .reading-toolbar .brew-size-hint { order: 1; flex-basis: 100%; margin: 0; }
+  }
+  @media (max-width: 380px) { .reading-toolbar .brew-size-hint { grid-column: 1 / -1; } }
+  /* Short labels such as Why read sit beside their text without a wide gutter. */
+  .item .reading-context-field { grid-template-columns: max-content minmax(0, 1fr); gap: 8px; }
+  @media (pointer: fine) { .more-reasons > summary { min-height: 30px; } }

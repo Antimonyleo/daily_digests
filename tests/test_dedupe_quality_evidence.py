@@ -44,8 +44,11 @@ def test_title_only_match_cannot_transfer_hard_exclusion_to_distinct_doi():
     rss = _item("Nature", "https://doi.org/10.9999/real", rich=True)
     db = _item("PubMed", "https://doi.org/10.9999/other", {"is_retracted": True})
     result = dedupe_ranking_candidates([rss, db])
-    assert result == [rss]
+    # Distinct DOIs are distinct works: the title alone neither merges them
+    # nor moves the retraction onto the other record.
+    assert result == [rss, db]
     assert not should_skip_item(rss)
+    assert should_skip_item(db)
     assert "is_retracted" not in rss.metadata
 
 

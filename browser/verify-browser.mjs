@@ -372,9 +372,9 @@ print(json.dumps([dict(zip(['id','backend','signature','summary'],row)) for row 
 async function successfulBrew(mode = 'full') {
   await route(`/run?reading_mode=${mode}`, '#brew-button');
   await frame().locator('#brew-button').click();
-  await page.waitForFunction(() => location.hash.startsWith('#/done') || document.querySelector('#app')?.contentDocument?.querySelector('#err:not([hidden])'), undefined, { timeout: 300000 });
-  assert.ok((await page.evaluate(() => location.hash)).startsWith('#/done'), await frame().locator('#err').textContent().catch(() => 'Brew did not finish'));
-  await frame().locator('a.cta').click();
+  await page.waitForFunction(() => (location.hash.startsWith('#/done') || location.hash.startsWith('#/?digest_id=')) || document.querySelector('#app')?.contentDocument?.querySelector('#err:not([hidden])'), undefined, { timeout: 300000 });
+  assert.ok(/^#\/(?:done|\?digest_id=)/.test(await page.evaluate(() => location.hash)), await frame().locator('#err').textContent().catch(() => 'Brew did not finish'));
+  if ((await page.evaluate(() => location.hash)).startsWith('#/done')) await frame().locator('a.cta').click();
   await frame().locator('.item[data-section="research"]').first().waitFor();
   const checkpoint = await page.evaluate(() => window.__rpc({type:'acceptance-state'}));
   assert.equal(checkpoint.status, 200, checkpoint.body);
@@ -1481,9 +1481,9 @@ try {
     });
     await frame().locator('#mode-full').check();
     await frame().locator('#brew-button').click();
-    await page.waitForFunction(() => location.hash.startsWith('#/done') || document.querySelector('#app')?.contentDocument?.querySelector('#err:not([hidden])'), undefined, { timeout: 300000 });
-    assert.ok((await page.evaluate(() => location.hash)).startsWith('#/done'), await frame().locator('#err').textContent().catch(() => 'Brew did not finish'));
-    await frame().locator('a.cta').click();
+    await page.waitForFunction(() => (location.hash.startsWith('#/done') || location.hash.startsWith('#/?digest_id=')) || document.querySelector('#app')?.contentDocument?.querySelector('#err:not([hidden])'), undefined, { timeout: 300000 });
+    assert.ok(/^#\/(?:done|\?digest_id=)/.test(await page.evaluate(() => location.hash)), await frame().locator('#err').textContent().catch(() => 'Brew did not finish'));
+    if ((await page.evaluate(() => location.hash)).startsWith('#/done')) await frame().locator('a.cta').click();
     await frame().locator('.item[data-item-id]').first().waitFor();
     const events = await page.evaluate(() => window.__workerEvents);
     assert.ok(events.some(event => event.stage === 'Computing embeddings'), 'Real embedding inference was not observed.');
@@ -1495,9 +1495,13 @@ try {
     const preview=await page.evaluate(()=>window.__qualifiedPreview);
     assert.ok(preview.length>0 && preview.length<=8,JSON.stringify(preview));
     assert.ok(preview.every(title=>titles.includes(title)), 'Provisional picks must belong to the final qualified slate.');
-    assert.match(await frame().locator('.item').first().textContent(), /Fixture Author.*Nature/s);
-    assert.equal(await frame().locator('.item').first().locator('.publication-label').textContent(), 'Publication');
-    assert.match(await frame().locator('.item').first().locator('.match-topic').textContent(), /Text contains|Topic terms found|Related by meaning|Topic fit is uncertain|Title only/);
+    assert.match(await frame().locator('.item').first().textContent(), /Nature.*Fixture Author/s);
+    // An unknown genre is hidden from the source line, never relabelled as a research article.
+    assert.equal(await frame().locator('.item').first().evaluate(node=>[...node.querySelectorAll('.publication-label')].filter(label=>!label.closest('.related-commentaries')).length), 0);
+    assert.ok((await frame().locator('.item').first().locator('.match-topic strong').textContent()).trim());
+    await frame().locator('.item').first().locator('.item-details').evaluate(node=>node.open=true);
+    assert.match(await frame().locator('.item').first().locator('.item-details-body').textContent(), /Text contains|Topic terms found|Related by meaning|Topic fit is uncertain|Title only/);
+    await frame().locator('.item').first().locator('.item-details').evaluate(node=>node.open=false);
     await page.screenshot({ path: `${output}/brewed-digest.png`, fullPage: true });
     return { digest: await digestIdentity(), selected: await frame().locator('.item[data-item-id]').count(), slate, fixtureRequests: report.fixtureRequests.length };
   });

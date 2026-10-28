@@ -29,8 +29,11 @@ function mountPip(root, { digestId, notes = [] } = {}) {
   const pipChatStorageKey = "dailydigest-pip-chat";
   const teaDialog = instance.querySelector(".tea-dialog");
   const teaBreakOver = "Your cup is full. I’ll keep it warm while you read.";
-  let chatOpen = false;
-  try { chatOpen = localStorage.getItem(pipChatStorageKey) === "open"; } catch (_) {}
+  // A first display greets with one note. Only an explicit collapse is
+  // remembered as closed, so later routes and cache takeovers keep the reader's
+  // choice instead of re-deciding it.
+  let chatOpen = true;
+  try { chatOpen = localStorage.getItem(pipChatStorageKey) !== "closed"; } catch (_) {}
   let teaLeaves = 0;
   try {
     const savedTeaLeaves = Number.parseInt(localStorage.getItem(teaLeafStorageKey) || "0", 10);
@@ -42,34 +45,66 @@ function mountPip(root, { digestId, notes = [] } = {}) {
   let pipDrag = null;
   let pipLandTimer = null;
 
-  function syncTeaBreakState() {
+  // The note is chosen once, when a leaf is accepted (or on mount). Animation
+  // timers only move the cup, leaf and count; they never rewrite the text.
+  function renderNote() {
+    if (!teaText) return;
+    const note = teaLeaves >= 10 ? teaBreakOver : TEA_NOTES.length ? TEA_NOTES[teaLeaves % TEA_NOTES.length] : teaText.textContent;
+    if (teaText.textContent !== note) teaText.textContent = note;
+    if (teaBreak) teaBreak.dataset.noteKind = teaLeaves < 10 && note.startsWith("Lab joke") ? "joke" : "fact";
+    fitPipBubble();
+  }
+
+  function syncLeafControls() {
     if (teaLeafCount) teaLeafCount.textContent = String(teaLeaves);
-    if (!teaButton || !teaText) return;
-    if (teaLeaves < 10) {
-      if (TEA_NOTES.length) teaText.textContent = TEA_NOTES[teaLeaves % TEA_NOTES.length];
-      if (teaBreak) teaBreak.dataset.noteKind = teaText.textContent.startsWith("Lab joke") ? "joke" : "fact";
-      fitPipBubble();
-      return;
-    }
-    teaText.textContent = teaBreakOver;
+    if (!teaButton || teaLeaves < 10) return;
     teaButton.setAttribute("aria-label", "Ten leaves in Pip’s cup");
     teaButton.setAttribute("title", "Your cup is full");
     teaButton.disabled = true;
-    if (teaBreak) teaBreak.dataset.noteKind = "fact";
-    fitPipBubble();
+  }
+
+  // The page's reading column, when Pip sits on a reading page.
+  function readingColumn() {
+    const main = teaBreak.closest?.("main");
+    if (!main || !window.getComputedStyle) return null;
+    const box = main.getBoundingClientRect(), style = window.getComputedStyle(main);
+    return { left: box.left + (parseFloat(style.paddingLeft) || 0), right: box.right - (parseFloat(style.paddingRight) || 0) };
   }
 
   function fitPipBubble() {
     if (!teaDialog || !chatOpen || !teaPet || !teaPet.getClientRects().length) return;
+    // In the page flow the note sits beside the cup and takes its own space,
+    // so it never covers the article above or below.
+    const inline = !teaBreak.dataset.positioned && window.getComputedStyle?.(teaBreak).position === "static";
+    teaBreak.dataset.placement = inline ? "inline" : "floating";
+    if (inline) {
+      for (const name of ["left", "top", "width", "maxHeight"]) teaDialog.style[name] = "";
+      delete teaBreak.dataset.bubble;
+      return;
+    }
     const dock = teaPet.getBoundingClientRect();
+    // The bubble belongs to the cup: while an inline Pip is scrolled away, do
+    // not leave its note pinned over the article at the viewport edge.
+    const away = dock.bottom <= 0 || dock.top >= window.innerHeight || dock.right <= 0 || dock.left >= window.innerWidth;
+    if (away) { teaBreak.dataset.bubble = "away"; return; }
+    delete teaBreak.dataset.bubble;
     const leaf = teaButton?.getBoundingClientRect();
     const top = Math.min(dock.top, leaf?.top ?? dock.top);
     const bottom = Math.max(dock.bottom, leaf?.bottom ?? dock.bottom);
     const aboveSpace = Math.max(0, top - 22);
     const belowSpace = Math.max(0, window.innerHeight - bottom - 22);
     teaDialog.style.maxHeight = `${Math.max(44, Math.max(aboveSpace, belowSpace))}px`;
+    // A cup in the margin keeps its note in that margin, narrowed if needed,
+    // rather than letting it spill over the reading column.
+    let minLeft = 8, maxRight = window.innerWidth - 8;
+    const column = readingColumn();
+    if (column && dock.right <= column.left) maxRight = column.left - 12;
+    else if (column && dock.left >= column.right) minLeft = column.right + 12;
+    if (maxRight - minLeft < 160) { minLeft = 8; maxRight = window.innerWidth - 8; }
+    teaDialog.style.width = "";
+    teaDialog.style.width = `${Math.min(teaDialog.offsetWidth, maxRight - minLeft)}px`;
     const width = teaDialog.offsetWidth, height = teaDialog.offsetHeight;
-    teaDialog.style.left = `${Math.round(Math.max(8, Math.min(window.innerWidth - width - 8, dock.left)))}px`;
+    teaDialog.style.left = `${Math.round(Math.max(minLeft, Math.min(maxRight - width, dock.left)))}px`;
     const above = top - height - 14;
     const below = bottom + 14;
     teaDialog.style.top = `${Math.round(Math.max(8, Math.min(window.innerHeight - height - 8, above >= 8 ? above : below)))}px`;
@@ -93,10 +128,26 @@ function mountPip(root, { digestId, notes = [] } = {}) {
     };
   }
 
+  // A dropped cup must not cover the fixed Display or Back to top controls
+  // (or hide under them).
+  function clearOfDisplay(point) {
+    if (!teaBreak) return point;
+    const width = teaBreak.offsetWidth, height = teaBreak.offsetHeight;
+    for (const id of ["display-menu-toggle", "back-to-top"]) {
+      const control = document.getElementById(id);
+      if (!control || !control.getClientRects().length) continue;
+      const box = control.getBoundingClientRect();
+      const overlaps = point.x < box.right + 8 && point.x + width > box.left - 8
+        && point.y < box.bottom + 8 && point.y + height > box.top - 8;
+      if (overlaps) point = { x: point.x, y: Math.max(8, box.top - height - 8) };
+    }
+    return point;
+  }
+
   function setPipPosition(x, y, persist = true) {
     if (!teaBreak) return;
     teaBreak.dataset.positioned = "true";
-    const point = clampPipPosition(x, y);
+    const point = persist ? clearOfDisplay(clampPipPosition(x, y)) : clampPipPosition(x, y);
     teaBreak.style.left = `${Math.round(point.x)}px`;
     teaBreak.style.top = `${Math.round(point.y)}px`;
     teaBreak.style.bottom = "auto";
@@ -163,7 +214,8 @@ function mountPip(root, { digestId, notes = [] } = {}) {
     teaButton.setAttribute("aria-label", "Drop a tea leaf into Pip’s cup for another science fact or joke");
     teaButton.setAttribute("title", "Drop a tea leaf into Pip’s cup");
   }
-  syncTeaBreakState();
+  renderNote();
+  syncLeafControls();
   setPipChat(chatOpen, false);
   restorePipPosition();
   if (teaDialog && typeof window.ResizeObserver !== "undefined") {
@@ -280,14 +332,14 @@ function mountPip(root, { digestId, notes = [] } = {}) {
   function finishLeafCycle() {
     window.clearTimeout(leafTimer);
     if (teaBreak) teaBreak.classList.remove("is-feeding", "is-sipping", "is-regrowing");
-    if (leafBusy) syncTeaBreakState();
+    if (leafBusy) syncLeafControls();
     leafBusy = false;
     if (teaButton) teaButton.removeAttribute("aria-disabled");
     schedulePipIdle();
   }
   function runLeafCycle() {
     if (!pipMotionAllowed()) {
-      syncTeaBreakState();
+      syncLeafControls();
       return;
     }
     clearPipIdle();
@@ -306,7 +358,7 @@ function mountPip(root, { digestId, notes = [] } = {}) {
     leafTimer = window.setTimeout(() => {
       teaBreak.classList.remove("is-feeding");
       teaBreak.classList.add("is-sipping");
-      syncTeaBreakState();
+      syncLeafControls();
       leafTimer = window.setTimeout(() => {
         teaBreak.classList.remove("is-sipping");
         if (teaLeaves < 10) teaBreak.classList.add("is-regrowing");
@@ -327,12 +379,16 @@ function mountPip(root, { digestId, notes = [] } = {}) {
     }
   }
   if (teaText && teaButton && TEA_NOTES.length) {
-    teaButton.addEventListener("click", () => {
-      if (teaLeaves >= 10 || leafBusy || pipDrag) return;
-      setPipChat(true);
+    teaButton.addEventListener("click", (event) => {
+      // The second click of a double-click is the same gesture, including
+      // under reduced motion where no feeding cycle blocks it.
+      if (teaLeaves >= 10 || leafBusy || pipDrag || event?.detail > 1) return;
       teaLeaves = Math.min(10, teaLeaves + 1);
       // Save at acceptance so navigation or cancellation cannot lose a leaf.
       try { localStorage.setItem(teaLeafStorageKey, String(teaLeaves)); } catch (_) {}
+      // Choose the one new note, then open: both land in the same frame.
+      renderNote();
+      setPipChat(true);
       runLeafCycle();
     }, { signal: controller.signal });
   }

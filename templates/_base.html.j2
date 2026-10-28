@@ -23,7 +23,7 @@
   .article-figure { margin-top: 12px; font-size: 14px; }
   .article-figure summary { cursor: pointer; min-height: 44px; padding: 10px 0; }
   .article-figure figure { margin: 8px 0; }
-  .article-figure img { display: block; width: 100%; max-width: 480px; height: 220px; object-fit: contain; }
+  .article-figure img { display: block; width: auto; max-width: 100%; height: auto; max-height: 70vh; object-fit: contain; }
   .article-figure img[hidden], .figure-unavailable[hidden] { display: none; }
   .figure-retry { min-height: 44px; padding: 4px 12px; color: var(--accent); background: var(--card); border: 1px solid var(--border); border-radius: 6px; cursor: pointer; }
   .article-figure figcaption, .figure-hint { color: var(--muted); font-size: 12px; }
@@ -50,11 +50,11 @@
     outline: 2px solid var(--accent); outline-offset: 3px;
   }
   .skip-link {
-    position: absolute; top: 8px; left: 14px; z-index: 80;
+    position: fixed; top: 8px; left: 14px; z-index: 80;
     padding: 10px 14px; border-radius: 8px; background: var(--card);
-    transform: translateY(-180%);
+    transform: translateY(calc(-100% - 16px)); clip-path: inset(50%);
   }
-  .skip-link:focus { transform: translateY(0); }
+  .skip-link:focus { transform: translateY(0); clip-path: none; }
   button, input, textarea, select { font: inherit; }
   .btn {
     display: inline-flex; align-items: center; justify-content: center; gap: 8px;
@@ -69,9 +69,13 @@
   }
   .btn.primary:hover { background: var(--accent-strong); border-color: var(--accent-strong); }
   html[data-theme="dark"] .btn.primary { color: #0e1a13; }
+  /* Display stays reachable at the viewport's bottom-right on every reading
+     path. Safe-area insets keep it off notches and home indicators; the
+     --dd-vv-* offsets follow a pinch-zoomed mobile visual viewport. */
   .app-utilities {
-    position: relative; z-index: 40; width: max-content;
-    margin: -54px auto 16px;
+    position: fixed; z-index: 60; width: max-content; margin: 0;
+    right: calc(max(16px, env(safe-area-inset-right, 0px) + 10px) + var(--dd-vv-right, 0px));
+    bottom: calc(max(16px, env(safe-area-inset-bottom, 0px) + 10px) + var(--dd-vv-bottom, 0px));
   }
   .app-utility {
     min-height: 38px; padding: 8px 13px; border: 1px solid var(--border);
@@ -80,6 +84,20 @@
     font-size: 12px; font-weight: 740;
   }
   .app-utility:hover { color: var(--text); border-color: var(--accent); }
+  /* Back to top sits just above Display once the reader has scrolled. */
+  .back-to-top {
+    position: fixed; z-index: 60;
+    right: calc(max(16px, env(safe-area-inset-right, 0px) + 10px) + var(--dd-vv-right, 0px));
+    bottom: calc(max(16px, env(safe-area-inset-bottom, 0px) + 10px) + var(--dd-vv-bottom, 0px) + 48px);
+  }
+  /* On a phone, beside Display rather than above it: one row of controls
+     covers less of the card being read. Display is about 86px wide. */
+  @media (max-width: 760px) {
+    .back-to-top {
+      right: calc(max(16px, env(safe-area-inset-right, 0px) + 10px) + var(--dd-vv-right, 0px) + 94px);
+      bottom: calc(max(16px, env(safe-area-inset-bottom, 0px) + 10px) + var(--dd-vv-bottom, 0px));
+    }
+  }
   .app-utilities > summary { display: flex; align-items: center; gap: 9px; list-style: none; }
   .app-utilities > summary::-webkit-details-marker { display: none; }
   .app-utilities > summary::after { content: "+"; color: var(--accent); }
@@ -88,7 +106,7 @@
     position: absolute; bottom: calc(100% + 8px); right: 0;
     display: flex; flex-direction: column; gap: 4px;
     width: 240px; max-width: calc(100vw - 32px); padding: 8px;
-    max-height: calc(100dvh - 100px); overflow-y: auto;
+    max-height: calc(100vh - 100px); max-height: calc(100dvh - 100px); overflow-y: auto;
     border: 1px solid var(--border); border-radius: 12px;
     background: var(--card); box-shadow: var(--shadow);
   }
@@ -115,9 +133,6 @@
   @media (prefers-reduced-motion: no-preference) {
     body::before { animation: ambient-arrive 2.8s ease-out 1 both; }
   }
-  @media (max-width: 680px) {
-    .app-display-options { right: 50%; transform: translateX(50%); }
-  }
   @media (pointer: coarse) {
     .btn, .app-utility, .app-display-options .app-utility { min-height: 44px; }
   }
@@ -133,7 +148,7 @@
     body { background: white; color: black; }
     body::before, body::after, .actions, .app-utilities, .vote-row, .reason-block,
     .feedback-actions, .item-head-actions, .tea-break, .reader-toolbar, .brew-choice,
-    .compact-brew-form, .toast, .skip-link, .settings-actions { display: none !important; }
+    .compact-brew-form, .toast, .skip-link, .settings-actions, .back-to-top { display: none !important; }
     .wrap { max-width: none; padding: 0; }
     .card, .digest-card, .item { box-shadow: none; break-inside: avoid; }
     details > :not(summary) { display: block !important; }
@@ -165,6 +180,7 @@
     <span id="install-app-help" hidden>Adds a standalone app shortcut. It does not install or start the DailyDigest server.</span>
   </div>
 </details>
+<button class="app-utility back-to-top" id="back-to-top" type="button" aria-label="Back to top" hidden>↑ Top</button>
 <script>
 {% include "_rating_queue.js.j2" %}
 (function () {
@@ -173,6 +189,21 @@
   const displayButton = document.getElementById("display-toggle");
   const themeColor = document.getElementById("theme-color");
   const displayMenu = document.getElementById("display-menu");
+  // Keep the fixed control inside a pinch-zoomed visual viewport. Without
+  // zoom the offsets stay zero, so an on-screen keyboard does not lift it.
+  const visual = window.visualViewport;
+  function followVisualViewport() {
+    const zoomed = visual && visual.scale > 1.01;
+    const right = zoomed ? Math.max(0, window.innerWidth - visual.offsetLeft - visual.width) : 0;
+    const bottom = zoomed ? Math.max(0, window.innerHeight - visual.offsetTop - visual.height) : 0;
+    root.style.setProperty("--dd-vv-right", `${Math.round(right)}px`);
+    root.style.setProperty("--dd-vv-bottom", `${Math.round(bottom)}px`);
+  }
+  if (visual && root.style) {
+    visual.addEventListener("resize", followVisualViewport);
+    visual.addEventListener("scroll", followVisualViewport);
+    followVisualViewport();
+  }
   displayMenu.addEventListener("keydown", (event) => {
     if (event.key !== "Escape" || !displayMenu.open) return;
     event.preventDefault();
@@ -184,6 +215,17 @@
   }
   document.addEventListener("pointerdown", dismissDisplayMenu);
   document.addEventListener("focusin", dismissDisplayMenu);
+  // Shown after about a screen of scrolling; returns focus to the page start.
+  const backToTop = document.getElementById("back-to-top");
+  function syncBackToTop() { backToTop.hidden = window.scrollY < window.innerHeight; }
+  window.addEventListener("scroll", syncBackToTop, { passive: true });
+  window.addEventListener("resize", syncBackToTop);
+  syncBackToTop();
+  backToTop.addEventListener("click", () => {
+    const smooth = !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    window.scrollTo({ top: 0, behavior: smooth ? "smooth" : "auto" });
+    document.getElementById("page-content").focus({ preventScroll: true });
+  });
   function applyTheme(theme) {
     const dark = theme === "dark";
     root.dataset.theme = dark ? "dark" : "light";

@@ -847,6 +847,7 @@ def install_browser():
     embed._resolved_backend_name = lambda: str(browserEmbeddingBackend())
 
     from dailydigest import web
+    web.BROWSER_MODE = True
     _WEB = web
     web.threading = SimpleNamespace(Thread=BrowserThread, Lock=threading.Lock, Event=threading.Event)
     original_validate = web._validate_setup

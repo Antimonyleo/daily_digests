@@ -96,6 +96,8 @@ test('current cached layout promotes supplied context once and keeps section/dat
   assert.equal((html.match(/Compare assembly methods\./g)||[]).length,1);
   assert.match(html,/Only simulated &lt;not validated&gt;/);
   assert.ok(html.indexOf('Compare assembly methods.')<html.indexOf('<details>'));
+  assert.ok(html.indexOf('Only simulated')>html.indexOf('<details><summary>Details</summary>'),'A caveat belongs in Details, not on the card');
+  assert.match(html,/<div class="contents-links"><a href="about:srcdoc#cached-section-0">/);
   assert.match(html,/font-src data:/);
   assert.match(html,/script-src 'none'/);
   assert.equal(validateReadingView({...value,version:4}),null,'The older disposable copy regenerates from SQLite');
@@ -113,6 +115,13 @@ test('saved reading views retain optional publisher image links without contacti
   assert.match(html,/Graphical abstract · open publisher image/);
   assert.doesNotMatch(html,/<img|<script/);
   value.items[0].figureURL='javascript:alert(1)';assert.equal(validateReadingView(value),null);
+});
+
+test('saved reading views keep plain article images under their honest label', () => {
+  const value=fixture();Object.assign(value.items[0],{figureURL:'https://publisher.test/b.png',figureLabel:'Article image'});
+  assert.ok(validateReadingView(value));
+  assert.match(readingViewDocument(value),/Article image · open publisher image/);
+  value.items[0].figureLabel='TOC guess';assert.equal(validateReadingView(value),null);
 });
 
 test('opening controls preserves the edition in a saved reading view after midnight', () => {
@@ -190,4 +199,97 @@ test('shared CSS is inlined without opaque-frame requests or weaker script isola
   const html=readingViewDocument(fixture(),'dark','https://example.test/desk/reading-view.mjs',new Date(),css);
   assert.doesNotMatch(html,/<link/);assert.match(html,/script-src 'none'/);assert.match(html,/--bg:green/);
   assert.doesNotMatch(readingViewDocument(fixture(),'light',undefined,undefined,'</style><script>bad()</script>'),/<script>/);
+});
+
+
+test('a caveat without other details still opens a Details disclosure', () => {
+  const value=fixture();value.items[0].caveat='Only one cohort.';
+  const html=readingViewDocument(value);
+  assert.match(html,/<details><summary>Details<\/summary><div class="summary-field"><span class="summary-label">Caveat<\/span><p class="summary-text">Only one cohort\.<\/p>/);
+  assert.equal(readingViewDocument(fixture()).includes('<details>'),false);
+});
+
+test('opportunity facts are extracted as separate lines', () => {
+  const rows=['Amount: Up to $800,000 · Deadline: Dec 14 · Open','Eligibility: Eligibility needs verification · Check official requirements','Official call (Verify source) · Add to calendar'];
+  const facts={children:rows.map(textContent=>({textContent})),textContent:rows.join('')};
+  const item={dataset:{section:'Funding'},closest:()=>null,querySelector:selector=>selector==='.opportunity-facts'?facts:selector==='.title-link'?{textContent:'A call',getAttribute:()=>'https://example.org/call'}:null};
+  const document={querySelector:selector=>selector==='.digest-date'?{textContent:'2026-10-15'}:selector==='#reading-personalization'?{textContent:'{"name":"","notes":[]}'}:null,
+    querySelectorAll:selector=>selector==='.item[data-section]'?[item]:[]};
+  const view=extractReadingView(document,new Date('2026-10-15T12:00:00Z'));
+  assert.equal(view.items[0].opportunity,rows.join('\n'));
+  assert.match(readingViewDocument(view),/Eligibility needs verification/);
+});
+
+test('a grouped work stays one cached card that keeps each version link and its own status', () => {
+  const versionRow = (lead, status, url, linkText) => ({querySelector:selector => selector === '.version-lead' ? {textContent:lead}
+    : selector === '.version-status' ? (status ? {textContent:status} : null)
+    : selector === 'a[href]' ? {textContent:linkText, getAttribute:() => url} : null});
+  const versions = [versionRow('Also published in  Proteins', '', 'https://doi.org/10.1002/prot.70189', 'DOI 10.1002/prot.70189'),
+    versionRow('Preprint version on bioRxiv', 'Withdrawn', 'https://doi.org/10.1101/x', 'DOI 10.1101/x')];
+  const card = (title, withVersions) => ({dataset:{section:'Research'}, closest:()=>null,
+    querySelector:selector => selector === '.title-link' ? {textContent:title, getAttribute:() => 'https://example.org/' + title.length}
+      : selector === '.version-links li' ? (withVersions ? versions[0] : null) : null,
+    querySelectorAll:selector => selector === '.version-links li' && withVersions ? versions : []});
+  const items = [card('AlphaFold3 and disordered proteins', true), card('Another paper', false)];
+  const document = {querySelector:selector=>selector==='.digest-date'?{textContent:'2026-10-13'}:selector==='#reading-personalization'?{textContent:'{"name":"","notes":[]}'}:null,
+    querySelectorAll:selector=>selector==='.item[data-section]'?items:[]};
+  const view = extractReadingView(document, new Date('2026-10-15T12:00:00Z'));
+  assert.equal(view.items.length, 2);
+  assert.deepEqual(view.items[0].versions, [
+    {lead:'Also published in Proteins', status:'', url:'https://doi.org/10.1002/prot.70189', linkText:'DOI 10.1002/prot.70189'},
+    {lead:'Preprint version on bioRxiv', status:'Withdrawn', url:'https://doi.org/10.1101/x', linkText:'DOI 10.1101/x'}]);
+  assert.equal('versions' in view.items[1], false);
+  const html = readingViewDocument(view);
+  assert.match(html, /Research <span>2<\/span>/);
+  assert.match(html, /<li>Also published in Proteins · <a href="https:\/\/doi.org\/10.1002\/prot.70189"[^>]*>DOI 10.1002\/prot.70189<\/a><\/li>/);
+  // The withdrawn status stays on its own version link, not the card.
+  assert.match(html, /<li>Preprint version on bioRxiv · <strong class="version-status">Withdrawn<\/strong>/);
+  assert.equal((html.match(/Withdrawn/g) || []).length, 1);
+  for (const bad of [{...view.items[0].versions[0], url:'javascript:alert(1)'}, {...view.items[0].versions[0], grade:70},
+    {...view.items[0].versions[0], lead:''}]) {
+    assert.equal(validateReadingView({...view, items:[{...view.items[0], versions:[bad]}]}), null);
+  }
+  assert.ok(validateReadingView({...view, items:[{...view.items[0], versions:[{...view.items[0].versions[0], url:''}]}]}));
+});
+
+test('saved funding facts lead the card and the purpose is secondary, as natively', () => {
+  const data=fixture();
+  data.items[0].opportunity='Amount: $250,000 · Deadline: Nov 3 · Open\nEligibility: Needs verification';
+  data.items[0].summary='The call funds variant interaction centers.';
+  const html=readingViewDocument(data);
+  assert.match(html,/<div class="opportunity-facts"><p class="opportunity-key">Amount: \$250,000 · Deadline: Nov 3 · Open<\/p><p class="opportunity-line">Eligibility: Needs verification<\/p><\/div>/);
+  assert.ok(html.indexOf('opportunity-key')<html.indexOf('opportunity-purpose'),'facts come before the purpose');
+  assert.match(html,/<p class="paper-finding opportunity-purpose">The call funds/);
+  assert.match(html,/\.opportunity-key\{color:var\(--text\);font-size:15px;font-weight:600/);
+  assert.match(html,/\.paper-finding\.opportunity-purpose\{color:var\(--muted\);font-size:14px/);
+  assert.equal((html.match(/Eligibility: Needs verification/g)||[]).length,1,'facts are not repeated as context');
+});
+
+test('research findings keep the primary finding style', () => {
+  assert.doesNotMatch(readingViewDocument(fixture()),/class="paper-finding opportunity-purpose"/);
+});
+
+test('saved page carries the reader density preference', () => {
+  assert.match(readingViewDocument(fixture(),'light',undefined,undefined,null,'compact'),/<html lang="en" data-theme="light" data-display="compact">/);
+  assert.match(readingViewDocument(fixture()),/data-display="comfortable"/);
+  assert.match(readingViewDocument(fixture(),'light',undefined,undefined,null,'"><script>'),/data-display="comfortable"/);
+});
+
+test('compact view hides routine match context but keeps real uncertainty, as natively', () => {
+  const data=fixture();
+  data.items[0].reason='Matches: protein design';data.items[0].uncertainty='Protein design · Topic fit is uncertain';
+  const html=readingViewDocument(data,'light',undefined,undefined,null,'compact');
+  assert.match(html,/<p class="reading-context">Matches: protein design<\/p>/);
+  assert.match(html,/<p class="reading-context reading-uncertainty">Protein design · Topic fit is uncertain<\/p>/);
+  assert.match(html,/html\[data-display="compact"\] \.reading-context:not\(\.reading-uncertainty\)\{display:none\}/);
+  assert.doesNotMatch(html,/html\[data-display="compact"\] \.reading-context\{display:none\}/);
+  data.items[0].reason=data.items[0].uncertainty;
+  assert.equal((readingViewDocument(data).match(/Topic fit is uncertain/g)||[]).length,1,'one shared line is shown once, as uncertainty');
+  assert.match(readingViewDocument(data),/reading-uncertainty">Protein design · Topic fit is uncertain/);
+});
+
+test('the saved page ends with a script-free way back to the top', () => {
+  const html=readingViewDocument(fixture());
+  assert.match(html,/<p class="cache-updated"><a href="about:srcdoc#page-salutation">Back to top<\/a> · Saved /);
+  assert.match(html,/<h1 id="page-salutation">/);
 });

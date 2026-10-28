@@ -58,6 +58,7 @@
   }
   .time-machine-link.active time { color: var(--accent-strong); }
   .compact-brew-form { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0; }
+  .brew-size-hint { color: var(--muted); font-size: 13px; line-height: 1.35; }
   .compact-brew {
     display: flex; align-items: center; gap: 7px; min-height: 38px; padding: 5px 6px 5px 10px;
     border: 1px solid var(--border); border-radius: 8px; background: var(--card);
@@ -168,6 +169,8 @@
   }
 	  .digest-date { font-weight: 750; overflow-wrap: anywhere; }
 	  .feedback-note { color: var(--muted); font-size: 13px; line-height: 1.45; max-width: 620px; }
+  .footer p { margin: 0; }
+  .footer .source-note { margin-bottom: 4px; color: var(--copy-secondary); font-size: 13px; }
   .ranking-panel {
     display: grid; gap: 8px; padding: 14px;
     border: 1px solid var(--border); border-radius: 8px; background: var(--panel);
@@ -274,7 +277,7 @@
     display: grid; grid-template-columns: 92px 1fr; gap: 8px; margin: 10px 0 0;
   }
   .summary-field { display: grid; grid-template-columns: 92px 1fr; gap: 8px; }
-  .related-commentaries { margin: 10px 0; padding: 0 0 0 12px; border-left: 2px solid var(--border); list-style: none; font-size: 14px; line-height: 1.45; }
+  .related-commentaries { margin: 10px 0; padding: 0 0 0 12px; border-left: 1px solid var(--border); list-style: none; font-size: 14px; line-height: 1.45; }
   .related-commentaries li + li { margin-top: 6px; }
   .related-commentaries .publication-label { color: var(--muted); }
   .related-commentaries a { overflow-wrap: anywhere; text-underline-offset: 3px; }
@@ -425,8 +428,7 @@
   html[data-display="compact"] .reason-line { display: none; }
   html[data-display="compact"] .item .summary,
   html[data-display="compact"] .summary-primary { margin-top: 5px; }
-  html[data-display="compact"] .summary-primary { grid-template-columns: 72px 1fr; gap: 6px; }
-  html[data-display="compact"] .summary-primary .summary-label { font-size: 12px; white-space: nowrap; }
+  html[data-display="compact"] .summary-primary { grid-template-columns: minmax(0, 1fr); gap: 0; }
   html[data-display="compact"] .item-details { margin-top: 5px; }
   html[data-display="compact"] .item-details summary { padding: 5px 0; }
   html[data-display="compact"] .vote-panel {
@@ -504,26 +506,24 @@
       <h1 id="page-salutation" data-profile-name="{{ profile_name | default('', true) }}">{{ salutation }}{% if profile_name %}, {{ profile_name }}{% endif %}</h1>
     </div>
     <div class="actions reading-toolbar">
-      <form class="compact-brew-form" action="/run" method="get">
+      <form class="compact-brew-form" action="/run" method="post">
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
         <label class="compact-brew" for="reading-mode-select">
           <span class="sr-only">Digest size</span>
-          <select id="reading-mode-select" name="reading_mode" aria-label="Choose digest size">
-            <option value="full">Full</option><option value="usual" selected>Standard</option><option value="minimal">Short</option>
+          <select id="reading-mode-select" name="reading_mode" aria-label="Choose digest size" aria-describedby="reading-mode-hint">
+            <option value="full" data-hint="Every qualified pick">Full</option><option value="usual" data-hint="Up to 15 best picks" selected>Standard</option><option value="minimal" data-hint="5 research picks + 1 from each other section">Short</option>
           </select>
         </label>
         <button class="btn primary" type="submit">Brew</button>
       </form>
+      <span class="brew-size-hint" id="reading-mode-hint">Up to 15 best picks</span>
       <a class="btn" href="/saved">Saved</a>
       <a class="btn" href="/setup">Settings</a>
     </div>
   </header>
 
-  {% if viewing_today and not brewed and latest_saved_brew %}
-  <section class="source-coverage" aria-label="Latest saved digest">
-    <p>No digest has been brewed today.</p>
-    <a class="btn" href="{{ latest_saved_brew.href }}">Open latest saved digest · {{ latest_saved_brew.date_label }}</a>
-  </section>
-  {% endif %}
+  {% if requested_digest_missing %}<p class="feedback-note" role="status">That digest is no longer saved. Showing today’s reading desk.</p>{% endif %}
+
 
   {% set has_helpful_ratings = (ranking_status.vote_counts | default({})).signed | default(0) %}
   {% set rating_counts = ranking_status.vote_counts | default({}) %}
@@ -539,7 +539,6 @@
   </form>
   {% endif %}
 
-  {% if source_coverage is defined and source_coverage.unavailable %}<p class="feedback-note">{{ source_coverage.unavailable }} sources unavailable. <a href="#source-details" data-open-source-details>Coverage and freshness</a></p>{% endif %}
   <section class="digest-card" id="digest-content" tabindex="-1">
     <nav class="contents-nav" aria-label="In this digest">
       <div class="contents-links">
@@ -560,7 +559,7 @@
       <label class="sr-only" for="digest-search">Search this digest</label><input id="digest-search" class="digest-search" type="search" placeholder="Search this digest" autocomplete="off">
       <div class="tool-group" role="group" aria-label="Filter recommendations">
         <button class="filter-chip active" data-filter="all" type="button" aria-pressed="true">All</button>
-        <button class="filter-chip" data-filter="priority" data-filter-group="status" data-filter-value="priority" type="button" aria-pressed="false" title="Show the higher-ranked picks in this digest">Top picks</button>
+        <button class="filter-chip" data-filter="priority" data-filter-group="status" data-filter-value="priority" type="button" aria-pressed="false" title="Show the strongest picks from every section">Top picks</button>
         <button class="filter-chip" data-filter="unreviewed" data-filter-group="status" data-filter-value="unreviewed" type="button" aria-pressed="false">Unrated</button>
       </div>
       <div class="reader-tools-side">
@@ -584,8 +583,9 @@
 	      A digest was brewed for {{ "today" if viewing_today else digest_id }}, but no matching items were found.<br>
 	      Adjust section sizes or profile terms in Settings, then brew again.
 	      {% else %}
-	      No digest has been brewed for today yet.<br>
+	      No digest has been brewed today.<br>
 	      Use the brew button to fetch fresh sources and watch progress live.
+          {% if viewing_today and latest_saved_brew %}<p><a class="btn" href="{{ latest_saved_brew.href }}">Open latest saved digest · {{ latest_saved_brew.date_label }}</a></p>{% endif %}
 	      {% endif %}
 	    </div>
     {% else %}
@@ -598,7 +598,7 @@
       {% for item in section.entries %}
       {% set priority_score = item.score_raw if item.ranking.contribution_rerank is defined else item.confidence_score | default(item.score_raw) %}
       {% set priority = 'spotlight' if priority_score >= 0.85 else ('read' if priority_score >= 0.65 else 'skim') %}
-      <div class="item" data-item-id="{{ item.id }}" data-section="{{ section.key }}" data-priority="{{ priority }}" data-topic="{{ item.ranking.primary_facet | default('', true) }}" data-source-bucket="{{ item.ranking.source_bucket }}" data-reviewed="{{ 'true' if item.current_grade is not none else 'false' }}" data-current-grade="{{ item.current_grade if item.current_grade is not none else '' }}" data-bookmarked="{{ 'true' if item.bookmarked else 'false' }}" data-known="{{ 'true' if item.known else 'false' }}">
+      <div class="item" data-item-id="{{ item.id }}" data-section="{{ section.key }}" data-priority="{{ priority }}" data-top-pick="{{ 'true' if item.top_pick else 'false' }}" data-topic="{{ item.ranking.primary_facet | default('', true) }}" data-source-bucket="{{ item.ranking.source_bucket }}" data-reviewed="{{ 'true' if item.current_grade is not none else 'false' }}" data-current-grade="{{ item.current_grade if item.current_grade is not none else '' }}" data-bookmarked="{{ 'true' if item.bookmarked else 'false' }}" data-known="{{ 'true' if item.known else 'false' }}" data-saved-item-ids="{{ item.saved_item_ids | default([]) | join(',') }}" data-known-item-ids="{{ item.known_item_ids | default([]) | join(',') }}"{% if item.version_item_ids %} data-version-item-ids="{{ item.version_item_ids | join(',') }}"{% endif %}{% if item.version_search %} data-version-search="{{ item.version_search }}"{% endif %}>
         <div class="item-main">
           <div class="item-head">
             <div class="item-heading">
@@ -607,60 +607,45 @@
               {% endif %}
               <a class="title-link" href="{{ item.url }}" target="_blank" rel="noopener">{{ item.title }}</a>
             </div>
-            <div class="item-head-actions">
-              <button class="bookmark-btn{% if item.bookmarked %} active{% endif %}" type="button" aria-pressed="{{ 'true' if item.bookmarked else 'false' }}" aria-label="{{ 'Remove from saved items' if item.bookmarked else 'Save for later' }}">
-                <span class="bookmark-icon" aria-hidden="true">{{ '★' if item.bookmarked else '☆' }}</span>
-                <span class="bookmark-label">{{ 'Saved' if item.bookmarked else 'Save' }}</span>
-              </button>
-              {% if section.key in ("opportunities", "events") %}
-              {# Funding calls stay open for weeks and form a standing shortlist
-                 that may re-show an active call, so only an explicit "I know this"
-                 can retire one. Nothing automatic ever sets this flag. #}
-              <button class="bookmark-btn known-btn{% if item.known %} active{% endif %}" type="button" aria-pressed="{{ 'true' if item.known else 'false' }}" aria-label="{{ 'Show this again in future digests' if item.known else 'Mark as known so it stops appearing' }}">
-                <span class="known-icon" aria-hidden="true">{{ '✓' if item.known else '⊘' }}</span>
-                <span class="known-label">{{ 'Known' if item.known else 'Mark known' }}</span>
-              </button>
-              {% endif %}
-            </div>
           </div>
           <div class="item-copy">
+          <div class="paper-meta">
           <div class="meta">
-            {% if item.authors %}<span class="authors">{{ item.authors }}</span> · {% endif %}{{ item.source }}{% if item.publication_label %} · <span class="publication-label">{{ item.publication_label }}</span>{% endif %}{% if item.published %} &middot; {{ item.published }}{% endif %}
+            {%- set meta_sep = joiner(" · ") -%}
+            {%- if item.source %}{{ meta_sep() }}<span class="venue">{{ item.source }}</span>{% endif %}{% if item.publication_label %}{{ meta_sep() }}<span class="publication-label">{{ item.publication_label }}</span>{% endif %}{% if item.published_label %}{{ meta_sep() }}{% if item.published_iso %}<time datetime="{{ item.published_iso }}">{{ item.published_label }}</time>{% else %}{{ item.published_label }}{% endif %}{% endif %}{% if item.authors %}{{ meta_sep() }}<span class="authors">{{ item.authors }}</span>{% endif -%}
           </div>
+          {% include "_version_links.html.j2" %}
           {% if item.opportunity %}
-          <div class="opportunity-facts">
+          {% set opp = item.opportunity %}
+          <div class="opportunity-facts" data-opportunity-kind="{{ 'event' if section.key == 'events' else 'funding' }}">
             {% if section.key == "events" %}
-            <strong>Date:</strong> {{ item.opportunity.event_dates or "Not stated" }}
-            &middot; <strong>Location:</strong> {{ item.opportunity.location }}
-            {% if item.opportunity.format %}&middot; {{ item.opportunity.format }}{% endif %}<br>
+            <p class="opportunity-key"><span class="opportunity-fact"><span class="fact-label">Date:</span> {{ opp.event_dates_label or "Not stated" }}</span> · <span class="opportunity-fact opportunity-where"><span class="fact-label">Where:</span> {{ opp.location }}{% if opp.format %} · {{ opp.format }}{% endif %}</span> · <span class="opportunity-fact"><span class="fact-label">Deadline:</span> {% if opp.deadline_iso %}<time datetime="{{ opp.deadline_iso }}">{{ opp.deadline_label }}</time>{% else %}{{ opp.deadline_label }}{% endif %}</span></p>
             {% else %}
-            <strong>Amount:</strong> {{ item.opportunity.amount }}<br>
+            <p class="opportunity-key"><span class="opportunity-fact"><span class="fact-label">Amount:</span> {{ opp.amount }}</span> · <span class="opportunity-fact"><span class="fact-label">Deadline:</span> {% if opp.deadline_iso %}<time datetime="{{ opp.deadline_iso }}">{{ opp.deadline_label }}</time>{% else %}{{ opp.deadline_label }}{% endif %}</span> · <span class="opportunity-status">{{ opp.status }}</span></p>
             {% endif %}
-            <strong>Deadline:</strong> {{ item.opportunity.deadline }}
-            &middot; {{ item.opportunity.status }}
-            &middot; {{ item.opportunity.eligibility }}<br>
-            <span class="opportunity-note">{{ item.opportunity.official }} &middot; {{ item.opportunity.eligibility_reason }}</span>
-            &middot; <a href="{{ item.opportunity.calendar_url }}">Add to calendar</a>
+            <p class="opportunity-eligibility"{% if opp.eligibility != 'Potentially eligible' %} data-needs-verification{% endif %}><span class="fact-label">Eligibility:</span> {{ opp.eligibility }} · <span class="opportunity-note">{{ opp.eligibility_reason }}</span></p>
+            <p class="opportunity-links"><a href="{{ item.url }}" target="_blank" rel="noopener">{{ 'Official call' if section.key != 'events' else 'Official page' }}</a> <span class="opportunity-note">({{ opp.official }})</span> · <a href="{{ opp.calendar_url }}">Add to calendar</a></p>
           </div>
           {% endif %}
           {% set uncertain_fit = (not item.abstract) or (item.ranking.topic_alignment and (item.ranking.topic_alignment.uncertain or not item.ranking.topic_alignment.complete)) %}
           {% set evidence_topic = item.ranking.topic_support.topic if item.ranking.topic_support and item.ranking.topic_support.status == 'text_supported' else item.ranking.primary_facet %}
-          {% if item.ranking.primary_facet %}<p class="match-topic{% if uncertain_fit or not item.match_evidence %} topic-support{% endif %}"><strong>{{ evidence_topic }}</strong>{% if not item.abstract %} · Title only; fit needs checking{% elif uncertain_fit %} · Topic fit is uncertain{% elif item.match_evidence %} · Text contains “{{ item.match_evidence.term }}”{% elif item.ranking.topic_support and item.ranking.topic_support.status == 'text_supported' %} · Topic terms found in the supplied text{% else %} · Related by meaning; check the connection{% endif %}</p>{% endif %}
+          {% if item.ranking.primary_facet %}<p class="match-topic{% if uncertain_fit or not item.match_evidence %} topic-support{% endif %}"{% if uncertain_fit %} data-reading-uncertainty{% endif %}><strong>{{ evidence_topic }}</strong>{% if not item.abstract %} · Title only; fit needs checking{% elif uncertain_fit %} · Topic fit is uncertain{% endif %}</p>{% endif %}
           {% if section.key == 'research' and not item.abstract and not item.ranking.primary_facet %}<p class="topic-support">Title only; fit needs checking</p>{% endif %}
           {% if item.reason_line and not item.ranking.primary_facet %}
           <div class="reason-line">{{ item.reason_line }}</div>
           {% endif %}
+          </div>
           {% if item.summary_fields.get('Key finding') %}
-          <div class="summary-primary" aria-label="Key finding for {{ item.label }}">
-            <div class="summary-label">Key finding</div>
-            <div class="summary-text">{{ item.summary_fields.get('Key finding') }}</div>
+          <div class="summary-primary" aria-label="{{ item.finding_label | default('Key finding') }} for {{ item.label }}">
+            <div class="summary-label">{{ item.finding_label | default('Key finding') }}</div>
+            <div class="summary-text">{% for segment in item.finding_segments %}{% if segment.match %}<mark class="finding-term">{{ segment.text }}</mark>{% else %}{{ segment.text }}{% endif %}{% endfor %}</div>
           </div>
           {% elif item.summary %}
-          <div class="summary">{{ item.summary }}</div>
+          <div class="summary">{% for segment in item.finding_segments %}{% if segment.match %}<mark class="finding-term">{{ segment.text }}</mark>{% else %}{{ segment.text }}{% endif %}{% endfor %}</div>
           {% endif %}
-          {% if item.summary_fields.get('Key finding') %}{% for label in ['Why read', 'Caveat'] %}{% if item.summary_fields.get(label) %}
-          <div class="summary-field reading-context-field" data-summary-label="{{ label }}"><div class="summary-label">{{ label }}</div><div class="summary-text">{{ item.summary_fields.get(label) }}</div></div>
-          {% endif %}{% endfor %}{% endif %}
+          {% if item.summary_fields.get('Key finding') and item.summary_fields.get('Why read') %}
+          <div class="summary-field reading-context-field" data-summary-label="Why read"><div class="summary-label">Why read</div><div class="summary-text">{{ item.summary_fields.get('Why read') }}</div></div>
+          {% endif %}
           {% include "_article_figure.html.j2" %}
           {% if item.related_commentaries %}
           <ul class="related-commentaries" aria-label="Commentary on {{ item.title }}">
@@ -671,7 +656,10 @@
           {% endif %}
           <details class="item-details">
             <summary>Details</summary>
-            <div class="item-details-body"><p class="rating-help">Ratings guide future recommendations. Less relevant and Not relevant lower their priority; reasons distinguish topic fit, difficulty and access.</p>
+            <div class="item-details-body">
+              {% if item.summary_fields.get('Key finding') and item.summary_fields.get('Caveat') %}
+              <div class="summary-field" data-summary-label="Caveat"><div class="summary-label">Caveat</div><div class="summary-text">{{ item.summary_fields.get('Caveat') }}</div></div>
+              {% endif %}
               {% if item.summary_fields %}
                 {% for label, text in item.summary_fields.items() %}
                   {% if label not in ['Key finding', 'Why read', 'Caveat'] %}
@@ -682,8 +670,9 @@
                   {% endif %}
                 {% endfor %}
               {% endif %}
-              {% if item.abstract %}<div class="summary-field article-abstract"><div class="summary-label">Abstract</div><div class="summary-text">{{ item.abstract }}</div></div>{% endif %}
-              {% if item.match_evidence %}<blockquote class="match-quote">{{ item.match_evidence.quote }}</blockquote><p class="hint">Exact text match explains the topic connection, not scientific quality.</p>{% endif %}
+              {% if item.authors_full and item.authors_full != item.authors %}<div class="summary-field article-authors"><div class="summary-label">Authors</div><div class="summary-text">{{ item.authors_full }}</div></div>{% endif %}
+              {% if item.abstract %}<div class="summary-field article-abstract"><div class="summary-label">Abstract</div><div class="summary-text">{% for segment in item.abstract_segments %}{% if segment.match %}<mark class="match-term">{{ segment.text }}</mark>{% else %}{{ segment.text }}{% endif %}{% endfor %}</div></div>{% endif %}
+              {% if item.ranking.primary_facet and item.abstract and not uncertain_fit %}<p class="signal-line">{% if item.match_evidence %}Text contains “{{ item.match_evidence.term }}”{% if item.abstract_segments | selectattr('match') | list %} (marked in the abstract){% endif %}. A text match explains the topic connection, not scientific quality.{% elif item.ranking.topic_support and item.ranking.topic_support.status == 'text_supported' %}Topic terms found in the supplied text.{% else %}Related by meaning; check the connection.{% endif %}</p>{% endif %}
               <div class="why-copy"><strong>Why this pick?</strong>
                 {% if item.ranking.primary_facet %}Best-matching interest: {{ item.ranking.primary_facet }}.{% endif %}
                 {% if item.ranking.why_shown %}
@@ -691,8 +680,8 @@
                 {% else %}
                 Selected because it looks relevant to your profile and carries useful editorial signals for today’s read.
                 {% endif %}
-                {% if item.ranking.selection_reason %}
-                {{ item.ranking.selection_reason | capitalize }}.
+                {% if item.selection_note %}
+                {{ item.selection_note }}
                 {% endif %}
               </div>
               {% if item.ranking.topic_alignment is defined %}
@@ -703,45 +692,40 @@
               </div>
               {% endif %}
               {% if item.ranking.tags %}<div class="signal-line">{{ item.ranking.tags | join(' · ') }}</div>{% endif %}
-              {% if item.ranking.contribution_claims is defined %}
+              {% if item.evidence %}
+              {% for row in item.evidence.known %}
               <div class="summary-field">
-                <div class="summary-label">Contribution evidence</div>
-                {% for claim in item.ranking.contribution_claims.claims | unique(attribute='quote') | list %}
-                <div class="summary-text">{{ claim.quote }}</div>
-                {% else %}
-                <div class="summary-text">Unknown from supplied text</div>
+                <div class="summary-label">{{ row.label }}</div>
+                <div class="summary-text">
+                {% for quote in row.quotes %}
+                <p>{{ quote }}</p>
                 {% endfor %}
-              </div>
-              {% endif %}
-              {% if item.ranking.article_evidence is defined %}
-              {% for dimension, label in [('validation', 'Validation evidence'), ('data_code', 'Data/code availability'), ('limitations', 'Limitations')] %}
-              <div class="summary-field">
-                <div class="summary-label">{{ label }}</div>
-                {% for claim in item.ranking.article_evidence.dimensions[dimension].claims %}
-                <div class="summary-text">{{ claim.quote }}</div>
-                {% else %}
-                <div class="summary-text">Unknown from supplied text</div>
-                {% endfor %}
+                </div>
               </div>
               {% endfor %}
-              <div class="signal-line">Author-reported claims; not independently verified.</div>
+              {% if item.evidence.unknown %}<p class="signal-line evidence-unknown">Unknown from supplied text: {{ item.evidence.unknown_text }}.</p>{% endif %}
+              {% if item.evidence.attributed %}<div class="signal-line">Author-reported claims; not independently verified.</div>{% endif %}
               {% endif %}
             </div>
           </details>
-          <div class="save-state{% if item.current_grade is not none %} saved{% endif %}" aria-live="polite">
-            {% if item.current_grade == 100 %}
-            Very relevant saved.
-            {% elif item.current_grade == 70 %}
-            Relevant saved.
-            {% elif item.current_grade == 40 %}
-            Less relevant saved.
-            {% elif item.current_grade == 10 %}
-            Not relevant saved.
-            {% endif %}
-          </div>
+          <div class="save-state{% if item.current_grade is not none %} saved{% endif %}" aria-live="polite"></div>
           </div>
         </div>
-        <div class="vote-panel">{{ feedback_controls(item) }}<button class="copy-summary btn" type="button">Copy summary</button><span class="copy-status" role="status"></span></div>
+        <div class="vote-panel">{{ feedback_controls(item) }}<div class="item-actions">
+          <button class="bookmark-btn{% if item.bookmarked %} active{% endif %}" type="button" aria-pressed="{{ 'true' if item.bookmarked else 'false' }}" aria-label="{{ 'Remove from saved items' if item.bookmarked else 'Save for later' }}">
+            <span class="bookmark-icon" aria-hidden="true">{{ '★' if item.bookmarked else '☆' }}</span>
+            <span class="bookmark-label">{{ 'Saved' if item.bookmarked else 'Save' }}</span>
+          </button>
+          {% if section.key in ("opportunities", "events") %}
+          {# Funding calls stay open for weeks and form a standing shortlist
+             that may re-show an active call, so only an explicit "I know this"
+             can retire one. Nothing automatic ever sets this flag. #}
+          <button class="bookmark-btn known-btn{% if item.known %} active{% endif %}" type="button" aria-pressed="{{ 'true' if item.known else 'false' }}" aria-label="{{ 'Show this again in future digests' if item.known else 'Mark as known so it stops appearing' }}">
+            <span class="known-icon" aria-hidden="true">{{ '✓' if item.known else '⊘' }}</span>
+            <span class="known-label">{{ 'Known' if item.known else 'Mark known' }}</span>
+          </button>
+          {% endif %}
+          <button class="copy-summary btn" type="button">Copy summary</button></div><span class="copy-status" role="status"></span></div>
       </div>
       {% endfor %}
       </details>
@@ -772,7 +756,7 @@
       </summary>
       <div class="overflow-body">
         <p class="overflow-note">
-          These cleared every relevance gate and lost their seat only to today’s
+          More matches that did not fit in today’s
           serving size. Saving pins them for one more ranking pass against
           tomorrow’s fresh papers.
         </p>
@@ -780,7 +764,7 @@
           {% for entry in overflow_audit %}
           <li class="overflow-row" data-item-id="{{ entry.item_id }}">
             <a href="{{ entry.url }}" target="_blank" rel="noopener">{{ entry.title }}</a>
-            <span class="overflow-meta">{{ entry.source }}{% if entry.section %} · {{ entry.section }}{% endif %} · relevance {{ '%.2f'|format(entry.topic_score | default(0.0) | float) }}</span>
+            <span class="overflow-meta">{{ entry.source }}{% if entry.section %} · {{ entry.section }}{% endif %}</span>
             {# Rating a near-miss is the scarcest training signal there is: these
                sit exactly on the cutoff the ranker keeps getting wrong. A negative
                grade retires the item (store.exclude_reviewed_items). A positive one
@@ -805,7 +789,8 @@
     {% endif %}
 
     <div class="footer">
-      Your reading history and ratings are saved locally.
+      {% if source_coverage is defined and source_coverage.unavailable %}<p class="source-note">{{ source_coverage.unavailable }} {{ 'source was' if source_coverage.unavailable == 1 else 'sources were' }} unavailable in the latest check. <a href="#source-details" data-open-source-details>See source coverage</a></p>{% endif %}
+      <p>Your reading history and ratings are saved locally.</p>
     </div>
   </section>
   {% include "_pip.html.j2" %}
@@ -820,10 +805,12 @@
     </summary>
     <div class="about-body">
   <aside class="learning-summary source-coverage" aria-label="Your reading feedback">
+    <h3 class="about-heading">Your feedback</h3>
+    {% if learned_profile_note %}<p class="learned-profile-note">{{ learned_profile_note }}</p>{% endif %}
     <p id="learning-summary-message">{% if ranking_status.blocked | default(false) or has_helpful_ratings %}{{ ranking_status.learning_message | default(ranking_status.message) }}{% else %}Rate a paper to help shape future digests.{% endif %}</p>
     <p id="usefulness-summary"{% if not feedback_summary.rated %} hidden{% endif %}>{% if feedback_summary.rated %}{{ feedback_summary.useful }} useful of {{ feedback_summary.rated }} rated picks in this digest · {{ feedback_summary.unrated }} unrated.{% endif %}</p>
     <a href="/reading/study">Review useful picks per digest</a>
-    <details><summary>What the feedback means</summary><p>Useful means marked Relevant or Very relevant. Ratings help future brews; this saved list does not reshuffle. Unrated papers are unknown, not unsuccessful recommendations.</p></details>
+    <details><summary>What the feedback means</summary><p>Ratings guide future recommendations. Less relevant and Not relevant lower their priority; reasons distinguish topic fit, difficulty and access.</p><p>Useful means marked Relevant or Very relevant. Ratings help future brews; this saved list does not reshuffle. Unrated papers are unknown, not unsuccessful recommendations.</p></details>
   </aside>
   {% if interest_coverage %}
   <section class="source-coverage" aria-label="Your configured interests">
@@ -842,7 +829,7 @@
 
   {% if source_coverage is defined %}
   <section id="source-details" class="source-coverage" aria-label="Source coverage and freshness">
-    <strong>Latest source check</strong>
+    <h3 class="about-heading">Latest source check</h3>
     {% if source_coverage.total %}
       <p>{{ source_coverage.responded }} of {{ source_coverage.total }} sources responded{% if source_coverage.unavailable %} · {{ source_coverage.unavailable }} unavailable{% endif %}{% if source_coverage.limited %} · {{ source_coverage.limited }} returned limited results{% endif %}{% if source_coverage.unknown %} · {{ source_coverage.unknown }} unknown{% endif %}.</p>
       <p class="source-check-time">Checked <time datetime="{{ source_coverage.checked_at }}">{{ source_coverage.checked_label }}</time>{% if source_coverage.public_oldest_label %} · Oldest public feed update: {{ source_coverage.public_oldest_label }}{% endif %}</p>
@@ -867,11 +854,11 @@
 
 
     <section class="ranking-panel" aria-live="polite">
-      <div class="ranking-kicker">Personalization</div>
+      <h3 class="ranking-kicker about-heading">Personalization</h3>
       <div class="ranking-counts" id="ranking-counts"{% if not has_helpful_ratings %} hidden{% endif %}>
         <span class="count-pill good">Relevant <span id="vote-good">{{ rating_counts.good | default(0) }}</span></span>
         <span class="count-pill bad">Not relevant <span id="vote-bad">{{ rating_counts.bad | default(0) }}</span></span>
-        <span class="count-pill">Helpful ratings <span id="vote-signed">{{ rating_counts.signed | default(0) }}</span>/<span id="vote-threshold">{{ ranking_status.min_votes_for_lr }}</span></span>
+        <span class="count-pill">Helpful ratings <span id="vote-signed">{{ rating_counts.signed | default(0) }}</span><span id="vote-threshold-part"{% if (rating_counts.signed | default(0)) >= (ranking_status.min_votes_for_lr | default(0)) %} hidden{% endif %}> of <span id="vote-threshold">{{ ranking_status.min_votes_for_lr }}</span> needed</span></span>
       </div>
       <div class="ranking-message" id="ranking-message">
         {{ ranking_status.message }}
@@ -880,7 +867,7 @@
     </section>
     {% if overview.source_mix %}
     <div class="source-mix">
-      <h2 class="panel-title">Today’s source mix</h2>
+      <h3 class="panel-title about-heading">Today’s source mix</h3>
       {% for source, count in overview.source_mix %}
       <div class="mix-row">
         <span>{{ source }}</span>
@@ -1113,6 +1100,8 @@
     if (badEl) badEl.textContent = counts.bad;
     if (signedEl) signedEl.textContent = counts.signed;
     if (thresholdEl) thresholdEl.textContent = status.min_votes_for_lr;
+    const thresholdPart = document.getElementById("vote-threshold-part");
+    if (thresholdPart) thresholdPart.hidden = counts.signed >= status.min_votes_for_lr;
     if (trainBtn) trainBtn.disabled = !status.can_train;
     if (!msgEl) return;
     const learning = document.getElementById('learning-summary-message');
@@ -1161,7 +1150,7 @@
   const topicSelect = document.getElementById('topic-filter');
   const readerItems = Array.from(document.querySelectorAll('.item'));
   const normalizeQuery = text => text.normalize('NFKC').toLocaleLowerCase();
-  const searchText = new Map(readerItems.map(item => [item, normalizeQuery(Array.from(item.querySelectorAll('.title-link,.meta,.summary-text,.summary,.match-topic,.reason-line'), node => node.textContent).join(' '))]));
+  const searchText = new Map(readerItems.map(item => [item, normalizeQuery([...Array.from(item.querySelectorAll('.title-link,.meta,.version-links,.summary-text,.summary,.match-topic,.reason-line'), node => node.textContent), item.dataset.versionSearch || ''].join(' '))]));
   if (topicSelect) {
     const topics = [...new Set(readerItems.map(item => item.dataset.topic).filter(Boolean))].sort((a,b) => a.localeCompare(b));
     for (const topic of topics) topicSelect.add(new Option(topic,topic));
@@ -1196,15 +1185,46 @@
   searchInput?.addEventListener('input',applyReaderFilters);topicSelect?.addEventListener('change',applyReaderFilters);
   const dateSelect=document.getElementById('digest-date');
   dateSelect?.addEventListener('change',()=>{if(typeof window.ddNavigate==='function')window.ddNavigate(dateSelect.value);else window.location.href = dateSelect.value;});
+  // Section tabs: one horizontally scrollable row. Keep the current and the
+  // focused tab in view, and show a leading fade once earlier tabs scroll away.
+  const tabStrip=document.querySelector('.contents-links');
+  const tabNav=tabStrip?.closest('.contents-nav');
+  const tabMotion=()=>window.matchMedia?.('(prefers-reduced-motion: reduce)').matches?'auto':'smooth';
+  function syncTabEdges(){
+    if(!tabStrip||!tabNav)return;
+    tabNav.toggleAttribute('data-tabs-scrolled',tabStrip.scrollLeft>2);
+    tabNav.toggleAttribute('data-tabs-overflow',tabStrip.scrollWidth>tabStrip.clientWidth+2);
+  }
+  function revealTab(link,behavior=tabMotion()){
+    if(!tabStrip||!link||link.hidden||tabStrip.scrollWidth<=tabStrip.clientWidth+2)return;
+    const strip=tabStrip.getBoundingClientRect(),tab=link.getBoundingClientRect(),lead=30,trail=40;
+    // A tab wider than the visible strip aligns its start, so its label reads first.
+    if(tab.left<strip.left+lead||tab.width>strip.width-lead-trail)tabStrip.scrollBy({left:tab.left-strip.left-lead,behavior});
+    else if(tab.right>strip.right-trail)tabStrip.scrollBy({left:tab.right-strip.right+trail,behavior});
+  }
+  function setCurrentTab(key){
+    let current=null;
+    document.querySelectorAll('.contents-links a').forEach(link=>{const active=link.dataset.sectionLink===key;link.setAttribute('aria-current',String(active));if(active)current=link;});
+    if(current&&!tabStrip?.contains(document.activeElement))revealTab(current);
+  }
+  tabStrip?.addEventListener('scroll',syncTabEdges,{passive:true});
+  tabStrip?.addEventListener('focusin',event=>{if(event.target.matches?.('a'))revealTab(event.target,'auto');});
+  window.addEventListener('resize',syncTabEdges);
+  syncTabEdges();
   document.querySelectorAll('.contents-links a').forEach(link=>link.addEventListener('click',event=>{
     const section=document.getElementById(link.hash.slice(1));if(!section||section.hidden)return;
     event.preventDefault();section.open=true;section.scrollIntoView({block:'start'});const summary=section.querySelector('.section-toggle');summary.tabIndex=-1;summary.focus({preventScroll:true});
-    document.querySelectorAll('.contents-links a').forEach(node=>node.setAttribute('aria-current',String(node===link)));
+    setCurrentTab(link.dataset.sectionLink);revealTab(link);
   }));
   if(typeof IntersectionObserver!=='undefined'){
-    const observer=new IntersectionObserver(entries=>{for(const entry of entries)if(entry.isIntersecting&&!entry.target.hidden)document.querySelectorAll('.contents-links a').forEach(link=>link.setAttribute('aria-current',String(link.dataset.sectionLink===entry.target.dataset.section)));},{rootMargin:'-5% 0px -65% 0px'});
+    const observer=new IntersectionObserver(entries=>{for(const entry of entries)if(entry.isIntersecting&&!entry.target.hidden)setCurrentTab(entry.target.dataset.section);},{rootMargin:'-5% 0px -65% 0px'});
     document.querySelectorAll('.section-block:not(.empty-section)').forEach(section=>observer.observe(section));
   }
+  const sizeSelect = document.getElementById("reading-mode-select");
+  const sizeHint = document.getElementById("reading-mode-hint");
+  const syncSizeHint = () => { if (sizeSelect && sizeHint) sizeHint.textContent = sizeSelect.selectedOptions[0]?.dataset.hint || ""; };
+  sizeSelect?.addEventListener("change", syncSizeHint);
+  syncSizeHint();
   document.querySelector('[data-open-source-details]')?.addEventListener('click',event=>{event.preventDefault();document.querySelector('.about-brew').open=true;const section=document.getElementById('source-details');section.tabIndex=-1;section.scrollIntoView({block:'start'});section.focus({preventScroll:true});});
   applyReaderFilters();
 
@@ -1247,7 +1267,7 @@
     let shown = 0;
     items.forEach((itemEl) => {
       const bucket = itemEl.dataset.sourceBucket || "";
-      const priorityMatch = !state.priorityOnly || itemEl.dataset.priority === "spotlight" || itemEl.dataset.priority === "read";
+      const priorityMatch = !state.priorityOnly || itemEl.dataset.topPick === "true";
       const unreadMatch = !state.unreadOnly || itemEl.dataset.reviewed !== "true" || itemEl.dataset.feedbackPending === "true";
       const queryMatch = !state.query || searchText.get(itemEl).includes(normalizeQuery(state.query));
       const topicMatch = !state.topic || itemEl.dataset.topic === state.topic;
@@ -1272,6 +1292,7 @@
       const section=document.getElementById(link.hash.slice(1));link.hidden=Boolean(section?.hidden);
       const count=section?.querySelectorAll('.item:not([hidden])').length;const badge=link.querySelector('span');if(badge)badge.textContent=String(count||0);
     });
+    syncTabEdges();
     const countEl = document.getElementById("filter-count");
     if (countEl) countEl.textContent = `${shown} of ${items.length}`;
     const emptyEl = document.getElementById("no-filter-results");
@@ -1364,6 +1385,13 @@
     });
   });
 
+  function otherVersionIds(raw, id) {
+    return String(raw || "").split(",").filter((value) => /^\d+$/.test(value) && value !== String(id));
+  }
+  function versionQuery(ids) {
+    return ids.length ? `?versions=${ids.join(",")}` : "";
+  }
+
   document.querySelectorAll(".item").forEach((itemEl) => {
     syncReasonChips(itemEl);
     const bookmarkBtn = itemEl.querySelector(".bookmark-btn:not(.known-btn)");
@@ -1372,15 +1400,18 @@
         const id = itemEl.dataset.itemId;
         const wasSaved = itemEl.dataset.bookmarked === "true";
         bookmarkBtn.disabled = true;
+        // A work is saved when any version is; unsaving clears every version.
+        const savedVersions = wasSaved ? otherVersionIds(itemEl.dataset.savedItemIds, id) : [];
         setStatus(itemEl, wasSaved ? "Removing saved item…" : "Saving item…", "");
         try {
-          const response = await fetch(`/bookmark/${id}`, {
+          const response = await fetch(`/bookmark/${id}${versionQuery(savedVersions)}`, {
             method: wasSaved ? "DELETE" : "POST",
             headers: { "X-CSRF-Token": CSRF_TOKEN },
           });
           const payload = await responsePayload(response);
           const nowSaved = !wasSaved;
           itemEl.dataset.bookmarked = nowSaved ? "true" : "false";
+          itemEl.dataset.savedItemIds = nowSaved ? id : "";
           bookmarkBtn.classList.toggle("active", nowSaved);
           bookmarkBtn.setAttribute("aria-pressed", nowSaved ? "true" : "false");
           const bookmarkIcon = bookmarkBtn.querySelector(".bookmark-icon");
@@ -1406,15 +1437,17 @@
         const id = itemEl.dataset.itemId;
         const wasKnown = itemEl.dataset.known === "true";
         knownBtn.disabled = true;
+        const knownVersions = wasKnown ? otherVersionIds(itemEl.dataset.knownItemIds, id) : [];
         setStatus(itemEl, "Updating known status…", "");
         try {
-          const response = await fetch(`/known/${id}`, {
+          const response = await fetch(`/known/${id}${versionQuery(knownVersions)}`, {
             method: wasKnown ? "DELETE" : "POST",
             headers: { "X-CSRF-Token": CSRF_TOKEN },
           });
           const payload = await responsePayload(response);
           const nowKnown = !wasKnown;
           itemEl.dataset.known = nowKnown ? "true" : "false";
+          itemEl.dataset.knownItemIds = nowKnown ? id : "";
           knownBtn.classList.toggle("active", nowKnown);
           knownBtn.setAttribute("aria-pressed", nowKnown ? "true" : "false");
           const knownIcon = knownBtn.querySelector(".known-icon");
@@ -1457,7 +1490,7 @@
           itemEl.querySelector('.vote-btn')?.focus();
           return;
         }
-        setStatus(itemEl, payload.storagePending ? `${GRADE_LABEL[grade]} recorded · saving browser copy…` : `${GRADE_LABEL[grade]} saved`, payload.storagePending ? 'pending' : 'saved');
+        setStatus(itemEl, payload.storagePending ? `${GRADE_LABEL[grade]} recorded · saving browser copy…` : "Rating recorded.", payload.storagePending ? 'pending' : 'saved');
         showToast(`${GRADE_LABEL[grade]} response recorded`);
       },
       failure:error => {setStatus(itemEl, 'Response was not saved. ' + error.message, 'error'); flash(itemEl);},

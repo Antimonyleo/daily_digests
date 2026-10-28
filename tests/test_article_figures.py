@@ -97,3 +97,120 @@ def test_publisher_figure_survives_store_digest_and_saved_routes(tmp_path, monke
 ])
 def test_unlabelled_logos_and_issue_covers_are_not_article_previews(entry):
     assert 'article_figure' not in _entry_metadata(entry)
+
+
+# --- Explicit graphical-abstract evidence --------------------------------------
+# Wiley eTOC fixtures below reuse the image URL, alt text and caption text stored
+# for these records in the 2026-10-23 public snapshot (browser/.build-cache). Raw
+# feed HTML is not retained, so the markup around those values is the minimal
+# content:encoded shape implied by the stored abstract (image, then caption).
+WILEY_DECLARED = [
+    ('https://onlinelibrary.wiley.com/cms/asset/38e2d4cf-2911-4d45-9735-dd1df61b7b06/adma75449-gra-0001-m.png',
+     'Mechanoactive Biomaterials for Cell–Matrix Mechanotransduction',
+     'The graphical abstract shows how individual triggers (force, light, or temperature) and combined '
+     'optothermal or receptor‐targeted actuation induce material responses.'),
+    ('https://onlinelibrary.wiley.com/cms/asset/92ae942a-2193-47ad-9fc5-9b78c6ed99e7/smll76381-gra-0001-m.png',
+     'From Fiber to Electrode: Structure, Property and Advanced Characterization of Textile Carbon Electrodes',
+     'The table of contents graphic summarizes electrode materials and characterization strategies for '
+     'iron‐chromium redox flow batteries.'),
+]
+
+
+def _wiley_entry(url, alt, caption, abstract='ABSTRACT A longer abstract follows the caption.'):
+    feed = feedparser.parse(f'''<rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+<channel><title>Wiley</title><item><title>{alt}</title><link>https://onlinelibrary.wiley.com/doi/10.1002/x?af=R</link>
+<description>{caption[:80]}</description>
+<content:encoded><![CDATA[<div><p><img src="{url}" alt="{alt}"/></p><p>{caption}</p> {abstract}</div>]]></content:encoded>
+</item></channel></rss>''')
+    return feed.entries[0]
+
+
+@pytest.mark.parametrize('url,alt,caption', WILEY_DECLARED)
+def test_caption_that_names_the_sole_image_marks_a_graphical_abstract(url, alt, caption):
+    from dailydigest.article_figure import display_figure
+    metadata = _entry_metadata(_wiley_entry(url, alt, caption))
+    figure = metadata['article_figure']
+    assert figure == {'url': url, 'kind': 'graphical_abstract', 'alt': alt,
+                      'provenance': 'feed_html', 'label_evidence': 'following_caption'}
+    assert display_figure(metadata)['label'] == 'Graphical abstract'
+
+
+def test_undeclared_wiley_asset_stays_an_article_image_despite_its_file_name():
+    from dailydigest.article_figure import display_figure
+    url = 'https://advanced.onlinelibrary.wiley.com/cms/asset/a0584762-019c-46d8-9314-fbb17060e97c/adma75394-gra-0001-m.png'
+    metadata = _entry_metadata(_wiley_entry(url, 'Targeting Endoplasmic Reticulum Stress',
+                                            'An ER‐regulating heterojunction converts pathological oxidative cues.'))
+    assert metadata['article_figure']['kind'] == 'article_preview'
+    assert 'label_evidence' not in metadata['article_figure']
+    assert display_figure(metadata)['label'] == 'Article image'
+
+
+@pytest.mark.parametrize('caption', [
+    'As displayed in Graphical Abstract image.tif, a molecular‐design strategy tailors droplet dynamics.',
+    'Graphical abstracts are increasingly common in materials journals.',
+    'A heterojunction is shown. The graphical abstract was created with an image tool.',
+])
+def test_incidental_mentions_do_not_relabel_an_image(caption):
+    url = 'https://onlinelibrary.wiley.com/cms/asset/x/advs76684-gra-0001-m.png'
+    assert _entry_metadata(_wiley_entry(url, 'A droplet paper', caption))['article_figure']['kind'] == 'article_preview'
+
+
+def test_caption_cannot_choose_between_several_images():
+    html = ('<p><img src="https://publisher.test/fig1.png" alt="Figure 1"></p>'
+            '<p>The graphical abstract summarizes the method.</p>'
+            '<p><img src="https://publisher.test/fig2.png" alt="Figure 2"></p>')
+    figure = _entry_metadata({'summary': html})['article_figure']
+    assert figure['url'] == 'https://publisher.test/fig1.png'
+    assert figure['kind'] == 'article_preview'
+
+
+def test_label_block_directly_before_an_image_marks_only_that_image():
+    html = ('<p><img src="https://publisher.test/fig1.png" alt="Figure 1"></p>'
+            '<h3>Graphical abstract:</h3><img src="https://publisher.test/ga.png" alt="Scheme">')
+    figure = _entry_metadata({'summary': html})['article_figure']
+    assert figure['url'] == 'https://publisher.test/ga.png'
+    assert figure['label_evidence'] == 'preceding_label'
+    separated = '<h3>Graphical abstract</h3><p>Some prose first.</p><img src="https://publisher.test/a.png" alt="Scheme">'
+    assert _entry_metadata({'summary': separated})['article_figure']['kind'] == 'article_preview'
+
+
+def test_same_image_in_content_and_summary_is_still_the_sole_image():
+    url, alt, caption = WILEY_DECLARED[0]
+    body = f'<p><img src="{url}" alt="{alt}"></p><p>{caption}</p>'
+    entry = {'content': [{'value': body}], 'summary': body}
+    assert _entry_metadata(entry)['article_figure']['kind'] == 'graphical_abstract'
+
+
+def test_preprint_graphical_abstract_placeholder_is_not_resolved_to_a_guessed_url():
+    # medRxiv/bioRxiv abstracts declare a graphical abstract but give only a
+    # relative FIGDIR placeholder; resolving it would mean guessing a URL.
+    summary = ('A placental mechanism contributing to sPTB. Graphical Abstract O_FIG O_LINKSMALLFIG WIDTH=200 '
+               'HEIGHT=113 SRC="FIGDIR/small/26362823v1_ufig1.gif" ALT="Figure 1"> View larger version (25K): '
+               '<img src="FIGDIR/small/26362823v1_ufig1.gif" alt="Figure 1"> C_FIG')
+    assert 'article_figure' not in _entry_metadata({'summary': summary})
+
+
+def test_media_thumbnail_is_labelled_article_image_for_readers():
+    from dailydigest.article_figure import display_figure
+    metadata = _entry_metadata({'media_thumbnail': [{'url': 'https://ichef.example.org/news/1.jpg'}]})
+    assert display_figure(metadata)['label'] == 'Article image'
+
+
+def test_figure_entry_names_the_declared_label_and_credits_the_feed():
+    from pathlib import Path
+    from jinja2 import Environment, FileSystemLoader
+    from dailydigest.article_figure import display_figure
+    env = Environment(loader=FileSystemLoader(Path(__file__).parents[1] / 'templates'), autoescape=True)
+    template = env.get_template('_article_figure.html.j2')
+    for kind, label in [('article_preview', 'Article image'), ('graphical_abstract', 'Graphical abstract')]:
+        figure = display_figure({'article_figure': {'url': 'https://publisher.test/a.png', 'kind': kind}})
+        html = template.render(item={'title': 'A paper', 'url': 'https://publisher.test/paper',
+                                     'source': 'Small (Wiley)', 'figure': figure})
+        # The cached reading view reads the label as the summary text before " · ".
+        assert f'<summary><span class="figure-label">{label}</span> · ' in html
+        assert f'data-figure-kind="{kind}"' in html
+        assert f'{label} supplied in the Small (Wiley) feed' in html
+        assert 'class="figure-full" href="https://publisher.test/a.png"' in html
+        assert 'class="figure-unavailable" role="status" hidden' in html
+    other = 'Graphical abstract' if label == 'Article image' else 'Article image'
+    assert other not in html

@@ -26,10 +26,16 @@ titles=['Programmable DNA origami assembly design','De novo protein binder engin
 store.upsert_items([Item(source='Fixture Journal',section='research',external_id=str(i),url=f'https://reading.invalid/{i}',title=title,abstract='A fictional assembly and molecular design method.',authors='Sample Author',published_at=now) for i,title in enumerate(titles)])
 with store.session_scope() as session:
  rows=session.query(store.ItemRow).order_by(store.ItemRow.id).all();ids=[row.id for row in rows]
- for row in rows:row.summary='Key finding: A programmable assembly method connects molecular building blocks.\\nWhy read: Compare geometry and binding rules.\\nCaveat: Fictional interface fixture.'
+ for row in rows:row.summary='Key finding: A programmable assembly method connects molecular building blocks.\\nWhy read: Compare geometry and binding rules.\\nCaveat: Tested only in one fictional cell line.'
 store.write_digest(day,[(f'R{i+1}',item_id,.85) for i,item_id in enumerate(ids)])
 store.write_digest((now-timedelta(days=2)).date().isoformat(),[('R1',ids[0],.85)])
 store.write_digest_features(day,[(f'R{i+1}',item_id,.85,{'primary_facet':topic,'source_bucket':'published_journal'}) for i,(item_id,topic) in enumerate(zip(ids,['DNA origami','Protein design','Synthetic condensates']))])
+claims=[{'quote':'First independent assembly measurement from the sample abstract.'},{'quote':'A second measurement comparing assembly across controlled sample conditions.'}]
+store.write_digest_features(day,[('R1',ids[0],.85,{'primary_facet':'DNA origami','source_bucket':'published_journal','contribution_claims':{'claims':claims},'article_evidence':{'dimensions':{key:{'claims':claims} for key in ['validation','data_code','limitations']}}})])
+with store.session_scope() as session:
+ from dailydigest.summarize import _extractive
+ row=session.get(store.ItemRow,ids[0]);row.summary=_extractive(row)
+ assert 'Why read:' not in row.summary
 pages={}
 for path,handler in [('/',web.index),('/setup',web.setup_get),('/saved',web.saved_items)]:
  request=Request({'type':'http','method':'GET','path':path,'query_string':b'','headers':[(b'host',b'reading-ui.test')],'scheme':'http','server':('reading-ui.test',80),'client':('test',1),'app':web.app})
@@ -49,7 +55,22 @@ async function verifySurface(page,path){
  }));
  assert.match(surface.font,/^Figtree/);assert.equal(surface.loaded,true);assert.match(surface.background,/linear-gradient/);
  assert.ok(surface.bodySize>=16);assert.ok(surface.headingSize>=24);
+ const skips=await page.locator('.skip-link').evaluateAll(nodes=>nodes.map(node=>({bottom:node.getBoundingClientRect().bottom,clip:getComputedStyle(node).clipPath})));
+ assert.ok(skips.every(link=>link.bottom<=0&&link.clip!=='none'),'Skip links must be fully hidden until keyboard focus');
+ for(const link of await page.locator('.skip-link').all()){
+  await link.focus();assert.ok(await link.evaluate(node=>node.getBoundingClientRect().top>=0&&getComputedStyle(node).clipPath==='none'));
+  await link.evaluate(node=>node.blur());
+ }
  if(path==='/'){
+  const first=page.locator('.item').first();
+  assert.equal(await first.locator('[data-summary-label="Why read"]').count(),0,'Why read renders only when the summary supplies one');
+  assert.equal(await page.locator('.item').nth(1).locator('[data-summary-label="Why read"]').count(),1,'Retain meaningful reasons');
+  await first.locator('.item-details').evaluate(node=>node.open=true);
+  assert.equal(await first.locator('.item-details-body .rating-help').count(),0);
+  assert.deepEqual(await first.locator('.article-abstract .summary-label').evaluate(node=>({text:node.textContent,transform:getComputedStyle(node).textTransform})),{text:'Abstract',transform:'none'});
+  const quotes=await first.locator('.summary-field .summary-text p').evaluateAll(nodes=>nodes.map(node=>node.getBoundingClientRect().width));
+  assert.ok(quotes.length>=2);assert.ok(quotes.every(width=>width>=200),JSON.stringify(quotes));
+  await first.locator('.item-details').evaluate(node=>node.open=false);
   const positions=await page.evaluate(()=>{
    const box=selector=>{const rect=document.querySelector(selector).getBoundingClientRect();return {x:rect.x,y:rect.y,height:rect.height};};
    return {brew:box('.reading-toolbar .primary'),saved:box('.reading-toolbar a[href="/saved"]'),settings:box('.reading-toolbar a[href="/setup"]')};
@@ -58,9 +79,10 @@ async function verifySurface(page,path){
  }else if(path==='/setup'){
   const headings=await page.locator('.settings-row>summary').evaluateAll(nodes=>nodes.map(node=>({size:parseFloat(getComputedStyle(node).fontSize),weight:Number(getComputedStyle(node).fontWeight)})));
   assert.ok(headings.length>=4);assert.ok(headings.every(heading=>heading.size>=18&&heading.weight>=600));
+  assert.equal(await page.locator('.settings-topic-help').evaluate(node=>getComputedStyle(node).borderTopWidth),'0px');
  }
 }
-try{for(const width of [1440,390,320]){
+try{for(const width of [1366,1536,390,320]){
  const context=await browser.newContext({viewport:{width,height:900}});
  await context.route('**/*',route=>{const url=new URL(route.request().url());if(url.origin!=='http://reading-ui.test'){report.external.push(url.href);return route.abort();}return route.fulfill(pages[url.pathname]?{contentType:'text/html',body:pages[url.pathname]}:{status:204,body:''});});
  const page=await context.newPage();page.on('pageerror',error=>report.errors.push(error.message));
@@ -71,7 +93,7 @@ try{for(const width of [1440,390,320]){
  await page.locator('[data-filter=all]').click();await page.locator('.more-filters>summary').click();await page.locator('#topic-filter').selectOption('DNA origami');assert.equal(await page.locator('.item:not([hidden])').count(),1);await page.locator('[data-filter=preprints]').click();assert.equal(await page.locator('.item:not([hidden])').count(),0);await page.keyboard.press('Escape');await page.locator('[data-filter=all]').click();assert.equal(await page.locator('.item:not([hidden])').count(),3);
  report.checks.push({width,name:'Search URL/reload, combined topic/source filtering and reset'});
  await page.locator('.contents-links a').first().click();assert.equal(await page.evaluate(()=>document.activeElement.classList.contains('section-toggle')),true);
- await page.evaluate(()=>{window.__copied='';Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async text=>window.__copied=text}});});await page.locator('.copy-summary').first().click();assert.match(await page.evaluate(()=>window.__copied),/Why read: Compare geometry/);assert.match(await page.evaluate(()=>window.__copied),/Caveat: Fictional/);
+ await page.evaluate(()=>{window.__copied='';Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async text=>window.__copied=text}});});await page.locator('.copy-summary').first().click();assert.doesNotMatch(await page.evaluate(()=>window.__copied),/Why read:/);await page.locator('.copy-summary').nth(1).click();assert.match(await page.evaluate(()=>window.__copied),/Why read: Compare geometry/);assert.match(await page.evaluate(()=>window.__copied),/Caveat: Tested only in one fictional cell line/);
  await page.evaluate(()=>Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async()=>{throw Error('denied');}}}));await page.locator('.copy-summary').first().click();await page.locator('.copy-fallback').waitFor();assert.equal(await page.locator('.copy-fallback').evaluate(node=>node===document.activeElement),true);
  report.checks.push({width,name:'Contents keyboard focus, Copy summary and denied-clipboard fallback'});
  for(const path of ['/','/setup','/saved']){await page.goto('http://reading-ui.test'+path);await page.evaluate(()=>document.documentElement.dataset.theme='dark');await page.evaluate(()=>document.fonts.ready);assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);await page.screenshot({path:resolve(output,`${path==='/'?'digest':path.slice(1)}-dark-${width}.png`)});}

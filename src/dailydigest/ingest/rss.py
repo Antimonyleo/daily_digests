@@ -82,6 +82,118 @@ def _strip_html(s: str) -> str:
     return re.sub(r"\s+", " ", s).strip()
 
 
+# Publisher feed headers that precede (or replace) the abstract. Each pattern is
+# anchored at the start of the text and names explicit bibliographic fields, so
+# body sentences that merely cite a DOI or contain numbers are never touched.
+_DOI_TOKEN = (
+    # Nature's compact DOIs are glued to the next sentence ("...-1A paper"),
+    # so their fixed suffix shape bounds them; other DOIs end at whitespace.
+    r"(?:10\.1038/[a-z]{1,2}\d{4,6}-\d{3}-\d{4,6}-[0-9a-z]"
+    r"|10\.\d{4,9}/[^\s,;]+)"
+)
+_FEED_HEADERS = (
+    # "Nature Nanotechnology, Published online: 13 October 2026; doi:10.1038/…"
+    re.compile(r"^\s*(?:[^,;\n]{2,100},\s*)?Published online\s*:\s*[^;\n]{3,40};\s*doi\s*:\s*"
+               + _DOI_TOKEN + r"\s*", re.I),
+    # "Advanced Science, Volume 13, Issue 26, 8 May 2026." (Wiley, AAAS, PNAS, ACS)
+    re.compile(r"^\s*[^,;\n]{2,100},\s*Volume\s+\d+\s*,\s*Issue\s+[\w-]+\s*"
+               r"(?:,\s*Pages?\s+[\w-]+\s*)?(?:,\s*[A-Za-z0-9 ]{0,30}?\b\d{4})?\s*\.?\s*", re.I),
+    # "New England Journal of Medicine, Ahead of Print."
+    re.compile(r"^\s*[^,;\n]{2,100},\s*Ahead of Print\s*\.?\s*", re.I),
+    # A bare leading identifier: "doi:10.…" or "https://doi.org/10.…".
+    re.compile(r"^\s*(?:doi\s*:\s*|https?://(?:dx\.)?doi\.org/)" + _DOI_TOKEN + r"\s*", re.I),
+)
+# RSC: "Chem. Sci., 2026, Accepted Manuscript DOI: 10.1039/…, Edge Article Open
+# Access This article is licensed under … Licence. A. Author, B. Author <body>"
+_RSC_HEADER = re.compile(
+    r"^\s*[^\n]{2,60}?,\s*\d{4}\s*,\s*(?:Advance Article|Accepted Manuscript|[\d ,–-]+?)\s*"
+    r"DOI\s*:\s*" + _DOI_TOKEN + r"\s*,\s*(?P<kind>(?:[A-Z][a-z]+\s+){0,2}(?:Article|Review|Perspective|"
+    r"Communication|Highlight|Feature|Tutorial|Paper|Comment|Editorial|Correction))?"
+    r"(?:\s*Open Access)?\s*(?:This article is licensed under.{0,200}?Licen[cs]e\.)?\s*",
+    re.I | re.S)
+_RSC_TAIL = re.compile(r"\s*(?:To cite this article before page numbers are assigned[^.]*\.)?"
+                       r"\s*The content of this RSS Feed \(c\)[^\n]*$", re.I)
+_NAME_TOKEN = re.compile(r"^(?:[A-Z][\w'’.-]*|van|von|de|der|den|da|di|du|la|le)$")
+# Hacker News style link-post fields carry no article text.
+_LINK_POST_FIELDS = re.compile(
+    r"(?:Article URL|Comments URL)\s*:\s*\S+|\bPoints\s*:\s*\d+|#\s*Comments\s*:\s*\d+", re.I)
+# A leading abstract label, spaced or glued ("AbstractAlternative …").
+_LEAD_LABEL = re.compile(r"^\s*(?:Abstract|ABSTRACT|Summary|SUMMARY|Significance|SIGNIFICANCE)"
+                         r"\s*[:.]?\s*(?=[A-Z0-9])")
+# A repeated abstract label between a publisher teaser and the abstract itself.
+_INNER_LABEL = re.compile(r"\s+ABSTRACT\s+(?=[A-Z0-9])|(?<=[.!?])\s*(?:Abstract|Significance)(?=[A-Z][a-z])")
+
+
+def _strip_author_list(text: str) -> str:
+    """Drop a leading "A. Author, B. Author" list that RSC places before its teaser.
+
+    Requires a comma-separated name group before the final name, which ends at a
+    glued case change ("LouDeciphering") or before a capitalized word that is
+    followed by lowercase prose. Anything less certain is left unchanged.
+    """
+    tokens = text.split(" ")
+    index, groups = 0, 0
+    while index < len(tokens):
+        start = index
+        while index < len(tokens) and _NAME_TOKEN.match(tokens[index].rstrip(",")) and not tokens[index].endswith(","):
+            index += 1
+            if index - start > 5:
+                return text
+        if index < len(tokens) and tokens[index].endswith(",") and _NAME_TOKEN.match(tokens[index][:-1]):
+            index, groups = index + 1, groups + 1
+            continue
+        index = start
+        break
+    if groups < 1:
+        return text
+    for offset in range(index, min(index + 6, len(tokens))):
+        token = tokens[offset]
+        glued = re.search(r"(?<=[a-z])(?=[A-Z][a-z])", token)
+        if glued:
+            return " ".join([token[glued.start():], *tokens[offset + 1:]])
+        following = tokens[offset + 1] if offset + 1 < len(tokens) else ""
+        if offset > index and following[:1].islower():
+            return " ".join(tokens[offset:])
+        if not _NAME_TOKEN.match(token):
+            return text
+    return text
+
+
+def strip_feed_metadata(text: str) -> str:
+    """Remove recognizable feed header/label metadata from abstract text.
+
+    Only anchored bibliographic headers, publisher boilerplate, link-post
+    fields and abstract labels are removed. A repeated inner ``ABSTRACT`` label
+    becomes a newline so a publisher teaser and the abstract are not fused into
+    one sentence. Returns "" when nothing but metadata remains.
+    """
+    if not text:
+        return ""
+    cleaned = str(text)
+    changed = True
+    while changed:
+        changed = False
+        for pattern in _FEED_HEADERS:
+            stripped = pattern.sub("", cleaned, count=1)
+            if stripped != cleaned:
+                cleaned, changed = stripped, True
+    rsc = _RSC_HEADER.match(cleaned)
+    if rsc:
+        cleaned = _strip_author_list(cleaned[rsc.end():].strip())
+        cleaned = _RSC_TAIL.sub("", cleaned)
+    cleaned = _LINK_POST_FIELDS.sub(" ", cleaned)
+    cleaned = _LEAD_LABEL.sub("", cleaned, count=1)
+    cleaned = _INNER_LABEL.sub("\n", cleaned)
+    lines = (re.sub(r"[ \t\xa0]+", " ", line).strip() for line in cleaned.split("\n"))
+    return "\n".join(line for line in lines if line)
+
+
+def feed_publication_kind(text: str) -> str:
+    """Article kind declared inside an RSC feed header ("Review Article"), else ""."""
+    match = _RSC_HEADER.match(text or "")
+    return (match.group("kind") or "").strip() if match else ""
+
+
 def canonicalize_url(url: str) -> str:
     if not url:
         return url

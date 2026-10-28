@@ -456,7 +456,7 @@ function navigationControls(response) {
     history:{replaceState(){}},crypto:{randomUUID:()=> 'fixture-token'},renderedDocument,
     location:{href:'https://reader.test/daily_digests/#/setup'},dirtySetup:true,frameGeneration:null,
     computeTimer:null,clearInterval,latestCompute:null,interactiveSandbox:'allow-scripts allow-same-origin',
-    startup:{hidden:true,dataset:{}},previewNotice:{hidden:true},
+    startup:{hidden:true,dataset:{}},previewNotice:{hidden:true},cachedDisplay:null,
     document:{getElementById:()=>({})},scheduleLinkedBackup:()=>{context.copies++;},copies:0,
     report:error=>errors.push(error.message)};
   const helper=source.match(/export function httpErrorMessage\([\s\S]*?\n\}/);
@@ -500,4 +500,11 @@ test('a redirected GET error cannot become an editable POST validation response'
   const ui=navigationControls([{status:303,headers:{location:'/setup'},body:''},
     {status:400,headers:{'content-type':'text/html'},body:'<html>unexpected GET error</html>'}]);
   await ui.navigate('/setup',{method:'POST'});assert.equal(ui.frame.srcdoc,'original draft');assert.equal(ui.errors.length,1);
+});
+
+test('opening the full desk removes the saved page Display menu so only the native one remains',async()=>{
+  const ui=navigationControls({status:200,headers:{'content-type':'text/html'},body:'<html><body><main>Desk</main></body></html>'});
+  let disposed=0;ui.context.dirtySetup=false;ui.context.cachedDisplay={dispose:()=>{disposed++;}};
+  await ui.navigate('/',{});
+  assert.deepEqual(ui.errors,[]);assert.equal(disposed,1);assert.equal(ui.context.cachedDisplay,null);
 });

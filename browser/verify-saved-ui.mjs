@@ -55,7 +55,8 @@ try{
   await page.goto('http://saved.test/saved');await page.evaluate(()=>document.fonts.ready);
   const first=page.locator('.saved-card').first();
   assert.equal(await first.locator('.saved-title').innerText(),'Fictional paper 1');
-  assert.equal(await first.locator('.reading-context-field').count(),2);
+  assert.equal(await first.locator('.reading-context-field').count(),1,'Only Why read sits beside the finding');
+  assert.equal(await first.locator('.item-details [data-summary-label="Caveat"]').count(),1,'The caveat stays available in Details');
   assert.equal(await page.locator('.saved-header a').last().innerText(),'Settings');
   await first.locator('.remove-saved').click();
   await first.locator('.saved-removal').waitFor();assert.equal(await first.locator('.saved-content').isVisible(),false);

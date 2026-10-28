@@ -31,6 +31,20 @@ try{
   await page.locator('#cached-pip .tea-break').waitFor();
   const frame=()=>page.frameLocator('#app');
   assert.equal(await frame().locator('#page-salutation').textContent(),'Good evening, Ada');
+  // The saved page has the native Display menu in the trusted shell (scripts stay off in the frame).
+  assert.equal(await page.locator('#cached-display-menu').count(),1);
+  assert.doesNotMatch(await page.locator('#app').getAttribute('sandbox'),/allow-scripts/);
+  await frame().locator('details summary').click();
+  await page.locator('#cached-display-toggle').click();
+  await page.locator('#cached-display-toggle-compact').click();
+  await frame().locator('html[data-display=compact]').waitFor({state:'attached'});
+  // The page is restyled in place: open Details and real uncertainty survive.
+  assert.equal(await frame().locator('details').evaluate(node=>node.open),true);
+  assert.equal(await frame().locator('.reading-uncertainty').isVisible(),true);
+  assert.equal(await page.evaluate(()=>localStorage.getItem('dailydigest-display')),'compact');
+  await page.locator('#cached-display-toggle-compact').click();
+  await frame().locator('html[data-display=comfortable]').waitFor({state:'attached'});
+  await page.keyboard.press('Escape');
   assert.equal(await frame().locator('html').getAttribute('data-theme'),'dark');
   assert.equal(await frame().locator('link[rel=stylesheet]').count(),0,'Shared CSS must be embedded to survive opaque-frame COEP');
   await page.frames().find(frame=>frame.parentFrame()).waitForFunction(()=>getComputedStyle(document.body).backgroundImage.includes('linear-gradient'));
@@ -72,6 +86,7 @@ try{
   assert.deepEqual(report.errors,[]);assert.deepEqual(report.blocked,[]);
   report.checks.push('dark current-time named greeting and original shared gradient render with zero workers',
     'mobile Pip stays collapsed until requested; closing returns all article space',
+    'saved-page Display menu switches density through the native preference without starting Python',
     'real Pip leaf action works in trusted parent with article scripts disabled; default desktop dock clears the shell footer',
     'simulated persisted pagehide retains Pip; disclosure focuses its leaf for keyboard access',
     'disposal before delayed markup completion is idempotent and cannot resurrect a duplicate component');

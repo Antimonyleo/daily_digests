@@ -192,3 +192,9 @@ def test_supplied_selection_facts_are_frozen_without_reconsulting_sources(captur
     assert snapshot["candidates"][0]["selection_facts"] == expected
     facts[1]["source_bucket"] = "changed-after-capture"
     assert snapshot["candidates"][0]["selection_facts"] == expected
+
+
+def test_static_profile_row_count_is_recorded(capture_args):
+    assert snapshot_mod.build_ranking_snapshot(**capture_args)["profile_static_rows"] is None
+    frozen = snapshot_mod.build_ranking_snapshot(**capture_args, profile_static_rows=1)
+    assert frozen["profile_static_rows"] == 1

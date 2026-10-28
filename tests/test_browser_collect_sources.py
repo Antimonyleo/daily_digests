@@ -20,6 +20,16 @@ def report():
                                                     ('c', 'arxiv', 'research'), ('d', 'rss', 'research')]}}
 
 
+def empty_preprint_fields(server, days=collector.PREPRINT_DAYS):
+    end = NOW.date()
+    return {'server': server, 'days': days,
+            'window': {'from': (end - timedelta(days=days)).isoformat(), 'to': end.isoformat()},
+            'coverage': {'total_available': 0, 'fetched_count': 0, 'exhausted': True,
+                         'truncated': False, 'stop_reason': 'exhausted', 'row_cap': 8000,
+                         'dates': {}, 'undated': {'entries': 0, 'withdrawn': 0, 'invalid': 0}},
+            'withdrawals': []}
+
+
 def fail(data, names):
     for name in names:
         data['sources'][name].update(status='error', items=[], fetched_at=None,
@@ -108,9 +118,15 @@ def test_every_actual_configured_public_source_section_can_publish(tmp_path):
             'sources': {spec.name: {'kind': spec.kind, 'section': spec.section,
                                    'url': spec.url, 'category': spec.category,
                                    'days': 21, 'status': 'ok', 'fetched_at': NOW.isoformat(),
-                                   'items': []} for spec in sources}}
+                                   'items': [], **(empty_preprint_fields(spec.server)
+                                                   if spec.kind == 'biorxiv' else {})}
+                        for spec in sources}}
     summary = collector.publish(data, tmp_path / 'actual-source-shapes.json', now=NOW)
     assert summary['fresh_ok'] == len(sources)
+    # Both preprint servers are covered; medRxiv is kept, and profile-driven,
+    # author-driven and OpenAlex venue sources remain live.
+    assert {spec.server for spec in sources if spec.kind == 'biorxiv'} == {'biorxiv', 'medrxiv'}
+    assert {spec.kind for spec in sources} == {'rss', 'arxiv', 'biorxiv'}
     assert {row['section'] for row in data['sources'].values()} >= {'research', 'industry', 'ai', 'regulatory', 'world'}
 
 
@@ -286,3 +302,89 @@ def test_cli_warns_below_eighty_percent_fresh_without_rejecting_valid_coverage(
     else:
         assert not captured.err
         assert logged['freshness_warning'] is None
+
+
+ENGLISH_ABSTRACT = ('This study presents a programmable DNA origami scaffold that assembles protein '
+                    'cargo with nanometre precision and improved yield across buffers. ') * 3
+FRENCH_ABSTRACT = ('Cette étude présente une nouvelle méthode de recherche pour assembler des protéines '
+                   'avec une amélioration importante de la précision et du rendement. ') * 3
+
+
+def report_with_items():
+    data = report()
+    data['sources']['a']['items'] = [
+        {'source': 'a', 'section': 'research', 'external_id': key, 'url': f'https://example.test/{key}',
+         'title': title, 'abstract': abstract}
+        for key, title, abstract in [('en', 'A scaffold', ENGLISH_ABSTRACT),
+                                     ('fr', 'Une méthode', FRENCH_ABSTRACT),
+                                     ('short', 'Perovskite solar cells', '')]]
+    return data
+
+
+def test_language_decisions_are_optional_and_absent_is_backward_compatible():
+    data = report_with_items()
+    assert 'language_decisions' not in collector.validate_report(data, now=NOW)
+
+
+def test_published_language_decisions_match_the_runtime_filter(tmp_path):
+    from dailydigest.dedupe import filter_english, language_rule_version, language_sample_key
+    from dailydigest.models import Item
+    import json
+
+    annotated = collector.with_language_decisions(report_with_items())
+    decisions = annotated['language_decisions']
+    assert decisions['rule_version'] == language_rule_version()
+    items = [Item.model_validate(row) for row in annotated['sources']['a']['items']]
+    # Short text is decided by length alone and is not stored.
+    assert decisions['allowed'] == {language_sample_key((it.title + ' ' + it.abstract).strip()):
+                                    it.external_id == 'en' for it in items if it.external_id != 'short'}
+    assert ([it.external_id for it in filter_english(items, decisions)]
+            == [it.external_id for it in filter_english(items)] == ['en', 'short'])
+    summary = collector.publish(annotated, tmp_path / 'public.json', now=NOW)
+    assert summary['language_decisions'] == 'current'
+    assert json.loads((tmp_path / 'public.json').read_text())['language_decisions'] == decisions
+    # Re-annotation replaces, never merges with, an earlier map.
+    stale = {**annotated, 'language_decisions': {'rule_version': 'old', 'allowed': {'0' * 64: False}}}
+    assert collector.with_language_decisions(stale)['language_decisions'] == decisions
+
+
+def test_other_rule_version_is_valid_but_reported_as_ignored():
+    data = report_with_items()
+    data['language_decisions'] = {'rule_version': 'english-filter-r0', 'allowed': {'0' * 64: True}}
+    assert collector.validate_report(data, now=NOW)['language_decisions'] == 'version-mismatch'
+
+
+@pytest.mark.parametrize('decisions', [
+    None, [], 'map', {'allowed': {}}, {'rule_version': 1, 'allowed': {}},
+    {'rule_version': 'v', 'allowed': []},
+    {'rule_version': 'v', 'allowed': {'not-a-sha': True}},
+    {'rule_version': 'v', 'allowed': {'0' * 64: 'yes'}},
+    {'rule_version': 'v', 'allowed': {f'{index:064x}': True for index in range(4)}},  # > items
+])
+def test_malformed_language_decisions_cannot_publish(tmp_path, decisions):
+    data = report_with_items()
+    data['language_decisions'] = decisions
+    with pytest.raises(ValueError, match='language decisions'):
+        collector.publish(data, tmp_path / 'public.json', now=NOW)
+    assert not (tmp_path / 'public.json').exists()
+
+
+def test_cli_publishes_language_decisions(tmp_path, monkeypatch, capsys):
+    from contextlib import nullcontext
+    import json
+    import sys
+
+    current = report_with_items()
+    now = datetime.now(timezone.utc).isoformat()
+    current['generated_at'] = now
+    for row in current['sources'].values():
+        row['fetched_at'] = now
+    output = tmp_path / 'public.json'
+    monkeypatch.setattr(collector, 'collect', lambda *_args: current)
+    monkeypatch.setattr(collector, 'public_specs', lambda *_args: [])
+    monkeypatch.setattr(collector, 'isolated_settings', lambda *_args: nullcontext())
+    monkeypatch.setattr(collector.tempfile, 'mkdtemp', lambda **_kwargs: str(tmp_path))
+    monkeypatch.setattr(sys, 'argv', ['collect_sources', '--output', str(output), '--event', 'schedule'])
+    assert collector.main() == 0
+    assert json.loads(capsys.readouterr().out)['language_decisions'] == 'current'
+    assert len(json.loads(output.read_text())['language_decisions']['allowed']) == 2

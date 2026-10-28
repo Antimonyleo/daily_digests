@@ -1,0 +1,9 @@
+{#- Other versions of this card's work (preprint/journal). Each line uses only
+    that version's own venue, DOI/URL and withdrawal/retraction status. -#}
+{% if item.version_links %}
+<ul class="version-links" aria-label="Other versions of {{ item.title }}">
+  {% for link in item.version_links %}
+  <li{% if link.item_id is not none %} data-version-item-id="{{ link.item_id }}"{% endif %}><span class="version-lead">{{ link.lead }}{% if link.venue %} <cite class="version-venue">{{ link.venue }}</cite>{% endif %}</span>{% if link.status %} · <strong class="version-status">{{ link.status }}</strong>{% endif %}{% if link.href %} · <a href="{{ link.href }}" target="_blank" rel="noopener noreferrer">{{ link.link_text }}</a>{% endif %}</li>
+  {% endfor %}
+</ul>
+{% endif %}

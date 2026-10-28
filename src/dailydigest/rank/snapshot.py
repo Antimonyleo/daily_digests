@@ -74,7 +74,7 @@ def build_ranking_snapshot(
     reading_mode: str, candidates, scored, eligible, labeled, features,
     section_budgets: dict, settings, profile, profile_matrix, catch_up: bool,
     ingest_stats, feedback_before: dict, feedback_after: dict, stages: dict,
-    selection_facts: dict | None = None,
+    selection_facts: dict | None = None, profile_static_rows: int | None = None,
 ) -> dict:
     """Capture every local candidate, including rejected and unselected rows.
 
@@ -141,6 +141,8 @@ def build_ranking_snapshot(
         "ranking_settings": ranking_settings, "settings_signature": _hash(ranking_settings),
         "profile": profile_data, "profile_signature": _hash(profile_data),
         "profile_matrix": profile_matrix.tolist(),
+        # Leading static rows; later rows are learned. None: not recorded.
+        "profile_static_rows": profile_static_rows,
         "scorer_version": quality.RANKER_VERSION,
         "embedding_signature": active_embedding_signature(),
         "query_embedding_signature": active_embedding_signature(is_query=True),

@@ -16,8 +16,9 @@ def test_first_setup_is_research_only_and_has_no_dead_back_link(monkeypatch, tmp
     assert 'id="priority-options"' in html
 
 
-def test_run_requires_an_explicit_start_and_consistent_compute_notice():
+def test_browser_run_requires_an_explicit_start_and_consistent_compute_notice(monkeypatch):
     from dailydigest import web
+    monkeypatch.setattr(web, 'BROWSER_MODE', True)
     html = web.run_get(request('/run')).body.decode()
     assert 'heat, fan noise and battery use' in html
     assert '20 minutes or more' in html

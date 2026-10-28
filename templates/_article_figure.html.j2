@@ -1,12 +1,21 @@
+{#- Optional feed-supplied image. "Graphical abstract" only when the feed declared
+    it (display_figure sets the label); every other image is an "Article image".
+    Nothing renders without an image: no empty frame, no "not found" chip.
+    The image is fetched only when the reader opens this disclosure, without
+    cookies (crossorigin=anonymous) or referrer. The loader in _base.html.j2
+    keys on .figure-link, img[data-src], .figure-unavailable and .figure-retry;
+    the cached reading view reads the summary text before " · ". -#}
 {% if item.figure %}
-<details class="article-figure">
-  <summary>{{ item.figure.label }} <span class="figure-hint">· load publisher image</span></summary>
-  <p class="figure-hint">Opening this preview contacts the publisher’s image host. Images do not influence ranking.</p>
+{% set figure = item.figure %}
+<details class="article-figure" data-figure-kind="{{ figure.kind | default('article_preview') }}">
+  <summary><span class="figure-label">{{ figure.label }}</span> · <span class="figure-hint">show image</span></summary>
+  <p class="figure-hint">Showing it loads the image from the publisher’s host, without cookies or a referrer. Images never affect ranking.</p>
   <figure>
-    <a class="figure-link" href="{{ item.figure.url }}" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer" aria-label="Expand {{ item.figure.label|lower }} for {{ item.title }}">
-      <img data-src="{{ item.figure.url }}" alt="{{ item.figure.alt or item.figure.label }}" loading="lazy" decoding="async" referrerpolicy="no-referrer" crossorigin="anonymous">
+    <a class="figure-link" href="{{ figure.url }}" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer" aria-label="Open {{ figure.label|lower }} full size for {{ item.title }}">
+      <img data-src="{{ figure.url }}" alt="{{ figure.alt or figure.label }}" loading="lazy" decoding="async" referrerpolicy="no-referrer" crossorigin="anonymous">
     </a>
-    <figcaption>Image supplied in the article feed · <a href="{{ item.url }}" target="_blank" rel="noopener noreferrer">Publisher article and credit</a>. <span class="figure-unavailable" role="status" hidden>Preview unavailable. <button type="button" class="figure-retry">Retry image</button></span></figcaption>
+    <figcaption>{{ figure.label }} supplied in the {{ item.source or 'publisher' }} feed · <a class="figure-full" href="{{ figure.url }}" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer">Open full size</a> · <a href="{{ item.url }}" target="_blank" rel="noopener noreferrer">Article and image credit</a>.
+      <span class="figure-unavailable" role="status" hidden>The image host did not allow an embedded preview. <button type="button" class="figure-retry">Retry image</button> or <a href="{{ figure.url }}" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer">open it directly</a>.</span></figcaption>
   </figure>
 </details>
 {% endif %}

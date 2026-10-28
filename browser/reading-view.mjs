@@ -34,7 +34,7 @@ export function validateReadingView(value) {
   const limits = {section:128, title:2000, url:8000, meta:2000, summary:30000, reason:20000, opportunity:20000, uncertainty:20000, details:60000, why:30000, caveat:30000};
   const figureFields = {figureURL:8000, figureLabel:40};
   for (const item of value.items) {
-    if (!item || Object.keys(item).some(key=>!Object.hasOwn(limits,key) && !Object.hasOwn(figureFields,key) && key !== 'companions') ||
+    if (!item || Object.keys(item).some(key=>!Object.hasOwn(limits,key) && !Object.hasOwn(figureFields,key) && !['companions','versions'].includes(key)) ||
         Object.entries(figureFields).some(([key, limit])=>key in item && (typeof item[key] !== 'string' || item[key].length > limit)) ||
         Object.entries(limits).some(([key, limit]) => typeof item[key] !== 'string' || item[key].length > limit) ||
         !item.title.trim()) return null;
@@ -43,13 +43,20 @@ export function validateReadingView(value) {
           typeof link.title !== 'string' || !link.title.trim() || link.title.length > 2000 ||
           typeof link.publicationLabel !== 'string' || !link.publicationLabel.trim() || link.publicationLabel.length > 80 ||
           typeof link.url !== 'string' || link.url.length > 8000 || !safeArticleURL(link.url)))) return null;
+    // Other versions of the same work: each keeps its own venue and status.
+    if (item.versions !== undefined && (!Array.isArray(item.versions) || item.versions.length > 20 ||
+        item.versions.some(link => !link || Object.keys(link).some(key => !['lead','status','url','linkText'].includes(key)) ||
+          typeof link.lead !== 'string' || !link.lead.trim() || link.lead.length > 500 ||
+          typeof link.status !== 'string' || link.status.length > 80 ||
+          typeof link.linkText !== 'string' || link.linkText.length > 500 ||
+          typeof link.url !== 'string' || link.url.length > 8000 || (link.url && !safeArticleURL(link.url))))) return null;
     try {
       const url = new URL(item.url);
       if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) return null;
       if (item.figureURL) {
         const figure = new URL(item.figureURL);
         if (figure.protocol !== 'https:' || figure.username || figure.password ||
-            !['Graphical abstract','Article preview'].includes(item.figureLabel)) return null;
+            !['Graphical abstract','Article preview','Article image'].includes(item.figureLabel)) return null;
       }
     } catch { return null; }
   }
@@ -103,6 +110,13 @@ export function extractReadingView(document, now = new Date()) {
       ? Array.from(body.children, child => child.textContent.trim()).filter(Boolean).join('\n\n')
       : body.textContent.trim();
   };
+  // Funding/event facts are separate lines natively; keep them as lines.
+  const lines = (node, selector) => {
+    const block = node.querySelector(selector);
+    if (!block) return '';
+    const rows = block.children?.length ? Array.from(block.children, child => child.textContent.replace(/\s+/g, ' ').trim()).filter(Boolean) : [];
+    return rows.length ? rows.join('\n') : block.textContent.trim();
+  };
   let personalization;
   try { personalization = JSON.parse(text(document, '#reading-personalization')); }
   catch { return null; }
@@ -113,13 +127,17 @@ export function extractReadingView(document, now = new Date()) {
       title:text(node, '.title-link'), url:node.querySelector('.title-link')?.getAttribute('href') || '',
       meta:text(node, '.meta'), summary:text(node, '.summary-primary .summary-text, .summary'),
       why:summaryField(node, 'Why read'), caveat:summaryField(node, 'Caveat'),
-      reason:text(node, '.match-topic, .reason-line'), opportunity:text(node, '.opportunity-facts'),
+      reason:text(node, '.match-topic, .reason-line'), opportunity:lines(node, '.opportunity-facts'),
       uncertainty:text(node, '.topic-support, [data-reading-uncertainty]'),
       details:detailsText(node),
       companions:Array.from(node.querySelectorAll?.('.related-commentaries li') || [], child => ({
         title:text(child, 'a[href]'), url:child.querySelector('a[href]')?.getAttribute('href') || '',
         publicationLabel:text(child, '.publication-label'),
       })),
+      ...(node.querySelector?.('.version-links li') ? {versions:Array.from(node.querySelectorAll('.version-links li'), child => ({
+        lead:text(child, '.version-lead').replace(/\s+/g, ' '), status:text(child, '.version-status'),
+        url:child.querySelector('a[href]')?.getAttribute('href') || '', linkText:text(child, 'a[href]'),
+      }))} : {}),
       ...(node.querySelector('.figure-link') ? {
         figureURL:node.querySelector('.figure-link').getAttribute('href'),
         figureLabel:text(node, '.article-figure summary').split(' · ')[0].trim(),
@@ -180,22 +198,42 @@ export function readingGreeting(name, now = new Date()) {
   return greeting + (name ? `, ${name}` : '');
 }
 
-export function readingViewDocument(value, theme = 'light', controlsBaseURL = import.meta.url, now = new Date(), sharedCSS = null) {
+// Funding/event facts first, as on the native card: the key line (amount or
+// date, deadline, status) leads, other fact lines follow as secondary text.
+function opportunityFacts(lines, escape) {
+  const rows = lines.split('\n').map(line => line.trim()).filter(Boolean);
+  return '<div class="opportunity-facts">' + rows.map((line, index) =>
+    `<p class="${index ? 'opportunity-line' : 'opportunity-key'}">${escape(line)}</p>`).join('') + '</div>';
+}
+
+export function readingViewDocument(value, theme = 'light', controlsBaseURL = import.meta.url, now = new Date(), sharedCSS = null, display = 'comfortable') {
   if (!validateReadingView(value)) throw new Error('Invalid saved reading view');
   const escape = text => text.replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
   const sections = [...new Set(value.items.map(item => item.section))];
-  const contents = sections.map((name, index) => `<a href="about:srcdoc#cached-section-${index}">${escape(name)} <span>${value.items.filter(item => item.section === name).length}</span></a>`).join('');
+  const contents = '<div class="contents-links">' + sections.map((name, index) => `<a href="about:srcdoc#cached-section-${index}">${escape(name)} <span>${value.items.filter(item => item.section === name).length}</span></a>`).join('') + '</div>';
   const items = sections.map((section, index) => `<section class="section-block" id="cached-section-${index}" tabindex="-1"><h2 class="section-heading">${escape(section)}</h2>`
     + value.items.filter(item => item.section === section).map(item =>
-      `<article><h3><a href="${escape(item.url)}" target="_blank" rel="noopener noreferrer">${escape(item.title)}</a></h3><p class="meta">${escape(item.meta)}</p>`
-      + (item.opportunity ? '<p class="meta">Saved opportunity details. Verify current deadlines and eligibility at the official source.</p>' : '')
-      + [...new Set([item.opportunity, item.reason, item.uncertainty].filter(Boolean))].map(text => `<p class="reading-context">${escape(text)}</p>`).join('')
-      + (item.summary ? `<p class="paper-finding">${escape(item.summary)}</p>` : '')
-      + [['Why read', item.why], ['Caveat', item.caveat]].filter(([, text]) => text).map(([label, text]) => `<div class="summary-field"><span class="summary-label">${label}</span><p class="summary-text">${escape(text)}</p></div>`).join('')
+      `<article><h3><a href="${escape(item.url)}" target="_blank" rel="noopener noreferrer">${escape(item.title)}</a></h3><div class="paper-meta"><p class="meta">${escape(item.meta)}</p>`
+      + (item.opportunity ? opportunityFacts(item.opportunity, escape)
+        + '<p class="meta">Saved opportunity details. Verify current deadlines and eligibility at the official source.</p>' : '')
+      + (item.reason && item.reason !== item.opportunity && item.reason !== item.uncertainty ? `<p class="reading-context">${escape(item.reason)}</p>` : '')
+      // Uncertainty is evidence, not routine context: compact view keeps it.
+      + (item.uncertainty && item.uncertainty !== item.opportunity ? `<p class="reading-context reading-uncertainty">${escape(item.uncertainty)}</p>` : '')
+      + '</div>'
+      + (item.versions?.length ? '<ul class="version-links">' + item.versions.map(link => `<li>${escape(link.lead)}`
+        + (link.status ? ` · <strong class="version-status">${escape(link.status)}</strong>` : '')
+        + (link.url ? ` · <a href="${escape(link.url)}" target="_blank" rel="noopener noreferrer">${escape(link.linkText || 'Open this version')}</a>` : '') + '</li>').join('') + '</ul>' : '')
+      // An opportunity's purpose is secondary to its facts, as natively.
+      + (item.summary ? `<p class="paper-finding${item.opportunity ? ' opportunity-purpose' : ''}">${escape(item.summary)}</p>` : '')
+      // Card order matches the native page: Why read beside the finding; a
+      // study caveat belongs with the other evidence inside Details.
+      + (item.why ? `<div class="summary-field"><span class="summary-label">Why read</span><p class="summary-text">${escape(item.why)}</p></div>` : '')
       + (item.figureURL ? `<p class="meta"><a href="${escape(item.figureURL)}" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer">${escape(item.figureLabel)} · open publisher image</a></p>` : '')
       + (item.companions?.length ? `<ul class="related-commentaries" aria-label="Commentary on ${escape(item.title)}">`
         + item.companions.map(link => `<li><span class="publication-label">${escape(link.publicationLabel)}</span> · <a href="${escape(link.url)}" target="_blank" rel="noopener noreferrer">${escape(link.title)}</a></li>`).join('') + '</ul>' : '')
-      + (item.details ? `<details><summary>Details</summary><p>${escape(item.details)}</p></details>` : '') + '</article>'
+      + (item.details || item.caveat ? '<details><summary>Details</summary>'
+        + (item.caveat ? `<div class="summary-field"><span class="summary-label">Caveat</span><p class="summary-text">${escape(item.caveat)}</p></div>` : '')
+        + (item.details ? `<p>${escape(item.details)}</p>` : '') + '</details>' : '') + '</article>'
     ).join('') + '</section>').join('');
   let controlsLink = 'Use Open controls above to see all.';
   if (sharedCSS !== null && (typeof sharedCSS !== 'string' || sharedCSS.length > 400001)) throw new Error('Invalid shared reading styles');
@@ -216,9 +254,12 @@ export function readingViewDocument(value, theme = 'light', controlsBaseURL = im
     + (value.related.total > value.related.links.length
       ? `<p class="meta">Showing ${value.related.links.length} of ${value.related.total} related papers. ${controlsLink}</p>` : '') + '</section>' : '';
   const savedAt = new Intl.DateTimeFormat(undefined, {dateStyle:'medium',timeStyle:'short'}).format(new Date(value.savedAt));
-  return `<!doctype html><html lang="en" data-theme="${theme === 'dark' ? 'dark' : 'light'}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'none'; style-src 'unsafe-inline'${styleOrigin}; font-src data:; form-action 'none'; base-uri 'none'"><title>Saved DailyDigest ${escape(value.date)}</title>${sharedStyles}<style>
-  *{box-sizing:border-box}body{line-height:1.5}main{position:relative;z-index:1;max-width:1100px;margin:auto;padding:24px 20px 48px}h1{font-size:30px;font-weight:650;line-height:1.2;margin:4px 0 20px;letter-spacing:-.02em}h2{font-size:17px;margin:0;padding:14px 20px;border-bottom:1px solid var(--border)}h3{font-size:22px;font-weight:650;line-height:1.3;margin:0;letter-spacing:-.015em}article{padding:24px;border-bottom:1px solid var(--border)}article:last-child{border-bottom:0}a{color:var(--accent);text-decoration:none}h3 a{color:var(--text)}a:hover{text-decoration:underline;text-underline-offset:3px}a:focus-visible,summary:focus-visible{outline:2px solid var(--accent);outline-offset:3px}p{margin:8px 0 0;white-space:pre-line;overflow-wrap:anywhere}.meta,.reading-context{color:var(--muted);font-size:14px;line-height:1.5}.digest-card{background:var(--card);border:1px solid var(--border);border-radius:12px;overflow:hidden}.contents-nav{display:flex;align-items:center;flex-wrap:wrap;gap:8px 20px;padding:10px 20px;border-bottom:1px solid var(--border)}.contents-nav a{padding:8px 0;font-size:14px}.contents-nav time{margin-left:auto;font-size:14px;color:var(--muted);font-variant-numeric:tabular-nums}.contents-nav span{margin-left:4px}.paper-finding{font-size:17px;line-height:1.55;color:var(--text);max-width:70ch;margin-top:16px}.summary-field{display:grid;grid-template-columns:82px minmax(0,1fr);gap:10px;align-items:baseline;margin-top:8px;max-width:74ch}.summary-label{font-size:13px;font-weight:600;color:var(--muted)}.summary-text{font-size:15px;line-height:1.5;margin:0;color:var(--copy-secondary)}summary{cursor:pointer;min-height:40px;padding:8px 0;font-size:14px;color:var(--accent-strong)}details>p{font-size:14px;line-height:1.5;max-width:74ch}h1,a{overflow-wrap:anywhere}.section-block{scroll-margin-top:12px}.cache-updated{font-size:13px;color:var(--muted);margin:16px 0}
-  @media(max-width:680px){main{padding:18px 12px 40px}h1{font-size:27px}article{padding:20px 16px}h3{font-size:20px}.paper-finding{font-size:16px}.contents-nav{padding:8px 14px;gap:4px 14px}.contents-nav time{font-size:13px}.summary-field{grid-template-columns:1fr;gap:2px}}
-  .related-commentaries{margin:10px 0;padding:0 0 0 12px;border-left:2px solid var(--border);list-style:none;font-size:14px;line-height:1.45}.related-commentaries li+li{margin-top:6px}.related-commentaries .publication-label{color:var(--muted)}.related-commentaries a{overflow-wrap:anywhere;text-underline-offset:3px}
-  </style></head><body><main><h1 id="page-salutation">${escape(readingGreeting(value.profileName,now))}</h1><div class="digest-card"><nav class="contents-nav" aria-label="In this digest">${contents}<time class="digest-date" datetime="${escape(value.date)}">${escape(value.date)}</time></nav>${items}</div>${related}<p class="cache-updated">Saved ${escape(savedAt)}</p></main></body></html>`;
+  return `<!doctype html><html lang="en" data-theme="${theme === 'dark' ? 'dark' : 'light'}" data-display="${display === 'compact' ? 'compact' : 'comfortable'}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'none'; style-src 'unsafe-inline'${styleOrigin}; font-src data:; form-action 'none'; base-uri 'none'"><title>Saved DailyDigest ${escape(value.date)}</title>${sharedStyles}<style>
+  *{box-sizing:border-box}body{line-height:1.5}main{position:relative;z-index:1;max-width:1100px;margin:auto;padding:24px 20px 48px}h1{font-size:30px;font-weight:650;line-height:1.2;margin:4px 0 20px;letter-spacing:-.02em}h2{font-size:17px;margin:0;padding:14px 20px;border-bottom:1px solid var(--border)}h3{font-size:21px;font-weight:550;line-height:1.32;margin:0;letter-spacing:-.01em}article{padding:20px 24px 16px;border-bottom:1px solid var(--border)}article:last-child{border-bottom:0}a{color:var(--accent);text-decoration:none}h3 a{color:var(--text)}a:hover{text-decoration:underline;text-underline-offset:3px}a:focus-visible,summary:focus-visible{outline:2px solid var(--accent);outline-offset:3px}p{margin:8px 0 0;white-space:pre-line;overflow-wrap:anywhere}.paper-meta{display:flex;flex-wrap:wrap;align-items:baseline;gap:2px 12px;margin-top:6px}.paper-meta p{margin:0}.meta,.reading-context{color:var(--muted);font-size:14px;line-height:1.5}.digest-card{background:var(--card);border:1px solid var(--border);border-radius:12px;overflow:hidden}.contents-nav{display:flex;align-items:center;gap:8px 20px;padding:10px 20px;border-bottom:1px solid var(--border)}.contents-links{display:flex;gap:18px;min-width:0;overflow-x:auto;scrollbar-width:thin;padding-right:28px;-webkit-mask-image:linear-gradient(to right,#000 calc(100% - 28px),transparent);mask-image:linear-gradient(to right,#000 calc(100% - 28px),transparent)}.contents-nav a{flex-shrink:0;padding:8px 0;font-size:14px}.contents-nav time{flex-shrink:0;margin-left:auto;font-size:14px;color:var(--muted);font-variant-numeric:tabular-nums}.contents-nav span{margin-left:4px}.paper-finding{font-size:16px;line-height:1.5;color:var(--text);max-width:70ch;margin-top:10px}.summary-field{display:grid;grid-template-columns:82px minmax(0,1fr);gap:10px;align-items:baseline;margin-top:8px;max-width:74ch}.summary-label{font-size:13px;font-weight:600;color:var(--muted)}.summary-text{font-size:15px;line-height:1.5;margin:0;color:var(--copy-secondary)}summary{cursor:pointer;min-height:40px;padding:8px 0;font-size:14px;color:var(--accent-strong)}details>.summary-field{margin-top:0}details>p{font-size:14px;line-height:1.5;max-width:74ch}h1,a{overflow-wrap:anywhere}.section-block{scroll-margin-top:12px}.cache-updated{font-size:13px;color:var(--muted);margin:16px 0}
+  @media(max-width:680px){main{padding:18px 12px 40px}h1{font-size:27px}article{padding:16px 16px 12px}h3{font-size:19px}.paper-finding{margin-top:8px}.contents-nav{padding:8px 14px;gap:4px 14px}.contents-links{gap:12px}.contents-nav time{font-size:13px}.summary-field{grid-template-columns:1fr;gap:2px}}
+  .version-links{margin:4px 0 0;padding:0;list-style:none;color:var(--muted);font-size:14px;line-height:1.5}.version-links li{overflow-wrap:anywhere}.version-links a{text-underline-offset:3px}.version-status{color:var(--down);font-weight:600}
+  .paper-meta .opportunity-facts{flex-basis:100%;margin:4px 0 2px}.opportunity-facts p{margin:2px 0 0}.opportunity-key{color:var(--text);font-size:15px;font-weight:600;line-height:1.5}.opportunity-line{color:var(--copy-secondary);font-size:14px;line-height:1.5}.paper-finding.opportunity-purpose{color:var(--muted);font-size:14px;max-width:72ch}
+  html[data-display="compact"] article{padding:9px 14px}html[data-display="compact"] h2{font-size:15px;padding:8px 14px}html[data-display="compact"] h3{font-size:16px;line-height:1.3}html[data-display="compact"] .paper-finding{margin-top:5px}html[data-display="compact"] article:not(:has(details[open])) .paper-finding{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;line-clamp:3;overflow:hidden}html[data-display="compact"] .reading-context:not(.reading-uncertainty){display:none}html[data-display="compact"] .summary-field{margin-top:4px}html[data-display="compact"] summary{min-height:32px;padding:5px 0}
+  .related-commentaries{margin:10px 0;padding:0 0 0 12px;border-left:1px solid var(--border);list-style:none;font-size:14px;line-height:1.45}.related-commentaries li+li{margin-top:6px}.related-commentaries .publication-label{color:var(--muted)}.related-commentaries a{overflow-wrap:anywhere;text-underline-offset:3px}
+  </style></head><body><main><h1 id="page-salutation">${escape(readingGreeting(value.profileName,now))}</h1><div class="digest-card"><nav class="contents-nav" aria-label="In this digest">${contents}<time class="digest-date" datetime="${escape(value.date)}">${escape(value.date)}</time></nav>${items}</div>${related}<p class="cache-updated"><a href="about:srcdoc#page-salutation">Back to top</a> · Saved ${escape(savedAt)}</p></main></body></html>`;
 }

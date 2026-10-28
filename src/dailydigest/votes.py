@@ -13,6 +13,7 @@ import hashlib
 import logging
 import re
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
@@ -454,7 +455,80 @@ _ROCCHIO_BETA = 0.04
 _ROCCHIO_DECAY = 0.995
 
 
-def _rebuild_rocchio_profile() -> None:
+@dataclass(frozen=True)
+class RocchioRebuildResult:
+    """Explicit outcome of rebuilding ``learned_profile.npz`` from votes.
+
+    ``status`` is ``written`` only after the replaced file was re-read and its
+    policy, reason and vote signatures verified; ``no_topic_votes`` means no
+    canonical rating teaches topic preference (the normal static state, with
+    no file); ``failed`` leaves any previous file byte-for-byte in place.
+    """
+
+    status: str
+    failure: str = ""
+    detail: str = ""
+    topic_votes: int = 0
+    vectors_total: int = 0
+    vectors_missing: int | None = None
+    duration_ms: int = 0
+    backup_path: str | None = None
+
+    @property
+    def written(self) -> bool:
+        return self.status == "written"
+
+
+def _uncached_vector_count(rows: list) -> int | None:
+    """How many rows the encoder must embed (cache miss); ``None`` if unknown."""
+    try:
+        from .rank.embed import active_embedding_signature
+        from .rank.embedding_cache import _text_hash, item_text
+        from .store import ItemEmbeddingRow
+
+        ids = [int(row.id) for row in rows if isinstance(getattr(row, "id", None), int)]
+        if len(ids) != len(rows):
+            return None
+        model = active_embedding_signature()
+        cached: dict[int, str] = {}
+        with session_scope() as s:
+            for start in range(0, len(ids), 500):
+                chunk = ids[start:start + 500]
+                for item_id, text_hash in s.execute(
+                    select(ItemEmbeddingRow.item_id, ItemEmbeddingRow.text_hash).where(
+                        ItemEmbeddingRow.item_id.in_(chunk), ItemEmbeddingRow.model == model,
+                    )
+                ).all():
+                    cached[int(item_id)] = text_hash
+        return sum(1 for row in rows if cached.get(int(row.id)) != _text_hash(item_text(row)))
+    except Exception:  # noqa: BLE001 - diagnostics only
+        return None
+
+
+def _learned_profile_backup_path(path: Path) -> Path:
+    """The single retained copy of the file a recovery replaced."""
+    return path.with_name(path.name + ".bak")
+
+
+def _keep_single_backup(path: Path) -> Path:
+    """Copy ``path`` to its one ``.bak`` atomically, replacing the previous backup."""
+    import os
+    import shutil
+    import tempfile
+
+    backup = _learned_profile_backup_path(path)
+    fd, tmp_name = tempfile.mkstemp(prefix=".learned_profile.bak.", suffix=".tmp", dir=path.parent)
+    os.close(fd)
+    tmp = Path(tmp_name)
+    try:
+        shutil.copy2(path, tmp)
+        tmp.replace(backup)
+    finally:
+        tmp.unlink(missing_ok=True)
+    return backup
+
+
+def _rebuild_rocchio_profile(*, keep_backup: bool = False) -> RocchioRebuildResult:
     """Rebuild the learned profile vector from scratch out of the CANONICAL votes.
 
     Idempotent by construction: the profile is a pure function of the *current*
@@ -473,8 +547,26 @@ def _rebuild_rocchio_profile() -> None:
     incremental update, which added a new contribution on every event and so
     double-counted re-votes and never removed a changed/neutralized contribution.
 
+    The new file is written to a unique temporary file, verified, then atomically
+    replaces the old one; any failure removes the temporary file and leaves the
+    previous artifact untouched. ``keep_backup`` (brew-time recovery) retains
+    the replaced file as a single ``learned_profile.npz.bak``.
+
     Called outside a DB session after each vote is recorded.
     """
+    import os
+    import tempfile
+    import time
+
+    started = time.monotonic()
+
+    def done(status: str, failure: str = "", detail: str = "", **fields) -> RocchioRebuildResult:
+        elapsed = max(0, int((time.monotonic() - started) * 1000))
+        result = RocchioRebuildResult(status, failure, detail, duration_ms=elapsed, **fields)
+        if status == "failed":
+            logger.warning("Rocchio rebuild failed (%s): %s", failure, detail)
+        return result
+
     try:
         import numpy as np
         with _VOTE_REASONS_LOCK:
@@ -502,48 +594,89 @@ def _rebuild_rocchio_profile() -> None:
                     continue
                 s.expunge(row)
                 canonical.append((row, int(value), grade))
-
-        path = _learned_profile_path()
-
-        if not canonical:
-            # No signed votes remain (all neutral/removed): the learned profile is
-            # empty. Remove any stale file so the ranker falls back cleanly rather
-            # than keeping a now-orphaned learned vector.
-            if path.exists():
-                try:
-                    path.unlink()
-                except OSError:
-                    pass
-            return
-
-        rows = [row for row, _, _ in canonical]
-        vecs = embed_item_rows(rows)
-        if vecs.size == 0 or vecs.shape[0] == 0:
-            return
-        vecs = vecs.astype(np.float32)
-
-        learned = np.zeros(vecs.shape[1], dtype=np.float32)
-        for rank, (_, value, grade) in enumerate(canonical):
-            g = grade if grade is not None else value_to_grade(value)
-            weight = grade_to_weight(g)
-            rate = _ROCCHIO_ALPHA if weight >= 0 else _ROCCHIO_BETA
-            factor = rate * weight * (_ROCCHIO_DECAY ** rank)
-            learned = learned + factor * vecs[rank]
-
-        path.parent.mkdir(parents=True, exist_ok=True)
-        # np.savez appends .npz to filenames lacking that extension, so use _tmp.npz
-        tmp = path.with_name(path.stem + "_tmp.npz")
-        np.savez(
-            tmp,
-            profile=learned,
-            vote_count=np.array([len(canonical)], dtype=np.int32),
-            feedback_semantics_version=np.array([FEEDBACK_SEMANTICS_VERSION]),
-            feedback_reasons_signature=np.array([feedback_reasons_signature(reason_data)]),
-            feedback_votes_signature=np.array([vote_signature]),
-        )
-        tmp.replace(path)
     except Exception as exc:  # noqa: BLE001
-        logger.warning("Rocchio rebuild failed: %s", exc)
+        return done("failed", "feedback_unreadable", str(exc))
+
+    path = _learned_profile_path()
+    backup_path: str | None = None
+    if not canonical:
+        # No signed votes remain (all neutral/removed): the learned profile is
+        # empty. Remove any stale file so the ranker falls back cleanly rather
+        # than keeping a now-orphaned learned vector (recovery keeps it as .bak).
+        if path.exists():
+            try:
+                if keep_backup:
+                    backup_path = str(_learned_profile_backup_path(path))
+                    path.replace(backup_path)
+                else:
+                    path.unlink()
+            except OSError as exc:
+                return done("failed", "write_failed", f"could not retire stale file: {exc}")
+        return done("no_topic_votes", backup_path=backup_path)
+
+    rows = [row for row, _, _ in canonical]
+    missing = _uncached_vector_count(rows)
+    counts = {"topic_votes": len(canonical), "vectors_total": len(rows), "vectors_missing": missing}
+    try:
+        vecs = embed_item_rows(rows)
+    except Exception as exc:  # noqa: BLE001
+        return done("failed", "encoder_unavailable", str(exc), **counts)
+    vecs = np.asarray(vecs, dtype=np.float32)
+    if vecs.ndim != 2 or vecs.shape[0] != len(rows) or vecs.shape[1] == 0:
+        return done("failed", "missing_vectors",
+                    f"encoder returned {vecs.shape[0] if vecs.ndim else 0} of {len(rows)} vectors", **counts)
+
+    learned = np.zeros(vecs.shape[1], dtype=np.float32)
+    for rank, (_, value, grade) in enumerate(canonical):
+        g = grade if grade is not None else value_to_grade(value)
+        weight = grade_to_weight(g)
+        rate = _ROCCHIO_ALPHA if weight >= 0 else _ROCCHIO_BETA
+        factor = rate * weight * (_ROCCHIO_DECAY ** rank)
+        learned = learned + factor * vecs[rank]
+    if not np.isfinite(learned).all():
+        return done("failed", "invalid_vector", "learned vector is not finite", **counts)
+
+    from .rank.profile import current_embedding_model, inspect_learned_profile
+
+    tmp: Path | None = None
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        # A unique temporary name: an interrupted or concurrent write can never
+        # be mistaken for (or clobber) the published artifact.
+        fd, tmp_name = tempfile.mkstemp(prefix=".learned_profile.", suffix=".npz.tmp", dir=path.parent)
+        tmp = Path(tmp_name)
+        with os.fdopen(fd, "wb") as handle:
+            np.savez(
+                handle,
+                profile=learned,
+                vote_count=np.array([len(canonical)], dtype=np.int32),
+                feedback_semantics_version=np.array([FEEDBACK_SEMANTICS_VERSION]),
+                feedback_reasons_signature=np.array([feedback_reasons_signature(reason_data)]),
+                feedback_votes_signature=np.array([vote_signature]),
+                embedding_model=np.array([current_embedding_model()]),
+            )
+            handle.flush()
+            os.fsync(handle.fileno())
+        staged = inspect_learned_profile(tmp, expected_dim=int(vecs.shape[1]))
+        if not staged.usable and staged.reason != "no_topic_votes":
+            return done("failed", "verification_failed",
+                        f"new file rejected before publication ({staged.reason}): {staged.detail}", **counts)
+        if keep_backup and path.exists():
+            backup_path = str(_keep_single_backup(path))
+        tmp.replace(path)
+        tmp = None
+    except Exception as exc:  # noqa: BLE001
+        return done("failed", "write_failed", str(exc), backup_path=backup_path, **counts)
+    finally:
+        if tmp is not None:
+            tmp.unlink(missing_ok=True)
+
+    published = inspect_learned_profile(path, expected_dim=int(vecs.shape[1]))
+    if not published.usable and published.reason != "no_topic_votes":
+        return done("failed", "verification_failed",
+                    f"published file rejected ({published.reason}): {published.detail}",
+                    backup_path=backup_path, **counts)
+    return done("written", backup_path=backup_path, **counts)
 
 
 def _update_rocchio(item_id: int | None = None, vote_value: int | None = None, grade: int | None = None) -> None:

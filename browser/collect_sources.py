@@ -1,4 +1,4 @@
-"""Collect public configured RSS/arXiv metadata for a static browser deployment.
+"""Collect public configured RSS/arXiv/bioRxiv metadata for a static browser deployment.
 
 This command never loads a reader profile, ranks articles, or uses credentials.
 Run with the locked native environment; publish the output beside static assets.
@@ -19,6 +19,23 @@ import tempfile
 import time
 
 import yaml
+
+# Kinds whose configured, non-profile queries are reproduced from the snapshot.
+# Profile-driven, author-driven and OpenAlex venue sources stay live: venue
+# queries are profile-independent but routinely hit the 120-item cap, so the
+# native selection under a different window cannot be reproduced exactly.
+SNAPSHOT_KINDS = {"rss", "arxiv", "biorxiv"}
+# Publication still requires these kinds; a preprint-server outage leaves its
+# record failed (readers fetch it directly) instead of blocking RSS/arXiv.
+REQUIRED_KINDS = {"rss", "arxiv"}
+# bioRxiv/medRxiv posting-date window. Readers request min_window_days (4) on
+# first and daily brews; 5 days covers that from a snapshot made the previous
+# UTC day. Longer catch-up windows are detected and fetched directly.
+PREPRINT_DAYS = 5
+# Collect the whole window. Readers re-apply the native 2,000-row cap
+# themselves (falling back when it would apply), so CI must not truncate.
+PREPRINT_COLLECTION_ROWS = 8000
+IDENTITY_FIELDS = ("kind", "section", "url", "category", "server", "days")
 
 
 @contextmanager
@@ -59,24 +76,61 @@ def public_specs(path):
     config = yaml.safe_load(Path(path).read_text())
     return [SourceSpec.model_validate({**row, "section": section})
             for section, rows in config.items() for row in rows
-            if row.get("kind") in {"rss", "arxiv"} and not row.get("profile_driven")]
+            if row.get("kind") in SNAPSHOT_KINDS and not row.get("profile_driven")]
+
+
+def _preprint_record(adapter, spec, days):
+    """Every parsed revision plus the evidence readers need to replay ``fetch``.
+
+    Items are the adapter's own parsed rows before ``current_versions``, so a
+    reader's shorter window selects revisions and withdrawals natively. Raw
+    entry counts per posting date let readers detect the native row cap.
+    """
+    adapter.max_rows = PREPRINT_COLLECTION_ROWS
+    adapter.fetch(spec, days=days)
+    diagnostic = adapter.last_fetch_diagnostics["queries"][0]
+    window_from, window_to = diagnostic["query"].split(":", 1)[1].split("/")
+    dates = {key: dict(value) for key, value in adapter.last_fetch_entry_dates.items() if key}
+    undated = dict(adapter.last_fetch_entry_dates.get(None) or {"entries": 0, "withdrawn": 0, "invalid": 0})
+    if any(not window_from <= key <= window_to for key in dates):
+        # Readers select a shorter window by posting date; entries the API
+        # placed outside its interval could not be replayed exactly.
+        raise RuntimeError("Preprint API returned entries outside the requested posting window")
+    return {
+        "server": spec.server,
+        "window": {"from": window_from, "to": window_to},
+        "coverage": {key: diagnostic[key] for key in (
+            "total_available", "fetched_count", "exhausted", "truncated", "stop_reason")}
+        | {"row_cap": adapter.max_rows, "dates": dict(sorted(dates.items())), "undated": undated},
+        "items": [item.model_dump(mode="json") for item in adapter.last_fetch_versions],
+        "withdrawals": [{"date": date, "item": item.model_dump(mode="json")} for date, item in zip(
+            adapter.last_fetch_withdrawal_dates, adapter.last_fetch_withdrawals, strict=True)],
+    }
 
 
 def collect(specs, days=21, adapters=None, now=None):
     if adapters is None:
         from dailydigest.ingest.arxiv import ArxivSource
+        from dailydigest.ingest.biorxiv import BiorxivSource
         from dailydigest.ingest.rss import RSSSource
 
-        adapters = {"rss": RSSSource, "arxiv": ArxivSource}
+        adapters = {"rss": RSSSource, "arxiv": ArxivSource, "biorxiv": BiorxivSource}
     now = now or (lambda: datetime.now(timezone.utc))
 
     def fetch(spec):
+        window = PREPRINT_DAYS if spec.kind == "biorxiv" else days
         record = {"kind": spec.kind, "section": spec.section, "url": spec.url,
-                  "category": spec.category, "days": days, "fetched_at": None}
+                  "category": spec.category, "days": window, "fetched_at": None}
+        if spec.kind == "biorxiv":
+            record["server"] = spec.server
         try:
-            items = adapters[spec.kind]().fetch(spec, days=days)
-            record.update(status="ok", fetched_at=now().isoformat(),
-                          items=[item.model_dump(mode="json") for item in items])
+            adapter = adapters[spec.kind]()
+            if spec.kind == "biorxiv":
+                fields = _preprint_record(adapter, spec, window)
+            else:
+                fields = {"items": [item.model_dump(mode="json")
+                                    for item in adapter.fetch(spec, days=window)]}
+            record.update(status="ok", fetched_at=now().isoformat(), **fields)
         except Exception as exc:
             record.update(status="error", attempted_at=now().isoformat(), items=[],
                           error=f"{type(exc).__name__}: {exc}"[:500])
@@ -92,14 +146,76 @@ def collect(specs, days=21, adapters=None, now=None):
             time.sleep(3)
         name, record = fetch(spec)
         sources[name] = record
+    # Both preprint servers share one API host; keep them sequential.
+    for spec in (spec for spec in specs if spec.kind == "biorxiv"):
+        name, record = fetch(spec)
+        sources[name] = record
     return {"version": 1, "generated_at": now().isoformat(), "days": days,
             "public_only": True, "sources": sources}
+
+
+def _count(value):
+    return type(value) is int and value >= 0
+
+
+def _validate_preprint_record(name, record, items):
+    """Reject preprint evidence that could not reproduce the native adapter."""
+    from datetime import date
+    from dailydigest.models import Item
+
+    server, window, coverage = record.get("server"), record.get("window"), record.get("coverage")
+    if not isinstance(server, str) or not server:
+        raise ValueError(f"Invalid preprint server: {name}")
+    try:
+        start, end = date.fromisoformat(window["from"]), date.fromisoformat(window["to"])
+    except (TypeError, ValueError, KeyError) as exc:
+        raise ValueError(f"Invalid preprint window: {name}") from exc
+    if (end - start).days != record["days"]:
+        raise ValueError(f"Preprint window does not match its days: {name}")
+    if (not isinstance(coverage, dict) or type(coverage.get("exhausted")) is not bool
+            or type(coverage.get("truncated")) is not bool
+            or not _count(coverage.get("fetched_count")) or not _count(coverage.get("row_cap"))
+            or not (coverage.get("total_available") is None or _count(coverage["total_available"]))
+            or not isinstance(coverage.get("dates"), dict) or not isinstance(coverage.get("undated"), dict)):
+        raise ValueError(f"Invalid preprint coverage: {name}")
+    buckets = {**coverage["dates"], None: coverage["undated"]}
+    valid_entries = 0
+    for key, counts in buckets.items():
+        if key is not None:
+            try:
+                day = date.fromisoformat(key)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"Invalid preprint coverage date: {name}") from exc
+            if not start <= day <= end:
+                raise ValueError(f"Preprint coverage outside its window: {name}")
+        if (not isinstance(counts, dict) or set(counts) != {"entries", "withdrawn", "invalid"}
+                or not all(_count(value) for value in counts.values())
+                or counts["withdrawn"] + counts["invalid"] > counts["entries"]):
+            raise ValueError(f"Invalid preprint coverage counts: {name}")
+        valid_entries += counts["entries"] - counts["withdrawn"] - counts["invalid"]
+    if sum(counts["entries"] for counts in buckets.values()) != coverage["fetched_count"]:
+        raise ValueError(f"Preprint coverage counts disagree with fetched entries: {name}")
+    if valid_entries != len(items):
+        raise ValueError(f"Preprint items disagree with coverage counts: {name}")
+    for item in items:
+        if item.published_at is not None and not start <= item.published_at.date() <= end:
+            raise ValueError(f"Preprint item outside its window: {name}")
+    withdrawals = record.get("withdrawals")
+    if not isinstance(withdrawals, list):
+        raise ValueError(f"Invalid preprint withdrawals: {name}")
+    for row in withdrawals:
+        if not isinstance(row, dict) or not (row.get("date") is None or row.get("date") in coverage["dates"]):
+            raise ValueError(f"Invalid preprint withdrawal date: {name}")
+        notice = Item.model_validate(row.get("item"))
+        if (notice.source != name or notice.section != record["section"]
+                or notice.metadata.get("is_retracted") is not True):
+            raise ValueError(f"Preprint withdrawal identity mismatch: {name}")
 
 
 def _validate_record(name, record, *, now):
     from dailydigest.models import Item, _VALID_SECTIONS
 
-    if not isinstance(record, dict) or record.get("kind") not in {"rss", "arxiv"}:
+    if not isinstance(record, dict) or record.get("kind") not in SNAPSHOT_KINDS:
         raise ValueError(f"Invalid source record: {name}")
     if record.get("section") not in _VALID_SECTIONS:
         raise ValueError(f"Invalid source section: {name}")
@@ -118,10 +234,12 @@ def _validate_record(name, record, *, now):
         raise ValueError(f"Invalid source timestamp: {name}") from exc
     if fetched.tzinfo is None or not -timedelta(minutes=5) <= now - fetched <= timedelta(hours=48):
         raise ValueError(f"Source timestamp expired or invalid: {name}")
-    for row in record["items"]:
-        item = Item.model_validate(row)
+    items = [Item.model_validate(row) for row in record["items"]]
+    for item in items:
         if item.source != name or item.section != record["section"]:
             raise ValueError(f"Source item identity mismatch: {name}")
+    if record["kind"] == "biorxiv":
+        _validate_preprint_record(name, record, items)
     return True
 
 
@@ -152,8 +270,7 @@ def validate_report(report, *, now=None, min_fresh_fraction=0.5, allow_carry_for
             attempt = row.get("latest_attempt")
             if not row.get("carried_forward") or not isinstance(attempt, dict):
                 raise ValueError("Push carry-forward requires current attempt records")
-            if any(row.get(field) != attempt.get(field)
-                   for field in ("kind", "section", "url", "category", "days")):
+            if any(row.get(field) != attempt.get(field) for field in IDENTITY_FIELDS):
                 raise ValueError("Push carry-forward attempt configuration mismatch")
             if _validate_record(name, attempt, now=now) and not attempt.get("carried_forward"):
                 attempted_ok.add(name)
@@ -164,12 +281,44 @@ def validate_report(report, *, now=None, min_fresh_fraction=0.5, allow_carry_for
         raise ValueError(f"Public source coverage too low: {len(eligible)}/{len(sources)} "
                          + ("retained successes" if fallback else "fresh successes"))
     for field in ("kind", "section"):
-        configured = {row[field] for row in sources.values()}
+        # Optional snapshot kinds may fail without blocking publication; their
+        # readers see the failed record and fetch those sources directly.
+        configured = {row[field] for row in sources.values()
+                      if field != "kind" or row[field] in REQUIRED_KINDS}
         successful = {sources[name][field] for name in eligible}
         if configured - successful:
             raise ValueError(f"Public source coverage missing {field}: {sorted(configured - successful)}")
-    return {"sources": len(sources), "ok": len(healthy), "fresh_ok": len(fresh),
-            "carried_forward": len(healthy - fresh)}
+    summary = {"sources": len(sources), "ok": len(healthy), "fresh_ok": len(fresh),
+               "carried_forward": len(healthy - fresh)}
+    if "language_decisions" in report:
+        # Optional accelerator. Another rule version is valid but ignored by
+        # readers; a malformed map indicates a collector bug and is rejected.
+        from dailydigest.dedupe import language_decisions_status
+
+        status = language_decisions_status(report["language_decisions"], max_entries=sum(
+            len(row["items"]) for row in sources.values() if row.get("status") == "ok"))
+        if status in {"absent", "malformed"}:  # an explicit null is not "absent"
+            raise ValueError("Invalid public source language decisions")
+        summary["language_decisions"] = status
+    return summary
+
+
+def with_language_decisions(report):
+    """Attach current-rule language decisions for every published item.
+
+    Decisions use exactly dedupe.filter_english's sample and rule, keyed by the
+    sample's sha256 and rule version. Short and failed samples are omitted.
+    """
+    from dailydigest.dedupe import precompute_language_decisions
+    from dailydigest.models import Item
+
+    annotated = {key: value for key, value in report.items() if key != "language_decisions"}
+    items = [Item.model_validate(row) for record in report.get("sources", {}).values()
+             if record.get("status") == "ok" for row in record.get("items", [])]
+    decisions = precompute_language_decisions(items)
+    if decisions is not None:
+        annotated["language_decisions"] = decisions
+    return annotated
 
 
 def carry_forward(report, previous, *, now=None):
@@ -184,7 +333,7 @@ def carry_forward(report, previous, *, now=None):
         old = previous["sources"].get(name)
         if failed.get("status") != "error" or not isinstance(old, dict):
             continue
-        if any(old.get(field) != failed.get(field) for field in ("kind", "section", "url", "category", "days")):
+        if any(old.get(field) != failed.get(field) for field in IDENTITY_FIELDS):
             continue
         try:
             valid = _validate_record(name, old, now=now)
@@ -224,7 +373,7 @@ def prepare_publication(report, previous=None, *, event="schedule", now=None):
         raise ValueError(f"Push fallback previous snapshot unavailable, expired, or invalid: {exc}") from exc
     if set(previous["sources"]) != set(sources) or any(
         any(old.get(field) != sources[name].get(field)
-            for field in ("kind", "section", "url", "category", "days"))
+            for field in IDENTITY_FIELDS)
         for name, old in previous["sources"].items()
     ):
         raise ValueError("Push fallback previous snapshot configuration does not match current sources")
@@ -272,7 +421,7 @@ def main():
                 previous = json.loads(args.previous.read_text())
             except (ValueError, OSError):
                 previous = None
-        report = prepare_publication(report, previous, event=args.event)
+        report = with_language_decisions(prepare_publication(report, previous, event=args.event))
         summary = publish(report, output, allow_carry_forward=args.event == "push")
     except ValueError as exc:
         print(json.dumps({"status": "rejected", "error": str(exc)}))

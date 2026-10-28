@@ -101,6 +101,10 @@ def publication_label(row) -> str:
     if host in {'arxiv.org', 'www.arxiv.org', 'biorxiv.org', 'www.biorxiv.org',
                 'medrxiv.org', 'www.medrxiv.org'}:
         return 'Preprint'
+    # Preprint-server adapters (bioRxiv/medRxiv) link through doi.org but record
+    # the server's own version/type fields, which establish preprint status.
+    if any(str(metadata.get(key) or '').strip() for key in ('preprint_type', 'preprint_version')):
+        return 'Preprint'
     return 'Publication'
 
 

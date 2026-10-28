@@ -191,8 +191,14 @@ export async function beforeDesk({browser,base,report,out}){
   await page.waitForFunction(()=>window.__firstBrewRequests.length===1,{},{timeout:30000});
   assert.equal(await page.evaluate(()=>window.__firstBrewRequests[0].reading_mode),'usual');
   assert.equal(await page.evaluate(()=>window.__firstBrewRequests.length),1);
+  await page.evaluate(()=>document.querySelector('#app').contentWindow.ddNavigate('/run?reading_mode=usual&autostart=1'));
+  await frame.locator('#brew-button').waitFor();
+  assert.equal(await frame.locator('#brew-button').isVisible(),true);
+  assert.equal(await page.evaluate(()=>window.__firstBrewRequests.length),1,'A raw autostart URL must not submit another Brew');
+  await page.evaluate(()=>document.querySelector('#app').contentWindow.dispatchEvent(new CustomEvent('dd-brew-complete',{detail:{digestId:'2026-10-26'}})));
+  await page.locator('#backup-reminder').waitFor();
   assert.deepEqual(errors,[]);assert.deepEqual(external,[]);
-  const check={name:'first-visit-topic-entry',passed:true,firstInteractiveMs,runtimeAndSetupReadyMs:performance.now()-started,topicDraftTransferred:true,oneActionStandardBrew:true,startIntercepted:true};
+  const check={name:'first-visit-topic-entry',passed:true,firstInteractiveMs,runtimeAndSetupReadyMs:performance.now()-started,topicDraftTransferred:true,oneActionStandardBrew:true,untrustedAutostartIsPassive:true,backupReminderAfterCompletion:true,startIntercepted:true};
   report.checks.push(check);console.log(JSON.stringify(check));
   await writeFile(out+'/report.json',JSON.stringify(report,null,2));
  }finally{await context.close();}
@@ -225,7 +231,7 @@ export async function afterMatrix({page,frame,route,record,brew,titles,out,repor
   assert.ok(primary,'Primary paper must enter the actual pipeline');
   assert.equal(primary.metadata.publication_enrichment?.status,'failed');
   assert.equal(primary.metadata.publication_types,undefined,'Failure must not invent a research genre');
-  assert.ok((await cardFor(frame,papers.primary).locator('.publication-label').allTextContents()).includes('Publication'));
+  assert.ok(!(await cardFor(frame,papers.primary).locator('.publication-label').allTextContents()).some(label=>/research article/i.test(label)),'Failure must not display an invented genre');
   assert.equal(evidence.metadataRequests.length,1,'Repeated brews within the failed-lookup TTL must reuse the backoff');
   return{cachedStatus:'failed',requests:evidence.metadataRequests.length,brews:report.checks.filter(row=>row.name.includes('repeat')).length};
  });

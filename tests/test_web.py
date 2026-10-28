@@ -10,7 +10,7 @@ import threading
 import time
 from datetime import date, datetime, timezone
 from pathlib import Path
-from urllib.parse import urlencode
+from urllib.parse import parse_qs, urlencode, urlsplit
 
 import pytest
 import yaml
@@ -984,7 +984,7 @@ def test_index_time_machine_uses_latest_actual_brews_across_gaps(
     assert 'May 3' in page and 'May 1' in page
 
 
-def test_recent_digest_ids_are_ordered_by_actual_brew_time():
+def test_recent_digest_ids_are_ordered_by_edition_date_not_rebrew_time():
     from dailydigest import web
     from dailydigest.store import DigestRow, init_db, session_scope
 
@@ -1008,8 +1008,8 @@ def test_recent_digest_ids_are_ordered_by_actual_brew_time():
         )
 
     assert web._recent_digest_ids("2026-05-06") == [
-        "2026-05-03",
         "2026-05-05",
+        "2026-05-03",
         "2026-05-01",
     ]
 
@@ -1041,7 +1041,7 @@ def test_explicit_current_and_previous_brew_navigation(tmp_path, monkeypatch, vi
         assert 'aria-label="Previous digest"' in page
 
 
-def test_index_falls_back_to_today_outside_the_time_machine_window(
+def test_index_opens_a_retained_digest_outside_the_recent_picker(
     tmp_path, monkeypatch
 ):
     from dailydigest import web
@@ -1069,8 +1069,8 @@ def test_index_falls_back_to_today_outside_the_time_machine_window(
     response = web.index(_request("GET", "/"), digest_id="2026-05-01")
 
     assert response.status_code == 200
-    assert loaded == ["2026-05-05"]
-    assert "2026-05-01" not in _text_payload(response)
+    assert loaded == ["2026-05-01"]
+    assert "2026-05-01" in _text_payload(response)
 
 
 @pytest.mark.parametrize("today_brewed", [False, True])
@@ -1101,7 +1101,7 @@ def test_empty_today_prominently_links_latest_saved_digest_without_switching_dat
     if today_brewed:
         assert 'Open latest saved digest' not in html
     else:
-        assert 'No digest has been brewed today.' in html
+        assert html.count('No digest has been brewed today.') == 1
         assert re.search(r'href="/\?digest_id=2026-05-03"[^>]*>Open latest saved digest', html)
 
 
@@ -1412,10 +1412,15 @@ def test_reader_can_save_and_remove_an_item_from_the_digest(tmp_path, monkeypatc
     before = _text_payload(web.index(_request("GET", "/")))
     assert f'data-item-id="{item_id}"' in before
     assert 'data-bookmarked="false"' in before
+    # The title owns the reading width; Save sits in the card's action row.
     assert re.search(
         r'<div class="item-head">\s*<div class="item-heading">.*?'
-        r'<a class="title-link".*?>Save this RNA paper</a>\s*</div>\s*'
-        r'<div class="item-head-actions">\s*'
+        r'<a class="title-link".*?>Save this RNA paper</a>\s*</div>\s*</div>',
+        before,
+        re.DOTALL,
+    )
+    assert re.search(
+        r'<div class="vote-panel">.*?<div class="item-actions">\s*'
         r'<button class="bookmark-btn"[^>]+aria-label="Save for later"',
         before,
         re.DOTALL,
@@ -2845,9 +2850,11 @@ def test_main_page_choice_arrives_at_run_page_and_starts_once(monkeypatch, tmp_p
     profile_path.write_text("bio: Reader\nkeywords: []\ndownweight: []\n")
     monkeypatch.setattr(web, "_get_profile_path", lambda: profile_path)
 
-    response = web.run_get(
-        _request("GET", "/run"), reading_mode="minimal", autostart=True
-    )
+    prepared = asyncio.run(web.run_prepare(_request("POST", "/run", form={
+        "_csrf_token": web._CSRF_TOKEN, "reading_mode": "minimal",
+    })))
+    start = parse_qs(urlsplit(prepared.headers["location"]).query)["start"][0]
+    response = web.run_get(_request("GET", "/run"), reading_mode="minimal", autostart=True, start=start)
     body = _text_payload(response)
 
     assert 'value="minimal" checked' in body
@@ -2942,12 +2949,12 @@ def test_theme_controls_and_safe_pwa_assets_are_exposed(monkeypatch, tmp_path):
     assert "localStorage.getItem(\"dailydigest-theme\")" in page
     assert "localStorage.getItem(\"dailydigest-display\")" in page
     assert page.index("dailydigest-theme") < page.index("<style>")
-    assert "@media (max-width: 680px)" in page
     assert ".app-utilities {" in page
     assert "display: flex; flex-direction: column" in page
     utilities = re.search(r"\.app-utilities \{([^}]+)\}", page).group(1)
-    assert "position: relative" in utilities
-    assert "position: fixed" not in utilities
+    # Display stays at the viewport's bottom-right instead of scrolling away.
+    assert "position: fixed" in utilities
+    assert "env(safe-area-inset-bottom" in utilities and "right:" in utilities
     assert "navigator.serviceWorker.register" in page
     assert 'data-theme="light"' in page
     assert "@media (prefers-reduced-motion: no-preference)" in page
@@ -3094,3 +3101,20 @@ def test_setup_timezone_detection_is_only_enabled_on_first_run(
     assert response.status_code == 200
     expected = "true" if first_run else "false"
     assert f'data-detect-timezone="{expected}"' in _text_payload(response)
+
+
+def test_future_dated_digest_after_timezone_change_stays_in_date_order(tmp_path, monkeypatch):
+    from dailydigest import web
+    profile_path = tmp_path / 'profile.yaml'
+    profile_path.write_text('name: Ada\nbio: Researcher.\nkeywords: []\ndownweight: []\n')
+    monkeypatch.setattr(web, '_get_profile_path', lambda: profile_path)
+    monkeypatch.setattr(web, '_digest_id', lambda: '2026-05-05')
+    available = ['2026-05-05', '2026-05-03']
+    monkeypatch.setattr(web, '_recent_digest_ids', lambda _today, limit=3: list(available))
+    monkeypatch.setattr(web, '_digest_exists', lambda value: value in {*available, '2026-05-06'})
+    _stub_index_dependencies(web, monkeypatch)
+    monkeypatch.setattr(web, '_load_today', lambda *_args, **_kwargs: ([], {}))
+    page = _text_payload(web.index(_request('GET', '/'), digest_id='2026-05-06'))
+    assert '-1 days' not in page and 'from -1' not in page
+    picker = page[page.index('<option value="/?digest_id=2026-05-06" selected>'):]
+    assert picker.index('2026-05-06') < picker.index('value="/"') < picker.index('digest_id=2026-05-03')

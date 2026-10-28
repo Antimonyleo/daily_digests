@@ -54,24 +54,33 @@ def test_failed_brew_retry_preserves_reader_selected_serving():
     script = source[source.index("  async function startBrew()"):source.index("  if (RESUME)")]
     _run_js('''
         const assert = require('node:assert/strict');
-        const RESTART_URL = '/run?reading_mode=usual&autostart=1';
+        const RESTART_URL = '/run?reading_mode=usual';
         const RESUME_URL = '/run?reading_mode=usual&resume=1&run_id=abcdef123456';
         const RUN_ID = 'abcdef123456', CSRF_TOKEN = 'fixture';
         let restartUrl = RESTART_URL;
         const control = () => ({events:{},addEventListener(k,cb){this.events[k]=cb;}});
         const form=control(), retryButton=control(), reconnectButton=control(), cancelButton=control();
-        const newBrewLink={href:RESTART_URL};
+        const newBrewLink=Object.assign(control(), {href:RESTART_URL});
+        let submitted;
+        const document={body:{append(){}},createElement(tag){
+            if(tag !== 'form') return {};
+            return {children:[],append(input){this.children.push(input);},requestSubmit(){
+                submitted={method:this.method,action:this.action,fields:Object.fromEntries(this.children.map(i=>[i.name,i.value]))};
+            }};
+        }};
         const brewButton={disabled:false}, choicePanel={}, progressPanel={};
         const window={location:{href:'http://127.0.0.1:8799/run'},history:{replaceState(){}}};
         class FormData {get(){return 'minimal';}}
-        const fetch=async()=>({ok:false,status:503});
+        const fetch=async()=>({ok:false,status:503,json:async()=>({detail:'Fixture failure'})});
         const showError=()=>{};
         const connectStream=()=>assert.fail('failed start must not create a status stream');
     ''' + script + '''
         (async()=>{
             await startBrew();
             retryButton.events.click();
-            assert.equal(new URL(window.location.href,'http://fixture.invalid').searchParams.get('reading_mode'),'minimal');
+            assert.equal(submitted.method,'post');
+            assert.equal(submitted.action,'/run');
+            assert.deepEqual(submitted.fields,{_csrf_token:'fixture',reading_mode:'minimal'});
             assert.equal(new URL(newBrewLink.href,'http://fixture.invalid').searchParams.get('reading_mode'),'minimal');
         })().catch(error=>{console.error(error);process.exitCode=1;});
     ''')
@@ -158,7 +167,7 @@ def test_pip_feeding_reacts_after_impact_and_ignores_repeated_clicks():
     _run_pip_js('''
         teaButton.events.click();
         assert.equal(saved[teaLeafStorageKey], '1');
-        assert.equal(teaText.textContent, TEA_NOTES[0], 'keep the old note until impact');
+        assert.equal(teaText.textContent, TEA_NOTES[1], 'the accepted leaf chooses its note at once');
         assert.equal(teaBreak.classList.contains('is-sipping'), false);
         teaButton.events.click();
         assert.equal(saved[teaLeafStorageKey], '1');

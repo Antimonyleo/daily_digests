@@ -23,15 +23,17 @@
   {% if items %}
   <div class="saved-list" id="saved-list">
     {% for item in items %}
-    <article class="saved-card" data-item-id="{{ item.id }}" data-current-grade="{{ item.current_grade if item.current_grade is not none else '' }}" data-saved-state="saved">
+    <article class="saved-card" data-item-id="{{ item.id }}" data-current-grade="{{ item.current_grade if item.current_grade is not none else '' }}" data-saved-state="saved" data-saved-item-ids="{{ item.saved_item_ids | default([item.id]) | join(',') }}">
       <div class="saved-content">
         <a class="saved-title" href="{{ item.url }}" target="_blank" rel="noopener">{{ item.title }}</a>
         <div class="saved-meta">
-          {{ item.section }} · {{ item.source }}{% if item.publication_label %} · {{ item.publication_label }}{% endif %}{% if item.published %} · Published {{ item.published }}{% endif %}{% if item.saved %} · Saved {{ item.saved }}{% endif %}
+          {{- item.section }} · <span class="venue">{{ item.source }}</span>{% if item.publication_label %} · {{ item.publication_label }}{% endif %}{% if item.published_label %} · Published {% if item.published_iso %}<time datetime="{{ item.published_iso }}">{{ item.published_label }}</time>{% else %}{{ item.published_label }}{% endif %}{% endif %}{% if item.saved %} · Saved {{ item.saved }}{% endif -%}
         </div>
-        {% if item.summary_fields and item.summary_fields.get('Key finding') %}
-        <div class="summary-primary"><div class="summary-label">Key finding</div><div class="summary-text">{{ item.summary_fields.get('Key finding') }}</div></div>
-        {% for label in ['Why read', 'Caveat'] %}{% if item.summary_fields.get(label) %}<div class="reading-context-field"><div class="summary-label">{{ label }}</div><div class="summary-text">{{ item.summary_fields.get(label) }}</div></div>{% endif %}{% endfor %}
+        {% include "_version_links.html.j2" %}
+        {% set has_finding = item.summary_fields and item.summary_fields.get('Key finding') %}
+        {% if has_finding %}
+        <div class="summary-primary"><div class="summary-label">{{ item.finding_label | default('Key finding') }}</div><div class="summary-text">{{ item.summary_fields.get('Key finding') }}</div></div>
+        {% if item.summary_fields.get('Why read') %}<div class="reading-context-field" data-summary-label="Why read"><div class="summary-label">Why read</div><div class="summary-text">{{ item.summary_fields.get('Why read') }}</div></div>{% endif %}
         {% else %}{% if item.summary %}<div class="saved-summary">{{ item.summary }}</div>{% endif %}{% endif %}
         {% include "_article_figure.html.j2" %}
         {% if item.related_commentaries %}
@@ -40,6 +42,12 @@
           <li><span class="publication-label">{{ commentary.publication_label }}</span> · <a href="{{ commentary.url }}" target="_blank" rel="noopener noreferrer">{{ commentary.title }}</a></li>
           {% endfor %}
         </ul>
+        {% endif %}
+        {% if has_finding and item.summary_fields.get('Caveat') %}
+        <details class="item-details">
+          <summary>Details</summary>
+          <div class="item-details-body"><div class="summary-field" data-summary-label="Caveat"><div class="summary-label">Caveat</div><div class="summary-text">{{ item.summary_fields.get('Caveat') }}</div></div></div>
+        </details>
         {% endif %}
         <div class="saved-feedback">{{ feedback_controls(item) }}<button class="copy-summary btn" type="button">Copy summary</button><span class="copy-status" role="status"></span></div>
         <div class="save-state" aria-live="polite"></div>
@@ -174,7 +182,10 @@
       action.disabled = true;
       status.textContent = saved ? 'Restoring…' : 'Removing…';
       try {
-        const response = await fetch(`/bookmark/${card.dataset.itemId}`, {
+        // One card is one work: Remove clears, and Undo restores, every saved version.
+        const versions = (card.dataset.savedItemIds || '').split(',')
+          .filter(value => /^\d+$/.test(value) && value !== card.dataset.itemId);
+        const response = await fetch(`/bookmark/${card.dataset.itemId}${versions.length ? '?versions=' + versions.join(',') : ''}`, {
           method:saved ? 'POST' : 'DELETE', headers:{'X-CSRF-Token':CSRF_TOKEN},
         });
         if (serial !== state.serial) return;

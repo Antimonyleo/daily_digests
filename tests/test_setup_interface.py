@@ -148,7 +148,11 @@ def test_setup_action_has_one_explicit_destination_and_never_starts_during_save(
         "llm_backend": "extractive", "after_save": action,
     })))
     assert response.status_code == 303
-    assert response.headers["location"] == destination
+    if action == "brew":
+        assert response.headers["location"].startswith(destination + "&start=")
+        assert web._consume_run_start(response.headers["location"].split("&start=")[1], "usual")
+    else:
+        assert response.headers["location"] == destination
     assert response.headers["cache-control"] == "no-store"
     assert yaml.safe_load(profile.read_text())["keywords"] == ["DNA origami assembly"]
 
