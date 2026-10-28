@@ -21,6 +21,10 @@ const endpoint = spec => {
     case 'fda_api': return { url: 'https://api.fda.gov/' + spec.endpoint + '?limit=1&search=submissions.submission_status:AP' };
     case 'clinicaltrials': return { url: 'https://clinicaltrials.gov/api/v2/studies?pageSize=1&format=json' };
     case 'grants_gov': return { url: 'https://api.grants.gov/v1/api/search2', method: 'POST', headers: { 'Content-Type': 'text/plain;charset=UTF-8' }, body: JSON.stringify({ rows: 1, keyword: 'research', oppStatuses: 'forecasted|posted' }) };
+    case 'eu_funding': return { url: 'https://api.tech.ec.europa.eu/search-api/prod/rest/search?apiKey=SEDIA&text=***&pageSize=1&pageNumber=1', method: 'POST', multipart: { query: JSON.stringify({ bool: { must: [{ terms: { type: ['1'] } }, { terms: { status: ['31094501', '31094502'] } }] } }), languages: '["en"]' } };
+    case 'nih_guide': return { url: 'https://search.grants.nih.gov/guide/api/data?' + new URLSearchParams({ perpage: '1', sort: 'reldate:desc', from: '0', query: 'nanoparticle', type: 'active,activenosis', parentic: 'all', primaryic: 'all', activitycodes: 'all', doctype: 'all', parentfoa: 'all', clinicaltrials: 'all', fields: 'all', spons: 'true', daterange: '01011991-' + new Date().toISOString().slice(5, 7) + new Date().toISOString().slice(8, 10) + new Date().toISOString().slice(0, 4) }) };
+    case 'embl_events': return { url: spec.url + '?per_page=1&_fields=id,link' };
+    case 'embo_events': return { url: spec.url };
     default: throw new Error('Unknown source kind: ' + spec.kind);
   }
 };
@@ -49,7 +53,13 @@ try {
     const result = await page.evaluate(async spec => {
       const start = performance.now();
       try {
-        const response = await fetch(spec.url, { method: spec.method || 'GET', headers: spec.headers || {}, body: spec.body, credentials: 'omit', signal: AbortSignal.timeout(15000) });
+        let requestBody = spec.body;
+        if (spec.multipart) {
+          // Same shape the adapter sends: JSON parts in a multipart form, a CORS simple request.
+          requestBody = new FormData();
+          for (const [name, value] of Object.entries(spec.multipart)) requestBody.append(name, new Blob([value], { type: 'application/json' }), 'blob');
+        }
+        const response = await fetch(spec.url, { method: spec.method || 'GET', headers: spec.headers || {}, body: requestBody, credentials: 'omit', signal: AbortSignal.timeout(15000) });
         const body = await response.text();
         let opportunityId = null;
         if (spec.kind === 'grants_gov') {

@@ -373,13 +373,13 @@ def ingest_all(
     gap can be backfilled (bounded by each API and the ranking recency window).
     """
     init_db()
-    specs = [
+    specs = _reader_funding_sources([
         spec
         for spec in load_sources()
         if _section_enabled(
             getattr(spec, "section", "research") or "research", section_settings
         )
-    ]
+    ], section_settings)
     _emit(progress_callback, "ingest_start", {"sources": len(specs)})
     all_items: list[Item] = []
     stats: list[IngestStats] = []
@@ -629,6 +629,33 @@ def _research_source_family(spec: Any) -> str | None:
         host = urlsplit(str(getattr(spec, "url", "") or "")).hostname
         return f"publisher:{host.lower()}" if host else None
     return None
+
+
+def _reader_funding_sources(specs: list[Any], settings: Settings | None = None) -> list[Any]:
+    """Keep the funding sources that serve the reader's current country.
+
+    Coverage gates then judge only these, so a reader in Germany is not told
+    funding failed because a US-only service was down, and vice versa.
+    """
+    if not any(getattr(spec, "applicant_regions", None) for spec in specs):
+        return specs
+    from .opportunities import funding_regions, load_opportunity_profile
+
+    try:
+        country = load_opportunity_profile(
+            (settings or get_settings()).opportunity_profile_path
+        ).country
+    except (OSError, ValueError):
+        return specs
+    regions = funding_regions(country)
+    if regions is None:
+        return specs
+    return [
+        spec for spec in specs
+        if getattr(spec, "section", "") != "opportunities"
+        or not getattr(spec, "applicant_regions", None)
+        or regions & {str(region).casefold() for region in spec.applicant_regions}
+    ]
 
 
 def _source_request_group(spec: Any) -> str:

@@ -402,6 +402,7 @@ opportunities:
     kind: grants_gov
     profile_driven: true
     lookahead_days: 180
+    applicant_regions: [us]
   # Searches the vocabulary of the AWARD rather than the science. Fellowships and
   # personal/career awards are described by their mechanism, so a research-keyword
   # search never returns them — measured on the live API, "DNA nanotechnology"
@@ -415,9 +416,29 @@ opportunities:
       postdoctoral fellowship|career development award|research training|
       early career investigator|visiting scholar|research fellowship|
       mentored research scientist|independent scientist award
+    applicant_regions: [us]
+  # The NIH Guide serves the same NIH notices as Grants.gov from another host,
+  # so US funding survives a Grants.gov outage.
+  - name: NIH Guide
+    kind: nih_guide
+    profile_driven: true
+    lookahead_days: 270
+    applicant_regions: [us]
+  # Horizon Europe topics, including ERC, MSCA and EIC. Every open topic is read
+  # and ranked locally: the portal's keyword search misses most matches.
+  - name: EU Funding & Tenders
+    kind: eu_funding
+    lookahead_days: 270
+    applicant_regions: [eu]
 
 events:
+  # EMBL's structured listing; same events and identities as its former RSS.
   - name: EMBL Events
-    kind: events_rss
-    url: https://www.embl.org/about/info/course-and-conference-office/events/feed/
+    kind: embl_events
+    url: https://www.embl.org/about/info/course-and-conference-office/wp-json/wp/v2/vf_events
+    lookahead_days: 365
+  # EMBO workshops, courses, lectures and symposia held worldwide.
+  - name: EMBO Events
+    kind: embo_events
+    url: https://www.embo.org/wp-json/embo/v1/events/new
     lookahead_days: 365

@@ -223,10 +223,14 @@ It updates when you expand sections, filter picks, or change the display density
 Funding and event cards show the official source, current status, deadline,
 available amount when stated, location/date for events, and a conservative
 eligibility assessment. Use **Add to calendar** to download a standard `.ics`
-file for the deadline or event. DailyDigest currently verifies US federal calls through
-Grants.gov and scientific courses/conferences through EMBL's official event
-pages. These sections are discovery aids: always read the linked official call
-before spending time on an application.
+file for the deadline or event. Funding comes from official sources chosen by
+the country you enter in setup: US readers get Grants.gov and the NIH Guide,
+and readers in the EU or a Horizon Europe associated country (including the UK
+and Switzerland) get EU Funding & Tenders topics (Horizon Europe, ERC, MSCA,
+EIC). Readers elsewhere see every source, labelled for eligibility review.
+Courses and conferences come from EMBL and from EMBO's worldwide workshops,
+courses, lectures and symposia. These sections are discovery aids: always read
+the linked official call before spending time on an application.
 
 ## Accounts, subscriptions, and optional services
 

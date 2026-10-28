@@ -96,27 +96,56 @@ _OPPORTUNITY_TYPE_FAMILIES: dict[str, tuple[str, ...]] = {
     "travel support": ("travel", "accessibility grant", "bursary"),
 }
 
+_EU_MEMBERS = (
+    "austria", "belgium", "bulgaria", "croatia", "cyprus", "czechia", "czech republic",
+    "denmark", "estonia", "finland", "france", "germany", "greece", "hungary", "ireland",
+    "italy", "latvia", "lithuania", "luxembourg", "malta", "netherlands", "poland",
+    "portugal", "romania", "slovakia", "slovenia", "spain", "sweden",
+)
+# Countries associated to Horizon Europe take part on the same terms as members.
+_HORIZON_ASSOCIATED = (
+    "albania", "armenia", "bosnia and herzegovina", "canada", "faroe islands", "georgia",
+    "iceland", "israel", "kosovo", "moldova", "montenegro", "new zealand", "north macedonia",
+    "norway", "serbia", "south korea", "republic of korea", "switzerland", "tunisia",
+    "turkey", "türkiye", "ukraine", "united kingdom", "uk", "great britain", "england",
+    "scotland", "wales", "northern ireland",
+)
+_US_NAMES = ("us", "u.s.", "usa", "u.s.a.", "united states", "united states of america", "america")
+
 _REGION_MARKERS: dict[str, tuple[str, ...]] = {
     "north america": ("united states", "u.s.", "usa", "canada", "mexico"),
     "europe": (
-        "europe",
-        "germany",
-        "heidelberg",
-        "united kingdom",
-        "france",
-        "italy",
-        "spain",
-        "switzerland",
-        "netherlands",
-        "belgium",
-        "austria",
-        "sweden",
-        "denmark",
-        "norway",
-        "finland",
+        "europe", "heidelberg", *_EU_MEMBERS, "united kingdom", "uk", "england", "scotland",
+        "wales", "switzerland", "norway", "iceland", "serbia", "ukraine", "turkey", "türkiye",
+        "albania", "bosnia", "montenegro", "north macedonia", "moldova", "armenia",
     ),
-    "asia": ("asia", "china", "japan", "korea", "india", "singapore", "taiwan"),
+    "asia": (
+        "asia", "china", "japan", "korea", "india", "singapore", "taiwan", "hong kong",
+        "thailand", "vietnam", "malaysia", "indonesia", "philippines", "bangladesh",
+        "pakistan", "sri lanka", "nepal",
+    ),
+    "middle east": ("israel", "saudi arabia", "united arab emirates", "qatar", "jordan", "lebanon", "iran"),
+    "south america": ("brazil", "argentina", "chile", "colombia", "peru", "uruguay", "ecuador"),
+    "africa": ("africa", "egypt", "morocco", "tunisia", "kenya", "nigeria", "ghana", "ethiopia", "rwanda"),
+    "oceania": ("australia", "new zealand"),
 }
+
+
+def funding_regions(country: str) -> set[str] | None:
+    """Applicant regions for a reader's current country, or None when unknown.
+
+    Unknown countries see every funding source, each still labelled
+    "needs verification"; a recognised country sees only its funders.
+    """
+    name = re.sub(r"\s+", " ", str(country or "").casefold().strip(" ."))
+    if not name:
+        return None
+    regions = set()
+    if name in _US_NAMES:
+        regions.add("us")
+    if name in _EU_MEMBERS or name in _HORIZON_ASSOCIATED:
+        regions.add("eu")
+    return regions or None
 
 
 def _iso_date(value: object) -> date | None:
@@ -157,7 +186,9 @@ def _region_matches(selected: list[str], location: str) -> bool:
             continue
         if wanted in normalized:
             return True
-        if any(marker in normalized for marker in _REGION_MARKERS.get(wanted, ())):
+        # Whole words only: "uk" must not match Fukuoka, nor "india" Indiana.
+        if any(re.search(rf"(?<![\w.]){re.escape(marker)}(?!\w)", normalized)
+               for marker in _REGION_MARKERS.get(wanted, ())):
             return True
     return False
 
@@ -304,9 +335,13 @@ def opportunity_display(
         if assessment and assessment.eligibility == "likely"
         else "Eligibility needs verification"
     )
+    deadline = str(metadata.get("deadline") or "")
+    if not deadline and metadata.get("expires"):
+        # Announcements that accept several due dates state only when they expire.
+        deadline = f"See the announcement for due dates (expires {metadata['expires']})"
     return {
         "status": str(metadata.get("status") or "unknown").replace("_", " ").title(),
-        "deadline": str(metadata.get("deadline") or "Not stated"),
+        "deadline": deadline or "Not stated",
         "amount": amount,
         "eligibility": eligibility,
         "eligibility_reason": assessment.reason if assessment else "Check official requirements",

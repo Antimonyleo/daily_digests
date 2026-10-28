@@ -63,4 +63,20 @@ def dispatch_source(spec: SourceSpec) -> Source:
         from .events_rss import EventsRSSSource
 
         return EventsRSSSource()
+    if spec.kind == "eu_funding":
+        from .eu_funding import EUFundingSource
+
+        return EUFundingSource()
+    if spec.kind == "nih_guide":
+        from .nih_guide import NIHGuideSource
+
+        return NIHGuideSource()
+    if spec.kind == "embl_events":
+        from .events_api import EMBLEventsSource
+
+        return EMBLEventsSource()
+    if spec.kind == "embo_events":
+        from .events_api import EMBOEventsSource
+
+        return EMBOEventsSource()
     raise ValueError(f"Unknown source kind: {spec.kind}")

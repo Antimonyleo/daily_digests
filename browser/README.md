@@ -524,8 +524,9 @@ people should use separate browser profiles. Import and companion restore replac
 state; they do not merge independently accumulated feedback. An installed shortcut
 does not promise offline startup or background computation.
 
-Configured research sources span different fields unevenly. Grants.gov covers US
-funding and the EMBL event stream is limited; these sections are not exhaustive.
+Configured research sources span different fields unevenly. Funding covers the US
+(Grants.gov, NIH Guide) and Europe (EU Funding & Tenders); events come from EMBL
+and EMBO. These sections are not exhaustive.
 The interface states these limits before opt-in and retains conservative eligibility.
 
 For scheduled/manual source refreshes, the Pages workflow maintains one recurring

@@ -901,6 +901,16 @@ def candidate_identity_keys(it: Any, *, include_publication_links: bool = True) 
     if normalized_url:
         keys.append(f"url:{normalized_url}")
 
+    if isinstance(metadata, dict) and getattr(it, "section", "") in {"opportunities", "events"}:
+        # Deadline records carry no publication date. NIH Guide and Grants.gov
+        # share the official notice number; EMBO and EMBL both list joint
+        # symposia under the same title and start date.
+        if metadata.get("record_type") == "event":
+            if (start := str(metadata.get("event_start") or "")) and (name := _normalized_title_key(title)):
+                keys.append(f"event:{name}:{start}")
+        elif official := str(metadata.get("official_id") or "").strip().upper():
+            keys.append(f"opportunity:{official}")
+
     title_key = _same_day_title_key(title, _effective_date(it))
     if title_key:
         keys.append(f"title_day:{title_key}")
