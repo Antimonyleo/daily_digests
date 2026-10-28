@@ -1322,7 +1322,7 @@ try {
     const handler = async request => {
       const response = await request.fetch();
       const manifest = await response.json();
-      if (stale) {manifest.build_id='acceptance-next-release';manifest.public_sources={oldest_fetched_at:new Date(Date.now()-49*3600000).toISOString()};}
+      if (stale) {manifest.build_id='acceptance-next-release';manifest.app_release='acceptance-next-app';manifest.public_sources={oldest_fetched_at:new Date(Date.now()-49*3600000).toISOString()};}
       else manifest.public_sources={oldest_fetched_at:new Date().toISOString()};
       await request.fulfill({response,body:JSON.stringify(manifest)});
     };
@@ -1424,7 +1424,7 @@ try {
       const during = JSON.parse(checkpoint.body);
       await page.route('**/assets/build-manifest.json*', async request => {
         const response = await request.fetch(); const manifest = await response.json();
-        manifest.build_id = 'acceptance-busy-next-release';
+        manifest.build_id = 'acceptance-busy-next-release'; manifest.app_release = 'acceptance-busy-next-app';
         await request.fulfill({response, body:JSON.stringify(manifest)});
       }, {times:1});
       await page.evaluate(()=>document.dispatchEvent(new Event('visibilitychange')));

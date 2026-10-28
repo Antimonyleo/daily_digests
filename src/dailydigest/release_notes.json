@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "releases": [
+    {
+      "version": "2026.10.27",
+      "date": "2026-10-27",
+      "title": "More funding and events, clearer reading, one-click updates",
+      "notes": [
+        "Funding brews work again in the browser after a change on Grants.gov.",
+        "Funding now matches your country: NIH Guide for the US, EU Funding & Tenders (Horizon Europe, ERC, MSCA) for Europe.",
+        "Events now include EMBO workshops and courses worldwide, and every upcoming EMBL event.",
+        "Journal names are written out in full and lead each card; compact view is fixed.",
+        "Updates now say what changed and install with one click."
+      ]
+    }
+  ]
+}

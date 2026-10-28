@@ -163,6 +163,7 @@
 </head>
 <body>
 <a class="skip-link" href="#page-content">Skip to content</a>
+{% if local_updates_enabled is defined and local_updates_enabled() %}{% include "_update_notice.html.j2" %}{% endif %}
 <main class="wrap" id="page-content" tabindex="-1">
   {% block body %}{% endblock %}
 </main>

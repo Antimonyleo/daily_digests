@@ -232,6 +232,33 @@ Courses and conferences come from EMBL and from EMBO's worldwide workshops,
 courses, lectures and symposia. These sections are discovery aids: always read
 the linked official call before spending time on an application.
 
+### Updating DailyDigest
+
+You don't need to download anything again or use a terminal to update.
+
+- **Website (including the installed app):** the site loads its latest version
+  each time you open it. If a new version comes out while it is open, a notice
+  says what changed; select **Update now**. Updating waits until a running brew
+  finishes, and asks you to save unsaved Settings first. The twice-daily refresh
+  of public source data is not an update and shows no notice.
+- **On your computer (ZIP download or Git copy):** while DailyDigest is open, it
+  checks twice a day for a newer version. A notice at the top of the page lists
+  what changed; select **Update now**. DailyDigest downloads the new version,
+  installs it, restarts and reloads the page, usually within a minute or two.
+  Your `data/` folder (digests, ratings, profile) and `.env` settings are never
+  changed. Replaced program files are saved first in `.update-backups/`, and if
+  anything fails, the previous version is restored and keeps running. A Git copy
+  updates only when its files have not been edited; otherwise the notice
+  explains how to update by hand. The check downloads one public file from
+  GitHub and sends nothing about you; set `CHECK_FOR_UPDATES=false` in `.env`
+  to turn it off.
+- **Docker:** the notice appears, but a container cannot rebuild itself. Download
+  the new version into the same folder (or `git pull`), then run
+  `docker compose up --build -d`. Your `data/` folder is kept.
+
+Copies installed before this feature need one manual update (download the ZIP
+again into the same folder, or `git pull`) to get the update notice.
+
 ## Accounts, subscriptions, and optional services
 
 The default browser experience needs no login after the software is downloaded.
@@ -690,6 +717,14 @@ uv sync --frozen --group dev
 uv run pytest
 uv run ruff check src tests
 ```
+
+To publish an update to every installation, add an entry at the top of
+`src/dailydigest/release_notes.json` with a higher `version` (`YYYY.MM.DD`, or
+`YYYY.MM.DD.N` for a second release that day) and up to eight short,
+reader-facing notes, then merge to `main`. Local installations offer the update
+once the entry is on `main`; the website shows the notes after its next deploy.
+Keep `DailyDigest-Windows.bat` unchanged: Windows reads a running batch file
+from disk, so the updater must never rewrite it (a test pins its contents).
 
 DailyDigest is released under the [MIT License](LICENSE).
 

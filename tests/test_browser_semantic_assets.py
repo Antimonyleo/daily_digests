@@ -132,8 +132,14 @@ def test_full_build_manifest_identifies_lazy_semantic_assets_and_ships_engine(tm
         'modules': 0, 'python': 'fixture', 'invalidation': 'checked-hash'})
     monkeypatch.setattr(builder, 'resolve_pyodide_packages', lambda lock, names: [])
     monkeypatch.setattr(builder, 'gpu_model_files', lambda root, output, cache: output.mkdir(parents=True))
-    monkeypatch.setattr(builder, 'publish_public_embeddings', lambda *args: {
-        'published': 0, 'complete': False, 'warning': 'No public snapshot in semantic asset fixture'})
+    public_data = {'refresh': 'morning'}
+
+    def publish_public_embeddings(output, *args):
+        # Stand-in for the twice-daily public data refresh.
+        (output / 'assets/public-embeddings.json').write_text(json.dumps(public_data))
+        return {'published': 0, 'complete': False, 'warning': 'No public snapshot in semantic asset fixture'}
+
+    monkeypatch.setattr(builder, 'publish_public_embeddings', publish_public_embeddings)
     def archive(path, wheels):
         with zipfile.ZipFile(path, 'w') as output:
             output.writestr('public.py', '# public')
@@ -146,6 +152,15 @@ def test_full_build_manifest_identifies_lazy_semantic_assets_and_ships_engine(tm
     assert manifest['semantic_model']['sha256'] == hashes
     assert manifest['semantic_model']['lazy'] is True
     assert manifest['private_data_included'] is False
+    assert manifest['app_release'] == report['app_release'] and manifest['version'] == manifest['release_notes'][0]['version']
+    index = (output / 'index.html').read_text()
+    assert f'name="dailydigest-app-release" content="{report["app_release"]}"' in index
+    assert f'name="dailydigest-version" content="{manifest["version"]}"' in index
+    # A public data refresh is a new build but not a new application release.
+    public_data['refresh'] = 'evening'
+    refreshed = builder.build(tmp_path / 'refreshed-data')
+    assert refreshed['build_id'] != report['build_id']
+    assert refreshed['app_release'] == report['app_release']
     assert (output / 'semantic.mjs').is_file()
     assert (output / 'public-embeddings.mjs').is_file()
     assert (output / 'embedding-memo.mjs').is_file()
@@ -161,3 +176,4 @@ def test_full_build_manifest_identifies_lazy_semantic_assets_and_ships_engine(tm
     requirements.write_text(requirements.read_text().replace('filelock==3.29.0', 'filelock==3.30.0'))
     updated = builder.build(tmp_path / 'updated-dependencies')
     assert updated['build_id'] != report['build_id']
+    assert updated['app_release'] != report['app_release']

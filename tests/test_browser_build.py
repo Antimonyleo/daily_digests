@@ -21,6 +21,7 @@ def test_source_archive_positive_allowlist_excludes_private_state(tmp_path, monk
         "templates/FONT-LICENSE.txt": "Public fixture font license",
         "config/sources.yaml": "research: []\n",
         "browser/network.py": "# public network adapter\n",
+        "src/dailydigest/release_notes.json": '{"schema": 1, "releases": []}',
         "data/profile.yaml": "PRIVATE_PROFILE_SENTINEL",
         ".env": "SECRET_SENTINEL",
         "config/opportunities.yaml": "PRIVATE_ELIGIBILITY_SENTINEL",
@@ -35,7 +36,8 @@ def test_source_archive_positive_allowlist_excludes_private_state(tmp_path, monk
     archive = tmp_path / "app.zip"
     manifest = build.source_archive(archive, [])
     assert set(manifest) == {"src/dailydigest/core.py", "templates/page.j2",
-                             "templates/FONT-LICENSE.txt", "config/sources.yaml", "browser/network.py"}
+                             "templates/FONT-LICENSE.txt", "config/sources.yaml", "browser/network.py",
+                             "src/dailydigest/release_notes.json"}
     with zipfile.ZipFile(archive) as package:
         assert package.read("templates/FONT-LICENSE.txt") == b"Public fixture font license"
         contents = b"".join(package.read(name) for name in package.namelist())

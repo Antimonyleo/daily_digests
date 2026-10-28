@@ -16,6 +16,7 @@ import uuid
 import zipfile
 from pathlib import Path
 
+from dailydigest.updates import load_release_notes
 from dailydigest.rank.semantic_assets import (
     MODEL_NOTICE, SEMANTIC_FILES, SEMANTIC_REPOSITORY, SEMANTIC_REVISION,
 )
@@ -83,7 +84,8 @@ def source_archive(output: Path, wheels: list[Path]) -> dict[str, str]:
         # Positive allowlist, not a broad repository copy with private exclusions.
         paths = list((ROOT / "src/dailydigest").rglob("*.py"))
         paths += list((ROOT / "templates").glob("*.j2"))
-        paths += [ROOT / "config/sources.yaml", HERE / "network.py", ROOT / "templates/FONT-LICENSE.txt"]
+        paths += [ROOT / "config/sources.yaml", HERE / "network.py", ROOT / "templates/FONT-LICENSE.txt",
+                  ROOT / "src/dailydigest/release_notes.json"]
         for path in sorted(paths):
             if "__pycache__" in path.parts:
                 continue
@@ -269,7 +271,7 @@ def relocate_models(output: Path) -> tuple[str, str]:
     worker.write_text(worker.read_text().replace("./assets/models/", "./" + relative))
     return relative, model_id
 
-def stamp_release(output: Path, build_id: str) -> None:
+def stamp_release(output: Path, build_id: str, app_release: str = "", version: str = "") -> None:
     """Guard mixed cached shells/bundles before restoring any private state."""
     for path in output.iterdir():
         if path.is_file() and path.suffix in {".mjs", ".js", ".html", ".css", ".webmanifest"}:
@@ -280,7 +282,12 @@ def stamp_release(output: Path, build_id: str) -> None:
                 text = text.replace(":v1`", ":" + build_id + "`")
             path.write_text(text)
     index = output / "index.html"
-    html = index.read_text().replace("<head>", '<head>\n  <meta name="dailydigest-build" content="' + build_id + '">', 1)
+    meta = '<head>\n  <meta name="dailydigest-build" content="' + build_id + '">'
+    # The app release ignores the twice-daily public data refresh, so readers
+    # are told about a new version only when the application itself changed.
+    meta += '\n  <meta name="dailydigest-app-release" content="' + (app_release or build_id) + '">'
+    meta += '\n  <meta name="dailydigest-version" content="' + version + '">'
+    html = index.read_text().replace("<head>", meta, 1)
     initial_bytes = sum(path.stat().st_size for path in output.rglob("*")
                         if path.is_file() and "bge-small-webgpu" not in path.parts
                         and "semantic-models" not in path.parts)
@@ -437,9 +444,14 @@ def build(output: Path) -> dict:
             for path in sorted(assets.glob('public-embeddings*')) if path.is_file()},
         "browser_lock": hashlib.sha256((PROTO / "package-lock.json").read_bytes()).hexdigest()}
     build_id = hashlib.sha256(json.dumps(release_inputs, sort_keys=True).encode()).hexdigest()[:16]
-    stamp_release(output, build_id)
+    app_inputs = {key: value for key, value in release_inputs.items() if key != "public_embeddings"}
+    app_release = hashlib.sha256(json.dumps(app_inputs, sort_keys=True).encode()).hexdigest()[:16]
+    releases = load_release_notes()
+    stamp_release(output, build_id, app_release, releases[0]["version"])
     total = sum(p.stat().st_size for p in output.rglob("*") if p.is_file())
-    report = {"schema_version": 1, "build_id": build_id, "runtime_path": runtime_path,
+    report = {"schema_version": 1, "build_id": build_id, "app_release": app_release,
+              "version": releases[0]["version"], "release_notes": releases[:5],
+              "runtime_path": runtime_path,
               "dependency_id": dependency_id, "model_path": model_path, "model_id": model_id,
               "semantic_model": semantic_model,
               "python_bytecode": python_bytecode,

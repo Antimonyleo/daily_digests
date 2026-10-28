@@ -1,0 +1,158 @@
+<style>
+  .dd-update { position: relative; z-index: 2; max-width: 1100px; margin: 12px auto 0; padding: 0 16px; }
+  .dd-update[hidden] { display: none; }
+  .dd-update-panel {
+    padding: 14px 16px; border: 1px solid var(--border); border-left: 4px solid var(--accent);
+    border-radius: 8px; background: var(--card); box-shadow: var(--shadow); font-size: 14px; line-height: 1.5;
+  }
+  .dd-update-title { margin: 0; font-size: 15px; font-weight: 650; color: var(--text); }
+  .dd-update-release { margin: 8px 0 0; }
+  .dd-update-release h3 { margin: 0; font-size: 14px; font-weight: 600; }
+  .dd-update-release ul { margin: 4px 0 0; padding-left: 20px; }
+  .dd-update-message { margin: 8px 0 0; color: var(--copy-secondary); }
+  .dd-update-message:empty { display: none; }
+  .dd-update-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  .dd-update-actions[hidden], .dd-update-actions .btn[hidden] { display: none; }
+</style>
+<aside class="dd-update" id="dd-update" role="status" aria-live="polite" hidden>
+  <div class="dd-update-panel">
+    <p class="dd-update-title" id="dd-update-title"></p>
+    <div id="dd-update-releases"></div>
+    <p class="dd-update-message" id="dd-update-message"></p>
+    <div class="dd-update-actions" id="dd-update-actions">
+      <button class="btn primary" id="dd-update-apply" type="button" hidden>Update now</button>
+      <button class="btn" id="dd-update-later" type="button">Later</button>
+    </div>
+  </div>
+</aside>
+<script>
+(() => {
+  const root = document.getElementById("dd-update");
+  if (!root || typeof window.ddNavigate === "function") return;
+  const title = document.getElementById("dd-update-title");
+  const list = document.getElementById("dd-update-releases");
+  const message = document.getElementById("dd-update-message");
+  const actions = document.getElementById("dd-update-actions");
+  const applyButton = document.getElementById("dd-update-apply");
+  const later = document.getElementById("dd-update-later");
+  const csrf = {{ update_csrf_token()|tojson }};
+  const read = key => { try { return localStorage.getItem(key) || ""; } catch (_) { return ""; } };
+  const write = (key, value) => { try { localStorage.setItem(key, value); } catch (_) {} };
+  const newer = (a, b) => {
+    const x = String(a).split(".").map(Number), y = String(b).split(".").map(Number);
+    for (let i = 0; i < Math.max(x.length, y.length); i += 1) {
+      if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0);
+    }
+    return false;
+  };
+  const showReleases = releases => {
+    list.replaceChildren(...releases.map(release => {
+      const block = document.createElement("section");
+      block.className = "dd-update-release";
+      const heading = document.createElement("h3");
+      heading.textContent = release.title || `Version ${release.version}`;
+      const notes = document.createElement("ul");
+      notes.replaceChildren(...(release.notes || []).map(note => {
+        const item = document.createElement("li"); item.textContent = note; return item;
+      }));
+      block.append(heading, notes);
+      return block;
+    }));
+  };
+  let target = "", installing = false;
+  const fetchStatus = () => fetch("/update/status", {cache: "no-store"}).then(response => {
+    if (!response.ok) throw new Error(String(response.status));
+    return response.json();
+  });
+  let rechecks = 0;
+  const render = state => {
+    if (installing) return;
+    if (!state.available) {
+      // The first check runs in the background; look again once it is done.
+      if (state.checking && rechecks < 5) { rechecks += 1; setTimeout(() => fetchStatus().then(render).catch(() => {}), 3000); }
+      return;
+    }
+    target = state.latest;
+    if (read("dailydigest-update-later") === target) return;
+    title.textContent = `A new version of DailyDigest is ready (${state.latest}).`;
+    showReleases(state.releases || []);
+    applyButton.hidden = !state.can_apply && !state.blocked_reason;
+    applyButton.disabled = !state.can_apply;
+    applyButton.textContent = state.phase === "failed" ? "Try again" : "Update now";
+    const working = ["downloading", "installing", "restarting"].includes(state.phase);
+    message.textContent = state.phase === "failed" || working ? state.message
+      : state.blocked_reason || state.instructions
+      || (state.can_apply ? "Updating takes a minute or two. Your digests, ratings and settings stay as they are." : "");
+    root.hidden = false;
+  };
+  const welcome = state => {
+    // After an update, say once what changed in the version now running.
+    const seen = read("dailydigest-version-seen");
+    if (state.installed && seen && newer(state.current, seen)) {
+      title.textContent = `DailyDigest was updated to ${state.current}.`;
+      showReleases([state.installed]);
+      message.textContent = "";
+      applyButton.hidden = true;
+      later.textContent = "Got it";
+      root.hidden = false;
+    }
+    if (state.current) write("dailydigest-version-seen", state.current);
+  };
+  later.addEventListener("click", () => {
+    if (target && later.textContent === "Later") write("dailydigest-update-later", target);
+    root.hidden = true;
+  });
+  const waitForRestart = (deadline) => {
+    setTimeout(() => {
+      fetchStatus().then(state => {
+        if (state.current && !newer(target, state.current)) {
+          message.textContent = "Updated. Reloading…";
+          location.reload();
+          return;
+        }
+        if (state.phase === "failed") {
+          installing = false;
+          render(state);
+          return;
+        }
+        message.textContent = state.message || "Installing the new version…";
+        waitForRestart(deadline);
+      }).catch(() => {
+        // The local app is restarting; keep waiting quietly.
+        if (Date.now() > deadline) {
+          installing = false;
+          message.textContent = "DailyDigest is taking longer than usual to restart. If this page doesn't come back, start DailyDigest again the way you usually do.";
+          return;
+        }
+        message.textContent = "Restarting DailyDigest…";
+        waitForRestart(deadline);
+      });
+    }, 1500);
+  };
+  applyButton.addEventListener("click", () => {
+    installing = true;
+    applyButton.disabled = true;
+    later.hidden = true;
+    message.textContent = "Starting the update… Keep this page open.";
+    fetch("/update/apply", {method: "POST", headers: {"X-CSRF-Token": csrf}}).then(response => {
+      if (!response.ok) throw new Error(String(response.status));
+      return response.json();
+    }).then(state => {
+      if (!["downloading", "installing", "restarting"].includes(state.phase)) {
+        installing = false;
+        later.hidden = false;
+        render(state);
+        if (!state.phase || state.phase === "idle") message.textContent = state.blocked_reason || "The update couldn't start. Try again in a moment.";
+        return;
+      }
+      waitForRestart(Date.now() + 10 * 60 * 1000);
+    }).catch(() => {
+      installing = false;
+      later.hidden = false;
+      applyButton.disabled = false;
+      message.textContent = "The update couldn't start. Try again in a moment.";
+    });
+  });
+  fetchStatus().then(state => { welcome(state); if (root.hidden) render(state); }).catch(() => {});
+})();
+</script>

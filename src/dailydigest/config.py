@@ -44,6 +44,10 @@ class Settings(BaseSettings):
 
     db_path: str = "data/digest.db"
 
+    # Look for a newer DailyDigest release twice a day while the local app is
+    # open. Only the public release notes are downloaded; nothing is sent.
+    check_for_updates: bool = True
+
     # --- Embedding / ranking model configuration -------------------------- #
     # Swap in a stronger scientific encoder (e.g. "allenai/specter2_base",
     # "ncbi/MedCPT-Query-Encoder", "BAAI/bge-large-en-v1.5") without code

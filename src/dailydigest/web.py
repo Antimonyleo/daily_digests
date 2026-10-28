@@ -18,6 +18,8 @@ Routes:
 - ``POST /ranking/train``  — refresh vote-derived ranking calibration on demand
 - ``POST /refresh``        — kick off a dry-run pipeline in the background
 - ``GET /healthz``         — liveness probe
+- ``GET /update/status``   — newer release and what changed (checks twice a day)
+- ``POST /update/apply``   — install the newer release and restart the local app
 - ``GET /setup``           — onboarding wizard (weighted interests, LLM backend)
 - ``POST /setup``          — write local profile YAML and .env, redirect to /run
 - ``GET /run``             — brewing page with live SSE progress feed
@@ -66,7 +68,7 @@ from jinja2 import Environment, FileSystemLoader
 from pydantic import ValidationError
 from sqlalchemy import func, select
 
-from . import health
+from . import health, updates
 from .article_figure import display_figure
 from . import votes as votes_mod
 from .config import SETTINGS, get_settings, reload_settings, section_enabled, settings_env_path
@@ -226,6 +228,9 @@ templates = Jinja2Templates(
 )
 templates.env.globals["pip_notes"] = lambda: preview_tea_deck(date.fromisoformat(_digest_id()))
 templates.env.globals["pip_day"] = lambda: _digest_id()
+# The browser build has its own release notice; only native installs show this one.
+templates.env.globals["local_updates_enabled"] = lambda: updates.install_mode() != "browser"
+templates.env.globals["update_csrf_token"] = lambda: _CSRF_TOKEN
 
 # Per-section sort order so we can ORDER BY (section_order, label_number).
 _SECTION_RANK = {name: idx for idx, name in enumerate(SECTION_ORDER)}
@@ -2476,6 +2481,37 @@ def refresh(request: Request) -> JSONResponse:
 @app.get("/healthz")
 def healthz() -> dict[str, str]:
     return {"status": "ok"}
+
+
+def _local_jobs_busy() -> bool:
+    return _BREW_LOCK.locked() or _COMPUTE_LOCK.locked()
+
+
+@app.get("/update/status")
+def update_status(request: Request) -> JSONResponse:
+    _require_local_origin(request)
+    updates.UPDATER.maybe_check(get_settings().check_for_updates)
+    return JSONResponse(updates.UPDATER.status(busy=_local_jobs_busy()),
+                        headers={"Cache-Control": "no-store"})
+
+
+@app.post("/update/apply")
+def update_apply(request: Request) -> JSONResponse:
+    _require_csrf(request)
+    # Hold both job locks from here until the process restarts, so no brew or
+    # ranking job starts against half-replaced program files.
+    brew = _BREW_LOCK.acquire(blocking=False)
+    compute = brew and _COMPUTE_LOCK.acquire(blocking=False)
+
+    def release() -> None:
+        if compute:
+            _COMPUTE_LOCK.release()
+        if brew:
+            _BREW_LOCK.release()
+
+    address = (request.url.hostname or "127.0.0.1", request.url.port or 8765)
+    state = updates.UPDATER.apply(busy=not compute, address=address, on_failure=release)
+    return JSONResponse(state, headers={"Cache-Control": "no-store"})
 
 
 @app.get("/manifest.webmanifest")

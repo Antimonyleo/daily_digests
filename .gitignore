@@ -38,3 +38,5 @@ htmlcov/
 # Local review artifacts (not part of the project)
 .full-review/
 .playwright-mcp/
+# Program files replaced by the one-click updater
+.update-backups/

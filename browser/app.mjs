@@ -712,13 +712,47 @@ async function boot() {
       if (view) await client.call({type:'cache-reading-view', generation:frameGeneration, view});
     } catch { /* A disposable reading copy must never block the authoritative desk. */ }
   };
-  let computeBusy = false, dismissedRelease = '';
+  let computeBusy = false, dismissedRelease = '', welcomeChecked = false;
   const releaseNotice = document.getElementById('release-notice');
   const releaseReload = document.getElementById('release-reload');
+  const releaseDismiss = document.getElementById('release-dismiss');
+  const releaseNotes = document.getElementById('release-notes');
+  const runningVersion = document.querySelector('meta[name="dailydigest-version"]')?.content || '';
+  const versionNewer = (a, b) => {
+    const x = String(a || '').split('.').map(Number), y = String(b || '').split('.').map(Number);
+    for (let i = 0; i < Math.max(x.length, y.length); i += 1) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0);
+    return false;
+  };
+  const showReleaseNotes = releases => {
+    releaseNotes.replaceChildren(...releases.slice(0, 3).map(release => {
+      const block = document.createElement('section');
+      const heading = document.createElement('h3');
+      heading.textContent = release.title || `Version ${release.version}`;
+      const list = document.createElement('ul');
+      list.replaceChildren(...(release.notes || []).map(note => { const item = document.createElement('li'); item.textContent = note; return item; }));
+      block.append(heading, list);
+      return block;
+    }));
+    releaseNotes.hidden = !releases.length;
+  };
   const setReleaseState = () => {
     releaseReload.disabled = computeBusy || (runtimeStarted && !ready);
     document.getElementById('release-message').textContent = computeBusy
-      ? 'A new version is available. Finish or stop this brew before reloading.' : 'A new version is available.';
+      ? 'A new version of DailyDigest is ready. Finish or stop this brew before updating.' : 'A new version of DailyDigest is ready.';
+  };
+  const welcomeRelease = manifest => {
+    // After an update, say once what changed in the version now open.
+    if (welcomeChecked || !runningVersion) return;
+    welcomeChecked = true;
+    let seen = '';
+    try { seen = localStorage.getItem('dailydigest-version-seen') || ''; localStorage.setItem('dailydigest-version-seen', runningVersion); } catch { return; }
+    if (!seen || !versionNewer(runningVersion, seen) || !releaseNotice.hidden) return;
+    const changes = (manifest.release_notes || []).filter(release => versionNewer(release.version, seen) && !versionNewer(release.version, runningVersion));
+    if (!changes.length) return;
+    document.getElementById('release-message').textContent = 'DailyDigest was updated. Here’s what’s new.';
+    showReleaseNotes(changes);
+    releaseReload.hidden = true; releaseDismiss.textContent = 'Got it';
+    releaseNotice.dataset.build = ''; releaseNotice.hidden = false;
   };
   const checkRelease = async () => {
     if (document.hidden) return;
@@ -733,12 +767,22 @@ async function boot() {
       const freshness = publicSourceFreshness(manifest.public_sources);
       const sourceNotice = document.getElementById('source-freshness');
       sourceNotice.textContent = freshness?.message || ''; sourceNotice.hidden = !freshness?.message;
-      const next = manifest.build_id;
-      if (typeof next !== 'string' || !next || next === current || next === dismissedRelease) return;
+      // The public-data refresh rebuilds the site twice a day without changing
+      // the application; brews already read the newer snapshot, so only an
+      // application release is announced. Older manifests compare whole builds.
+      const currentApp = document.querySelector('meta[name="dailydigest-app-release"]')?.content;
+      const compareApp = Boolean(currentApp && typeof manifest.app_release === 'string');
+      const next = compareApp ? manifest.app_release : manifest.build_id;
+      if (typeof next !== 'string' || !next || next === (compareApp ? currentApp : current) || next === dismissedRelease) {
+        welcomeRelease(manifest);
+        return;
+      }
+      showReleaseNotes((manifest.release_notes || []).filter(release => versionNewer(release.version, runningVersion)));
+      releaseReload.hidden = false; releaseDismiss.textContent = 'Later';
       releaseNotice.dataset.build = next; releaseNotice.hidden = false; setReleaseState();
     } catch { /* An unavailable update check must not interrupt reading or brewing. */ }
   };
-  document.getElementById('release-dismiss').onclick = () => { dismissedRelease = releaseNotice.dataset.build; releaseNotice.hidden = true; };
+  releaseDismiss.onclick = () => { if (releaseNotice.dataset.build) dismissedRelease = releaseNotice.dataset.build; releaseNotice.hidden = true; };
   releaseReload.onclick = async () => {
     releaseReload.disabled = true;
     if (dirtySetup) {
@@ -817,6 +861,15 @@ async function boot() {
   const report = (error) => {
     if (tabMoved) return;
     const message = error.message || String(error);
+    if (!ready && /release changed\. Reload the page/.test(message)) {
+      // A release was published while this page was open, so its files no
+      // longer match. Nothing private has loaded yet: reload once, quietly.
+      try {
+        if (sessionStorage.getItem('dailydigest-release-reload') !== '1') {
+          sessionStorage.setItem('dailydigest-release-reload', '1'); location.reload(); return;
+        }
+      } catch { /* Fall through to the visible retry. */ }
+    }
     if (!ready && /open in another tab/.test(message)) { showTabWait(message); return; }
     if (!ready || frame.hidden) {
       startup.hidden = false; frame.hidden = true; previewNotice.hidden = true;
@@ -1150,6 +1203,7 @@ async function boot() {
   worker.addEventListener('message', ({ data }) => {
     if (data.type === 'ready') {
       ready = true;
+      try { sessionStorage.removeItem('dailydigest-release-reload'); } catch { /* Optional. */ }
       tabActions.hidden = true;
       document.getElementById('retry').hidden = true;
       document.getElementById('test-gpu').disabled = false;
