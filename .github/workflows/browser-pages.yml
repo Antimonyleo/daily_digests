@@ -2,7 +2,7 @@ name: DailyDigest browser Pages
 
 on:
   push:
-    branches: [main, codex/browser-compute-prototype]
+    branches: [main, dev]
     paths: [browser/**, src/**, templates/**, tests/**, pyproject.toml, .github/workflows/ci.yml, config/sources.yaml, prototypes/browser-compute/**, .github/workflows/browser-pages.yml, uv.lock]
   workflow_dispatch:
   schedule:

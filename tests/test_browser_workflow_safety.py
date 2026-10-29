@@ -141,7 +141,7 @@ def test_pull_requests_run_browser_unit_checks_without_publishing():
 
 def test_only_main_can_publish_or_update_production_refresh_incidents():
     workflow = yaml.load((Path(__file__).resolve().parents[1] / '.github/workflows/browser-pages.yml').read_text(), Loader=yaml.BaseLoader)
-    assert 'codex/browser-compute-prototype' in workflow['on']['push']['branches']
+    assert set(workflow['on']['push']['branches']) == {'main', 'dev'}
     assert 'if' not in workflow['jobs']['build']
     for name in ('deploy', 'notify-failure', 'refresh-status'):
         assert "github.ref == 'refs/heads/main'" in workflow['jobs'][name]['if']

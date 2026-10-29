@@ -1,22 +1,25 @@
+# Routine upgrades are reviewed together on dev; do not open per-package PRs.
+# Vulnerability alerts remain enabled in repository settings.
+# Automatic security-update PRs are managed separately from this limit.
 version: 2
 updates:
   - package-ecosystem: uv
     directory: /
     schedule:
       interval: weekly
-    open-pull-requests-limit: 2
+    open-pull-requests-limit: 0
   - package-ecosystem: pip
     directory: /browser
     schedule:
       interval: weekly
-    open-pull-requests-limit: 2
+    open-pull-requests-limit: 0
   - package-ecosystem: npm
     directory: /prototypes/browser-compute
     schedule:
       interval: weekly
-    open-pull-requests-limit: 2
+    open-pull-requests-limit: 0
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
-    open-pull-requests-limit: 2
+    open-pull-requests-limit: 0

@@ -3,6 +3,34 @@
 [Project overview](../README.md) · [Browser build and verification](../browser/README.md)
 
 
+## Branches and dependency maintenance
+
+- `main` is the tested, published branch. Only `main` can deploy the website.
+- `dev` holds ongoing work and receives the same checks before integration.
+- Use one temporary feature or maintenance branch when isolation is needed;
+  delete it after integration. Merged temporary branches are deleted automatically.
+- Keep `dev` after merging. Its branch protection prevents deletion and force pushes.
+
+Review dependencies monthly, and promptly when a security alert arrives. Prepare
+one scoped batch on `dev` (or a temporary maintenance branch), check native and
+browser compatibility, run the relevant checks below, then integrate into `main`.
+Major runtime upgrades may need separate batches; do not combine unrelated
+breaking changes just to reduce branch count. No recurring job is installed by
+this policy.
+
+Routine Dependabot version PRs are disabled with `open-pull-requests-limit: 0`
+for each ecosystem. This is separate from security alerts and automatic security
+PRs ([GitHub documentation](https://docs.github.com/en/code-security/reference/supply-chain-security/dependabot-options-reference)).
+Security alerts are enabled; automatic security-update PRs remain disabled so
+fixes can be triaged in the same maintenance flow. Alerts must still be reviewed.
+
+The nine old dependency proposals (#2–#10) were closed without merging. Their
+commits and diffs remain available through those PRs and a verified local Git
+bundle in `.full-review/branch-consolidation-2026-10-29/`. No dependency versions
+were changed by this consolidation.
+
+## Checks and releases
+
 Run the automated tests with:
 
 ```bash
