@@ -108,7 +108,7 @@ def test_full_build_manifest_identifies_lazy_semantic_assets_and_ships_engine(tm
     browser.mkdir()
     cache.rename(browser / '.build-cache')
     original = builder.HERE
-    for name in ('index.html', 'app.mjs', 'guide.mjs', 'linked-backup.mjs', 'reading-view.mjs', 'tab-handoff.mjs', 'compute.mjs', 'embedding-memo.mjs', 'cpu-startup.mjs', 'public-embeddings.mjs', 'semantic.mjs', 'http.mjs', 'storage.mjs',
+    for name in ('index.html', 'example.html', 'companion.html', 'app.mjs', 'guide.mjs', 'linked-backup.mjs', 'reading-view.mjs', 'tab-handoff.mjs', 'compute.mjs', 'embedding-memo.mjs', 'cpu-startup.mjs', 'public-embeddings.mjs', 'semantic.mjs', 'http.mjs', 'storage.mjs',
                  'style.css', 'worker.mjs', 'manifest.webmanifest', 'app-icon.svg', 'sw.js', 'runtime.py',
                  'requirements-browser.txt', 'compile-python.mjs'):
         (browser / name).write_bytes((original / name).read_bytes())
@@ -147,6 +147,10 @@ def test_full_build_manifest_identifies_lazy_semantic_assets_and_ships_engine(tm
     monkeypatch.setattr(builder, 'source_archive', archive)
     output = tmp_path / 'site'
     report = builder.build(output)
+    # New-reader help remains usable without starting the application runtime.
+    for name in ('example.html', 'companion.html'):
+        assert (output / name).is_file()
+        assert '<script' not in (output / name).read_text()
     manifest = json.loads((output / 'assets/build-manifest.json').read_text())
     assert manifest['semantic_model'] == report['semantic_model']
     assert manifest['semantic_model']['sha256'] == hashes

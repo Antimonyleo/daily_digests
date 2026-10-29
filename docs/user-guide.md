@@ -66,12 +66,9 @@ The app opens <http://127.0.0.1:8765>. On the setup page:
    gene and RNA therapeutics
    ```
 
-   Each interest has its own topic and percentage field. Shares must total 100%
-   before saving; use **Normalize to 100%** or **Distribute evenly** to adjust them.
-   Older relative weights are converted to the displayed whole percentages when
-   you save. The no-JavaScript fallback still accepts `DNA nanotechnology | 3`.
-   Percentages guide priority rather than guarantee digest slots. **Personal details & topics to see less often**
-   holds optional bio and downweight preferences.
+   Topics start with equal priority. Open **Set topic priorities (optional)**
+   only if you want to change their shares; custom percentages must total 100%.
+   Priorities guide recommendations rather than guarantee digest slots.
 2. Keep **Extractive** selected for the easiest free setup. Expand the summary
    settings only when you want to change how summaries are made.
 3. Choose whether to include Funding & Opportunities, Events & Calls, Industry,
@@ -84,13 +81,13 @@ The app opens <http://127.0.0.1:8765>. On the setup page:
    clearly incompatible calls. Unknown eligibility is shown as “needs
    verification,” never as confirmed eligibility.
 
-5. Select **Save settings and choose today’s digest** to save the setup.
-6. Choose how much you feel like reading today: **Energetic** keeps every
-   qualified pick up to your section limits, **Usual** keeps the best 15, and
-   **Tired** keeps up to 5 research picks. Both **Usual** and **Tired** keep the
+5. Select **Brew** on first setup. Later edits use **Save changes**.
+6. Choose how much you feel like reading today: **Full** keeps every
+   qualified pick up to your section limits, **Standard** keeps the best 15, and
+   **Short** keeps up to 5 research picks. Both **Standard** and **Short** keep the
    best pick from each other enabled section, so no section you switched on
    disappears. Funding and events are never trimmed by the reading mode — a call
-   you skip today may have closed by the time you next pick **Energetic**. This
+   you skip today may have closed by the time you next pick **Full**. This
    changes only the final serving size; every enabled source is still scanned
    and filtered. When qualified picks are trimmed only by the serving size, the
    digest lists them under “more qualified picks didn’t fit today’s reading

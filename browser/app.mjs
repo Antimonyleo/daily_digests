@@ -94,6 +94,14 @@ export function announcementKey(info) {
   return `encoding:${Math.floor(10 * (info.completed || 0) / Math.max(1, info.total || 1))}`;
 }
 
+export function companionStartCommand(origin, scheduled = false) {
+  const url = new URL(origin);
+  if (!['http:', 'https:'].includes(url.protocol) || url.origin !== origin || !/^[a-zA-Z0-9.:[\]-]+$/.test(url.host)) throw new Error('Use a website origin.');
+  const preview = url.protocol === 'http:';
+  if (preview && !['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)) throw new Error('Use HTTPS outside localhost.');
+  return `uv run dd companion --allowed-origin ${url.origin}${preview ? ' --allow-local-preview' : ''}${scheduled ? ' --state-dir ./data/companion-state --schedule' : ''}`;
+}
+
 export function browserSupportError(environment = globalThis) {
   const missing = [];
   if (!environment.WebAssembly?.Suspending || !environment.WebAssembly?.promising) missing.push('WebAssembly Promise Integration');
@@ -975,7 +983,15 @@ async function boot() {
       : message || 'Switch to your other DailyDigest tab, or use this tab instead.');
   };
   const companionStatus = document.getElementById('companion-status');
-  document.querySelector('.companion-command').textContent = `dd companion --allowed-origin ${location.origin}`;
+  const updateCompanionCommand = () => {
+    const scheduled = document.getElementById('companion-schedule-command').checked;
+    document.querySelector('.companion-command').textContent = companionStartCommand(location.origin, scheduled);
+    document.getElementById('companion-command-help').textContent = scheduled
+      ? 'Run from the DailyDigest folder, connect, then Send reading desk to Companion. It brews at the saved hour (8 am by default) and timezone while this computer is awake. Email is separate.'
+      : 'Run from the DailyDigest folder. Preparing a command does not install or start the helper.';
+  };
+  document.getElementById('companion-schedule-command').onchange = updateCompanionCommand;
+  updateCompanionCommand();
   const companionEndpoint = document.getElementById('companion-endpoint');
   const companionToken = document.getElementById('companion-token');
   const guideKey = `dailydigest:guide:${location.pathname}`;
@@ -1595,7 +1611,6 @@ async function boot() {
     try { await navigator.clipboard.writeText(document.querySelector('.companion-command').textContent); companionStatus.textContent = 'Command copied. Run it in a terminal on your computer.'; }
     catch { companionStatus.textContent = 'Select and copy the command above, then run it in a terminal.'; }
   };
-  document.querySelector('.companion-command').textContent = `dd companion --allowed-origin ${location.origin}`;
   document.getElementById('shared-origin-warning').hidden = !location.hostname.endsWith('.github.io');
   document.getElementById('companion-disconnect').onclick = async () => {
     try { await companionCall({ type: 'configure-companion', endpoint: '', token: '' }); companionToken.value = ''; await refreshCompanion(); }

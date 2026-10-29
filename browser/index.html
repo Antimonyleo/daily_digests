@@ -36,11 +36,12 @@
     </div>
     <div class="tea-cup" aria-hidden="true"><span class="steam s1"></span><span class="steam s2"></span><span class="steam s3"></span><span class="cup-bowl"></span><span class="cup-handle"></span></div>
     <h1 id="startup-title">Putting the kettle on…</h1>
+    <p>Find relevant new papers, save what matters, and shape your next digest with ratings. <a href="./example.html" target="_blank" rel="noopener">See an example digest (new tab)</a>.</p>
     <p>DailyDigest runs on this device. Your interests, ratings and saved papers stay in this browser profile; another browser or profile has its own separate copy.</p>
     <form id="startup-topics-form" hidden>
       <label for="startup-topics">What would you like to read about?</label>
       <textarea id="startup-topics" rows="3" maxlength="1800" placeholder="Induced proximity&#10;Asymmetric catalysis&#10;RNA delivery" aria-describedby="startup-topics-hint"></textarea>
-      <p id="startup-topics-hint">One topic per line, up to ten. You can type while the app loads and refine them on the next page.</p>
+      <p id="startup-topics-hint">Start with two or three topics, one per line (up to ten). They start with equal priority; you can refine them later. Type while the app loads.</p>
       <button type="submit" id="startup-topics-continue">Continue with these topics</button>
       <p id="startup-topics-message" role="status"></p>
       <p class="startup-restore">Used DailyDigest in another browser or at another address? That data stays there until you bring a backup over. <button type="button" id="startup-restore">Restore a backup instead</button></p>
@@ -134,16 +135,11 @@
     <details id="companion-menu">
       <summary>Companion <span class="optional-label">(optional)</span></summary>
       <div class="data-tools">
-        <p>A web page can’t run programs on your computer, send email or keep brewing after you close it. The Companion is a small helper you run on your own computer that does these jobs for this page:</p>
-        <ul class="companion-uses">
-          <li>summaries with your signed-in Claude Code or Codex, or an API key kept on your computer;</li>
-          <li>emailing your digest, and reading email replies as ratings;</li>
-          <li>brewing on a schedule while this browser is closed.</li>
-        </ul>
-        <p>It is not remote access. It listens only on your computer and answers only this site, with your token. You don’t need it to read here, and if you read in the DailyDigest app on your computer rather than on this website, you don’t need it at all.</p>
+        <p>Want your digest ready each morning? The optional Companion adds scheduled brews, email, and your chosen summary provider. Keep its computer on and awake.</p>
+        <p><a href="./companion.html" target="_blank" rel="noopener">Benefits, privacy, and setup guide (new tab)</a>. Reading, brewing, ratings, and saves work without it. Local app users do not need it.</p>
         <ol class="companion-steps">
-          <li>Install the DailyDigest app on your computer. For Claude Code or Codex, sign in to <code>claude</code> or <code>codex</code> there; for email, add <code>RESEND_API_KEY</code>, <code>DIGEST_FROM</code> and <code>DIGEST_TO</code> to the app’s <code>.env</code> file.</li>
-          <li>Start the helper and leave it running: <code class="companion-command">dd companion --allowed-origin https://antimonyleo.github.io</code><button id="copy-companion-command" type="button">Copy command</button> For scheduled brews, add <code>--state-dir</code> with a folder for its copy, and <code>--schedule</code>.</li>
+          <li>Install DailyDigest on the computer that will do the work; the setup guide above explains providers and email.</li>
+          <li>Start the helper and leave it running: <code class="companion-command">uv run dd companion --allowed-origin https://antimonyleo.github.io</code><button id="copy-companion-command" type="button">Copy command</button> <label><input id="companion-schedule-command" type="checkbox"> Prepare a command for automatic morning brewing</label><p id="companion-command-help">Run from the DailyDigest folder. Preparing a command does not install or start the helper.</p></li>
           <li>It prints an address (usually <code>http://127.0.0.1:8768</code>) and the path of a token file. Enter the address below, and paste the token from that file.</li>
         </ol>
         <p>For summaries, the Companion receives the same paper details and short profile any summary provider gets. Scheduled brews work on a copy of your reading desk that you send it; credentials stay out unless you include them. Connect only to a helper you trust.</p>
@@ -158,7 +154,7 @@
         </form>
         <p id="companion-status" role="status">No Companion connected.</p>
         <p id="companion-summary-help" hidden>To use it for summaries, choose one of its providers under Settings, then Summaries. Its credentials stay on your computer.</p>
-        <p id="companion-schedule-help" hidden>Scheduled brews use the reading desk you last sent, so keep the Companion running. Getting its copy back replaces the reading desk here (a recovery copy is kept), so ratings made here since your last send are lost from it.</p>
+        <p id="companion-schedule-help" hidden>Use Send reading desk to Companion to enable scheduled work from that copy. Keep the Companion running and its computer awake. Getting its copy back replaces the reading desk here (a recovery copy is kept), so ratings made here since your last send are lost from it.</p>
         <div class="companion-actions">
           <label><input id="sync-credentials" type="checkbox"> Include saved API keys and passwords when sending</label>
           <button id="companion-email" disabled type="button">Send latest digest email</button>
@@ -176,7 +172,7 @@
         <button id="export" disabled type="button">Download backup</button>
         <label class="file-button">Restore backup<input id="import" type="file" accept="application/json,.json"></label>
         <p id="backup-restore-progress" role="status" hidden></p>
-        <p>Restoring replaces this reading desk. It does not merge changes from different browsers. Keep the backup file private.</p>
+        <p>To move devices: download here, open DailyDigest there, then restore that file. Download a backup of the destination first if it has anything you want to keep. Restoring replaces this reading desk; it does not merge changes. Keep the file private.</p>
         <section id="linked-backup-tools" aria-labelledby="linked-backup-title">
           <h2 id="linked-backup-title">A copy in your own folder</h2>
           <p>Choose a backup file in a folder you control. DailyDigest keeps working in browser storage and updates this extra copy only with your permission.</p>

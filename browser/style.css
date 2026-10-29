@@ -181,3 +181,15 @@ input, select, textarea { background: var(--card); color: var(--text); }
 #linked-backup-status, #linked-backup-help { overflow-wrap: anywhere; }
 #automatic-backup-label { display: block; margin-block: 12px; }
 @media print { #quick-guide { display: none !important; } }
+
+/* Lightweight help pages do not start a worker or access reader storage. */
+.guide-page { max-width: 72ch; margin: 0 auto; padding: 32px 24px 64px; line-height: 1.65; }
+.guide-page h2 { margin-top: 2em; line-height: 1.25; }
+.guide-page a { color: #175b40; text-underline-offset: .18em; }
+.guide-page pre { white-space: pre-wrap; overflow-wrap: anywhere; padding: 16px; background: #e8eee8; border-radius: 12px; }
+.guide-page article { padding: 16px 0; border-bottom: 1px solid #bdcbbc; }
+.guide-page :focus-visible { outline: 2px solid #175b40; outline-offset: 4px; }
+
+#companion-schedule-command { margin-right: 6px; }
+.companion-steps label { display: block; margin-top: 12px; }
+#companion-menu a { color: var(--accent-strong, #175b40); text-underline-offset: .18em; }

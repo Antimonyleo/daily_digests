@@ -1,7 +1,6 @@
 # DailyDigest Companion: what it is and how to set it up
 
-Status: draft written 2026-10-16 from the code and a local test. Items marked
-"unverified" were not tested.
+Setup instructions updated 2026-10-28. The dated verification notes below describe the scope of earlier testing.
 
 ## In one paragraph
 
@@ -45,7 +44,7 @@ Browser tab (website)  --->  Companion on your computer  --->  claude / codex / 
 4. If the command fails, items fall back to the built-in summary, and the page records
    which summary each item got.
 
-Only the exact website address you allow can talk to it, and every request must carry
+Only the website origin (scheme, host, and port) you allow can talk to it, and every request must carry
 the token. Provider logins stay on the Companion computer.
 
 ## Setup
@@ -73,9 +72,22 @@ the token. Provider logins stay on the Companion computer.
 5. **Choose the summary provider.** Open **Settings**, pick *Claude* or *Codex* as the
    summary provider, save, and brew.
 
-For email and scheduled brews, start the Companion with extra options and settings
-(email service key, mailbox, `--state-dir`, `--schedule`). See `src/dailydigest/companion.py`
-for the options. A guided setup for these is not written yet.
+## Automatic morning brewing
+
+In the website’s Companion panel, select **Prepare a command for automatic morning brewing**. It adds `--state-dir ./data/companion-state --schedule` to the command for this website. Run it from the DailyDigest directory and leave it running.
+
+1. Connect with the displayed address and private token.
+2. Select **Send reading desk to Companion**. Scheduling waits for this explicit upload.
+3. Keep that computer on, awake, and online at the copied desk’s configured digest hour (8 am by default), in its saved timezone. `DIGEST_HOUR` is an integer from 0 to 23. This is not an operating-system wake-up service.
+4. Use **Get Companion’s latest copy** to retrieve the result. This replaces the browser desk, with a recovery copy retained; newer browser ratings are not merged. Export a backup before changing copies.
+
+The directory is a separate copy of the reading desk, not automatic synchronization. Send it again after changing topics or settings. Selecting the checkbox only prepares a command: it does not install, start, or schedule anything by itself.
+
+Email is separate: configure `RESEND_API_KEY`, `DIGEST_FROM`, and `DIGEST_TO` in the app’s `.env` (see [email setup](domain-setup.md)). Importing email reply ratings also requires mailbox configuration. Optional providers must be explicitly configured on the Companion computer; scheduling does not choose one for you.
+
+## Stop and disconnect
+
+Press Ctrl+C in the terminal to stop the helper and scheduling. **Disconnect** in the website forgets the connection but does not stop the process. To revoke a token, stop the helper, remove the token file whose path it printed, restart, and reconnect with the newly generated token. Preserve backups before deleting any reading-desk copies.
 
 ## Troubleshooting
 

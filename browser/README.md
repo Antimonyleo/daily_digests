@@ -651,3 +651,18 @@ A provisional list appears after all topic and quality selection gates, while
 summaries are prepared. It is not published or used as a replacement for the
 last good digest when work is cancelled or fails. The UI gives stage progress
 and measured text-comparison estimates rather than an invented total ETA.
+
+## Lightweight introduction and Companion guide
+
+`example.html` is an explicitly fictional digest preview; `companion.html` explains
+optional automation, setup, data transfer, and stopping the helper. Both are
+static pages with no runtime, reader storage, or provider access. The shell links
+to them in new tabs. The Companion scheduling checkbox only prepares a command;
+it does not start the helper or upload state.
+
+`node browser/verify-onboarding.mjs` checks these pages and the command toggle at
+1280 px and 390 px using a local source-shell server and an idle worker stub.
+It attempts Chromium and Firefox, recording launch limitations honestly under
+`.full-review/onboarding-2026-10-28/`. This does not establish real-phone, Safari,
+full-runtime, or live scheduled-brew compatibility. Use the existing brew and
+storage harnesses for those respective runtime behaviors.

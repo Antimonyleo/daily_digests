@@ -2,6 +2,17 @@
   "schema": 1,
   "releases": [
     {
+      "version": "2026.10.29.1",
+      "date": "2026-10-29",
+      "title": "An easier start and clearer Companion setup",
+      "notes": [
+        "Preview an illustrative digest before the app finishes loading, then start with a few equally weighted topics.",
+        "Companion benefits and setup now open in a separate tab. An optional checkbox prepares the command for scheduled brewing; you still choose when to connect and send your reading desk.",
+        "Backup instructions explain how to move devices and which reading desk a restore replaces.",
+        "The project README now links directly to the website, with detailed instructions in separate guides."
+      ]
+    },
+    {
       "version": "2026.10.29",
       "date": "2026-10-29",
       "title": "Clearer first visit, guide and Companion",
