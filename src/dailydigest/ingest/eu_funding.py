@@ -22,6 +22,10 @@ TOPIC_URL = (
 _TOPIC = "1"
 _FORTHCOMING, _OPEN = "31094501", "31094502"
 HORIZON_EUROPE = "43108390"
+MSCA = "43108473"
+# Individual fellowships; MSCA doctoral networks and staff exchanges are
+# institutional and stay out of a fellowship source.
+_FELLOWSHIP_TOPIC = re.compile(r"-PF-|fellowship", re.IGNORECASE)
 _FIELDS = [
     "title", "identifier", "status", "deadlineDate", "startDate", "callIdentifier",
     "callTitle", "typesOfAction", "deadlineModel", "url",
@@ -34,13 +38,15 @@ _FIELDS = [
     retry=retry_if_exception(transient_http_error),
     reraise=True,
 )
-def _search(page: int, programme: str) -> dict:
+def _search(page: int, programme: str, division: str = "") -> dict:
     must: list[dict[str, Any]] = [
         {"terms": {"type": [_TOPIC]}},
         {"terms": {"status": [_FORTHCOMING, _OPEN]}},
     ]
     if programme:
         must.append({"terms": {"frameworkProgramme": [programme]}})
+    if division:
+        must.append({"terms": {"programmeDivision": [division]}})
     # Multipart is a CORS "simple" request, so browsers need no preflight.
     parts = {
         "query": ("blob", json.dumps({"bool": {"must": must}}), "application/json"),
@@ -103,17 +109,25 @@ class EUFundingSource:
     def fetch(self, spec: SourceSpec, days: int = 2) -> list[Item]:
         del days
         programme = HORIZON_EUROPE if spec.query is None else str(spec.query).strip()
+        # ``condition: msca_fellowships`` reads the MSCA programme division and
+        # keeps its individual fellowships only.
+        fellowships_only = str(spec.condition or "").casefold() == "msca_fellowships"
+        division = MSCA if fellowships_only else ""
         today = _today()
         horizon = today + timedelta(days=spec.lookahead_days)
         seen: set[str] = set()
         items: list[Item] = []
         for page in range(1, self.MAX_PAGES + 1):
-            payload = _search(page, programme)
+            payload = _search(page, programme, division)
             results = payload.get("results")
             if not isinstance(results, list):
                 raise RuntimeError(f"{spec.name} returned an invalid EU portal response")
             for row in results:
                 item = self._item(spec, row.get("metadata") or {}, today, horizon, seen)
+                if item is not None and fellowships_only and not _FELLOWSHIP_TOPIC.search(
+                    f"{item.external_id} {item.title}"
+                ):
+                    continue
                 if item is not None:
                     items.append(item)
             total = int(payload.get("totalResults") or 0)

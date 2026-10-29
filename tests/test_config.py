@@ -296,3 +296,47 @@ class TestLoadProfile:
         # The tracked example is documentation, never a default user profile.
         with pytest.raises(FileNotFoundError):
             load_profile(str(tmp_path / "nonexistent.yaml"))
+
+
+# ---------------------------------------------------------------------------
+# data/sources.local.yaml: the reader's own source changes survive updates
+# ---------------------------------------------------------------------------
+
+def _settings_with_sources(monkeypatch, tmp_path, shipped):
+    from dailydigest import config
+
+    (tmp_path / "config").mkdir()
+    (tmp_path / "data").mkdir()
+    (tmp_path / "config" / "sources.yaml").write_text(yaml.dump(shipped, sort_keys=False))
+    settings = Settings(_env_file=None, sources_path=str(tmp_path / "config" / "sources.yaml"),
+                        db_path=str(tmp_path / "data" / "digest.db"))
+    monkeypatch.setattr(config, "get_settings", lambda: settings)
+    return tmp_path / "data" / "sources.local.yaml"
+
+
+def test_local_sources_add_change_and_switch_off_shipped_sources(monkeypatch, tmp_path):
+    local = _settings_with_sources(monkeypatch, tmp_path, {
+        "research": [{"name": "Nature", "kind": "rss", "url": "https://nature.example/rss"},
+                     {"name": "Cell", "kind": "rss", "url": "https://cell.example/rss"}],
+        "events": [{"name": "CRS", "kind": "crs_events", "url": "https://crs.example", "lookahead_days": 365}],
+    })
+    assert [spec.name for spec in load_sources()] == ["Nature", "Cell", "CRS"]
+    local.write_text(yaml.safe_dump(sort_keys=False, data={
+        "research": [{"name": "Cell", "enabled": False},
+                     {"name": "Lab blog", "kind": "rss", "url": "https://lab.example/feed"}],
+        "events": [{"name": "CRS", "lookahead_days": 90}],
+    }))
+    specs = {spec.name: spec for spec in load_sources()}
+    assert list(specs) == ["Nature", "Lab blog", "CRS"]
+    assert specs["CRS"].lookahead_days == 90 and specs["CRS"].url == "https://crs.example"
+    assert specs["Lab blog"].section == "research"
+    # An explicit path (the public snapshot, audits) reads only the shipped list.
+    assert [spec.name for spec in load_sources(str(tmp_path / "config" / "sources.yaml"))] == [
+        "Nature", "Cell", "CRS"]
+
+
+def test_malformed_local_sources_name_the_file(monkeypatch, tmp_path):
+    local = _settings_with_sources(monkeypatch, tmp_path, {"research": []})
+    local.write_text("research:\n  - kind: rss\n")
+    with pytest.raises(ValueError, match="sources.local.yaml: every source under research needs a name"):
+        load_sources()

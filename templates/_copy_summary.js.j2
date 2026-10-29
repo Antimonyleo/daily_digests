@@ -17,11 +17,14 @@
         await navigator.clipboard.writeText(text);
         item.querySelector('.copy-fallback')?.remove();
         status.textContent = 'Summary copied';
+        const menu = button.closest('.item-more'); if (menu) menu.open = false;
       } catch (_) {
         let fallback = item.querySelector('.copy-fallback');
         if (!fallback) {
           fallback = document.createElement('textarea'); fallback.className = 'copy-fallback'; fallback.readOnly = true;
-          fallback.setAttribute('aria-label', 'Summary to copy'); button.after(fallback);
+          fallback.setAttribute('aria-label', 'Summary to copy');
+          const menu = button.closest('.item-more');
+          if (menu) { menu.open = false; menu.after(fallback); } else button.after(fallback);
         }
         fallback.value = text; fallback.focus(); fallback.select();
         status.textContent = 'Select and copy the summary';

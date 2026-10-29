@@ -156,3 +156,11 @@ test('internal settings recovery journals survive checkpoints and remain forbidd
   assert.throws(() => validateRecoverySnapshot(payload), /invalid private path/);
   assert.throws(() => capturePrivateSnapshot(['.settings-transaction.json/escape'], () => bytes), /invalid private path/);
 });
+
+test('a backup from a newer release asks for a reload instead of a vague format error', async () => {
+  const { SNAPSHOT_FORMAT, READABLE_SNAPSHOT_FORMATS } = await import('./storage.mjs');
+  assert.ok(READABLE_SNAPSHOT_FORMATS.has(SNAPSHOT_FORMAT));
+  assert.throws(() => validateRecoverySnapshot(JSON.stringify({ format: 'dailydigest-browser-v9', files: {} })), /newer version of DailyDigest.*Reload/);
+  assert.throws(() => validateStoredSnapshot(JSON.stringify({ format: 'dailydigest-browser-v9', files: {} })), /newer version/);
+  assert.throws(() => validateRecoverySnapshot(JSON.stringify({ format: 'other', files: {} })), /Unsupported DailyDigest backup format/);
+});

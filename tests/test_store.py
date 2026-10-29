@@ -279,6 +279,27 @@ def test_known_items_survive_retention_pruning(monkeypatch, tmp_path):
     assert stale not in remaining
 
 
+def test_interested_items_are_idempotent_and_survive_pruning(monkeypatch, tmp_path):
+    """A tracked deadline must outlive normal rotation, or it silently disappears."""
+    store_mod = _reset_store(tmp_path, monkeypatch)
+    event = _add_item(store_mod, "event-old", section="events")
+    stale = _add_item(store_mod, "news-old", section="world")
+    old = datetime.now(timezone.utc) - timedelta(days=90)
+    with store_mod.session_scope() as s:
+        for row in s.query(store_mod.ItemRow).all():
+            row.fetched_at = old
+    assert store_mod.set_item_interested(event, True) and store_mod.set_item_interested(event, True)
+    assert store_mod.set_item_interested(999999, True) is False
+    assert store_mod.interested_item_ids([event, stale]) == {event}
+
+    store_mod.prune(days=30)
+    assert [int(row.id) for row in store_mod.interested_items()] == [event]
+    with store_mod.session_scope() as s:
+        assert {int(r.id) for r in s.query(store_mod.ItemRow).all()} == {event}
+    store_mod.set_item_interested(event, False)
+    assert store_mod.interested_items() == []
+
+
 def test_unshown_candidates_are_not_suppressed_as_previously_shown(monkeypatch, tmp_path):
     """A trimmed near-miss must stay eligible, or "save for tomorrow" is a no-op.
 

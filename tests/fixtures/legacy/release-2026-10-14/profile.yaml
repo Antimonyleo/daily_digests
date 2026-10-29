@@ -1,0 +1,84 @@
+# Personal interest profile. Used to build a vector for ranking.
+# Edit freely; the embedder reads `bio` + each `keywords` entry.
+
+name: ""
+
+bio: |
+  Biotech researcher with interests in molecular biology, drug discovery,
+  CRISPR-based gene editing, and computational biology. I follow developments
+  in mRNA therapeutics, cell therapies, AI-for-science, and FDA approvals
+  affecting the broader biotech industry.
+
+keywords:
+  - CRISPR gene editing
+  - mRNA therapeutics
+  - cell therapy
+  - protein engineering and structure prediction
+  - drug discovery
+  - synthetic biology
+  - single-cell RNA sequencing
+  - structural biology
+  - AI in biology
+  - machine learning for drug discovery
+
+# Broader "keep me informed" topics. These help retrieval/news coverage but are
+# deliberately weaker than the ten core research interests above.
+context_keywords:
+  - clinical trials phase 3
+  - FDA approval
+  - biotech industry
+
+# Optional: use a small set of named, non-overlapping interests for attribution,
+# priority, and coverage reporting. Retrieval still uses `keywords` above. Keep
+# this list focused (roughly 6–10); priorities are relative, not quotas.
+# canonical_facets:
+#   RNA nanotechnology:
+#     anchors: [RNA origami, RNA nanostructure design]
+#     aliases: [RNA nanotechnology, RNA self-assembly]
+#     priority: 17
+#   Protein engineering and design:
+#     anchors: [protein engineering, de novo protein design]
+#     aliases: [protein design]
+#     priority: 15
+
+# Authors / labs / institutions to follow. Items whose byline matches any entry
+# are boosted in ranking and exposed as a learnable feature. Prefer full names;
+# a bare surname matches broadly.
+authors_of_interest:
+  - Jennifer Doudna
+  - Feng Zhang
+  - David Liu
+  - Broad Institute
+
+# Representative papers — your own, or exemplars of the work you care about.
+# Each entry (a title, or title + abstract) is embedded as a high-weight anchor,
+# giving a far stronger interest vector than the keyword list alone.
+seed_works:
+  - >-
+    Programmable editing of a target base in genomic DNA without
+    double-stranded DNA cleavage: base editing expands the genome editing
+    toolbox for therapeutic correction of point mutations.
+
+# Optional: fine-tune broad facets without duplicating keywords.
+# 1.0 is neutral, <1.0 reduces this facet's contribution, >1.0 strengthens it.
+# NOTE: values < 1.0 reduce the weight but do NOT suppress — use negative_interests
+# for topics you want to avoid entirely.
+interest_weights:
+  RNA therapeutics: 1.25
+  clinical translation: 1.15
+  arXiv CS methods: 0.45
+  biotech financing: 0.65
+
+# Soft penalties applied during ranking to push items down even if embedding-similar.
+downweight:
+  - cryptocurrency
+  - stock market predictions
+  - celebrity news
+
+# Topics to suppress: items semantically similar to these will be penalized.
+# Unlike downweight (lexical match), these work at the embedding level.
+negative_interests:
+  cryptocurrency: 1.0
+  stock trading: 1.0
+  celebrity news: 1.0
+  sports results: 1.0

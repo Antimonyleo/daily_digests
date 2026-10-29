@@ -186,7 +186,8 @@ export async function beforeDesk({browser,base,report,out}){
   const box=await primary.boundingBox();
   const footer=await page.locator('.browser-bar').boundingBox();
   assert.ok(box.y+box.height<=844-footer.height,'The first Brew action must fit above the phone toolbar');
-  assert.ok((await page.locator('#welcome-guide').boundingBox()).height<=56,'Getting-started shortcuts must fit one compact row');
+  assert.ok(await page.locator('#open-guide[data-first-run]').isVisible(),'First use highlights the Guide');
+  assert.ok(footer.height<=56,'The shell bar must stay one compact row');
   await primary.click();
   await page.waitForFunction(()=>window.__firstBrewRequests.length===1,{},{timeout:30000});
   assert.equal(await page.evaluate(()=>window.__firstBrewRequests[0].reading_mode),'usual');

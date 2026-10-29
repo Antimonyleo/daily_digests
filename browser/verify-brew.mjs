@@ -14,7 +14,14 @@ const fixtures=resolve(process.env.DAILYDIGEST_BREW_FIXTURES || '.full-review/to
 const computeMode=process.env.DAILYDIGEST_BREW_COMPUTE || 'cpu';
 assert.ok(['cpu','multicore'].includes(computeMode));
 const snapshot=await readFile(resolve(fixtures,'fixture-backup.json'),'utf8');
-const originalFeed=await readFile(resolve(fixtures,'research-feed.xml'),'utf8');
+// Date the fictional feed at noon UTC of its own day. The test clock starts five
+// days later; with the generation time instead, fixtures made shortly before
+// midnight crossed into the next day during the matrix and aged out of the
+// recency window.
+const originalFeed=(await readFile(resolve(fixtures,'research-feed.xml'),'utf8')).replace(/<pubDate>(.*?)<\/pubDate>/g,(match,value)=>{
+ const day=new Date(Date.parse(value));
+ return `<pubDate>${new Date(Date.UTC(day.getUTCFullYear(),day.getUTCMonth(),day.getUTCDate(),12)).toUTCString()}</pubDate>`;
+});
 const feed=extension?.prepareFeed ? extension.prepareFeed(originalFeed) : originalFeed;
 const fixtureDate = new Date(Math.max(...[...originalFeed.matchAll(/<pubDate>(.*?)<\/pubDate>/g)].map(match=>Date.parse(match[1]))) + 5*86400000).toISOString();
 const fixtureClockOffset=Date.parse(fixtureDate)-Date.now();

@@ -246,15 +246,15 @@
   .item-heading { min-width: 0; }
   .item-heading .type-label { margin-bottom: 7px; }
   .item-copy { min-width: 0; }
-  .bookmark-btn {
+  .bookmark-btn, .interested-btn {
     display: inline-flex; align-items: center; gap: 5px; min-height: 26px;
     margin-left: 0; padding: 3px 8px; border: 1px solid var(--border);
     border-radius: 999px; background: var(--card); color: var(--muted);
     font-size: 12px; font-weight: 760; white-space: nowrap; cursor: pointer;
   }
-  .bookmark-btn:hover { color: var(--accent-strong); border-color: #9fc2ae; }
+  .bookmark-btn:hover, .interested-btn:hover { color: var(--accent-strong); border-color: #9fc2ae; }
   .bookmark-btn.active { color: #7a4b00; border-color: #dcb86b; background: var(--gold-soft); }
-  .bookmark-btn:disabled { opacity: 0.65; cursor: progress; }
+  .bookmark-btn:disabled, .interested-btn:disabled { opacity: 0.65; cursor: progress; }
   .item-head-actions { display: flex; align-items: start; gap: 6px; }
   .known-btn.active { color: var(--muted); border-color: var(--border); background: var(--panel); }
   .known-btn.active .known-label { text-decoration: line-through; }
@@ -338,7 +338,7 @@
   .vote-btn.active.neutral { background: var(--surface-muted); border-color: var(--neutral); color: var(--neutral); }
   .vote-btn.active.bad { background: #fdecea; border-color: var(--down); color: var(--down); }
   .vote-btn { border-color: var(--control-border); min-height: 44px; }
-  .reason-chip, .bookmark-btn, .filter-chip, .time-machine-link { min-height: 44px; }
+  .reason-chip, .bookmark-btn, .interested-btn, .filter-chip, .time-machine-link { min-height: 44px; }
   .section-mark { width: 10px; height: 10px; background: var(--accent); border-radius: 50%; display: inline-block; }
   .vote-btn:disabled { opacity: 0.65; cursor: progress; }
   .item.flash { background: var(--flash); transition: background 0.4s; }
@@ -422,8 +422,9 @@
   html[data-display="compact"] .item-heading .type-label { margin: 0; }
   html[data-display="compact"] .item a.title-link { flex: 1 1 420px; font-size: 16px; line-height: 1.3; }
   html[data-display="compact"] .bookmark-label,
+  html[data-display="compact"] .interested-label,
   html[data-display="compact"] .known-label { display: none; }
-  html[data-display="compact"] .bookmark-btn { min-height: 24px; padding: 2px 6px; }
+  html[data-display="compact"] .bookmark-btn, html[data-display="compact"] .interested-btn { min-height: 24px; padding: 2px 6px; }
   html[data-display="compact"] .item .meta { margin-top: 3px; }
   html[data-display="compact"] .reason-line { display: none; }
   html[data-display="compact"] .item .summary,
@@ -463,7 +464,6 @@
     .summary-primary, .summary-field { grid-template-columns: 1fr; gap: 3px; }
     .audit-list li { grid-template-columns: 1fr; }
     .vote-panel { grid-template-columns: 1fr; }
-    .vote-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .reason-block { grid-column: 1; }
     .name-prompt { grid-template-columns: 1fr; }
     .today-cup { grid-template-columns: 1fr; gap: 10px; padding: 12px 14px; }
@@ -476,11 +476,12 @@
     html[data-display="compact"] .item { padding: 9px 12px; }
   }
   @media (pointer: coarse) {
-    .filter-chip, .more-filters summary, .bookmark-btn, .vote-btn, .reason-chip,
+    .filter-chip, .more-filters summary, .bookmark-btn, .interested-btn, .vote-btn, .reason-chip,
     .item-details summary, html[data-display="compact"] .item-details summary,
     html[data-display="compact"] .filter-chip,
     html[data-display="compact"] .more-filters summary,
     html[data-display="compact"] .bookmark-btn,
+    html[data-display="compact"] .interested-btn,
     html[data-display="compact"] .vote-btn { min-height: 44px; }
     .item-head:has(.known-btn) { grid-template-columns: minmax(0, 1fr); }
   }
@@ -576,6 +577,15 @@
       </div>
     </div>
     {% endif %}
+    {# Only items the reader marked Interested are tracked here, across digests. #}
+    <aside class="coming-deadlines" id="coming-deadlines" aria-labelledby="coming-deadlines-title"{% if not coming_deadlines.rows %} hidden{% endif %}>
+      <div class="coming-deadlines-head"><h2 class="coming-deadlines-title" id="coming-deadlines-title">Coming deadlines</h2><a class="coming-manage" href="/saved#tracked">All tracked{% if coming_deadlines.more %} · {{ coming_deadlines.more }} more{% endif %}</a></div>
+      <ul id="coming-deadlines-list">
+        {% for deadline in coming_deadlines.rows %}
+        <li data-tracked-id="{{ deadline.id }}" data-date="{{ deadline.date_iso }}"><a href="{{ '#item-' ~ deadline.id if deadline.on_page else deadline.url }}"{% if deadline.on_page %} data-open-item="item-{{ deadline.id }}"{% else %} target="_blank" rel="noopener"{% endif %}><span class="coming-date"><span class="coming-word">{{ deadline.date_word }}</span> <time datetime="{{ deadline.date_iso }}">{{ deadline.date_label }}</time><span class="deadline-countdown" data-deadline="{{ deadline.date_iso }}"></span></span><span class="coming-title">{{ deadline.title }}</span><span class="coming-kind">{{ deadline.kind }}</span></a></li>
+        {% endfor %}
+      </ul>
+    </aside>
 
 	    {% if empty %}
 	    <div class="empty">
@@ -598,38 +608,51 @@
       {% for item in section.entries %}
       {% set priority_score = item.score_raw if item.ranking.contribution_rerank is defined else item.confidence_score | default(item.score_raw) %}
       {% set priority = 'spotlight' if priority_score >= 0.85 else ('read' if priority_score >= 0.65 else 'skim') %}
-      <div class="item" data-item-id="{{ item.id }}" data-section="{{ section.key }}" data-priority="{{ priority }}" data-top-pick="{{ 'true' if item.top_pick else 'false' }}" data-topic="{{ item.ranking.primary_facet | default('', true) }}" data-source-bucket="{{ item.ranking.source_bucket }}" data-reviewed="{{ 'true' if item.current_grade is not none else 'false' }}" data-current-grade="{{ item.current_grade if item.current_grade is not none else '' }}" data-bookmarked="{{ 'true' if item.bookmarked else 'false' }}" data-known="{{ 'true' if item.known else 'false' }}" data-saved-item-ids="{{ item.saved_item_ids | default([]) | join(',') }}" data-known-item-ids="{{ item.known_item_ids | default([]) | join(',') }}"{% if item.version_item_ids %} data-version-item-ids="{{ item.version_item_ids | join(',') }}"{% endif %}{% if item.version_search %} data-version-search="{{ item.version_search }}"{% endif %}>
+      <div class="item" data-item-id="{{ item.id }}" id="item-{{ item.id }}" data-section="{{ section.key }}" data-priority="{{ priority }}" data-top-pick="{{ 'true' if item.top_pick else 'false' }}" data-topic="{{ item.ranking.primary_facet | default('', true) if (section.key == 'research' or item.match_evidence) else '' }}" data-source-bucket="{{ item.ranking.source_bucket }}" data-reviewed="{{ 'true' if item.current_grade is not none else 'false' }}" data-current-grade="{{ item.current_grade if item.current_grade is not none else '' }}" data-bookmarked="{{ 'true' if item.bookmarked else 'false' }}" data-known="{{ 'true' if item.known else 'false' }}" data-interested="{{ 'true' if item.interested else 'false' }}" data-interested-item-ids="{{ item.interested_item_ids | default([]) | join(',') }}" data-saved-item-ids="{{ item.saved_item_ids | default([]) | join(',') }}" data-known-item-ids="{{ item.known_item_ids | default([]) | join(',') }}"{% if item.version_item_ids %} data-version-item-ids="{{ item.version_item_ids | join(',') }}"{% endif %}{% if item.version_search %} data-version-search="{{ item.version_search }}"{% endif %}>
         <div class="item-main">
           <div class="item-head">
+            {% set uncertain_fit = (not item.abstract) or (item.ranking.topic_alignment and (item.ranking.topic_alignment.uncertain or not item.ranking.topic_alignment.complete)) %}
+            {% set evidence_topic = item.ranking.topic_support.topic if item.ranking.topic_support and item.ranking.topic_support.status == 'text_supported' else item.ranking.primary_facet %}
+            {# Outside Research a topic tag needs the topic in the item's own text; nearest-interest guesses stay in Details. #}
+            {% set show_topic = item.ranking.primary_facet and (section.key == 'research' or item.match_evidence) %}
             <div class="item-heading">
               {% if item.type_label %}
               <span class="type-label">{{ item.type_label }}</span>
               {% endif %}
+              {% if show_topic or item.publication_label %}<div class="item-kicker">{% if show_topic %}<p class="match-topic{% if uncertain_fit or not item.match_evidence %} topic-support{% endif %}"{% if uncertain_fit %} data-reading-uncertainty{% endif %}><strong>{{ evidence_topic }}</strong>{% if not item.abstract %} · Title only; fit needs checking{% elif uncertain_fit %} · Topic fit is uncertain{% endif %}</p>{% endif %}{% if item.publication_label %}<span class="publication-label">{{ item.publication_label }}</span>{% endif %}</div>{% endif %}
               <a class="title-link" href="{{ item.url }}" target="_blank" rel="noopener">{{ item.title }}</a>
             </div>
           </div>
           <div class="item-copy">
           <div class="paper-meta">
           <div class="meta">
-            {%- set meta_sep = joiner(" · ") -%}
-            {%- if item.source %}{{ meta_sep() }}<span class="venue">{{ item.source }}</span>{% endif %}{% if item.publication_label %}{{ meta_sep() }}<span class="publication-label">{{ item.publication_label }}</span>{% endif %}{% if item.published_label %}{{ meta_sep() }}{% if item.published_iso %}<time datetime="{{ item.published_iso }}">{{ item.published_label }}</time>{% else %}{{ item.published_label }}{% endif %}{% endif %}{% if item.authors %}{{ meta_sep() }}<span class="authors">{{ item.authors }}</span>{% endif -%}
+            {%- set listing = item.opportunity is not none and item.opportunity -%}
+            {%- set listed_event = listing and item.opportunity.kind == 'event' -%}
+            {#- Venue on one line; authors | date below. The hidden separator keeps
+                copied and cached text readable as one line. -#}
+            {%- set byline_sep = joiner(" | ") -%}
+            {%- set show_date = item.published_label and not listed_event -%}
+            {%- if item.source %}<span class="venue">{{ item.source }}</span>{% endif %}{% if item.source and (item.authors or show_date) %}<span class="meta-break" aria-hidden="true"> · </span>{% endif %}{% if item.authors or show_date %}<span class="meta-byline">{% if item.authors %}{{ byline_sep() }}<span class="authors">{{ item.authors }}</span>{% endif %}{% if show_date %}{{ byline_sep() }}{% if listing %}Posted {% endif %}{% if item.published_iso %}<time datetime="{{ item.published_iso }}">{{ item.published_label }}</time>{% else %}{{ item.published_label }}{% endif %}{% endif %}</span>{% endif -%}
           </div>
           {% include "_version_links.html.j2" %}
           {% if item.opportunity %}
           {% set opp = item.opportunity %}
-          <div class="opportunity-facts" data-opportunity-kind="{{ 'event' if section.key == 'events' else 'funding' }}">
-            {% if section.key == "events" %}
-            <p class="opportunity-key"><span class="opportunity-fact"><span class="fact-label">Date:</span> {{ opp.event_dates_label or "Not stated" }}</span> · <span class="opportunity-fact opportunity-where"><span class="fact-label">Where:</span> {{ opp.location }}{% if opp.format %} · {{ opp.format }}{% endif %}</span> · <span class="opportunity-fact"><span class="fact-label">Deadline:</span> {% if opp.deadline_iso %}<time datetime="{{ opp.deadline_iso }}">{{ opp.deadline_label }}</time>{% else %}{{ opp.deadline_label }}{% endif %}</span></p>
+          {% set is_event = opp.kind == 'event' %}
+          {% set deadline_time %}{% if opp.deadline_iso %}<time datetime="{{ opp.deadline_iso }}">{{ opp.deadline_label }}</time><span class="deadline-countdown" data-deadline="{{ opp.deadline_iso }}"></span>{% else %}{{ opp.deadline_label }}{% endif %}{% endset %}
+          {% set official_word = 'page' if is_event else 'call' %}
+          <div class="opportunity-facts" data-opportunity-kind="{{ 'event' if is_event else ('call' if opp.kind == 'call' else 'funding') }}">
+            {% if is_event %}
+            <p class="opportunity-key"><span class="opportunity-fact"><span class="fact-label">Date:</span> {{ opp.event_dates_label or "Not stated" }}</span> · <span class="opportunity-fact opportunity-where"><span class="fact-label">Where:</span> {{ opp.location }}{% if opp.format %} · {{ opp.format }}{% endif %}</span></p>
+            {% if opp.deadline_iso %}<p class="opportunity-deadline"><span class="fact-label">Deadline:</span> {{ deadline_time }}</p>{% endif %}
             {% else %}
-            <p class="opportunity-key"><span class="opportunity-fact"><span class="fact-label">Amount:</span> {{ opp.amount }}</span> · <span class="opportunity-fact"><span class="fact-label">Deadline:</span> {% if opp.deadline_iso %}<time datetime="{{ opp.deadline_iso }}">{{ opp.deadline_label }}</time>{% else %}{{ opp.deadline_label }}{% endif %}</span> · <span class="opportunity-status">{{ opp.status }}</span></p>
+            <p class="opportunity-key opportunity-deadline">{% if opp.deadline_iso %}<span class="fact-label">Closes:</span> {% endif %}{{ deadline_time }}</p>
+            <p class="opportunity-line"><span class="opportunity-fact"><span class="fact-label">Amount:</span> {{ opp.amount }}</span>{% if opp.status not in ['Open', 'Recurring', 'Unknown'] %} · <span class="opportunity-status">{{ opp.status }}</span>{% endif %}</p>
             {% endif %}
-            <p class="opportunity-eligibility"{% if opp.eligibility != 'Potentially eligible' %} data-needs-verification{% endif %}><span class="fact-label">Eligibility:</span> {{ opp.eligibility }} · <span class="opportunity-note">{{ opp.eligibility_reason }}</span></p>
-            <p class="opportunity-links"><a href="{{ item.url }}" target="_blank" rel="noopener">{{ 'Official call' if section.key != 'events' else 'Official page' }}</a> <span class="opportunity-note">({{ opp.official }})</span> · <a href="{{ opp.calendar_url }}">Add to calendar</a></p>
+            {% set eligibility_note = opp.eligibility_note %}
+            <p class="opportunity-eligibility"{% if opp.eligibility != 'Potentially eligible' %} data-needs-verification{% endif %}><span class="fact-label">Eligibility:</span> {% if opp.eligibility == 'Potentially eligible' %}Potentially eligible{% else %}check the official {{ official_word }}{% endif %}{% if eligibility_note %} · <span class="opportunity-note">{{ eligibility_note }}</span>{% endif %}</p>
+            <p class="opportunity-links"><a href="{{ item.url }}" target="_blank" rel="noopener">Official {{ official_word }}</a> <span class="opportunity-note">({{ opp.official }})</span> · <a href="{{ opp.calendar_url }}">Add to calendar</a></p>
           </div>
           {% endif %}
-          {% set uncertain_fit = (not item.abstract) or (item.ranking.topic_alignment and (item.ranking.topic_alignment.uncertain or not item.ranking.topic_alignment.complete)) %}
-          {% set evidence_topic = item.ranking.topic_support.topic if item.ranking.topic_support and item.ranking.topic_support.status == 'text_supported' else item.ranking.primary_facet %}
-          {% if item.ranking.primary_facet %}<p class="match-topic{% if uncertain_fit or not item.match_evidence %} topic-support{% endif %}"{% if uncertain_fit %} data-reading-uncertainty{% endif %}><strong>{{ evidence_topic }}</strong>{% if not item.abstract %} · Title only; fit needs checking{% elif uncertain_fit %} · Topic fit is uncertain{% endif %}</p>{% endif %}
           {% if section.key == 'research' and not item.abstract and not item.ranking.primary_facet %}<p class="topic-support">Title only; fit needs checking</p>{% endif %}
           {% if item.reason_line and not item.ranking.primary_facet %}
           <div class="reason-line">{{ item.reason_line }}</div>
@@ -716,16 +739,29 @@
             <span class="bookmark-icon" aria-hidden="true">{{ '★' if item.bookmarked else '☆' }}</span>
             <span class="bookmark-label">{{ 'Saved' if item.bookmarked else 'Save' }}</span>
           </button>
-          {% if section.key in ("opportunities", "events") %}
-          {# Funding calls stay open for weeks and form a standing shortlist
-             that may re-show an active call, so only an explicit "I know this"
-             can retire one. Nothing automatic ever sets this flag. #}
-          <button class="bookmark-btn known-btn{% if item.known %} active{% endif %}" type="button" aria-pressed="{{ 'true' if item.known else 'false' }}" aria-label="{{ 'Show this again in future digests' if item.known else 'Mark as known so it stops appearing' }}">
-            <span class="known-icon" aria-hidden="true">{{ '✓' if item.known else '⊘' }}</span>
-            <span class="known-label">{{ 'Known' if item.known else 'Mark known' }}</span>
+          {% if section.key in ("opportunities", "events") and item.opportunity %}
+          {# Interested tracks this item's date in Coming deadlines and on the Saved page. #}
+          {% set track = item.opportunity.tracked %}
+          <button class="interested-btn{% if item.interested %} active{% endif %}" type="button" aria-pressed="{{ 'true' if item.interested else 'false' }}" aria-label="{{ 'Interested: stop tracking this deadline' if item.interested else 'Interested: track this deadline' }}" title="Track this deadline in Coming deadlines" data-track-date="{{ track.iso }}" data-track-label="{{ track.label }}" data-track-word="{{ track.word }}" data-track-kind="{{ track.kind }}">
+            <span class="interested-icon" aria-hidden="true">{{ '⚑' if item.interested else '⚐' }}</span>
+            <span class="interested-label">Interested</span>
           </button>
           {% endif %}
-          <button class="copy-summary btn" type="button">Copy summary</button></div><span class="copy-status" role="status"></span></div>
+          <details class="item-more">
+            <summary aria-label="More actions for {{ item.label }}">More</summary>
+            <div class="item-more-menu">
+            {% if section.key in ("opportunities", "events") %}
+            {# Funding calls stay open for weeks and form a standing shortlist
+               that may re-show an active call, so only an explicit "I know this"
+               can retire one. Nothing automatic ever sets this flag. #}
+            <button class="bookmark-btn known-btn{% if item.known %} active{% endif %}" type="button" aria-pressed="{{ 'true' if item.known else 'false' }}" aria-label="{{ 'Show this again in future digests' if item.known else 'Mark as known so it stops appearing' }}">
+              <span class="known-icon" aria-hidden="true">{{ '✓' if item.known else '⊘' }}</span>
+              <span class="known-label">{{ 'Known' if item.known else 'Mark known' }}</span>
+            </button>
+            {% endif %}
+              <button class="copy-summary btn" type="button">Copy summary</button>
+            </div>
+          </details></div><span class="copy-status" role="status"></span></div>
       </div>
       {% endfor %}
       </details>
@@ -810,7 +846,7 @@
     <p id="learning-summary-message">{% if ranking_status.blocked | default(false) or has_helpful_ratings %}{{ ranking_status.learning_message | default(ranking_status.message) }}{% else %}Rate a paper to help shape future digests.{% endif %}</p>
     <p id="usefulness-summary"{% if not feedback_summary.rated %} hidden{% endif %}>{% if feedback_summary.rated %}{{ feedback_summary.useful }} useful of {{ feedback_summary.rated }} rated picks in this digest · {{ feedback_summary.unrated }} unrated.{% endif %}</p>
     <a href="/reading/study">Review useful picks per digest</a>
-    <details><summary>What the feedback means</summary><p>Ratings guide future recommendations. Less relevant and Not relevant lower their priority; reasons distinguish topic fit, difficulty and access.</p><p>Useful means marked Relevant or Very relevant. Ratings help future brews; this saved list does not reshuffle. Unrated papers are unknown, not unsuccessful recommendations.</p></details>
+    <details><summary>What the feedback means</summary><p>Keyboard: <kbd>j</kbd> and <kbd>k</kbd> move between items, <kbd>1</kbd>–<kbd>4</kbd> rate the current item from Very relevant to Not relevant, and <kbd>s</kbd> saves it.</p><p>Interested, on funding, calls and events, tracks that item’s deadline: it appears under Coming deadlines on every digest and on the Saved page until you untick it.</p><p>Ratings guide future recommendations. Less relevant and Not relevant lower their priority; reasons distinguish topic fit, difficulty and access.</p><p>Useful means marked Relevant or Very relevant. Ratings help future brews; this saved list does not reshuffle. Unrated papers are unknown, not unsuccessful recommendations.</p></details>
   </aside>
   {% if interest_coverage %}
   <section class="source-coverage" aria-label="Your configured interests">
@@ -1227,6 +1263,76 @@
   syncSizeHint();
   document.querySelector('[data-open-source-details]')?.addEventListener('click',event=>{event.preventDefault();document.querySelector('.about-brew').open=true;const section=document.getElementById('source-details');section.tabIndex=-1;section.scrollIntoView({block:'start'});section.focus({preventScroll:true});});
   applyReaderFilters();
+  // One open "More" menu at a time; outside clicks and Escape close it.
+  const moreMenus=[...document.querySelectorAll('details.item-more')];
+  moreMenus.forEach(menu=>{
+    menu.addEventListener('toggle',()=>{if(menu.open)moreMenus.forEach(other=>{if(other!==menu)other.open=false;});});
+    menu.querySelector('.known-btn')?.addEventListener('click',()=>{menu.open=false;});
+  });
+  document.addEventListener('click',event=>{moreMenus.forEach(menu=>{if(menu.open&&!menu.contains(event.target))menu.open=false;});});
+  document.addEventListener('keydown',event=>{if(event.key!=='Escape')return;const menu=moreMenus.find(item=>item.open);if(menu){menu.open=false;menu.querySelector('summary').focus();}});
+  // Keyboard triage: j/k move between items, 1-4 rate the current item, s saves it.
+  document.addEventListener('keydown',event=>{
+    if(event.defaultPrevented||event.altKey||event.ctrlKey||event.metaKey)return;
+    if(event.target.closest?.('input, textarea, select, [contenteditable], #display-menu, .tea-break'))return;
+    if(!['j','k','1','2','3','4','s'].includes(event.key))return;
+    const visible=[...document.querySelectorAll('.item')].filter(item=>!item.hidden&&item.offsetParent!==null);
+    if(!visible.length)return;
+    let current=document.activeElement?.closest?.('.item');
+    if(!current||!visible.includes(current))current=visible.find(item=>item.getBoundingClientRect().bottom>80)||visible[0];
+    event.preventDefault();
+    if(event.key==='j'||event.key==='k'){
+      const focusedHere=document.activeElement?.closest?.('.item')===current;
+      const step=event.key==='j'?1:-1;
+      const next=focusedHere?visible[visible.indexOf(current)+step]:current;
+      if(next){next.scrollIntoView({block:'start',behavior:tabMotion()});next.querySelector('.title-link')?.focus({preventScroll:true});}
+      return;
+    }
+    if(event.key==='s'){current.querySelector('.bookmark-btn:not(.known-btn)')?.click();return;}
+    current.querySelectorAll('.vote-row .vote-btn')[Number(event.key)-1]?.click();
+  });
+{% include "_countdown.js.j2" %}
+  const paintCountdown=node=>{
+    const days=daysUntil(node.dataset.deadline);
+    if(!Number.isFinite(days))return;
+    node.textContent=countdownText(days);
+    node.closest('.opportunity-deadline, .coming-deadlines li')?.toggleAttribute('data-deadline-soon',countdownSoon(days));
+  };
+  document.querySelectorAll('.deadline-countdown[data-deadline]').forEach(paintCountdown);
+  const openItemLink=link=>link.addEventListener('click',event=>{
+    const target=document.getElementById(link.dataset.openItem);if(!target)return;
+    event.preventDefault();
+    if(target.hidden||target.closest('[hidden]')){if(searchInput)searchInput.value='';document.querySelector('.filter-chip[data-filter="all"]')?.click();applyReaderFilters();}
+    const section=target.closest('details.section-block');if(section)section.open=true;
+    target.scrollIntoView({block:'start'});const title=target.querySelector('.title-link');title?.focus({preventScroll:true});
+  });
+  document.querySelectorAll('[data-open-item]').forEach(openItemLink);
+  // Interested adds the card's upcoming date to Coming deadlines at once; the
+  // server list (all tracked items, across digests) replaces it on reload.
+  const trackedStrip=document.getElementById('coming-deadlines');
+  const trackedList=document.getElementById('coming-deadlines-list');
+  window.syncTrackedDeadline=(itemEl,button,tracked)=>{
+    if(!trackedStrip||!trackedList)return;
+    const id=itemEl.dataset.itemId;
+    trackedList.querySelector(`li[data-tracked-id="${id}"]`)?.remove();
+    const iso=button.dataset.trackDate;
+    if(tracked&&iso&&daysUntil(iso)>=0){
+      const row=document.createElement('li');row.dataset.trackedId=id;row.dataset.date=iso;
+      const link=document.createElement('a');link.href=`#item-${id}`;link.dataset.openItem=`item-${id}`;
+      const when=document.createElement('span');when.className='coming-date';
+      const word=document.createElement('span');word.className='coming-word';word.textContent=button.dataset.trackWord;
+      const time=document.createElement('time');time.dateTime=iso;time.textContent=button.dataset.trackLabel;
+      const countdown=document.createElement('span');countdown.className='deadline-countdown';countdown.dataset.deadline=iso;
+      when.append(word,' ',time,countdown);
+      const title=document.createElement('span');title.className='coming-title';title.textContent=itemEl.querySelector('.title-link')?.textContent.trim()||'';
+      const kind=document.createElement('span');kind.className='coming-kind';kind.textContent=button.dataset.trackKind;
+      link.append(when,title,kind);row.append(link);
+      const later=[...trackedList.children].find(other=>(other.dataset.date||'')>iso);
+      trackedList.insertBefore(row,later||null);
+      paintCountdown(countdown);openItemLink(link);
+    }
+    trackedStrip.hidden=!trackedList.children.length;
+  };
 
   function activeFilterState() {
     const activeSourceTypes = new Set();
@@ -1464,6 +1570,43 @@
           showToast("Could not update the known flag");
         } finally {
           knownBtn.disabled = false;
+        }
+      });
+    }
+    const interestedBtn = itemEl.querySelector(".interested-btn");
+    if (interestedBtn) {
+      interestedBtn.addEventListener("click", async () => {
+        const id = itemEl.dataset.itemId;
+        const wasTracked = itemEl.dataset.interested === "true";
+        interestedBtn.disabled = true;
+        const trackedVersions = wasTracked ? otherVersionIds(itemEl.dataset.interestedItemIds, id) : [];
+        setStatus(itemEl, wasTracked ? "Removing from tracked deadlines…" : "Tracking this deadline…", "");
+        try {
+          const response = await fetch(`/interested/${id}${versionQuery(trackedVersions)}`, {
+            method: wasTracked ? "DELETE" : "POST",
+            headers: { "X-CSRF-Token": CSRF_TOKEN },
+          });
+          const payload = await responsePayload(response);
+          const nowTracked = !wasTracked;
+          itemEl.dataset.interested = nowTracked ? "true" : "false";
+          itemEl.dataset.interestedItemIds = nowTracked ? id : "";
+          interestedBtn.classList.toggle("active", nowTracked);
+          interestedBtn.setAttribute("aria-pressed", nowTracked ? "true" : "false");
+          interestedBtn.setAttribute("aria-label", nowTracked ? "Interested: stop tracking this deadline" : "Interested: track this deadline");
+          const icon = interestedBtn.querySelector(".interested-icon");
+          if (icon) icon.textContent = nowTracked ? "\u2691" : "\u2690";
+          setStorageLabel(interestedBtn.querySelector(".interested-label"), "Interested", payload.storagePending);
+          window.syncTrackedDeadline?.(itemEl, interestedBtn, nowTracked);
+          const message = payload.storagePending ? "Tracked deadline recorded · saving browser copy…"
+            : nowTracked ? (interestedBtn.dataset.trackDate ? "Tracking this deadline in Coming deadlines" : "Tracked · no date stated, see Saved")
+            : "No longer tracking this deadline";
+          setStatus(itemEl, message, payload.storagePending ? "pending" : "saved");
+          showToast(message);
+        } catch (error) {
+          setStatus(itemEl, "Tracking was not saved. Try again.", "error");
+          showToast("Could not update tracked deadlines");
+        } finally {
+          interestedBtn.disabled = false;
         }
       });
     }

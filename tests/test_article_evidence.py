@@ -158,3 +158,37 @@ def test_negation_in_another_sentence_does_not_hide_positive_claims_or_change_of
     for key in ("validation", "data_code"):
         claim = dimensions[key]["claims"][0]
         assert text[claim["start"]:claim["end"]] == claim["quote"]
+
+
+def test_problems_the_work_solves_are_not_its_limitations():
+    from dailydigest.rank.article_evidence import assess_article_evidence
+
+    abstract = ("The LNPs address key limitations of current LNP systems, including immunogenicity. "
+                "A limitation of this study is the small sample of donors.")
+    claims = assess_article_evidence("T", abstract)["dimensions"]["limitations"]["claims"]
+    assert [claim["quote"] for claim in claims] == ["A limitation of this study is the small sample of donors."]
+
+
+def test_a_sentence_split_never_ends_inside_brackets():
+    from dailydigest.rank.article_evidence import assess_article_evidence
+
+    abstract = "Uptake rose in macrophages (66.5% pos. F4/80+ cells) in vivo. Data are publicly available."
+    result = assess_article_evidence("T", abstract)
+    assert result["dimensions"]["data_code"]["claims"][0]["quote"] == "Data are publicly available."
+    assert all("(66.5% pos." not in c["quote"] or c["quote"].endswith("in vivo.")
+               for d in result["dimensions"].values() for c in d["claims"])
+
+
+def test_a_solved_limitation_does_not_hide_one_stated_in_the_same_sentence():
+    abstract = ("Although our method overcomes limitations of conventional LNPs, it is limited to murine models. "
+                "Delivery improved tenfold.")
+    claims = assess_article_evidence("T", abstract)["dimensions"]["limitations"]["claims"]
+    assert [claim["quote"] for claim in claims] == [
+        "Although our method overcomes limitations of conventional LNPs, it is limited to murine models."]
+
+
+def test_an_unclosed_bracket_does_not_merge_the_rest_of_the_abstract():
+    abstract = ("We studied cells (see methods. Results were strong. "
+                "Limitations: small sample size. We conclude.")
+    claims = assess_article_evidence("T", abstract)["dimensions"]["limitations"]["claims"]
+    assert [claim["quote"] for claim in claims] == ["Limitations: small sample size."]

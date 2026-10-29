@@ -323,8 +323,12 @@ def test_display_preferences_and_menu_keyboard_dismissal(storage_available):
     base = base.replace('{% include "_rating_queue.js.j2" %}', TEMPLATE.with_name('_rating_queue.js.j2').read_text())
     # Exercise the actual theme bootstrap and display-menu controller. Other
     # base scripts have independent tests and may contain Jinja component calls.
+    # The file copy (data/ui_prefs.json) holds a dark theme; the CSRF token
+    # lets each change be saved back to it.
+    base = base.replace('{{ (ui_prefs() if ui_prefs is defined else {})|tojson }}', '{"theme": "dark"}')
+    base = base.replace('{{ (update_csrf_token() if update_csrf_token is defined else "")|tojson }}', '"token"')
     scripts = [script for script in re.findall(r'<script>(.*?)</script>', base, re.DOTALL)
-               if 'const savedTheme =' in script or 'const displayButton =' in script]
+               if 'const filed =' in script or 'const displayButton =' in script]
     assert len(scripts) == 2
     _run_js(f'const storageAvailable = {str(storage_available).lower()};' + '''
         const assert = require('node:assert/strict');
@@ -352,13 +356,19 @@ def test_display_preferences_and_menu_keyboard_dismissal(storage_available):
         };
         const window = {matchMedia: () => ({matches:false}), addEventListener: () => {}};
         const navigator = {};
+        const posted = [];
+        const fetch = (url, options) => { posted.push([url, options.headers['X-CSRF-Token']]); return Promise.resolve(); };
     ''' + '\n'.join(scripts) + '''
-        assert.equal(document.documentElement.dataset.theme, storageAvailable ? 'dark' : 'light');
+        // This browser's values win; without storage the file copy applies.
+        assert.equal(document.documentElement.dataset.theme, 'dark');
+        // Choices the file lacks are brought up to date with this browser.
+        assert.deepEqual(posted.splice(0), storageAvailable ? [['/ui-prefs?display=compact&pip=hidden', 'token']] : []);
         assert.equal(nodes['display-toggle']['aria-pressed'], storageAvailable ? 'true' : 'false');
         assert.equal(nodes['display-toggle'].textContent, 'Compact view');
         assert.equal(nodes['pip-toggle']['aria-pressed'], storageAvailable ? 'false' : 'true');
         nodes['pip-toggle'].events.click();
         if (storageAvailable) assert.equal(saved['dailydigest-pip'], 'visible');
+        assert.deepEqual(posted.splice(0), [[`/ui-prefs?pip=${storageAvailable ? 'visible' : 'hidden'}`, 'token']]);
         assert.equal(document.documentElement.dataset.pip, storageAvailable ? 'visible' : 'hidden');
         assert.equal(nodes['pip-toggle']['aria-pressed'], storageAvailable ? 'true' : 'false');
         nodes['display-toggle'].events.click();

@@ -10,6 +10,8 @@ Routes:
   (``?versions=1,2`` also covers that card's other versions of the same work)
 - ``GET /saved``           — search the local saved-reading archive
 - ``POST|DELETE /known/{id}`` — manually flag an item as known so future digests skip it
+- ``POST|DELETE /interested/{id}`` — track (or stop tracking) a funding, call or event deadline
+- ``POST /ui-prefs``       — remember theme, density and Pip in ``data/ui_prefs.json``
 - ``POST /overflow/save``  — pin today's reading-mode overflow for tomorrow's brew
 - ``POST /overflow/save/{id}`` — pin one overflow item (used when rating it positively)
 - ``POST /vote/{id}/reason/{reason}`` — record qualitative feedback reason
@@ -98,6 +100,8 @@ from .store import (
     carryover_item_ids,
     exclude_publication_companions,
     init_db,
+    interested_item_ids,
+    interested_items,
     item_metadata,
     known_item_ids,
     load_digest_audit,
@@ -107,6 +111,7 @@ from .store import (
     search_bookmarks,
     session_scope,
     set_bookmark,
+    set_item_interested,
     set_item_known,
 )
 from .tea_break import daily_tea_deck, preview_tea_deck
@@ -231,6 +236,7 @@ templates.env.globals["pip_day"] = lambda: _digest_id()
 # The browser build has its own release notice; only native installs show this one.
 templates.env.globals["local_updates_enabled"] = lambda: updates.install_mode() != "browser"
 templates.env.globals["update_csrf_token"] = lambda: _CSRF_TOKEN
+templates.env.globals["ui_prefs"] = lambda: _load_ui_prefs()
 
 # Per-section sort order so we can ORDER BY (section_order, label_number).
 _SECTION_RANK = {name: idx for idx, name in enumerate(SECTION_ORDER)}
@@ -525,13 +531,23 @@ _FINDING_MARKS = 4
 
 
 _EVIDENCE_DIMENSIONS = (
-    ("validation", "Validation evidence"),
+    ("validation", "Stated validation"),
     ("data_code", "Data/code availability"),
-    ("limitations", "Limitations"),
+    ("limitations", "Stated limitations"),
 )
 
 
-def _evidence_view(ranking: dict) -> dict[str, Any] | None:
+def _complete_quote(quote: str, text: str) -> str:
+    """Finish a quote that a sentence split cut inside brackets ("(66.5% pos.")."""
+    start = text.find(quote) if text and quote.count("(") > quote.count(")") else -1
+    close = text.find(")", start + len(quote)) if start >= 0 else -1
+    if close < 0:
+        return quote
+    stop = re.search(r"[.!?;](?=\s|$)", text[close:])
+    return text[start:close + stop.end() if stop else len(text)].strip()
+
+
+def _evidence_view(ranking: dict, text: str = "") -> dict[str, Any] | None:
     """Show supplied quotes; collapse every unknown dimension into one line."""
     rows: list[tuple[str, list[str]]] = []
 
@@ -539,6 +555,7 @@ def _evidence_view(ranking: dict) -> dict[str, Any] | None:
         out: list[str] = []
         for claim in claims if isinstance(claims, list) else []:
             quote = str((claim or {}).get("quote") or "").strip() if isinstance(claim, dict) else ""
+            quote = _complete_quote(quote, text)
             if quote and quote not in out:
                 out.append(quote)
         return out
@@ -546,7 +563,7 @@ def _evidence_view(ranking: dict) -> dict[str, Any] | None:
     contribution = ranking.get("contribution_claims")
     if contribution is not None:
         claims = contribution.get("claims") if isinstance(contribution, dict) else None
-        rows.append(("Contribution evidence", quotes(claims)))
+        rows.append(("Stated contribution", quotes(claims)))
     article = ranking.get("article_evidence")
     if article is not None:
         dimensions = article.get("dimensions") if isinstance(article, dict) else None
@@ -925,6 +942,7 @@ def _load_today(
         item_ids = [r.id for r in rows]
         saved_item_ids = bookmarked_item_ids(int(item_id) for item_id in item_ids)
         known_ids = known_item_ids(int(item_id) for item_id in item_ids)
+        tracked_ids = interested_item_ids(int(item_id) for item_id in item_ids)
         vote_rows = s.execute(
             select(VoteRow.item_id, VoteRow.value, VoteRow.grade)
             .where(VoteRow.item_id.in_(item_ids))
@@ -1007,18 +1025,25 @@ def _load_today(
                 seen_keys.append(key)
             section_rows[key].append(row)
             opportunity = (
-                opportunity_display(item_metadata(row), opportunity_profile)
+                opportunity_display(item_metadata(row), opportunity_profile, key)
                 if key in {"opportunities", "events"}
                 else None
             )
             if opportunity is not None:
                 opportunity["calendar_url"] = f"/calendar/{int(row.id)}.ics"
-                deadline = _friendly_date(opportunity.get("deadline"), reference_day)
+                # A deadline always names its year; "Dec 2" alone is ambiguous.
+                deadline = _friendly_date(opportunity.get("deadline"), None)
                 opportunity["deadline_label"] = deadline["label"] or "Not stated"
                 opportunity["deadline_iso"] = deadline["iso"]
                 opportunity["event_dates_label"] = _friendly_span(
                     opportunity.get("event_dates"), reference_day
                 )
+                kind = opportunity.get("kind")
+                is_event = kind == "event"
+                opportunity["tracked"] = {
+                    **_tracked_date(opportunity, is_event, item_metadata(row), reference_day),
+                    "kind": "Event" if is_event else "Call" if kind == "call" else "Funding",
+                }
             published = _friendly_date(row.published_at, reference_day)
             display_summary = _display_summary(row.summary, key, row)
             # Feed headers ("Journal, Published online: …; doi:…") are not the
@@ -1055,7 +1080,7 @@ def _load_today(
                     "abstract_segments": _highlight_segments(
                         display_abstract, (evidence or {}).get("term", "")
                     ),
-                    "evidence": _evidence_view(ranking),
+                    "evidence": _evidence_view(ranking, display_abstract),
                     "selection_note": _selection_note(ranking.get("selection_reason")),
                     "authors": authors["short"],
                     "authors_full": authors["full"],
@@ -1084,6 +1109,10 @@ def _load_today(
                 ratings=current_grade, saved=saved_item_ids, known=known_ids,
                 recorded_links=recorded_links,
             )
+            for entry in by_section[key]:
+                carrying = [iid for iid in (int(entry["id"]), *entry.get("version_item_ids", [])) if iid in tracked_ids]
+                entry["interested"] = bool(carrying)
+                entry["interested_item_ids"] = carrying
             _mark_top_picks(by_section[key])
 
         for r in rows:
@@ -1107,6 +1136,73 @@ def _load_today(
             )
 
     return rendered_sections, current_vote
+
+
+def _tracked_date(opportunity: dict, is_event: bool, metadata: dict | None = None,
+                  today: date | None = None) -> dict[str, str]:
+    """The date a tracked item is waiting on.
+
+    That is the next stated deadline (a call's later stages and an event's
+    other registration routes included), else an upcoming event's start.
+    Once everything has passed, the last of those dates is shown as passed.
+    """
+    today = today or date.fromisoformat(_digest_id())
+    stated = [opportunity.get("deadline")] + [
+        row.get("date") for row in (metadata or {}).get("deadlines") or [] if isinstance(row, dict)]
+    deadlines = sorted({when["iso"]: when for when in (_friendly_date(value, None) for value in stated)
+                        if when["iso"]}.values(), key=lambda when: when["iso"])
+    start = _friendly_date(str(opportunity.get("event_dates") or "").split("–")[0].strip(), None)
+    word = "Deadline" if is_event else "Closes"
+    upcoming = [when for when in deadlines if when["iso"] >= today.isoformat()]
+    if upcoming:
+        return {"iso": upcoming[0]["iso"], "label": upcoming[0]["label"], "word": word}
+    if is_event and start["iso"] and (start["iso"] >= today.isoformat() or not deadlines
+                                      or start["iso"] > deadlines[-1]["iso"]):
+        return {"iso": start["iso"], "label": start["label"], "word": "Starts"}
+    if deadlines:
+        return {"iso": deadlines[-1]["iso"], "label": deadlines[-1]["label"], "word": word}
+    return {"iso": "", "label": str(opportunity.get("deadline") or "Not stated"), "word": "Deadline"}
+
+
+def _tracked_view(row: ItemRow, profile: Any = None) -> dict:
+    """One Interested item as the deadline strip and the Saved page show it."""
+    opportunity = opportunity_display(item_metadata(row), profile, row.section or "")
+    kind = opportunity.get("kind")
+    is_event = kind == "event"
+    when = _tracked_date(opportunity, is_event, item_metadata(row))
+    return {
+        "id": int(row.id), "title": row.title or "", "url": safe_url(row.url),
+        "source": _display_source_name(display_source(row)),
+        "kind": "Event" if is_event else "Call" if kind == "call" else "Funding",
+        "date_iso": when["iso"], "date_label": when["label"], "date_word": when["word"],
+        "event_dates_label": _friendly_span(opportunity.get("event_dates"), None),
+        "location": opportunity.get("location") or "", "amount": opportunity.get("amount") or "",
+        "eligibility": opportunity.get("eligibility") or "",
+        "eligibility_reason": opportunity.get("eligibility_reason") or "",
+        "eligibility_note": opportunity.get("eligibility_note") or "",
+        "calendar_url": f"/calendar/{int(row.id)}.ics",
+    }
+
+
+def _tracked_items(profile: Any = None) -> list[dict]:
+    """Every Interested funding, call or event item, soonest date first, undated last."""
+    rows = [row for row in interested_items() if (row.section or "") in {"opportunities", "events"}]
+    views = [_tracked_view(row, profile) for row in rows]
+    return sorted(views, key=lambda view: (not view["date_iso"], view["date_iso"]))
+
+
+def _tracked_deadlines(sections: list[dict], today: date, limit: int = 6) -> dict:
+    """Upcoming dates of the items the reader marked Interested, for the top of the page.
+
+    Only an explicit Interested mark puts an item here, and it stays tracked
+    across digests; a passed or undated item is listed on the Saved page instead.
+    """
+    on_page = {int(entry["id"]) for section in sections for entry in section.get("entries", [])}
+    tracked = _tracked_items()
+    upcoming = [view for view in tracked if view["date_iso"] and view["date_iso"] >= today.isoformat()]
+    for view in upcoming:
+        view["on_page"] = view["id"] in on_page
+    return {"rows": upcoming[:limit], "more": max(0, len(upcoming) - limit), "total": len(tracked)}
 
 
 # Top picks are the strongest of every section, in slate order: about a third
@@ -2034,6 +2130,7 @@ def index(request: Request, digest_id: str = "") -> Response:
             "daily_notes": tea_notes,
             "summarizer_label": _summarizer_label(digest_id),
             "sections": sections,
+            "coming_deadlines": _tracked_deadlines(sections, today_date),
             "empty_enabled_sections": empty_enabled_sections,
             "overview": overview,
             "source_coverage": health.coverage_summary(),
@@ -2156,8 +2253,15 @@ def saved_items(request: Request, q: str = "", page: int = 1) -> Response:
     from urllib.parse import urlencode
     def page_url(number):
         return "/saved?" + urlencode({"page": number, **({"q": query} if query else {})})
+    tracked: list[dict] = []
+    if not query and page == 1:
+        try:
+            tracked_profile = load_opportunity_profile(get_settings().opportunity_profile_path)
+        except Exception:  # noqa: BLE001 - eligibility then stays "check the official page"
+            tracked_profile = None
+        tracked = _tracked_items(tracked_profile)
     response = templates.TemplateResponse(request, "saved.html.j2", {
-        "items": items, "query": query, "csrf_token": _CSRF_TOKEN,
+        "items": items, "query": query, "csrf_token": _CSRF_TOKEN, "tracked": tracked,
         "total": total, "page": page, "pages": pages, "feedback_warning": warning,
         "previous_page": page_url(page - 1) if page > 1 else "",
         "next_page": page_url(page + 1) if page < pages else "",
@@ -2241,6 +2345,56 @@ def known_add(request: Request, item_id: int, versions: str = "") -> JSONRespons
     _require_csrf(request)
     changed = _set_flag_on_versions(set_item_known, item_id, versions, True)
     return JSONResponse({"ok": True, "item_id": item_id, "known": True, **_versions_payload(changed)})
+
+
+@app.post("/interested/{item_id}")
+def interested_add(request: Request, item_id: int, versions: str = "") -> JSONResponse:
+    """Track an item's deadline in Coming deadlines and on the Saved page."""
+    _require_csrf(request)
+    changed = _set_flag_on_versions(set_item_interested, item_id, versions, True)
+    return JSONResponse({"ok": True, "item_id": item_id, "interested": True, **_versions_payload(changed)})
+
+
+@app.delete("/interested/{item_id}")
+def interested_remove(request: Request, item_id: int, versions: str = "") -> JSONResponse:
+    _require_csrf(request)
+    changed = _set_flag_on_versions(set_item_interested, item_id, versions, False)
+    return JSONResponse({"ok": True, "item_id": item_id, "interested": False, **_versions_payload(changed)})
+
+
+# Display choices each page also keeps in this browser's localStorage. The file
+# copy travels with backups and restores, so a new device starts the same way.
+_UI_PREFS = {"theme": {"light", "dark"}, "display": {"comfortable", "compact"},
+             "pip": {"visible", "hidden"}}
+
+
+def _ui_prefs_path() -> Path:
+    return Path(get_settings().db_path).parent / "ui_prefs.json"
+
+
+def _load_ui_prefs() -> dict[str, str]:
+    try:
+        stored = json.loads(_ui_prefs_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(stored, dict):
+        return {}
+    return {key: value for key, value in stored.items()
+            if isinstance(value, str) and value in _UI_PREFS.get(key, ())}
+
+
+@app.post("/ui-prefs")
+def ui_prefs_save(request: Request, theme: str = "", display: str = "", pip: str = "") -> JSONResponse:
+    """Remember display choices beside the reader's other data."""
+    _require_csrf(request)
+    chosen = {key: value for key, value in (("theme", theme), ("display", display), ("pip", pip)) if value}
+    if any(value not in _UI_PREFS[key] for key, value in chosen.items()):
+        raise HTTPException(status_code=422, detail="unknown display choice")
+    prefs = _load_ui_prefs()
+    if chosen and {**prefs, **chosen} != prefs:
+        prefs.update(chosen)
+        _atomic_private_write(_ui_prefs_path(), json.dumps(prefs, sort_keys=True) + "\n")
+    return JSONResponse(prefs)
 
 
 @app.delete("/known/{item_id}")
@@ -2825,24 +2979,20 @@ async def setup_post(request: Request) -> Response:
     ):
         opportunity_profile = _opportunity_profile_from_form(form)
         opportunity_path = _get_opportunity_profile_path()
-        opportunity_payload = opportunity_profile.model_dump(
-            exclude={
-                "description",
-                "citizenship_or_residency",
-                "requires_travel_support",
-            }
-        )
-        # The simplified form no longer asks for these legacy values, but an
-        # ordinary Settings save must not silently erase private profile data a
-        # prior version already stored.
+        # Start from the stored file, so a Settings save never erases what the
+        # form doesn't show: values the simplified form no longer asks for, or
+        # fields a newer version added before the reader went back to this one.
         existing = _profile_data(path=opportunity_path, strict=True)
-        for key in (
-            "description",
-            "citizenship_or_residency",
-            "requires_travel_support",
-        ):
-            if key in existing:
-                opportunity_payload[key] = existing[key]
+        opportunity_payload = {
+            **existing,
+            **opportunity_profile.model_dump(
+                exclude={
+                    "description",
+                    "citizenship_or_residency",
+                    "requires_travel_support",
+                }
+            ),
+        }
 
     # Write/update .env.
     default_base_url = (

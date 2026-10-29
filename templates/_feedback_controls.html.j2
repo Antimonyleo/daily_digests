@@ -47,6 +47,6 @@
 
           <div class="feedback-actions">
             <button class="btn clear-rating" type="button"{% if item.current_grade is none %} hidden{% endif %}>Clear rating</button>
-            <button class="btn feedback-done" type="button" hidden>Done</button>
+            <button class="btn feedback-done" type="button" hidden title="Finish this rating; the Unrated view then hides the item">Done rating</button>
           </div>
 {% endmacro %}

@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Trimmed from https://www.snf.ch/api/rss/en/call/feed.xml (2026-10-27); the feed lists the whole call history. Item 5 is an edited variant for tests. -->
+<rss version="2.0">
+    <channel>
+        <title>SNF RSS Feed - Call - EN</title>
+        <link>https://www.snf.ch</link>
+        <description>Call</description>
+        <item>
+            <title><![CDATA[SNSF Starting Grants 2027]]></title>
+            <link>https://www.snf.ch/en/B9wb55x8qyNWmy1n/news/snsf-starting-grants-2027</link>
+            <guid>https://www.snf.ch/en/B9wb55x8qyNWmy1n/news/snsf-starting-grants-2027</guid>
+            <pubDate>Thu, 01 Oct 2026 06:00:21 GMT</pubDate>
+            <description><![CDATA[Grants for researchers wanting to lead their own independent project and research team in Switzerland. ]]></description>
+            <author>com@snf.ch (Swiss National Science Foundation (SNSF))</author>
+        </item>
+        <item>
+            <title><![CDATA[Call for proposals: Ambizione]]></title>
+            <link>https://www.snf.ch/en/3P7pzbPX0iyOtYDo/news/call-for-projects-ambizione</link>
+            <guid>https://www.snf.ch/en/3P7pzbPX0iyOtYDo/news/call-for-projects-ambizione</guid>
+            <pubDate>Mon, 03 Aug 2026 06:00:36 GMT</pubDate>
+            <description><![CDATA[Ambizione grants are aimed at early-career researchers.]]></description>
+        </item>
+        <item>
+            <title><![CDATA[Call for Postdoc.Mobility]]></title>
+            <link>https://www.snf.ch/en/aK0GyCwNg3knzGat/news/call-for-postdocmobility</link>
+            <guid>https://www.snf.ch/en/aK0GyCwNg3knzGat/news/call-for-postdocmobility</guid>
+            <pubDate>Mon, 04 May 2026 06:00:19 GMT</pubDate>
+            <description><![CDATA[Fellowships for postdocs who wish to deepen their research experience abroad.]]></description>
+        </item>
+        <item>
+            <title><![CDATA[Call for proposals: Project Funding 2024]]></title>
+            <link>https://www.snf.ch/en/OldCall000000000/news/call-for-proposals-project-funding-2024</link>
+            <guid>https://www.snf.ch/en/OldCall000000000/news/call-for-proposals-project-funding-2024</guid>
+            <pubDate>Thu, 01 Feb 2024 08:00:00 GMT</pubDate>
+            <description><![CDATA[An old call that the adapter must not fetch.]]></description>
+        </item>
+        <item>
+            <title><![CDATA[Biodiversa+: new call opening]]></title>
+            <link>https://www.snf.ch/en/gaGYS8iom20zvCCM/news/biodiversa-new-call-opening</link>
+            <guid>https://www.snf.ch/en/gaGYS8iom20zvCCM/news/biodiversa-new-call-opening</guid>
+            <pubDate>Wed, 09 Sep 2026 06:00:20 GMT</pubDate>
+            <description><![CDATA[A pre-announcement whose page has no deadline yet.]]></description>
+        </item>
+    </channel>
+</rss>

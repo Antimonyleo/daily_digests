@@ -1,0 +1,207 @@
+{
+ "_note": "Trimmed from https://www.isscr.org/upcoming-events?format=json (2026-10-27): upcoming[] only, selected keys; the last three rows are test variants. startDate/endDate are epoch ms.",
+ "upcoming": [
+  {
+   "id": "6a87490f4bd3db1534a3c9fc",
+   "title": "Organoid Models in Tissue Architecture and Patterning",
+   "fullUrl": "/upcoming-events/organoid-models-webinar",
+   "startDate": 1794322800127,
+   "endDate": 1794328200127,
+   "location": {
+    "mapLat": 40.7207559,
+    "mapLng": -74.0007613,
+    "addressTitle": "",
+    "addressLine1": "",
+    "addressLine2": "",
+    "addressCountry": ""
+   },
+   "tags": [
+    "webinar"
+   ],
+   "categories": [
+    "Webinar",
+    "tz-America/New_York"
+   ],
+   "excerpt": "<p style=\"white-space:pre-wrap;\" data-rte-preserve-empty=\"true\">An ISSCR Webinar in partnership with <em>Stem Cell Reports</em> and BaCell3D</p><p style=\"white-space:pre-wrap;\" data-rte-preserve-empty=\"true\">10 November 2026</p>",
+   "updatedOn": 1788469244048,
+   "publishOn": 1787675369372,
+   "recordTypeLabel": "event"
+  },
+  {
+   "id": "67872a938d3cfc6f1e58df6d",
+   "title": "Disease Modeling and Drug Discovery Symposium",
+   "fullUrl": "/upcoming-events/2026-san-diego-international-symposium",
+   "startDate": 1797436800822,
+   "endDate": 1797642000822,
+   "location": {
+    "mapLat": 32.715738,
+    "mapLng": -117.1610838,
+    "addressTitle": "",
+    "addressLine1": "",
+    "addressLine2": "San Diego, CA",
+    "addressCountry": "United States"
+   },
+   "tags": [
+    "2026 Symposia",
+    "in-person",
+    "Future of the Field",
+    "Disease Modeling & Drug Discovery"
+   ],
+   "categories": [
+    "tz-America/Los_Angeles",
+    "International Symposia"
+   ],
+   "excerpt": "<p style=\"white-space:pre-wrap;\" data-rte-preserve-empty=\"true\">San Diego, USA</p><p style=\"white-space:pre-wrap;\" data-rte-preserve-empty=\"true\">16-18 December 2026</p>",
+   "updatedOn": 1792506751555,
+   "publishOn": 1737565524233,
+   "recordTypeLabel": "event"
+  },
+  {
+   "id": "687e8f2718cc6d6904085994",
+   "title": "ISSCR 2027 Annual Meeting",
+   "fullUrl": "/upcoming-events/isscr-2027",
+   "startDate": 1813068000399,
+   "endDate": 1813352400399,
+   "location": {
+    "mapLat": 37.7829872,
+    "mapLng": -122.4033752,
+    "addressTitle": "Moscone West Convention Center",
+    "addressLine1": "800 Howard Street",
+    "addressLine2": "San Francisco, CA, 94103",
+    "addressCountry": "United States"
+   },
+   "tags": [
+    "in-person",
+    "Future of the Field",
+    "Disease Modeling & Drug Discovery",
+    "Foresight & Guidance",
+    "Clinical Readiness & Education"
+   ],
+   "categories": [
+    "Annual Meeting",
+    "tz-America/Los_Angeles"
+   ],
+   "excerpt": "<p class=\"\" style=\"white-space:pre-wrap;\" data-rte-preserve-empty=\"true\">Join us in San Francisco, USA for the most comprehensive gathering in stem cell research.</p><p class=\"\" style=\"white-space:pre-wrap;\" data-rte-preserve-empty=\"true\">15-18 June 2027</p>",
+   "updatedOn": 1792036124953,
+   "publishOn": 1756225752532,
+   "recordTypeLabel": "event"
+  },
+  {
+   "id": "69d7d52d3d882552c33f167f",
+   "title": "Cell Therapy Symposium",
+   "fullUrl": "/upcoming-events/2027-stockholm-international-symposium",
+   "startDate": 1822024800859,
+   "endDate": 1822219200859,
+   "location": {
+    "mapLat": 59.336095,
+    "mapLng": 18.0561647,
+    "addressTitle": "House of People",
+    "addressLine1": "12-14 Barnhusgatan",
+    "addressLine2": "Stockholm, Stockholms län, 111 23",
+    "addressCountry": "Sweden"
+   },
+   "tags": [
+    "in-person",
+    "2027 Symposia",
+    "Future of the Field",
+    "Clinical Readiness & Education"
+   ],
+   "categories": [
+    "International Symposia",
+    "tz-Europe/Stockholm"
+   ],
+   "excerpt": "<p style=\"white-space:pre-wrap;\" data-rte-preserve-empty=\"true\">Stockholm, Sweden</p><p style=\"white-space:pre-wrap;\" data-rte-preserve-empty=\"true\">27-29 September 2027</p>",
+   "updatedOn": 1792076301361,
+   "publishOn": 1775761182576,
+   "recordTypeLabel": "event"
+  },
+  {
+   "id": "687e901f9415d133be50a5bb",
+   "title": "ISSCR 2028 Annual Meeting",
+   "fullUrl": "/upcoming-events/isscr-2028",
+   "startDate": 1845702000787,
+   "endDate": 1845982800787,
+   "location": {
+    "mapLat": 55.6378412,
+    "mapLng": 12.5787538,
+    "addressTitle": "Bella Center Copenhagen",
+    "addressLine1": "5 Center Boulevard",
+    "addressLine2": "København, 2300",
+    "addressCountry": "Denmark"
+   },
+   "tags": [
+    "in-person",
+    "Future of the Field",
+    "Foresight & Guidance",
+    "Disease Modeling & Drug Discovery",
+    "Clinical Readiness & Education"
+   ],
+   "categories": [
+    "Annual Meeting",
+    "tz-europe/copenhagen"
+   ],
+   "excerpt": "<p class=\"\" style=\"white-space:pre-wrap;\" data-rte-preserve-empty=\"true\">Join us in Copenhagen, Denmark for the most comprehensive gathering in stem cell research.</p><p class=\"\" style=\"white-space:pre-wrap;\" data-rte-preserve-empty=\"true\">27-30 June 2028</p>",
+   "updatedOn": 1793127991132,
+   "publishOn": 1756225757881,
+   "recordTypeLabel": "event"
+  },
+  {
+   "id": "test-kyoto-2027",
+   "title": "Organoid Workshop (test row: unknown tz name)",
+   "fullUrl": "/upcoming-events/test-kyoto-workshop",
+   "startDate": 1803826800000,
+   "endDate": 1803942000000,
+   "location": {
+    "mapLat": 35.0116,
+    "mapLng": 135.7681,
+    "addressTitle": "",
+    "addressLine1": "",
+    "addressLine2": "Kyoto, Kyoto, 606-0001",
+    "addressCountry": "Japan"
+   },
+   "tags": [
+    "in-person"
+   ],
+   "categories": [
+    "International Symposia",
+    "tz-Asia/Kyoto"
+   ],
+   "excerpt": "<p>Kyoto, Japan</p>",
+   "recordTypeLabel": "event"
+  },
+  {
+   "id": "test-past",
+   "title": "Past webinar (test row)",
+   "fullUrl": "/upcoming-events/test-past",
+   "startDate": 1788278400000,
+   "endDate": 1788278400000,
+   "location": {},
+   "tags": [
+    "webinar"
+   ],
+   "categories": [
+    "Webinar",
+    "tz-America/New_York"
+   ],
+   "excerpt": "",
+   "recordTypeLabel": "event"
+  },
+  {
+   "id": "test-cancelled",
+   "title": "CANCELLED: Stem Cell Policy Forum (test row)",
+   "fullUrl": "/upcoming-events/test-cancelled",
+   "startDate": 1803826800000,
+   "endDate": 1803826800000,
+   "location": {},
+   "tags": [
+    "webinar"
+   ],
+   "categories": [
+    "Webinar"
+   ],
+   "excerpt": "",
+   "recordTypeLabel": "event"
+  }
+ ],
+ "past": []
+}

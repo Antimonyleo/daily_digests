@@ -14,6 +14,27 @@
     </div>
   </header>
 
+  {% if tracked %}
+  {# Funding, calls and events marked Interested, soonest date first. #}
+  <section class="tracked-deadlines" id="tracked" aria-labelledby="tracked-title">
+    <h2 id="tracked-title">Tracked deadlines</h2>
+    <p class="archive-meta">Items you marked Interested. Dates and eligibility come from the listing; confirm them on the official page.</p>
+    <ul class="tracked-list">
+      {% for row in tracked %}
+      <li class="tracked-row" data-item-id="{{ row.id }}" data-tracked="true">
+        <div class="tracked-when">{% if row.date_iso %}<span class="coming-word">{{ row.date_word }}</span> <time datetime="{{ row.date_iso }}">{{ row.date_label }}</time><span class="deadline-countdown" data-deadline="{{ row.date_iso }}"></span>{% else %}{{ row.date_label }}{% endif %}</div>
+        <div class="tracked-body">
+          <a class="tracked-title" href="{{ row.url }}" target="_blank" rel="noopener">{{ row.title }}</a>
+          <div class="saved-meta">{{ row.kind }} · <span class="venue">{{ row.source }}</span>{% if row.kind == 'Event' and row.event_dates_label %} · {{ row.event_dates_label }}{% endif %}{% if row.kind == 'Event' and row.location %} · {{ row.location }}{% endif %}{% if row.kind != 'Event' and row.amount %} · {{ row.amount }}{% endif %}</div>
+          <div class="saved-meta">Eligibility: {% if row.eligibility == 'Potentially eligible' %}Potentially eligible{% else %}check the official {{ 'page' if row.kind == 'Event' else 'call' }}{% endif %}{% if row.eligibility_note %} · {{ row.eligibility_note }}{% endif %} · <a href="{{ row.calendar_url }}">Add to calendar</a></div>
+        </div>
+        <button class="btn untrack-btn" type="button" aria-pressed="true" aria-label="Stop tracking {{ row.title }}">Stop tracking</button>
+      </li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% endif %}
+
   <form class="search-card" action="/saved" method="get" role="search">
     <input name="q" type="search" value="{{ query }}" placeholder="Search title, source, abstract, or summary" aria-label="Search saved reading">
     <button class="btn primary" type="submit">Search</button>
@@ -73,6 +94,30 @@
 <script>
 (function () {
   const CSRF_TOKEN = {{ csrf_token|tojson }};
+{% include "_countdown.js.j2" %}
+  document.querySelectorAll('.tracked-row .deadline-countdown[data-deadline]').forEach(node=>{
+    const days=daysUntil(node.dataset.deadline);
+    if(!Number.isFinite(days))return;
+    node.textContent=countdownText(days);
+    node.closest('.tracked-row').toggleAttribute('data-deadline-soon',countdownSoon(days));
+    node.closest('.tracked-row').toggleAttribute('data-deadline-passed',days<0);
+  });
+  // Stop tracking keeps the row, so a slip is one click to undo.
+  document.querySelectorAll('.tracked-row').forEach(row=>{
+    const button=row.querySelector('.untrack-btn');
+    button.addEventListener('click',async()=>{
+      const tracked=row.dataset.tracked==='true';
+      button.disabled=true;
+      try{
+        const response=await fetch(`/interested/${row.dataset.itemId}`,{method:tracked?'DELETE':'POST',headers:{'X-CSRF-Token':CSRF_TOKEN}});
+        if(!response.ok)throw new Error(String(response.status));
+        row.dataset.tracked=tracked?'false':'true';
+        button.textContent=tracked?'Track again':'Stop tracking';
+        button.setAttribute('aria-pressed',tracked?'false':'true');
+      }catch(error){button.textContent='Not saved · try again';}
+      finally{button.disabled=false;}
+    });
+  });
   const bookmarkCards = new Map();
   function updateSavedCount() {
     const count = document.getElementById('archive-count');

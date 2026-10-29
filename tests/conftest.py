@@ -182,3 +182,21 @@ def _no_network(monkeypatch):
         return original(command, prompt, *args, **kwargs)
 
     monkeypatch.setattr(summarize, '_run_cli_process', guarded)
+
+
+@pytest.fixture(autouse=True)
+def _restore_snapshot_wrapped_adapters(monkeypatch):
+    """browser/network.install_public_source_fallback wraps adapter classes
+    process-wide; restore every class it can wrap after each test."""
+    from dailydigest.ingest.arxiv import ArxivSource
+    from dailydigest.ingest.biorxiv import BiorxivSource
+    from dailydigest.ingest import event_pages, national_funding
+    from dailydigest.ingest.rss import RSSSource
+
+    for adapter in (RSSSource, ArxivSource, BiorxivSource, national_funding.UKRIFundingSource,
+                    national_funding.SNSFFundingSource, event_pages.ISSCREventsSource,
+                    event_pages.KeystoneEventsSource, event_pages.CSHLEventsSource,
+                    event_pages.WellcomeConnectingScienceSource, event_pages.CRSEventsSource,
+                    event_pages.FEBSEventsSource, event_pages.ECIEventsSource,
+                    event_pages.BiophysicalSocietyEventsSource, event_pages.FASEBConferencesSource):
+        monkeypatch.setattr(adapter, "fetch", adapter.fetch)

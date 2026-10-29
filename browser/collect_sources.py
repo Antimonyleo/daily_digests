@@ -24,7 +24,13 @@ import yaml
 # Profile-driven, author-driven and OpenAlex venue sources stay live: venue
 # queries are profile-independent but routinely hit the 120-item cap, so the
 # native selection under a different window cannot be reproduced exactly.
-SNAPSHOT_KINDS = {"rss", "arxiv", "biorxiv"}
+# Funding and event pages without browser (CORS) access. They are public and
+# identical for every reader, so the daily collection carries them as well.
+# Sources marked ``local_only`` (terms forbid public re-posting) are never
+# collected; the website does not read them either.
+PAGE_KINDS = {"ukri_funding", "snsf_funding", "isscr_events", "keystone_events", "cshl_events",
+              "wellcome_cs_events", "crs_events", "febs_events", "eci_events", "faseb_src_events"}
+SNAPSHOT_KINDS = {"rss", "arxiv", "biorxiv", *PAGE_KINDS}
 # Publication still requires these kinds; a preprint-server outage leaves its
 # record failed (readers fetch it directly) instead of blocking RSS/arXiv.
 REQUIRED_KINDS = {"rss", "arxiv"}
@@ -76,7 +82,8 @@ def public_specs(path):
     config = yaml.safe_load(Path(path).read_text())
     return [SourceSpec.model_validate({**row, "section": section})
             for section, rows in config.items() for row in rows
-            if row.get("kind") in SNAPSHOT_KINDS and not row.get("profile_driven")]
+            if row.get("kind") in SNAPSHOT_KINDS and not row.get("profile_driven")
+            and not row.get("local_only")]
 
 
 def _preprint_record(adapter, spec, days):
@@ -111,10 +118,14 @@ def _preprint_record(adapter, spec, days):
 def collect(specs, days=21, adapters=None, now=None):
     if adapters is None:
         from dailydigest.ingest.arxiv import ArxivSource
+        from dailydigest.ingest.base import dispatch_source
         from dailydigest.ingest.biorxiv import BiorxivSource
         from dailydigest.ingest.rss import RSSSource
 
         adapters = {"rss": RSSSource, "arxiv": ArxivSource, "biorxiv": BiorxivSource}
+        for spec in specs:
+            if spec.kind in PAGE_KINDS:
+                adapters.setdefault(spec.kind, lambda spec=spec: dispatch_source(spec))
     now = now or (lambda: datetime.now(timezone.utc))
 
     def fetch(spec):
@@ -150,6 +161,9 @@ def collect(specs, days=21, adapters=None, now=None):
     for spec in (spec for spec in specs if spec.kind == "biorxiv"):
         name, record = fetch(spec)
         sources[name] = record
+    pages = [spec for spec in specs if spec.kind in PAGE_KINDS]
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        sources.update(dict(pool.map(fetch, pages)))
     return {"version": 1, "generated_at": now().isoformat(), "days": days,
             "public_only": True, "sources": sources}
 
@@ -283,8 +297,7 @@ def validate_report(report, *, now=None, min_fresh_fraction=0.5, allow_carry_for
     for field in ("kind", "section"):
         # Optional snapshot kinds may fail without blocking publication; their
         # readers see the failed record and fetch those sources directly.
-        configured = {row[field] for row in sources.values()
-                      if field != "kind" or row[field] in REQUIRED_KINDS}
+        configured = {row[field] for row in sources.values() if row["kind"] in REQUIRED_KINDS}
         successful = {sources[name][field] for name in eligible}
         if configured - successful:
             raise ValueError(f"Public source coverage missing {field}: {sorted(configured - successful)}")

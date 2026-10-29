@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import sqlite3
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
@@ -31,8 +32,16 @@ def _install(tmp_path: Path, version: str = "2026.10.27") -> Path:
     (root / "src" / "dailydigest" / "web.py").write_text("old = True\n")
     (root / "config").mkdir()
     (root / "config" / "sources.yaml").write_text("research: []\n")
+    # A module and a template an older release shipped that newer ones dropped.
+    (root / "src" / "dailydigest" / "obsolete.py").write_text("stale = True\n")
+    (root / "templates").mkdir()
+    (root / "templates" / "retired.html.j2").write_text("<p>old</p>\n")
     (root / "data").mkdir()
-    (root / "data" / "digest.db").write_bytes(b"reader database")
+    with sqlite3.connect(root / "data" / "digest.db") as db:
+        db.execute("CREATE TABLE votes (id INTEGER PRIMARY KEY, grade TEXT)")
+        db.execute("INSERT INTO votes (grade) VALUES ('relevant')")
+    db.close()
+    (root / "data" / "profile.yaml").write_text("bio: reader\n")
     (root / ".env").write_text("LLM_API_KEY=secret\n")
     return root
 
@@ -71,10 +80,14 @@ def _updater(root: Path, remote: dict, archive: bytes = b"", run=None, restarts=
     def http_get(url, limit):
         return json.dumps(remote).encode() if url == updates.NOTES_URL else archive
 
+    data = root / "data"
+    settings = SimpleNamespace(db_path=str(data / "digest.db"), profile_path=str(data / "profile.yaml"),
+                               opportunity_profile_path=str(data / "opportunities.yaml"))
     return updates.Updater(root=root, notes_path=root / "src" / "dailydigest" / "release_notes.json",
                            http_get=http_get, run=run or _Run(),
                            restart=lambda host, port: (restarts if restarts is not None else []).append((host, port)),
-                           clock=lambda: datetime(2026, 11, 2, 9, tzinfo=timezone.utc))
+                           clock=lambda: datetime(2026, 11, 2, 9, tzinfo=timezone.utc),
+                           backup_data=lambda name: updates.backup_reader_data(name, settings))
 
 
 def test_shipped_release_notes_are_valid_and_newest_first():
@@ -117,6 +130,7 @@ def test_zip_update_replaces_program_files_only_and_restarts(tmp_path, monkeypat
     monkeypatch.setattr(updates, "_find_uv", lambda: "uv")
     monkeypatch.setattr(updates.time, "sleep", lambda seconds: None)
     root = _install(tmp_path)
+    database = (root / "data/digest.db").read_bytes()
     run, restarts, failures = _Run(), [], []
     updater = _updater(root, _notes("2026.11.02", "2026.10.27"), _archive(_release_files()), run, restarts)
     updater.check_now()
@@ -128,11 +142,28 @@ def test_zip_update_replaces_program_files_only_and_restarts(tmp_path, monkeypat
 
     assert (root / "src/dailydigest/web.py").read_text() == "old = False\n"
     assert (root / "src/dailydigest/new_module.py").is_file()
-    assert (root / "data/digest.db").read_bytes() == b"reader database"
+    assert (root / "data/digest.db").read_bytes() == database
     assert (root / ".env").read_text() == "LLM_API_KEY=secret\n"
     assert not (root / ".venv").exists()
-    backups = list((root / updates.BACKUP_DIR).iterdir())
+    backups = [path for path in (root / updates.BACKUP_DIR).iterdir() if path.is_dir()]
     assert len(backups) == 1 and (backups[0] / "files/src/dailydigest/web.py").read_text() == "old = True\n"
+    # The reader's database and profile were copied, beside their other data,
+    # before anything changed.
+    copied = root / "data" / updates.DATA_BACKUP_DIR / backups[0].name
+    assert json.loads((copied / "manifest.json").read_text())["complete"] is True
+    with sqlite3.connect(copied / "data/digest.db") as db:
+        assert db.execute("SELECT grade FROM votes").fetchall() == [("relevant",)]
+    db.close()
+    assert (copied / "data/profile.yaml").read_text() == "bio: reader\n"
+    # Files the new release dropped are gone, and kept in the backup.
+    assert not (root / "src/dailydigest/obsolete.py").exists()
+    assert not (root / "templates/retired.html.j2").exists()
+    assert (backups[0] / "files/src/dailydigest/obsolete.py").read_text() == "stale = True\n"
+    assert (root / "config/sources.yaml").read_text() == "research: []\n", "not release-owned"
+    summary = json.loads((backups[0] / "update.json").read_text())
+    assert summary["to"] == "2026.11.02" and summary["removed"] == 2
+    assert summary["data_backup"] == f"data/{updates.DATA_BACKUP_DIR}/{backups[0].name}"
+    assert updater.status(busy=False)["last_update"]["data_backup"] == summary["data_backup"]
     assert any("sync" in call for call in run.calls)
     assert restarts == [("127.0.0.1", 8765)] and failures == []
     assert updates.current_version(root / "src/dailydigest/release_notes.json") == "2026.11.02"
@@ -148,13 +179,64 @@ def test_failed_install_restores_every_file_and_keeps_running(tmp_path, monkeypa
 
     updater._apply("archive", "2026.11.02", ("127.0.0.1", 8765), lambda: failures.append(True))
 
+    # Everything is as before; the data copy taken first stays as a spare.
     after = {path: path.read_bytes() for path in root.rglob("*")
-             if path.is_file() and updates.BACKUP_DIR not in path.parts}
+             if path.is_file() and updates.BACKUP_DIR not in path.parts
+             and updates.DATA_BACKUP_DIR not in path.parts}
     assert after == before
     assert restarts == [] and failures == [True]
     state = updater.status(busy=False)
     assert state["phase"] == "failed" and "nothing was changed" in state["message"]
     assert state["can_apply"], "A failed attempt can be retried"
+
+
+def test_second_update_names_hand_edited_files_and_keeps_edited_dropped_ones(tmp_path, monkeypatch):
+    monkeypatch.setattr(updates, "_find_uv", lambda: "uv")
+    monkeypatch.setattr(updates.time, "sleep", lambda seconds: None)
+    root = _install(tmp_path)
+    first = {**_release_files(), "config/sources.yaml": b"research: []\n",
+             "src/dailydigest/helper.py": b"helper = 1\n", "src/dailydigest/extra.py": b"extra = 1\n"}
+    _updater(root, _notes("2026.11.02"), _archive(first))._apply(
+        "archive", "2026.11.02", ("127.0.0.1", 8765), lambda: None)
+    assert updates.load_installed_manifest(root)["config/sources.yaml"]
+
+    # The reader edits the sources list and a module the next release drops.
+    (root / "config/sources.yaml").write_text("research:\n  - {name: Mine, kind: rss, url: https://x}\n")
+    (root / "src/dailydigest/helper.py").write_text("helper = 'mine'\n")
+    second = {key: value for key, value in first.items()
+              if key not in {"src/dailydigest/helper.py", "src/dailydigest/extra.py"}}
+    second["src/dailydigest/release_notes.json"] = json.dumps(_notes("2026.11.09", "2026.11.02")).encode()
+    second["config/sources.yaml"] = b"research: []\nevents: []\n"
+    updater = _updater(root, _notes("2026.11.09"), _archive(second))
+    updater._clock = lambda: datetime(2026, 11, 9, 9, tzinfo=timezone.utc)
+    updater._apply("archive", "2026.11.09", ("127.0.0.1", 8765), lambda: None)
+
+    assert (root / "config/sources.yaml").read_text() == "research: []\nevents: []\n"
+    assert not (root / "src/dailydigest/extra.py").exists()
+    assert (root / "src/dailydigest/helper.py").read_text() == "helper = 'mine'\n", "edited: kept"
+    last = updater.status(busy=False)["last_update"]
+    assert last["edited"] == ["config/sources.yaml"] and last["removed"] == 1
+    saved = root / last["backup"] / "files/config/sources.yaml"
+    assert "Mine" in saved.read_text()
+
+
+def test_data_copy_failure_stops_the_update_before_any_change(tmp_path, monkeypatch):
+    monkeypatch.setattr(updates, "_find_uv", lambda: "uv")
+    root = _install(tmp_path)
+    before = {path: path.read_bytes() for path in root.rglob("*") if path.is_file()}
+    failures = []
+    updater = _updater(root, _notes("2026.11.02"), _archive(_release_files()))
+
+    def disk_full(destination):
+        raise OSError("No space left on device")
+
+    updater._backup_data = disk_full
+    updater._apply("archive", "2026.11.02", ("127.0.0.1", 8765), lambda: failures.append(True))
+    after = {path: path.read_bytes() for path in root.rglob("*")
+             if path.is_file() and updates.BACKUP_DIR not in path.parts}
+    assert after == before and failures == [True]
+    message = updater.status(busy=False)["message"]
+    assert "nothing was changed" in message and "couldn't be copied" in message
 
 
 def test_older_download_than_announced_is_refused(tmp_path, monkeypatch):
@@ -184,7 +266,9 @@ def test_busy_docker_and_edited_git_copies_explain_instead_of_updating(tmp_path,
     updater._run = lambda command, **kwargs: dirty
     edited = updater.status(busy=False)
     assert edited["mode"] == "git" and not edited["can_apply"]
-    assert "were changed" in edited["blocked_reason"]
+    assert updates.LOCAL_SOURCES in edited["blocked_reason"]
+    dirty.stdout = " M config/sources.yaml\n M src/dailydigest/web.py\n"
+    assert "were changed" in updater.status(busy=False)["blocked_reason"]
 
 
 def test_unreachable_update_check_is_quiet(tmp_path):
@@ -262,3 +346,31 @@ def test_native_pages_carry_the_update_notice_and_browser_pages_do_not(monkeypat
     monkeypatch.setattr(web.updates.sys, "platform", "emscripten")
     assert web.templates.env.globals["local_updates_enabled"]() is False
     assert template is not None
+
+
+def test_data_copy_includes_profiles_under_any_name_or_folder(tmp_path):
+    data = tmp_path / "data"
+    data.mkdir()
+    with sqlite3.connect(data / "digest.db") as db:
+        db.execute("CREATE TABLE t (x)")
+    db.close()
+    (data / "lab.yaml").write_text("bio: lab\n")
+    (tmp_path / "a").mkdir()
+    (tmp_path / "a" / "profile.yaml").write_text("career_stage: postdoc\n")
+    settings = SimpleNamespace(db_path=str(data / "digest.db"), profile_path=str(data / "lab.yaml"),
+                               opportunity_profile_path=str(tmp_path / "a" / "profile.yaml"))
+    copied = updates.backup_reader_data("20261101T090000", settings)
+    assert (copied / "profiles/lab.yaml").read_text() == "bio: lab\n"
+    assert (copied / "config/profile.yaml").read_text() == "career_stage: postdoc\n"
+    # Same file name in two folders: still one copy each, no collision.
+    (tmp_path / "b").mkdir()
+    (tmp_path / "b" / "profile.yaml").write_text("bio: elsewhere\n")
+    settings.profile_path = str(tmp_path / "b" / "profile.yaml")
+    again = updates.backup_reader_data("20261102T090000", settings)
+    assert (again / "profiles/profile.yaml").read_text() == "bio: elsewhere\n"
+    assert (again / "config/profile.yaml").read_text() == "career_stage: postdoc\n"
+    # Only the newest copies are kept.
+    for name in ("20261103T090000", "20261104T090000"):
+        updates.backup_reader_data(name, settings)
+    assert sorted(path.name for path in (data / updates.DATA_BACKUP_DIR).iterdir()) == [
+        "20261102T090000", "20261103T090000", "20261104T090000"]

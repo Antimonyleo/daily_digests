@@ -5,7 +5,7 @@ import {resolve} from 'node:path';
 import {tmpdir} from 'node:os';
 import {chromium} from '../prototypes/browser-compute/node_modules/playwright-core/index.mjs';
 const base=process.env.DAILYDIGEST_BROWSER_URL||'http://127.0.0.1:4413/';
-const output=resolve(process.env.DAILYDIGEST_CACHED_SHELL_REPORT||'.full-review/revision12/cached-shell');
+const output=resolve(process.env.DAILYDIGEST_CACHED_SHELL_REPORT||'.full-review/cached-shell');
 await mkdir(output,{recursive:true});
 const scratch=await mkdtemp(resolve(process.env.TMPDIR||tmpdir(),'dd-cached-shell-'));
 const browser=await chromium.launch({executablePath:'/usr/bin/google-chrome',headless:true,args:['--no-sandbox'],env:{...process.env,TMPDIR:scratch}});

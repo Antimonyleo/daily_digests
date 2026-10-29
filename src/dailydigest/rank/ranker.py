@@ -18,7 +18,7 @@ from typing import Any
 
 import numpy as np
 
-from ..store import ItemRow
+from ..store import ItemRow, item_metadata
 from .embedding_cache import embed_item_rows, item_text
 from .source_quality import (
     RANKER_VERSION,
@@ -996,10 +996,36 @@ def pick_top_per_section(
                     experimental_unknown_journal_cap=experimental_unknown_journal_cap,
                 )
             )
+        elif section == "events":
+            out.extend(_pick_events_and_calls(section_scored, cap))
         else:
             out.extend(_pick_news_balanced(section_scored, cap))
     out.sort(key=lambda t: t[1], reverse=True)
     return out
+
+
+def _pick_events_and_calls(
+    section_scored: list[tuple[ItemRow, float]],
+    cap: int,
+) -> list[tuple[ItemRow, float]]:
+    """Share Events & Calls between meetings and fellowship/award calls.
+
+    Meeting titles name a field and match topics closely; a fellowship open to
+    any life scientist matches less, so a pure score order never shows calls.
+    Up to 40% of the slots (at least one of two or more) go to the best
+    eligible calls; a single slot stays in score order. Unused slots return
+    to meetings and the other way round.
+    """
+    calls, meetings = [], []
+    for pair in section_scored:
+        (calls if item_metadata(pair[0]).get("record_type") == "call" else meetings).append(pair)
+    if not calls or not meetings or cap < 2:
+        return _pick_news_balanced(section_scored, cap)
+    picked_calls = _pick_news_balanced(calls, min(len(calls), max(1, math.floor(cap * 0.4))))
+    picked_meetings = _pick_news_balanced(meetings, cap - len(picked_calls))
+    if len(picked_calls) + len(picked_meetings) < cap:
+        picked_calls = _pick_news_balanced(calls, cap - len(picked_meetings))
+    return picked_meetings + picked_calls
 
 
 def _pick_research_balanced(

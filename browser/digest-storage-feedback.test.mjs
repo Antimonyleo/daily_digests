@@ -4,7 +4,8 @@ import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
 
 const digest=readFileSync(new URL('../templates/digest_web.html.j2',import.meta.url),'utf8');
-const saved=readFileSync(new URL('../templates/saved.html.j2',import.meta.url),'utf8');
+const saved=readFileSync(new URL('../templates/saved.html.j2',import.meta.url),'utf8')
+  .replace('{% include "_countdown.js.j2" %}',readFileSync(new URL('../templates/_countdown.js.j2',import.meta.url),'utf8'));
 function between(source,start,end) {
   const first=source.indexOf(start),last=source.indexOf(end,first+start.length);
   assert.ok(first>=0&&last>first,`Missing actual handler boundaries: ${start}`);

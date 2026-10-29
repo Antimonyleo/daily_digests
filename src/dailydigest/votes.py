@@ -1373,8 +1373,8 @@ def lr_training_status() -> dict[str, object]:
         message = "Legacy LR weights are unavailable; ranking is using topic similarity."
         training_status = "model_missing"
     else:
-        message = (f"{signed} ratings recorded. Early feedback refines your topic profile as evidence "
-                   f"accumulates; {remaining} more ratings unlock the additional preference-ranking layer.")
+        message = (f"{signed} rating{'' if signed == 1 else 's'} recorded. Early feedback refines your topic profile as evidence "
+                   f"accumulates; {remaining} more rating{' unlocks' if remaining == 1 else 's unlock'} the additional preference-ranking layer.")
         training_status = "needs_votes"
     return {
         "learning_message": (

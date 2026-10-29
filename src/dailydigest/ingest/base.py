@@ -17,6 +17,16 @@ class Source(Protocol):
         ...
 
 
+_NATIONAL_FUNDING = {"ukri_funding": "UKRIFundingSource", "snsf_funding": "SNSFFundingSource"}
+_EVENT_PAGES = {
+    "isscr_events": "ISSCREventsSource", "keystone_events": "KeystoneEventsSource",
+    "cshl_events": "CSHLEventsSource", "nature_conferences": "NatureConferencesSource",
+    "wellcome_cs_events": "WellcomeConnectingScienceSource", "crs_events": "CRSEventsSource",
+    "febs_events": "FEBSEventsSource", "eci_events": "ECIEventsSource",
+    "biophysics_events": "BiophysicalSocietyEventsSource", "faseb_src_events": "FASEBConferencesSource",
+}
+
+
 def dispatch_source(spec: SourceSpec) -> Source:
     # Lazy imports keep optional adapter deps off the hot import path.
     if spec.kind == "rss":
@@ -79,4 +89,20 @@ def dispatch_source(spec: SourceSpec) -> Source:
         from .events_api import EMBOEventsSource
 
         return EMBOEventsSource()
+    if spec.kind == "curated_calls":
+        from .curated import CuratedCallsSource
+
+        return CuratedCallsSource()
+    if spec.kind == "curated_events":
+        from .curated import CuratedEventsSource
+
+        return CuratedEventsSource()
+    if spec.kind in _NATIONAL_FUNDING:
+        from . import national_funding
+
+        return getattr(national_funding, _NATIONAL_FUNDING[spec.kind])()
+    if spec.kind in _EVENT_PAGES:
+        from . import event_pages
+
+        return getattr(event_pages, _EVENT_PAGES[spec.kind])()
     raise ValueError(f"Unknown source kind: {spec.kind}")

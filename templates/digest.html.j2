@@ -40,7 +40,7 @@
               </div>
               {% if item.opportunity %}
               <div style="font-size:12px;line-height:1.55;margin-top:6px;padding:7px 9px;background:#f6f8f6;border-radius:5px;color:#3d4a40;">
-                {% if section.key == "events" %}
+                {% if item.opportunity.kind == "event" %}
                   <strong>Date:</strong> {{ item.opportunity.event_dates or "Not stated" }}
                   &middot; <strong>Location:</strong> {{ item.opportunity.location }}
                   {% if item.opportunity.format %}&middot; {{ item.opportunity.format }}{% endif %}<br>

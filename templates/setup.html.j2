@@ -40,6 +40,11 @@
   #topics { min-height: 245px; font-size: 15px; }
   textarea::placeholder, input::placeholder { color: var(--muted); opacity: 1; }
   .example-note { color: var(--muted); font-size: 12px; line-height: 1.5; margin: 8px 0; }
+  .welcome-sections { display: grid; gap: 2px; margin: 14px 0 6px; padding: 0; border: 0; }
+  .welcome-sections legend { margin-bottom: 4px; padding: 0; color: var(--text); font-weight: 600; }
+  .welcome-sections label { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; margin: 0; font-weight: 500; }
+  .welcome-sections input { width: 18px; height: 18px; margin: 0; accent-color: var(--accent); }
+  .welcome-section-note { color: var(--muted); font-weight: 400; }
   .example-start { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 8px; align-items: center; }
   .example-start label { grid-column: 1 / -1; margin-bottom: 0; }
   .example-start select { min-width: 0; }
@@ -208,6 +213,11 @@
   .settings-refined .settings-help > summary { cursor: pointer; min-height: 30px; padding: 5px 0; font-size: 13px; font-weight: 500; }
   .settings-refined .settings-topic-help { border: 0; padding: 0; position: absolute; top: 0; right: 0; margin: 0; z-index: 10; }
   .settings-refined .settings-topic-help > summary { display: grid; place-items: center; width: 30px; height: 30px; min-height: 30px; padding: 5px; list-style: none; }
+  @media (pointer: coarse) {
+    .settings-refined .settings-topic-help > summary { width: 44px; height: 44px; min-height: 44px; padding: 12px; }
+    .settings-refined :is(.interest-edit-button, .interest-remove-button) { min-width: 44px; min-height: 44px; }
+    .settings-refined #priority-options > summary, .settings-refined .settings-disclosure > summary { min-height: 44px; }
+  }
   .settings-refined .settings-topic-help > summary::-webkit-details-marker { display: none; }
   .settings-refined .settings-topic-help svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.4; }
   .settings-refined .settings-topic-help-body { position: absolute; top: 34px; right: 0; width: min(360px, calc(100vw - 72px)); max-height: 65vh; overflow-y: auto; padding: 12px 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--card); color: var(--copy-secondary); }
@@ -276,6 +286,13 @@
         </select>
         <button class="btn" id="use-example-profile" type="button">Load example</button>
       </div>
+      {% endif %}
+      {% if first_run | default(not form.topics) %}
+      <fieldset class="welcome-sections" id="welcome-sections">
+        <legend>Also show (optional)</legend>
+        <label><input type="checkbox" data-mirror-section="include_opportunities"> <span>Funding &amp; Opportunities <span class="welcome-section-note">· grants and calls</span></span></label>
+        <label><input type="checkbox" data-mirror-section="include_events"> <span>Events &amp; Calls <span class="welcome-section-note">· conferences, fellowships and awards</span></span></label>
+      </fieldset>
       {% endif %}
       <p class="example-note" id="example-profile-note">{% if not form.topics %}Examples are editable starting points. {% endif %}Nothing is saved until you save your settings.</p>
       <label for="bio">Current research or learning goal (optional)</label>
@@ -381,7 +398,7 @@
             <p class="section-desc">Useful models, software, benchmarks, and scientific workflows.</p>
           </div>
           <div class="count-field">
-            <label for="top_ai">Maximum ai items</label>
+            <label for="top_ai">Maximum AI items</label>
             <input id="top_ai" name="top_ai" type="number" min="0" max="30"
                    value="{{ form.top_ai }}">
           </div>
@@ -438,7 +455,7 @@
               </span>
               <label class="section-name" for="include_opportunities">Funding &amp; Opportunities</label>
             </div>
-            <p class="section-desc">Sources follow your current country: Grants.gov and the NIH Guide for the US; EU Funding &amp; Tenders (Horizon Europe, ERC, MSCA) for the EU and associated countries, including the UK and Switzerland. Other countries see all of them. Coverage is not exhaustive, and eligibility needs official-source verification.</p>
+            <p class="section-desc">Research grants for your current country: Grants.gov and the NIH Guide for the US; EU Funding &amp; Tenders (Horizon Europe, ERC, EIC) for the EU and associated countries, including the UK and Switzerland; national funders such as UKRI and SNSF. Fellowships and awards are listed under Events &amp; Calls when that section is on. Coverage is not exhaustive, and eligibility needs official-source verification.</p>
           </div>
           <div class="count-field">
             <label for="top_opportunities">Maximum opportunities items</label>
@@ -458,7 +475,7 @@
               </span>
               <label class="section-name" for="include_events">Events &amp; Calls</label>
             </div>
-            <p class="section-desc">EMBL and EMBO list life-science conferences, workshops and courses, in Europe, worldwide and online. Coverage is not exhaustive across disciplines or regions; verify dates and eligibility at the official source.</p>
+            <p class="section-desc">Conferences, workshops and courses from EMBL, EMBO, Keystone, Cold Spring Harbor, FASEB and other organisers, worldwide and online, plus fellowship and award calls for your current country and international schemes such as MSCA, HFSP and EMBO. Coverage is not exhaustive; verify dates and eligibility at the official source.</p>
           </div>
           <div class="count-field">
             <label for="top_events">Maximum events items</label>
@@ -1200,6 +1217,17 @@
   const sections = document.querySelector('.section-options').closest('.step');
   const sectionGroup = settingsRow('digest-sections', 'Digest sections'); sections.before(sectionGroup); sectionGroup.append(sections);
   sections.querySelector('h2').hidden = true;
+  // First use names the optional sections beside the topics; each mirrors its real switch.
+  document.querySelectorAll('[data-mirror-section]').forEach(mirror => {
+    const toggle = document.getElementById(mirror.dataset.mirrorSection);
+    if (!toggle) { mirror.closest('label').hidden = true; return; }
+    mirror.checked = toggle.checked;
+    mirror.addEventListener('change', () => {
+      toggle.checked = mirror.checked; toggle.dispatchEvent(new Event('change', {bubbles: true}));
+      if (mirror.checked) sectionGroup.open = true;  // Opportunity matching asks for career stage and country.
+    });
+    toggle.addEventListener('change', () => { mirror.checked = toggle.checked; });
+  });
   const advanced = document.getElementById('advanced-interests'); advanced.classList.add('settings-row');
   advanced.querySelector('summary').replaceChildren(...labelWithValue('Examples & interests', ''));
   advanced.querySelector('summary').title = 'Add useful paper titles and background topics to refine matching.';

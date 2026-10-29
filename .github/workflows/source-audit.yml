@@ -1,0 +1,71 @@
+name: DailyDigest browser source access
+
+# A real Chrome probes every configured source from the Pages origin. Sources
+# the browser fetches directly must stay readable (CORS and transport); feeds
+# carried by the daily public snapshot are recorded but do not fail the check.
+# A change such as an upstream API refusing CORS preflight opens one issue
+# before readers meet it, and the issue closes after a clean audit.
+on:
+  schedule:
+    - cron: '41 7 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dailydigest-source-audit
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    if: ${{ github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          enable-cache: true
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: prototypes/browser-compute/package-lock.json
+      - run: uv sync --frozen --no-dev
+      - name: Install browser dependencies
+        working-directory: prototypes/browser-compute
+        run: npm ci --ignore-scripts
+      - name: Audit direct browser sources, retrying a failure once
+        id: audit
+        run: |
+          mkdir -p .source-audit
+          origin=https://antimonyleo.github.io/daily_digests/
+          node browser/source-audit.mjs "$origin" .source-audit/report.json
+          if ! uv run --no-sync python browser/check_source_access.py .source-audit/report.json --summary .source-audit/summary.md; then
+            sleep 60
+            node browser/source-audit.mjs "$origin" .source-audit/report.json
+            uv run --no-sync python browser/check_source_access.py .source-audit/report.json --summary .source-audit/summary.md || echo "failed=true" >> "$GITHUB_OUTPUT"
+          fi
+          cat .source-audit/summary.md >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo 'summary<<DAILYDIGEST_SUMMARY'
+            cat .source-audit/summary.md
+            echo 'DAILYDIGEST_SUMMARY'
+          } >> "$GITHUB_OUTPUT"
+      # Also runs when the audit itself crashed (Chrome or the origin
+      # unavailable), so a broken audit raises the issue instead of going quiet.
+      - name: Maintain source access issue
+        if: ${{ !cancelled() && steps.audit.outcome != 'skipped' }}
+        env:
+          DAILYDIGEST_ALERT_MODE: source-access-issue
+          DAILYDIGEST_REFRESH_RESULT: ${{ (steps.audit.outcome == 'failure' || steps.audit.outputs.failed == 'true') && 'failure' || 'success' }}
+          DAILYDIGEST_ACCESS_SUMMARY: ${{ steps.audit.outcome == 'failure' && '- The audit did not finish; see the run log.' || steps.audit.outputs.summary }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python browser/report_failure.py
+      - name: Fail when direct sources stay unreadable
+        if: ${{ steps.audit.outputs.failed == 'true' }}
+        run: exit 1

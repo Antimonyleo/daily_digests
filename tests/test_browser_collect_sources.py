@@ -126,8 +126,25 @@ def test_every_actual_configured_public_source_section_can_publish(tmp_path):
     # Both preprint servers are covered; medRxiv is kept, and profile-driven,
     # author-driven and OpenAlex venue sources remain live.
     assert {spec.server for spec in sources if spec.kind == 'biorxiv'} == {'biorxiv', 'medrxiv'}
-    assert {spec.kind for spec in sources} == {'rss', 'arxiv', 'biorxiv'}
+    # Funding and event pages without CORS access ride along as optional kinds.
+    assert {spec.kind for spec in sources} == {'rss', 'arxiv', 'biorxiv', *collector.PAGE_KINDS}
     assert {row['section'] for row in data['sources'].values()} >= {'research', 'industry', 'ai', 'regulatory', 'world'}
+
+
+def test_local_only_sources_never_enter_the_public_snapshot(tmp_path):
+    # The Biophysical Society's terms forbid public re-posting; local installs
+    # still read it, the public collection and website do not.
+    config = Path(__file__).parents[1] / 'config/sources.yaml'
+    names = {spec.name for spec in collector.public_specs(config)}
+    assert 'Biophysical Society Meetings' not in names
+    from dailydigest.config import load_sources
+    local_only = {spec.name for spec in load_sources(str(config)) if spec.local_only}
+    assert local_only == {'Biophysical Society Meetings'}
+    custom = tmp_path / 'sources.yaml'
+    custom.write_text('events:\n'
+                      '  - {name: Shared, kind: crs_events, url: "https://example.test/a"}\n'
+                      '  - {name: Personal, kind: crs_events, url: "https://example.test/b", local_only: true}\n')
+    assert [spec.name for spec in collector.public_specs(custom)] == ['Shared']
 
 
 def test_push_section_outage_reuses_previous_validated_snapshot(tmp_path):
@@ -388,3 +405,30 @@ def test_cli_publishes_language_decisions(tmp_path, monkeypatch, capsys):
     assert collector.main() == 0
     assert json.loads(capsys.readouterr().out)['language_decisions'] == 'current'
     assert len(json.loads(output.read_text())['language_decisions']['allowed']) == 2
+
+
+def test_failed_optional_page_sources_do_not_withhold_the_snapshot(tmp_path):
+    data = report()
+    data['sources']['UKRI'] = {'kind': 'ukri_funding', 'section': 'opportunities', 'url': None, 'category': None,
+                               'days': 21, 'status': 'error', 'attempted_at': NOW.isoformat(), 'items': [],
+                               'error': 'RuntimeError: listing changed'}
+    summary = collector.validate_report(data, now=NOW)
+    assert summary['ok'] == len(data['sources']) - 1
+
+
+def test_every_page_kind_is_snapshot_wrapped_and_audited():
+    """A page kind collected server-side must also be read from the snapshot in
+    browsers and probed by the CORS audit; the three lists move together."""
+    from dailydigest.ingest.base import dispatch_source
+    from dailydigest.models import SourceSpec
+
+    network_spec = importlib.util.spec_from_file_location(
+        'browser_network_page_kinds', Path(__file__).parents[1] / 'browser/network.py')
+    network = importlib.util.module_from_spec(network_spec)
+    network_spec.loader.exec_module(network)
+    network.install_public_source_fallback('/assets/public-sources.json', loader=lambda: {'sources': {}})
+    audit = (Path(__file__).parents[1] / 'browser/source-audit.mjs').read_text(encoding='utf-8')
+    for kind in collector.PAGE_KINDS:
+        adapter = dispatch_source(SourceSpec(name=kind, kind=kind, section='events'))
+        assert hasattr(type(adapter).fetch, '_public_snapshot_original'), kind
+        assert f"case '{kind}':" in audit, kind

@@ -25,6 +25,13 @@ from urllib.parse import urlsplit
 
 ROOT = Path('/app')
 MAX_IMPORT_FILES = 10_000
+SNAPSHOT_FORMAT = 'dailydigest-browser-v1'
+# Steps that bring an older snapshot format up to SNAPSHOT_FORMAT, one format
+# at a time ({'dailydigest-browser-v1': to_v2, ...}). A release that changes the
+# format adds the step from the previous one here (and the old name to
+# READABLE_SNAPSHOT_FORMATS in storage.mjs), so stored desks and backups from
+# every earlier release still open.
+SNAPSHOT_UPGRADES = {}
 MAX_IMPORT_CHARACTERS = 128 * 1024 * 1024
 _JOBS = deque()
 _REQUESTS = {}
@@ -298,7 +305,7 @@ def export_snapshot(root=ROOT, *, include_credentials=True):
         recover_settings_transaction(root)
     files = {str(path.relative_to(root)): base64.b64encode(path.read_bytes()).decode('ascii')
              for path in _checkpoint_paths(root)}
-    snapshot = {'format': 'dailydigest-browser-v1', 'files': files}
+    snapshot = {'format': SNAPSHOT_FORMAT, 'files': files}
     if not include_credentials:
         omitted = []
         if '.env' in files:
@@ -368,15 +375,34 @@ def preserve_omitted_credentials(payload, *, root=ROOT):
     return json.dumps(snapshot)
 
 
+def snapshot_format_error(found):
+    """A newer format means this page is older than the data: say so."""
+    match = re.fullmatch(r'dailydigest-browser-v(\d+)', str(found or ''))
+    if match and int(match.group(1)) > int(SNAPSHOT_FORMAT.rsplit('v', 1)[1]):
+        return ('This backup comes from a newer version of DailyDigest. Reload the page '
+                'to get the newest version, then try again.')
+    return 'Unsupported DailyDigest backup format'
+
+
+def upgrade_snapshot(snapshot):
+    """Apply the registered upgrade steps until the snapshot is current."""
+    seen = set()
+    while (isinstance(snapshot, dict) and snapshot.get('format') in SNAPSHOT_UPGRADES
+           and snapshot['format'] not in seen):
+        seen.add(snapshot['format'])
+        snapshot = SNAPSHOT_UPGRADES[snapshot['format']](snapshot)
+    if not isinstance(snapshot, dict) or snapshot.get('format') != SNAPSHOT_FORMAT:
+        raise ValueError(snapshot_format_error(snapshot.get('format') if isinstance(snapshot, dict) else None))
+    return snapshot
+
+
 def decode_snapshot(payload, *, enforce_import_limits=False):
     if enforce_import_limits:
         # Match JavaScript string.length, including supplementary Unicode.
         characters = len(payload) if payload.isascii() else sum(1 + (ord(char) > 0xFFFF) for char in payload)
         if characters > MAX_IMPORT_CHARACTERS:
             raise ValueError('Backup exceeds the portable import limit')
-    snapshot = json.loads(payload)
-    if not isinstance(snapshot, dict) or snapshot.get('format') != 'dailydigest-browser-v1':
-        raise ValueError('Unsupported DailyDigest backup format')
+    snapshot = upgrade_snapshot(json.loads(payload))
     files = snapshot.get('files')
     if not isinstance(files, dict):
         raise ValueError('Backup files must be an object')

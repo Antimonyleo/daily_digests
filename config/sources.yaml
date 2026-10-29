@@ -63,12 +63,14 @@ research:
     quality_tier: high
     prestige_score: 0.9
     impact_floor: 7.0
-  # `recent.xml` returns 406 Not Acceptable regardless of User-Agent/Accept
-  # (verified against four header combinations); `ahead.xml` serves the same
-  # upcoming-articles stream and returns 200.
+  # eLife has swapped which feed works. Earlier `recent.xml` returned 406 and
+  # `ahead.xml` worked; on 2026-10-28 `ahead.xml` returned 406 to the reader's
+  # browser User-Agent and held only 2 stale items, while `recent.xml`
+  # returned 200 with 100 current articles. The snapshot collection lists a
+  # failing feed in its report.
   - name: eLife
     kind: rss
-    url: https://elifesciences.org/rss/ahead.xml
+    url: https://elifesciences.org/rss/recent.xml
     quality_tier: strong
     prestige_score: 0.74
   - name: bioRxiv (recent)
@@ -267,6 +269,8 @@ research:
     url: https://www.cell.com/chem/current.rss
 
   # --- RSC flagships ---
+  # feeds.rsc.org serves no HTTPS and pubs.rsc.org blocks feed readers, so
+  # these stay on http. Browsers read them from the daily public snapshot.
   - name: Chemical Science
     kind: rss
     url: http://feeds.rsc.org/rss/sc
@@ -383,9 +387,11 @@ ai:
     kind: rss
     url: https://thegradient.pub/rss/
     quality_tier: trusted-news
+  # The Substack copy of the same newsletter; jack-clark.net refuses the
+  # snapshot collector's datacenter address with HTTP 403.
   - name: Import AI (Jack Clark)
     kind: rss
-    url: https://jack-clark.net/feed/
+    url: https://importai.substack.com/feed
     quality_tier: trusted-news
   - name: Latent Space
     kind: rss
@@ -403,20 +409,6 @@ opportunities:
     profile_driven: true
     lookahead_days: 180
     applicant_regions: [us]
-  # Searches the vocabulary of the AWARD rather than the science. Fellowships and
-  # personal/career awards are described by their mechanism, so a research-keyword
-  # search never returns them — measured on the live API, "DNA nanotechnology"
-  # gives 48 hits while "career development award" gives 1205 and "research
-  # training" (NRSA/Kirschstein) 1364. The opportunity topic floor and the
-  # eligibility gate still decide what is actually shown.
-  - name: Grants.gov (fellowships and career awards)
-    kind: grants_gov
-    lookahead_days: 270
-    query: >-
-      postdoctoral fellowship|career development award|research training|
-      early career investigator|visiting scholar|research fellowship|
-      mentored research scientist|independent scientist award
-    applicant_regions: [us]
   # The NIH Guide serves the same NIH notices as Grants.gov from another host,
   # so US funding survives a Grants.gov outage.
   - name: NIH Guide
@@ -430,8 +422,62 @@ opportunities:
     kind: eu_funding
     lookahead_days: 270
     applicant_regions: [eu]
+  # National research councils. Their pages lack browser (CORS) access, so
+  # browsers read them from the daily public snapshot.
+  - name: UKRI
+    kind: ukri_funding
+    url: https://www.ukri.org/opportunity/feed/
+    lookahead_days: 270
+    applicant_regions: [gb]
+  - name: Swiss National Science Foundation
+    kind: snsf_funding
+    url: https://www.snf.ch/api/rss/en/call/feed.xml
+    lookahead_days: 270
+    applicant_regions: [ch]
 
+# Events & Calls. Sources marked `calls` are fellowships and awards: they show
+# here when Events & Calls is on, and in Funding & Opportunities when only that
+# section is on. Fellowship and award items from the funding sources above move
+# here the same way. `applicant_regions` follow the reader's current country;
+# "international" calls are open to applicants from any country.
 events:
+  # Searches the vocabulary of the AWARD rather than the science. Fellowships and
+  # personal/career awards are described by their mechanism, so a research-keyword
+  # search never returns them — measured on the live API, "DNA nanotechnology"
+  # gives 48 hits while "career development award" gives 1205 and "research
+  # training" (NRSA/Kirschstein) 1364. The opportunity topic floor and the
+  # eligibility gate still decide what is actually shown.
+  - name: Grants.gov (fellowships and career awards)
+    kind: grants_gov
+    calls: true
+    lookahead_days: 270
+    query: >-
+      postdoctoral fellowship|career development award|research training|
+      early career investigator|visiting scholar|research fellowship|
+      mentored research scientist|independent scientist award
+    applicant_regions: [us]
+  - name: NIH Guide (fellowships and career awards)
+    kind: nih_guide
+    calls: true
+    lookahead_days: 270
+    query: >-
+      postdoctoral fellowship|predoctoral fellowship|career development award|
+      pathway to independence|early career
+    applicant_regions: [us]
+  # Open to researchers of any nationality who move to an EU or associated host.
+  - name: MSCA Postdoctoral Fellowships
+    kind: eu_funding
+    calls: true
+    condition: msca_fellowships
+    lookahead_days: 365
+    applicant_regions: [international]
+  # Recurring national and international schemes from official pages; each
+  # entry lists the countries whose readers it serves.
+  - name: Fellowships and awards
+    kind: curated_calls
+    calls: true
+    endpoint: calls.yaml
+    lookahead_days: 365
   # EMBL's structured listing; same events and identities as its former RSS.
   - name: EMBL Events
     kind: embl_events
@@ -442,3 +488,58 @@ events:
     kind: embo_events
     url: https://www.embo.org/wp-json/embo/v1/events/new
     lookahead_days: 365
+  # Organiser listings read from their pages. Except Nature Conferences, which
+  # browsers read directly, these reach browsers through the daily snapshot.
+  - name: Nature Conferences
+    kind: nature_conferences
+    url: https://conferences.nature.com/
+    lookahead_days: 365
+  - name: Keystone Symposia
+    kind: keystone_events
+    url: https://www.keystonesymposia.org/conferences/conference-listing?time_range=today-forward
+    lookahead_days: 365
+  - name: Cold Spring Harbor Meetings
+    kind: cshl_events
+    url: https://meetings.cshl.edu/meetings
+    lookahead_days: 365
+  - name: Wellcome Connecting Science
+    kind: wellcome_cs_events
+    url: https://coursesandconferences.wellcomeconnectingscience.org/our-events/conferences/
+    lookahead_days: 365
+  - name: ISSCR Events
+    kind: isscr_events
+    url: https://www.isscr.org/upcoming-events
+    lookahead_days: 365
+  - name: Controlled Release Society
+    kind: crs_events
+    url: https://www.controlledreleasesociety.org/events
+    lookahead_days: 365
+  - name: FEBS Events
+    kind: febs_events
+    url: https://www.febs.org/listings/events-calendar/
+    lookahead_days: 365
+  # Engineering Conferences International: one list carries every meeting's
+  # dates, venue and code (biotechnology, materials, nanomedicine and more).
+  - name: Engineering Conferences International
+    kind: eci_events
+    url: https://engconf.org/conferences/
+    lookahead_days: 365
+  # Annual meeting, BPS conferences, thematic meetings and networking events.
+  # Its terms of use allow personal, non-commercial use but not public
+  # re-posting, so only local installs read it (never the public snapshot).
+  - name: Biophysical Society Meetings
+    kind: biophysics_events
+    url: https://www.biophysics.org/events-calendar
+    lookahead_days: 365
+    local_only: true
+  # The listing omits venues, so up to 20 upcoming conference pages are read.
+  - name: FASEB Science Research Conferences
+    kind: faseb_src_events
+    url: https://www.faseb.org/meetings-and-events/science-research-conferences
+    lookahead_days: 365
+  # Hand-checked flagship meetings from organisers that block automated access
+  # (Gordon Research Conferences, MRS, ACS, RSC).
+  - name: Flagship meetings
+    kind: curated_events
+    endpoint: meetings.yaml
+    lookahead_days: 548

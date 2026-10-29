@@ -176,7 +176,12 @@ Funding calls and events stay open for weeks, so DailyDigest treats them as a
 standing shortlist and may re-show an active, relevant item while its deadline
 remains actionable. When you have seen enough of a call, press **Mark known**
 and it will not appear in any future digest. Nothing sets that flag automatically
-— press it again to undo.
+— press it again to undo. To keep track of a call, fellowship, award or event,
+press **Interested**: its deadline (or an event's start date, when no deadline is
+stated) then appears under **Coming deadlines** on every digest, with the time
+left, and in **Tracked deadlines** on the Saved page, until you stop tracking it.
+Only that click tracks an item, and tracked items are kept through retention
+pruning.
 
 After each successful brew, DailyDigest removes expired digest history, old
 HTML previews, and unreferenced feed items according to `RETENTION_DAYS`
@@ -223,14 +228,20 @@ It updates when you expand sections, filter picks, or change the display density
 Funding and event cards show the official source, current status, deadline,
 available amount when stated, location/date for events, and a conservative
 eligibility assessment. Use **Add to calendar** to download a standard `.ics`
-file for the deadline or event. Funding comes from official sources chosen by
-the country you enter in setup: US readers get Grants.gov and the NIH Guide,
-and readers in the EU or a Horizon Europe associated country (including the UK
-and Switzerland) get EU Funding & Tenders topics (Horizon Europe, ERC, MSCA,
-EIC). Readers elsewhere see every source, labelled for eligibility review.
-Courses and conferences come from EMBL and from EMBO's worldwide workshops,
-courses, lectures and symposia. These sections are discovery aids: always read
-the linked official call before spending time on an application.
+file for the deadline or event. Funding & Opportunities lists research grants
+from official sources chosen by the country you enter in setup: Grants.gov and
+the NIH Guide for the US; EU Funding & Tenders (Horizon Europe, ERC, EIC) for
+the EU and associated countries, including the UK and Switzerland; and national
+funders such as UKRI and SNSF. Events & Calls lists conferences, workshops and
+courses (EMBL, EMBO, Keystone, Cold Spring Harbor, ISSCR, FEBS, FASEB,
+Engineering Conferences International, the Biophysical Society (local
+installs only: its terms forbid public re-posting) and others,
+plus hand-checked flagship meetings from organisers that block automated
+access, such as Gordon Research Conferences, MRS, ACS and RSC), and fellowship and award calls for your country alongside schemes open
+to any country, such as MSCA Postdoctoral Fellowships, HFSP and EMBO. With only
+Funding switched on, fellowships stay there. A recurring scheme without an
+officially stated deadline says so. These sections are discovery aids: always
+read the linked official call before spending time on an application.
 
 ### Updating DailyDigest
 
@@ -246,10 +257,16 @@ You don't need to download anything again or use a terminal to update.
   what changed; select **Update now**. DailyDigest downloads the new version,
   installs it, restarts and reloads the page, usually within a minute or two.
   Your `data/` folder (digests, ratings, profile) and `.env` settings are never
-  changed. Replaced program files are saved first in `.update-backups/`, and if
-  anything fails, the previous version is restored and keeps running. A Git copy
-  updates only when its files have not been edited; otherwise the notice
-  explains how to update by hand. The check downloads one public file from
+  changed. Before anything is replaced, a copy of your database and profile
+  files is added in `data/update-backups/<time>`, beside the rest of your private
+  data; replaced or removed program files are saved in `.update-backups/`. The
+  last three of each are kept. If anything fails, the
+  previous version is restored and keeps running. Program files a new release
+  no longer ships are removed. If you edited a program file, such as
+  `config/sources.yaml`, the update replaces it, keeps your copy in the backup
+  and says so after restarting. A Git copy updates only when its files have not
+  been edited; otherwise the notice explains how to update by hand. The check
+  downloads one public file from
   GitHub and sends nothing about you; set `CHECK_FOR_UPDATES=false` in `.env`
   to turn it off.
 - **Docker:** the notice appears, but a container cannot rebuild itself. Download
@@ -257,7 +274,28 @@ You don't need to download anything again or use a terminal to update.
   `docker compose up --build -d`. Your `data/` folder is kept.
 
 Copies installed before this feature need one manual update (download the ZIP
-again into the same folder, or `git pull`) to get the update notice.
+again into the same folder, or `git pull`) to get the update notice. The data
+copy and the removal of dropped files start with the update after 2026.10.28.
+
+**Your own sources.** To add a feed, change a source or switch one off, put it in
+`data/sources.local.yaml` rather than editing `config/sources.yaml`; updates
+never touch `data/`, and backups include it. Use the same layout as
+`config/sources.yaml`. An entry with the name of a built-in source changes only
+the fields you give, and `enabled: false` switches it off:
+
+```yaml
+research:
+  - name: Our lab blog
+    kind: rss
+    url: https://example.org/feed.xml
+events:
+  - name: Biophysical Society Meetings
+    enabled: false
+```
+
+**Display choices.** Theme, Compact view and Pip are remembered in this browser
+and in `data/ui_prefs.json`, so a restored backup or another browser starts the
+same way.
 
 ## Accounts, subscriptions, and optional services
 
@@ -723,6 +761,21 @@ To publish an update to every installation, add an entry at the top of
 `YYYY.MM.DD.N` for a second release that day) and up to eight short,
 reader-facing notes, then merge to `main`. Local installations offer the update
 once the entry is on `main`; the website shows the notes after its next deploy.
+Fellowships, awards and flagship meetings that no feed or API publishes live in
+`src/dailydigest/curated/calls.yaml` and `meetings.yaml`. `meetings.yaml` holds
+only organisers whose sites refuse automated clients (Gordon Research
+Conferences, MRS, ACS, RSC Faraday Discussions, AIChE and Cell Press); once an
+organiser's own listing becomes readable, move it to an adapter and drop its
+entries here. Each entry names its
+official page and the date it was checked (`verified_on`). A `next_deadline`
+is shown only when the official page states it; deadlines seen only in search
+results are ignored, and meetings dated from search results are labelled
+"Verify source". Refresh both files about once a month: many rounds roll over
+within months, and some programmes close or change (for example Canada's
+Banting and Vanier awards were replaced in 2026). `applicant_regions` uses
+lowercase ISO country codes, `eu`, or `international` for schemes open to
+applicants from any country.
+
 Keep `DailyDigest-Windows.bat` unchanged: Windows reads a running batch file
 from disk, so the updater must never rewrite it (a test pins its contents).
 

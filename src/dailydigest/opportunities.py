@@ -14,6 +14,11 @@ from pydantic import BaseModel, Field, field_validator
 from .config import user_local_date
 
 
+# Opportunity types listed as calls (in Events & Calls when it is on) rather
+# than as research funding.
+CALL_TYPES = frozenset({"fellowship", "award", "prize", "travel_support"})
+
+
 class OpportunityProfile(BaseModel):
     """Private reader information used only for opportunity eligibility."""
 
@@ -131,21 +136,70 @@ _REGION_MARKERS: dict[str, tuple[str, ...]] = {
 }
 
 
+# Names a reader may type for their current country, keyed to ISO 3166-1
+# alpha-2 codes. Sources and calls list the codes (or "eu"/"international")
+# whose readers they serve.
+_COUNTRY_CODES: dict[str, str] = {
+    **{name: "us" for name in _US_NAMES},
+    "austria": "at", "belgium": "be", "bulgaria": "bg", "croatia": "hr", "cyprus": "cy",
+    "czechia": "cz", "czech republic": "cz", "denmark": "dk", "estonia": "ee", "finland": "fi",
+    "france": "fr", "germany": "de", "deutschland": "de", "greece": "gr", "hungary": "hu",
+    "ireland": "ie", "italy": "it", "latvia": "lv", "lithuania": "lt", "luxembourg": "lu",
+    "malta": "mt", "netherlands": "nl", "the netherlands": "nl", "holland": "nl", "poland": "pl",
+    "portugal": "pt", "romania": "ro", "slovakia": "sk", "slovenia": "si", "spain": "es",
+    "sweden": "se", "united kingdom": "gb", "uk": "gb", "u.k.": "gb", "great britain": "gb",
+    "britain": "gb", "england": "gb", "scotland": "gb", "wales": "gb", "northern ireland": "gb",
+    "switzerland": "ch", "norway": "no", "iceland": "is", "israel": "il", "turkey": "tr",
+    "türkiye": "tr", "ukraine": "ua", "serbia": "rs", "albania": "al", "armenia": "am",
+    "bosnia and herzegovina": "ba", "georgia": "ge", "kosovo": "xk", "moldova": "md",
+    "montenegro": "me", "north macedonia": "mk", "faroe islands": "fo", "tunisia": "tn",
+    "canada": "ca", "mexico": "mx", "brazil": "br", "argentina": "ar", "chile": "cl",
+    "colombia": "co", "peru": "pe", "uruguay": "uy", "japan": "jp", "china": "cn",
+    "people's republic of china": "cn", "prc": "cn", "hong kong": "hk", "taiwan": "tw",
+    "south korea": "kr", "korea": "kr", "republic of korea": "kr", "singapore": "sg",
+    "india": "in", "pakistan": "pk", "bangladesh": "bd", "thailand": "th", "vietnam": "vn",
+    "viet nam": "vn", "malaysia": "my", "indonesia": "id", "philippines": "ph",
+    "australia": "au", "new zealand": "nz", "south africa": "za", "egypt": "eg",
+    "morocco": "ma", "kenya": "ke", "nigeria": "ng", "ghana": "gh", "ethiopia": "et",
+    "rwanda": "rw", "saudi arabia": "sa", "united arab emirates": "ae", "uae": "ae",
+    "qatar": "qa", "jordan": "jo", "lebanon": "lb", "iran": "ir", "russia": "ru",
+}
+_EU_CODES = {
+    _COUNTRY_CODES[name] for name in (*_EU_MEMBERS, *_HORIZON_ASSOCIATED) if name in _COUNTRY_CODES
+}
+
+
+# Abbreviations are matched without their dots, so "U.S.", "U.S.A." and "U.K."
+# find the same codes as "US", "USA" and "UK".
+_COUNTRY_LOOKUP = {name.replace(".", ""): code for name, code in _COUNTRY_CODES.items()}
+
+
+def country_code(country: str) -> str | None:
+    name = re.sub(r"\s+", " ", str(country or "").casefold().replace(".", "").strip())
+    if len(name) == 2 and name.isalpha() and name in set(_COUNTRY_CODES.values()):
+        return name
+    return _COUNTRY_LOOKUP.get(name)
+
+
 def funding_regions(country: str) -> set[str] | None:
     """Applicant regions for a reader's current country, or None when unknown.
 
-    Unknown countries see every funding source, each still labelled
-    "needs verification"; a recognised country sees only its funders.
+    A recognised country gets its own code, plus "eu" for EU members and
+    countries associated to Horizon Europe. Text DailyDigest cannot place
+    returns None, so that reader sees every source, labelled for review.
     """
-    name = re.sub(r"\s+", " ", str(country or "").casefold().strip(" ."))
-    if not name:
+    code = country_code(country)
+    if code is None:
         return None
-    regions = set()
-    if name in _US_NAMES:
-        regions.add("us")
-    if name in _EU_MEMBERS or name in _HORIZON_ASSOCIATED:
-        regions.add("eu")
-    return regions or None
+    return {code, "eu"} if code in _EU_CODES else {code}
+
+
+def serves_reader(applicant_regions: object, reader_regions: set[str] | None) -> bool:
+    """Whether a source or call listing these applicant regions suits the reader."""
+    wanted = {str(region).casefold() for region in applicant_regions or [] if str(region).strip()}
+    if not wanted or reader_regions is None or "international" in wanted:
+        return True
+    return bool(wanted & reader_regions)
 
 
 def _iso_date(value: object) -> date | None:
@@ -251,6 +305,8 @@ def assess_opportunity(
             return OpportunityAssessment(False, "unknown", "location is outside preferences")
         return OpportunityAssessment(True, "unknown", "verify event requirements")
 
+    if not serves_reader(metadata.get("applicant_regions"), funding_regions(profile.country)):
+        return OpportunityAssessment(False, "unlikely", "open to applicants in other countries")
     country = profile.country.casefold()
     is_us = country in {"us", "u.s.", "usa", "united states", "united states of america"}
     eligibility_text = str(metadata.get("eligibility_description") or "").casefold()
@@ -303,16 +359,29 @@ def assess_opportunity(
     return OpportunityAssessment(False, "unlikely", "institution type is not listed")
 
 
+# Reasons that only say "check the official page": cards and the Saved page
+# show the eligibility word alone rather than repeat them.
+_GENERIC_REASONS = frozenset({
+    "verify official eligibility", "verify event requirements", "Check official requirements",
+    "verify eligibility on the official source",
+})
+
+
 def opportunity_display(
-    metadata: dict[str, Any], profile: OpportunityProfile | None = None
+    metadata: dict[str, Any], profile: OpportunityProfile | None = None, section: str = ""
 ) -> dict[str, str]:
-    """Return compact, presentation-ready facts from structured metadata."""
+    """Return compact, presentation-ready facts from structured metadata.
+
+    ``kind`` is "event", "call" or "funding"; a record in the events section
+    without a record type is an event.
+    """
 
     def money(value: object) -> str:
         if not isinstance(value, (int, float)):
             return ""
         currency = str(metadata.get("currency") or "").upper()
-        prefix = "$" if currency == "USD" else f"{currency} " if currency else ""
+        symbol = {"USD": "$", "GBP": "£", "EUR": "€"}.get(currency)
+        prefix = symbol or (f"{currency} " if currency else "")
         return f"{prefix}{value:,.0f}"
 
     amount_min = money(metadata.get("amount_min"))
@@ -339,12 +408,21 @@ def opportunity_display(
     if not deadline and metadata.get("expires"):
         # Announcements that accept several due dates state only when they expire.
         deadline = f"See the announcement for due dates (expires {metadata['expires']})"
+    elif not deadline and str(metadata.get("status") or "") == "recurring":
+        deadline = "Recurring call; see the official page for this round"
+    record_type = str(metadata.get("record_type") or "")
+    reason = assessment.reason if assessment else "Check official requirements"
     return {
+        # Fellowship and award calls share Events & Calls with events but
+        # show funding facts (amount, deadline, eligibility).
+        "kind": (record_type if record_type in {"event", "call"}
+                 else "event" if section == "events" else "funding"),
         "status": str(metadata.get("status") or "unknown").replace("_", " ").title(),
         "deadline": deadline or "Not stated",
         "amount": amount,
         "eligibility": eligibility,
-        "eligibility_reason": assessment.reason if assessment else "Check official requirements",
+        "eligibility_reason": reason,
+        "eligibility_note": "" if reason in _GENERIC_REASONS else reason,
         "event_dates": event_dates,
         "location": str(metadata.get("location") or "Not stated"),
         "format": str(metadata.get("format") or "").replace("_", " ").title(),

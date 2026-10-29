@@ -102,6 +102,15 @@ def canonicalize_url(url: str) -> str:
     return urlunparse(parsed).rstrip("/")
 
 
+def _event_start_suffix(it: Any, metadata: Any) -> str:
+    """Meetings without their own page share a listing or registration URL;
+    their start date keeps different meetings and editions apart."""
+    if (getattr(it, "section", "") in {"opportunities", "events"} and isinstance(metadata, dict)
+            and metadata.get("record_type") == "event" and metadata.get("event_start")):
+        return f"@{metadata['event_start']}"
+    return ""
+
+
 def dedupe_by_url(items: list[Item]) -> list[Item]:
     _preserve_preprint_publication_links(items)
     _preserve_research_exclusions(items)
@@ -112,6 +121,7 @@ def dedupe_by_url(items: list[Item]) -> list[Item]:
         if not canon:
             out.append(it)
             continue
+        canon += _event_start_suffix(it, getattr(it, "metadata", None))
         if canon in seen:
             continue
         seen.add(canon)
@@ -899,7 +909,7 @@ def candidate_identity_keys(it: Any, *, include_publication_links: bool = True) 
 
     normalized_url = _normalized_url(url)
     if normalized_url:
-        keys.append(f"url:{normalized_url}")
+        keys.append(f"url:{normalized_url}{_event_start_suffix(it, metadata)}")
 
     if isinstance(metadata, dict) and getattr(it, "section", "") in {"opportunities", "events"}:
         # Deadline records carry no publication date. NIH Guide and Grants.gov

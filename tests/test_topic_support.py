@@ -89,7 +89,10 @@ def _render_match(item):
     from jinja2 import Environment
 
     source = (Path(__file__).parents[1] / 'templates/digest_web.html.j2').read_text()
-    fragment = source[source.index('          {% set uncertain_fit'):source.index('          {% if item.reason_line')]
+    start = source.index('{% set uncertain_fit')
+    fragment = source[start:source.index('<a class="title-link"', start)]  # the kicker above the title
+    note = source.index("{% if section.key == 'research' and not item.abstract")
+    fragment += source[note:source.index('{% if item.reason_line', note)]  # the no-topic note below the meta
     return Environment(autoescape=True).from_string(fragment).render(item=item, section={'key': 'research'})
 
 

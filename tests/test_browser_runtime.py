@@ -1184,3 +1184,20 @@ def test_portable_export_blocks_unresolved_settings_but_internal_checkpoint_pres
         runtime.export_portable_snapshot(root=tmp_path)
     assert '.settings-transaction.json' in json.loads(runtime.export_snapshot(tmp_path))['files']
     assert (tmp_path / '.env').read_bytes() == b'external edit'
+
+
+def test_snapshot_formats_upgrade_in_steps_and_newer_ones_say_so(runtime, tmp_path, monkeypatch):
+    profile = base64.b64encode(b'keywords: [astronomy]').decode()
+    # A future release registers the step from the format it replaces.
+    monkeypatch.setattr(runtime, 'SNAPSHOT_UPGRADES', {
+        'dailydigest-browser-v0': lambda old: {'format': runtime.SNAPSHOT_FORMAT,
+                                               'files': {'data/' + name: value for name, value in old['entries'].items()}},
+    })
+    runtime.restore_snapshot(json.dumps({'format': 'dailydigest-browser-v0', 'entries': {'profile.yaml': profile}}),
+                             root=tmp_path)
+    assert (tmp_path / 'data/profile.yaml').read_bytes() == b'keywords: [astronomy]'
+    with pytest.raises(ValueError, match='newer version of DailyDigest'):
+        runtime.decode_snapshot(json.dumps({'format': 'dailydigest-browser-v9', 'files': {}}))
+    with pytest.raises(ValueError, match='Unsupported DailyDigest backup format'):
+        runtime.decode_snapshot(json.dumps({'format': 'something-else', 'files': {}}))
+    assert json.loads(runtime.export_snapshot(tmp_path))['format'] == runtime.SNAPSHOT_FORMAT

@@ -60,6 +60,22 @@ async function newPage(owner) {
   return page;
 }
 const ready=page=>page.waitForFunction(()=>window.__ready,undefined,{timeout:120000});
+// Backup, Restore and Data & compute live in the top bar's More menu.
+const menuItems=['open-backup','open-restore','open-data-settings'];
+// The fixture digest keeps its own date; once that day has passed, Today is empty
+// and offers the latest saved digest instead.
+async function openLatestDigest(target){
+  await target.evaluate(()=>location.hash='#/');
+  const app=target.frameLocator('#app');
+  const card=app.locator('.item[data-section="research"]').first();
+  const latest=app.locator('a.btn',{hasText:'Open latest saved digest'});
+  await card.or(latest).first().waitFor();
+  if(await latest.count())await latest.click();
+}
+async function shellAction(page,id){
+  if(menuItems.includes(id)&&await page.locator('#more-menu').isHidden())await page.locator('#open-more').click();
+  await page.locator('#'+id).click();
+}
 const disk=page=>page.evaluate(async()=>await (await (await navigator.storage.getDirectory()).getFileHandle('guide-test-backup.json')).getFile().then(file=>file.text()));
 async function waitForCopy(page, expected) {
   const deadline=Date.now()+130000;
@@ -91,18 +107,19 @@ try {
   try{
     await loadingPage.goto(base+'#/setup',{waitUntil:'commit'});
     await moduleRequested;
-    for(const id of ['open-backup','open-guide','open-data-settings']){
-      const button=loadingPage.locator('#'+id);await button.waitFor();
+    for(const id of ['open-guide','open-more',...menuItems]){
+      const button=loadingPage.locator('#'+id);await button.waitFor({state:menuItems.includes(id)?'attached':'visible'});
       assert.equal(await button.isDisabled(),true,'Visible startup controls must not accept clicks before their handlers bind');
       assert.equal(await button.evaluate(node=>node.onclick),null);
     }
     assert.equal(await loadingPage.evaluate(()=>window.__workers),0);
     // A normal action waits for the control to become usable; no forced click.
-    const click=loadingPage.locator(section==='backup'?'#open-backup':section==='guide'?'#open-guide':'#open-data-settings').click();
+    const click=shellAction(loadingPage,section==='backup'?'open-backup':section==='guide'?'open-guide':'open-data-settings');
     releaseModule();
     await loadingPage.waitForFunction(()=>window.__moduleCPUHeld===true);
     await click;
-    for(const id of ['open-backup','open-guide','open-data-settings'])assert.equal(await loadingPage.locator('#'+id).isEnabled(),true);
+    for(const id of ['open-guide','open-more',...menuItems])assert.equal(await loadingPage.locator('#'+id).isEnabled(),true);
+    assert.equal(await loadingPage.locator('#more-menu').isHidden(),true,'Choosing a menu item closes the menu');
     assert.equal(await loadingPage.evaluate(()=>window.__workers),0,'Header controls must work before Python starts');
     assert.equal(await loadingPage.locator('#status').textContent(),section==='backup'?'Opening backup…':section==='guide'?'Opening guide…':'Opening device settings…');
     await loadingPage.evaluate(()=>window.__releaseModuleCPU());
@@ -143,21 +160,21 @@ try {
     await earlyPage.goto(base+'#/setup');
     await earlyPage.waitForFunction(()=>window.__guideCPUHeld===true);
     assert.equal(await earlyPage.evaluate(()=>window.__workers),0);
-    await earlyPage.locator('#open-backup').click();
+    await shellAction(earlyPage,'open-backup');
     assert.equal(await earlyPage.locator('#status').textContent(),'Opening backup…','Visible Backup must acknowledge its action while CPU preparation is pending');
     assert.equal(await earlyPage.locator('#data-settings').evaluate(node=>node.open),false,'Controls must be bound before exposing the dialog');
-    await earlyPage.locator('#open-guide').click();
+    await shellAction(earlyPage,'open-guide');
     assert.equal(await earlyPage.locator('#status').textContent(),'Opening guide…');
     assert.equal(await earlyPage.locator('#quick-guide').isVisible(),false);
-    await earlyPage.locator('#open-data-settings').click();
+    await shellAction(earlyPage,'open-data-settings');
     assert.equal(await earlyPage.locator('#status').textContent(),'Opening device settings…');
-    if(last!=='data')await earlyPage.locator(last==='guide'?'#open-guide':'#open-backup').click();
+    if(last!=='data')await shellAction(earlyPage,last==='guide'?'open-guide':'open-backup');
     await earlyPage.evaluate(()=>window.__guideReleaseCPU());
     if(last==='guide'){
       await earlyPage.locator('#quick-guide').waitFor();
       assert.equal(await earlyPage.locator('#data-settings').evaluate(node=>node.open),false);
       await earlyPage.locator('#close-guide').click();
-      await earlyPage.locator('#open-backup').click();
+      await shellAction(earlyPage,'open-backup');
     }else{
       await earlyPage.locator('#data-settings').waitFor();
       assert.equal(await earlyPage.locator('#data-settings').evaluate(node=>node.open),true);
@@ -167,11 +184,11 @@ try {
     assert.equal(await earlyPage.locator('#import').evaluate(node=>typeof node.onchange),'function');
     if(last==='data'){
       await earlyPage.locator('#close-data-settings').click();
-      await earlyPage.locator('#open-backup').click();
+      await shellAction(earlyPage,'open-backup');
     }
     await earlyPage.locator('#linked-backup-status').filter({hasText:'Download backup and Restore backup'}).waitFor();
     await earlyPage.locator('#close-data-settings').click();
-    await earlyPage.locator('#open-data-settings').click();
+    await shellAction(earlyPage,'open-data-settings');
     await earlyPage.locator('#compute-menu > summary').click();
     assert.equal(await earlyPage.locator('#compute-menu').getAttribute('open'),'');
     await earlyPage.locator('#close-data-settings').click();
@@ -187,8 +204,14 @@ try {
  }
   const owner=await context(),page=await newPage(owner);
   await page.goto(base+'#/setup');
-  await page.locator('#welcome-guide').waitFor();
-  await page.locator('#welcome-guide-open').click();
+  await page.locator('#open-guide[data-first-run]').waitFor();
+  await page.locator('#open-more').click();
+  assert.equal(await page.locator('#open-restore').isVisible(),true,'First visit offers Restore backup from More');
+  assert.match(await page.locator('#more-menu').innerText(),/Saved in this browser profile/);
+  await page.keyboard.press('Escape');
+  assert.equal(await page.locator('#more-menu').isHidden(),true);
+  assert.equal(await page.locator('#open-more').evaluate(node=>node===document.activeElement),true,'Escape returns focus to More');
+  await page.locator('#open-guide').click();
   assert.equal(await page.locator('#quick-guide').getAttribute('aria-labelledby'),'guide-title-0');
   await page.locator('#guide-next').click();await page.locator('#guide-next').click();
   await page.getByRole('heading',{name:'Keep a copy you can restore'}).waitFor();
@@ -197,8 +220,8 @@ try {
   assert.equal(await page.locator('#browser-data-menu').getAttribute('open'),'');
   await page.locator('#close-data-settings').click();
   await page.reload();await ready(page);
-  assert.equal(await page.locator('#welcome-guide').isHidden(),true);
-  await page.locator('#open-guide').click();
+  assert.equal(await page.locator('#open-guide[data-first-run]').count(),0,'A seen guide drops the first-visit emphasis');
+  await shellAction(page,'open-guide');
   await page.locator('#quick-guide').waitFor();await page.locator('#close-guide').click();
   report.checks.push('first visit offers guide and restore; guide explains storage and reopens from Setup after dismissal');
 
@@ -215,10 +238,10 @@ try {
   const retained=await page.evaluate(key=>window.__rpc({type:'recovery-export',key}),recovery.quarantined.at(-1));
   assert.equal(retained.body,original.body);
   report.checks.push('normal restore atomically retains the exact original data and prunes recovery copies to three');
-  await page.evaluate(()=>location.hash='#/');
+  await openLatestDigest(page);
   const card=page.frameLocator('#app').locator('.item[data-section="research"]').first();
   await card.waitFor();
-  await page.locator('#open-backup').click();await page.locator('#link-backup').click();
+  await shellAction(page,'open-backup');await page.locator('#link-backup').click();
   await page.locator('#linked-backup-status').filter({hasText:'last copy saved'}).waitFor();
   assert.equal(JSON.parse(await disk(page)).credentialsIncluded,false);
   assert.equal(await page.locator('#automatic-backup').isChecked(),false);
@@ -259,14 +282,14 @@ try {
   assert.equal(readingReady,true,'A saved reading view must be committed before reloading.');
   await page.reload();
   await page.locator('#reading-view-notice').waitFor();
-  await page.locator('#open-backup').click();
+  await shellAction(page,'open-backup');
   await page.locator('#linked-backup-status').filter({hasText:'last copy saved'}).waitFor();
   assert.equal(await page.evaluate(()=>window.__workers),0);
   assert.equal(await page.locator('#automatic-backup').isChecked(),true);
   report.checks.push('file handle and opt-in survive reload; checking the file does not start Python from a saved reading view');
   await page.locator('#close-data-settings').click();
   await page.locator('#reading-view-open').click();await ready(page);
-  await page.locator('#open-backup').click();
+  await shellAction(page,'open-backup');
   const external=JSON.stringify({...JSON.parse(copied),changedElsewhere:true});
   await page.evaluate(async body=>{
     const handle=await (await navigator.storage.getDirectory()).getFileHandle('guide-test-backup.json');
@@ -284,19 +307,19 @@ try {
     const handle=await (await navigator.storage.getDirectory()).getFileHandle('guide-test-backup.json',{create:true});
     const writer=await handle.createWritable();await writer.write(body);await writer.close();
   },copied);
-  await other.locator('#open-backup').click();await other.locator('#link-backup').click();
+  await shellAction(other,'open-backup');await other.locator('#link-backup').click();
   await other.locator('#linked-backup-status').filter({hasText:'backup found'}).waitFor();
   assert.equal(await disk(other),copied,'Linking existing data must not overwrite it');
   assert.equal(await other.locator('#automatic-backup-label').isHidden(),true);
   await other.locator('#restore-linked-backup').click();const restored=other.waitForEvent('load');await other.locator('#restore-proceed').click();await restored;await ready(other);
-  await other.evaluate(()=>location.hash='#/');
+  await openLatestDigest(other);
   await other.frameLocator('#app').locator('.item[data-section="research"]').first().waitFor();
   await writeFile(resolve(output,'restored.html'),await other.frameLocator('#app').locator('body').innerHTML());
   await other.frameLocator('#app').locator('.vote-btn[data-grade="70"][aria-pressed="true"]').first().waitFor({state:'attached'});
   report.checks.push('a separate profile starts empty and can explicitly link and restore the copy, preserving the rating');
 
   await other.setViewportSize({width:390,height:844});
-  await other.locator('#open-guide').click();
+  await shellAction(other,'open-guide');
   for(let index=0;index<4;index++){
     assert.equal(await other.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
     assert.equal(await other.locator('#quick-guide').evaluate(node=>node.scrollWidth<=node.clientWidth),true);
@@ -309,7 +332,7 @@ try {
 
   const unsupported=await context();await unsupported.addInitScript(()=>{window.showSaveFilePicker=undefined;});
   const fallback=await newPage(unsupported);await fallback.goto(base+'#/setup');
-  await fallback.locator('#open-backup').click();
+  await shellAction(fallback,'open-backup');
   await fallback.locator('#linked-backup-status').filter({hasText:'Download backup and Restore backup'}).waitFor();
   assert.equal(await fallback.locator('#link-backup').isHidden(),true);
   assert.equal(await fallback.locator('#import').isEnabled(),true);

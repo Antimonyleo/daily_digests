@@ -454,6 +454,8 @@ def test_setup_preserves_legacy_opportunity_values_not_shown_in_simplified_form(
                 "applicant_role": "fellow",
                 "citizenship_or_residency": "US permanent resident",
                 "requires_travel_support": True,
+                # Written by a newer release before the reader went back.
+                "preferred_funders": ["NIH", "HFSP"],
             }
         )
     )
@@ -489,6 +491,7 @@ def test_setup_preserves_legacy_opportunity_values_not_shown_in_simplified_form(
     assert saved["description"].startswith("A detailed legacy")
     assert saved["citizenship_or_residency"] == "US permanent resident"
     assert saved["requires_travel_support"] is True
+    assert saved["preferred_funders"] == ["NIH", "HFSP"]
 
 
 def test_setup_rejects_invalid_structured_opportunity_fields_before_writing(
@@ -2946,9 +2949,12 @@ def test_theme_controls_and_safe_pwa_assets_are_exposed(monkeypatch, tmp_path):
     assert 'id="pip-toggle"' in page
     assert 'role="group" aria-label="Display preferences"' in page
     assert 'displayButton.textContent = "Compact view"' in page
-    assert "localStorage.getItem(\"dailydigest-theme\")" in page
-    assert "localStorage.getItem(\"dailydigest-display\")" in page
-    assert page.index("dailydigest-theme") < page.index("<style>")
+    # Saved choices apply before any style loads (this browser first, then
+    # the data/ui_prefs.json copy), so the page never flashes the other theme.
+    assert "localStorage.getItem(`dailydigest-${key}`)" in page
+    assert 'const filed = {};' in page
+    assert page.index('pick("theme")') < page.index("<style>")
+    assert page.index('pick("display")') < page.index("<style>")
     assert ".app-utilities {" in page
     assert "display: flex; flex-direction: column" in page
     utilities = re.search(r"\.app-utilities \{([^}]+)\}", page).group(1)

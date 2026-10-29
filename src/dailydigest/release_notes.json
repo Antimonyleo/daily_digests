@@ -2,6 +2,21 @@
   "schema": 1,
   "releases": [
     {
+      "version": "2026.10.28",
+      "date": "2026-10-28",
+      "title": "Fellowships, awards and tracked deadlines, matched to your country",
+      "notes": [
+        "Events & Calls now lists fellowships and awards for your country, plus schemes open to anyone such as MSCA Postdoctoral Fellowships, HFSP and EMBO.",
+        "Mark a grant, call or event Interested to track it: its deadline and how long is left appear under Coming deadlines on every digest and on the Saved page.",
+        "New funding from UKRI (UK) and the Swiss National Science Foundation. Funders that serve only other countries are no longer fetched for you, and with only Funding on, fellowships stay there.",
+        "New meetings from Keystone, Cold Spring Harbor, Nature Conferences, Wellcome Connecting Science, ISSCR, CRS, FEBS, FASEB and ECI, the Biophysical Society in local installs, plus hand-checked Gordon, MRS, ACS and RSC meetings.",
+        "Lighter cards: ratings sit in one quiet row, Mark known and Copy summary moved under More, and j, k, 1–4 and s work as keyboard shortcuts.",
+        "Cards put the topic tag above the title, the journal on its own line and authors | date below it; Wiley table-of-contents images now open; Details labels author statements as stated.",
+        "Updating keeps more of your own: it copies your data first, removes program files a release dropped, and leaves your own sources in data/sources.local.yaml alone. Theme, density and Pip now travel with backups.",
+        "On the website, storage protection is requested after your first brew, browsers that may clear data after a week remind you to back up sooner, and an empty desk offers Restore a backup first. eLife and Import AI feeds moved to their working addresses."
+      ]
+    },
+    {
       "version": "2026.10.27",
       "date": "2026-10-27",
       "title": "More funding and events, clearer reading, one-click updates",

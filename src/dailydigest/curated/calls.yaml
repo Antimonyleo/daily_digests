@@ -1,0 +1,1001 @@
+# Hand-kept list read by dailydigest.ingest.curated. Facts come from official
+# pages (checked on each entry's verified_on date). Refresh deadlines and
+# meeting dates monthly; see the README section on curated lists.
+# DailyDigest curated list: recurring fellowships and awards (individual applicants)
+# Compiled 2026-10-28 from each funder's own page.
+#
+# Field conventions beyond the brief:
+#   url_status   HTTP status seen with curl (browser UA) on 2026-10-28. Strings mark non-HTTP
+#                outcomes: "timeout" (no response in 30 s), "tls_error" (server sends an
+#                incomplete certificate chain). Non-200 entries rely on an official-domain
+#                search snippet; this is stated in deadline_evidence or the comment above the entry.
+#   next_deadline is set only when the official page names the upcoming round's date with a year.
+#                Recurring dates printed without a year (e.g. "1 April") are kept in a comment only.
+#   deadline_evidence starting with "search_snippet:" means the organiser page blocks automated
+#                access and the date comes from web-search results restricted to that organiser's
+#                own domain (paraphrased by the search tool, not a verbatim page quote).
+# MSCA Postdoctoral Fellowships and ERC Starting Grants are deliberately excluded: they arrive
+# through the EU Funding & Tenders API source.
+
+# ---------------------------------------------------------------- international / any country
+- id: hfsp-postdoctoral-fellowships
+  title: HFSP Long-Term and Cross-Disciplinary Postdoctoral Fellowships
+  funder: Human Frontier Science Program Organization
+  type: fellowship
+  url: https://www.hfsp.org/funding/hfsp-funding/postdoctoral-fellowships
+  url_status: 200
+  applicant_regions: [international]
+  host_countries: []
+  career_stage: [postdoc]
+  fields: life sciences (frontier, interdisciplinary; long-term and cross-disciplinary tracks)
+  summary: "Supports frontier, potentially transformative and interdisciplinary postdoctoral research in the life sciences, with high-risk projects encouraged. Two-step process: letter of intent, then invited full proposal."
+  eligibility_note: "Any nationality, but the fellowship cannot be held in the country of the applicant's nationality; PhD conferred no more than 3 years before the full-proposal deadline."
+  cycle: annual
+  # Page on 2026-10-28: "The Letter of Intent (LOI) Deadline for the 2027 Cycle has now passed."
+  # 2027-cycle dates were: portal opened March 12, 2026; LOI due May 12, 2026; full proposal Sept 24, 2026.
+  verified_on: 2026-10-28
+
+- id: embo-postdoctoral-fellowships
+  title: EMBO Postdoctoral Fellowships
+  funder: European Molecular Biology Organization (EMBO)
+  type: fellowship
+  url: https://www.embo.org/funding/fellowships-grants-and-career-support/postdoctoral-fellowships/
+  url_status: 200
+  applicant_regions: [international]
+  host_countries: []
+  career_stage: [postdoc]
+  fields: life sciences
+  summary: "Supports internationally mobile postdoctoral researchers in Europe and worldwide for up to two years, with salary or stipend, relocation allowance and child support."
+  eligibility_note: "International mobility is a key requirement; a first-author publication or refereed preprint is required; from the Autumn 2027 round re-applications are no longer permitted."
+  cycle: several rounds a year
+  next_deadline: 2027-01-22
+  deadline_evidence: "'Applications accepted throughout the year (next cutoff date – hard deadline: Friday 22 January 2027, 14:00 CET)' — https://www.embo.org/funding/fellowships-grants-and-career-support/postdoctoral-fellowships/"
+  verified_on: 2026-10-28
+
+- id: embo-scientific-exchange-grants
+  title: EMBO Scientific Exchange Grants
+  funder: European Molecular Biology Organization (EMBO)
+  type: travel_support
+  url: https://www.embo.org/funding/fellowships-grants-and-career-support/scientific-exchange-grants/
+  url_status: 200
+  applicant_regions: [international]
+  host_countries: []
+  career_stage: [phd, postdoc]
+  fields: life sciences
+  summary: "Funds research exchanges of up to three months between laboratories in eligible countries, to transfer expertise and techniques or access infrastructure unavailable in the home lab; covers travel and subsistence."
+  eligibility_note: "Both laboratories must be in EMBO-eligible countries; check the scheme's eligibility page for the country list."
+  cycle: rolling
+  # Page: "Applications accepted throughout the year"
+  verified_on: 2026-10-28
+
+- id: embo-young-investigator-programme
+  title: EMBO Young Investigator Programme
+  funder: European Molecular Biology Organization (EMBO)
+  type: award
+  url: https://www.embo.org/funding/fellowships-grants-and-career-support/young-investigator-programme/
+  url_status: 200
+  applicant_regions: [international]
+  host_countries: []
+  career_stage: [faculty]
+  fields: life sciences
+  summary: "Supports life scientists in their first years as group leaders with four years of networking funds, training, lab-member support and mentoring, and membership of the EMBO Young Investigator network."
+  eligibility_note: "Group leader for less than four years at the time of application; host-country rules are on the eligibility page (not checked here)."
+  cycle: annual
+  # Page: "Application deadline: 1 April" (no year printed)
+  verified_on: 2026-10-28
+
+- id: embo-installation-grants
+  title: EMBO Installation Grants
+  funder: European Molecular Biology Organization (EMBO)
+  type: award
+  url: https://www.embo.org/funding/fellowships-grants-and-career-support/installation-grants/
+  url_status: 200
+  applicant_regions: [international]
+  host_countries: [hr, cz, ee, hu, lt, lu, pl, pt, tr]
+  career_stage: [faculty]
+  fields: life sciences
+  summary: "Supports group leaders establishing laboratories in countries participating in the scheme, to strengthen the life sciences there."
+  eligibility_note: "In the 2026 call grants were available in Croatia, Czechia, Estonia, Hungary, Lithuania, Luxembourg, Poland, Portugal and Türkiye; the list can change per call."
+  cycle: annual
+  # Page: "Application deadline: 15 April" (no year printed)
+  verified_on: 2026-10-28
+
+- id: humboldt-research-fellowship
+  title: Humboldt Research Fellowship
+  funder: Alexander von Humboldt Foundation
+  type: fellowship
+  url: https://www.humboldt-foundation.de/en/apply/sponsorship-programmes/humboldt-research-fellowship
+  url_status: 200
+  applicant_regions: [international]
+  host_countries: [de]
+  career_stage: [postdoc, early_career]
+  fields: all disciplines
+  summary: "Funds postdoctoral (6–24 months) and experienced researchers (6–18 months) from abroad to carry out a research project of their choice with a host in Germany."
+  eligibility_note: "Postdoc track: doctorate within the last four years; applicants must not be German nationals (exceptions for long stays abroad)."
+  cycle: several rounds a year
+  # Page: "We have received the maximum number of applications for the current call ... The next call will open on November 15, 2026."
+  # That is an opening date, not a deadline, so next_deadline is not set.
+  verified_on: 2026-10-28
+
+- id: schmidt-science-fellows
+  title: Schmidt Science Fellows
+  funder: Schmidt Sciences
+  type: fellowship
+  url: https://schmidtsciencefellows.org/selection/who-can-apply/
+  url_status: 200
+  applicant_regions: [international]
+  host_countries: []
+  career_stage: [phd, postdoc]
+  fields: sciences (interdisciplinary)
+  summary: "Postdoctoral fellowship with a research placement, mentorship and leadership development for recent PhDs taking interdisciplinary approaches."
+  eligibility_note: "Candidates must be nominated by their PhD-awarding institution (a listed Nominating Partner); for the 2027 cohort the PhD had to be conferred between May 1, 2026 and June 30, 2027."
+  cycle: annual
+  # 2027 cohort: institutional nominations due May 15, 2026; full applications July 13, 2026 (passed).
+  verified_on: 2026-10-28
+
+- id: jsps-postdoctoral-fellowships-standard
+  title: JSPS Postdoctoral Fellowships for Research in Japan (Standard)
+  funder: Japan Society for the Promotion of Science (JSPS)
+  type: fellowship
+  url: https://www.jsps.go.jp/english/e-fellow/e-ippan/index.html
+  url_status: 200
+  applicant_regions: [international]
+  host_countries: [jp]
+  career_stage: [postdoc]
+  fields: all disciplines
+  summary: "Brings overseas postdoctoral researchers to Japan for cooperative research with a host researcher at a Japanese university or institute."
+  eligibility_note: "Citizen of a country with diplomatic relations with Japan, PhD within six years; Japanese citizens and permanent residents are not eligible; applications go through a Japanese host (open call) or an overseas nominating authority."
+  cycle: several rounds a year
+  verified_on: 2026-10-28
+
+- id: royal-society-newton-international-fellowships
+  title: Newton International Fellowships
+  funder: The Royal Society
+  type: fellowship
+  url: https://royalsociety.org/grants/newton-international/
+  url_status: 200
+  applicant_regions: [international]
+  host_countries: [gb]
+  career_stage: [postdoc]
+  fields: natural sciences (with British Academy for humanities and social sciences)
+  summary: "Two-year fellowships (up to £280,000) for early-career postdoctoral researchers from outside the UK to work at a UK research institution."
+  eligibility_note: "PhD by the closing date, no more than five years of active postdoctoral experience, and must not hold UK citizenship."
+  cycle: annual
+  # Page: last round "Status: Closed", open 15 January 2026, close 11 March 2026. Next round not yet announced.
+  verified_on: 2026-10-28
+
+- id: branco-weiss-fellowship
+  title: Branco Weiss Fellowship – Society in Science
+  funder: Branco Weiss Fellowship – Society in Science
+  type: fellowship
+  url: https://brancoweissfellowship.org/
+  url_status: 200
+  applicant_regions: [international]
+  host_countries: []
+  career_stage: [postdoc]
+  fields: all disciplines (natural sciences, engineering, social sciences, humanities); unconventional projects
+  summary: "Supports postdoctoral researchers between PhD and first faculty post who pursue unconventional research outside the mainstream; up to ten fellowships a year."
+  eligibility_note: "Postdoctoral researchers after the PhD and before a first faculty appointment."
+  cycle: annual
+  next_deadline: 2027-01-15
+  deadline_evidence: "'The registration portal for the 2027 fellowship intake is now open and will close on January 15, 2027, 5 p.m. CET.' — https://brancoweissfellowship.org/"
+  verified_on: 2026-10-28
+
+- id: embl-eipod-linc
+  title: EMBL Interdisciplinary Postdocs – Exploring Life in Context (EIPOD-LinC)
+  funder: European Molecular Biology Laboratory (EMBL)
+  type: fellowship
+  url: https://www.embl.org/about/info/postdoctoral-programme/eipod-linc-exploring-life-in-context/
+  url_status: 200
+  applicant_regions: [international]
+  host_countries: []
+  career_stage: [postdoc]
+  fields: life sciences, chemistry, physics, mathematics, engineering, ecology, epidemiology (interdisciplinary)
+  summary: "Three-year interdisciplinary postdoctoral fellowships at EMBL sites under the theme 'life in context', each project pairing an EMBL host with an external partner lab and including a secondment."
+  eligibility_note: "Open to all nationalities; PhD by the call deadline and at most eight years of research experience after the PhD."
+  cycle: annual
+  next_deadline: 2027-02-01
+  deadline_evidence: "'Applicants must have a Ph.D. by the call deadline (February 1st, 2027).' — https://www.embl.org/about/info/postdoctoral-programme/eipod-linc-exploring-life-in-context/ (the application page says references are due at call closing on February 2, 2027)"
+  verified_on: 2026-10-28
+
+# url_status 404: bifonds.de is a client-rendered site; deep links return 404 to curl and WebFetch.
+# Content below comes from search results restricted to bifonds.de.
+- id: boehringer-ingelheim-fonds-phd-fellowships
+  title: Boehringer Ingelheim Fonds PhD Fellowships
+  funder: Boehringer Ingelheim Fonds
+  type: fellowship
+  url: https://bifonds.de/fellowships-grants/phd-fellowships/when-to-apply-phd-fellowships.html
+  url_status: 404
+  applicant_regions: [international]
+  host_countries: []
+  career_stage: [phd]
+  fields: basic biomedical research
+  summary: "Personal fellowships for PhD students in basic biomedical research, granted for two years and extendable once."
+  eligibility_note: "Applicants must have started their PhD project recently; those who began more than six months before the deadline are not eligible (search snippet; verify on the site)."
+  cycle: several rounds a year
+  # search_snippet (bifonds.de): three deadlines a year, 1 February, 1 June and 1 October; portal opens one month before.
+  verified_on: 2026-10-28
+
+- id: swiss-government-excellence-scholarships
+  title: Swiss Government Excellence Scholarships
+  funder: Swiss Confederation (Federal Commission for Scholarships for Foreign Students, SERI)
+  type: fellowship
+  url: https://www.sbfi.admin.ch/en/swiss-government-excellence-scholarships
+  url_status: 200
+  applicant_regions: [international]
+  host_countries: [ch]
+  career_stage: [phd, postdoc]
+  fields: all disciplines
+  summary: "Scholarships for foreign researchers to pursue doctoral or postdoctoral research at Swiss universities and federal institutes of technology."
+  eligibility_note: "Applications go through Swiss diplomatic representations; deadlines and places vary by country of origin."
+  cycle: annual
+  # Page: 2027–2028 applications "open starting August 20, 2026"; deadlines are per country.
+  verified_on: 2026-10-28
+
+- id: company-of-biologists-travelling-fellowships
+  title: The Company of Biologists Travelling Fellowships
+  funder: The Company of Biologists (Development, Journal of Cell Science, Journal of Experimental Biology)
+  type: travel_support
+  url: https://www.biologists.com/grants/travelling-fellowships/
+  url_status: 200
+  applicant_regions: [international]
+  host_countries: []
+  career_stage: [phd, postdoc]
+  fields: cell biology, developmental biology, experimental biology
+  summary: "Grants of up to £3,000 for graduate students and postdocs to make collaborative visits to other laboratories."
+  eligibility_note: "Early-career scientists (graduate students and postdocs); travel within six months of the award; one award every two years per applicant."
+  cycle: several rounds a year
+  verified_on: 2026-10-28
+
+# ---------------------------------------------------------------- United States
+- id: nsf-grfp
+  title: NSF Graduate Research Fellowship Program (GRFP)
+  funder: U.S. National Science Foundation
+  type: fellowship
+  url: https://www.nsf.gov/funding/initiatives/grfp
+  url_status: 200
+  applicant_regions: [us]
+  host_countries: [us]
+  career_stage: [phd]
+  fields: STEM and STEM education
+  summary: "Five-year award with three years of financial support ($53,000 per year) for graduate students in NSF-supported STEM fields."
+  eligibility_note: ""
+  cycle: annual
+  # 2027 NOFO applicant deadlines were October 16–23, 2026 by field (passed).
+  verified_on: 2026-10-28
+
+- id: hertz-fellowship
+  title: Hertz Fellowship
+  funder: Fannie and John Hertz Foundation
+  type: fellowship
+  url: https://www.hertzfoundation.org/hertz-fellowship/who-can-apply/
+  url_status: 200
+  applicant_regions: [us]
+  host_countries: [us]
+  career_stage: [phd]
+  fields: applied sciences, engineering and mathematics
+  summary: "Up to five years of PhD funding (valued up to $250,000) plus lifelong professional support for doctoral students in the applied sciences, engineering and mathematics."
+  eligibility_note: "First- or second-year PhD student in fall 2027; US citizen or permanent resident."
+  cycle: annual
+  verified_on: 2026-10-28
+
+- id: damon-runyon-fellowship-award
+  title: Damon Runyon Fellowship Award
+  funder: Damon Runyon Cancer Research Foundation
+  type: fellowship
+  url: https://www.damonrunyon.org/for-scientists/application-guidelines/fellowship
+  url_status: 200
+  applicant_regions: [us]
+  host_countries: []
+  career_stage: [postdoc]
+  fields: cancer research (basic, theoretical and experimental)
+  summary: "Four-year postdoctoral fellowships for theoretical and experimental research relevant to cancer causes, mechanisms, therapies and prevention, with fellows' retreats."
+  eligibility_note: "Level 1 basic scientists: degree no more than 18 months before the deadline and no more than one year in the sponsor's lab; cannot already hold another postdoctoral fellowship."
+  cycle: several rounds a year
+  next_deadline: 2027-03-15
+  deadline_evidence: "Deadlines table row: application opens 'January 15, 2027', due on or before 'March 15, 2027', degree conferred 'September 15, 2025 - March 15, 2027' — https://www.damonrunyon.org/for-scientists/application-guidelines/fellowship/forms"
+  verified_on: 2026-10-28
+
+- id: jane-coffin-childs-fellowship
+  title: Jane Coffin Childs Fund Postdoctoral Fellowship
+  funder: Jane Coffin Childs Fund for Medical Research
+  type: fellowship
+  url: https://www.jccfund.org/eligibilty-criteria/important-dates-and-documents/
+  url_status: 200
+  applicant_regions: [international]
+  host_countries: []
+  career_stage: [postdoc]
+  fields: basic biomedical research
+  summary: "Postdoctoral fellowships for basic biomedical research; applications through the Temelio portal with three referee letters."
+  eligibility_note: "Any nationality, but awards to non-US citizens are made only to US sponsoring institutions; limits on time since PhD and on postdoctoral experience apply."
+  cycle: annual
+  next_deadline: 2027-02-01
+  deadline_evidence: "'The 2027 JCC application is now open. The application for the 2027 cycle is due February 1, 2027 at 3pm ET.' — https://www.jccfund.org/eligibilty-criteria/important-dates-and-documents/"
+  verified_on: 2026-10-28
+
+- id: lsrf-postdoctoral-fellowships
+  title: Life Sciences Research Foundation Postdoctoral Fellowships
+  funder: Life Sciences Research Foundation (LSRF)
+  type: fellowship
+  url: https://lsrf.org/apply/
+  url_status: 200
+  applicant_regions: [international]
+  host_countries: []
+  career_stage: [postdoc]
+  fields: life sciences
+  summary: "Postdoctoral fellowships in the life sciences, awarded through an annual competition with peer review."
+  eligibility_note: "US citizens may work anywhere; non-US citizens must work in a US laboratory; within 5 years of PhD; must move to a lab different from the thesis lab."
+  cycle: annual
+  # Page: "THIS GRANT CYCLE IS OPEN UNTIL October 1, 2026" (passed).
+  verified_on: 2026-10-28
+
+- id: helen-hay-whitney-fellowship
+  title: Helen Hay Whitney Foundation Postdoctoral Fellowship
+  funder: Helen Hay Whitney Foundation
+  type: fellowship
+  url: https://hhwf.org/research-fellowship/
+  url_status: 200
+  applicant_regions: [us, ca]
+  host_countries: []
+  career_stage: [postdoc]
+  fields: basic biomedical sciences
+  summary: "Three-year fellowships supporting early postdoctoral research training in all basic biomedical sciences."
+  eligibility_note: "PhD no more than two years (MD four years) before the deadline and no more than one year in the postdoc lab; US citizens may work in the US, Canada or abroad, foreign citizens in US labs only."
+  cycle: annual
+  # Last stated deadline: June 15, 2026 (passed).
+  verified_on: 2026-10-28
+
+- id: hhmi-hanna-gray-fellows
+  title: HHMI Hanna H. Gray Fellows Program
+  funder: Howard Hughes Medical Institute
+  type: fellowship
+  url: https://www.hhmi.org/programs/hanna-h-gray-fellows
+  url_status: 200
+  applicant_regions: [us]
+  host_countries: [us]
+  career_stage: [postdoc]
+  fields: biomedical and life sciences
+  summary: "Supports postdoctoral scientists transitioning to independent faculty careers, with up to two years of postdoc support and a pathway to the Freeman Hrabowski Scholars Program; from the 2028 competition both programs run as one combined competition held every other year."
+  eligibility_note: "No more than 7 years of postdoctoral experience by December 15, 2026; currently a postdoc at an HHMI-eligible institution; authorised to work in the US."
+  cycle: unknown
+  next_deadline: 2026-12-15
+  deadline_evidence: "'Competition: Every other year; 2028 competition opens November 3, 2026 (9 AM ET) and closes December 15, 2026 (11:59 PM ET)' — https://www.hhmi.org/programs/hanna-h-gray-fellows"
+  verified_on: 2026-10-28
+
+- id: bwf-career-awards-scientific-interface
+  title: Career Awards at the Scientific Interface (CASI)
+  funder: Burroughs Wellcome Fund
+  type: award
+  url: https://www.bwfund.org/grants/interfaces-in-science/career-awards-at-the-scientific-interface/
+  url_status: 200
+  applicant_regions: [us, ca]
+  host_countries: [us, ca]
+  career_stage: [postdoc, faculty]
+  fields: physical, mathematical, computational sciences and engineering applied to biology
+  summary: "$560,000 over five years bridging advanced postdoctoral training and the first three years of faculty service, for researchers moving from the physical, mathematical, computational or engineering sciences into biology."
+  eligibility_note: "US and Canadian citizens, permanent residents and temporary residents at US or Canadian non-profit institutions."
+  cycle: annual
+  # Page: "LOI Deadline: August 14, 2026" (passed); "Full Application Deadline: January 11, 2027" applies only to invited LOIs.
+  verified_on: 2026-10-28
+
+# url_status 403: beckman-foundation.org blocks curl and WebFetch. Dates from search results on that domain.
+- id: beckman-young-investigators
+  title: Beckman Young Investigator Program
+  funder: Arnold and Mabel Beckman Foundation
+  type: award
+  url: https://www.beckman-foundation.org/programs/beckman-young-investigator/
+  url_status: 403
+  applicant_regions: [us]
+  host_countries: [us]
+  career_stage: [faculty]
+  fields: chemistry and life sciences
+  summary: "Early-career faculty award selected through a blinded letter-of-intent stage followed by invited full proposals (search snippet)."
+  eligibility_note: "Search snippet: no more than 10 years after the terminal degree, at a US non-profit institution (not government labs), with endorsement from the chief academic officer and dean."
+  cycle: annual
+  next_deadline: 2026-11-16
+  deadline_evidence: "search_snippet: 2027 BYI letter-of-intent portal 'opens 31 Jul 2026, 5 p.m. and closes 16 Nov 2026 at 5 p.m.' — https://www.beckman-foundation.org/programs/beckman-young-investigator/ (page 403 to automated clients)"
+  verified_on: 2026-10-28
+
+- id: acs-cancer-society-postdoctoral-fellowships
+  title: American Cancer Society Postdoctoral Fellowships
+  funder: American Cancer Society
+  type: fellowship
+  url: https://www.cancer.org/research/we-fund-cancer-research/apply-research-grant/grant-types/postdoctoral-fellowships.html
+  url_status: 200
+  applicant_regions: [us]
+  host_countries: [us]
+  career_stage: [postdoc]
+  fields: cancer research
+  summary: "Two- or three-year fellowships for postdoctoral researchers in cancer research at US academic or non-profit institutions."
+  eligibility_note: "At a US institution; US citizen or appropriate visa or immigration status; terminal degree 3 years or less and/or 3 or fewer years of postdoctoral training at application."
+  cycle: several rounds a year
+  # Page: "Application Deadlines: June 1 and December 1" (no year printed).
+  verified_on: 2026-10-28
+
+# acs.org serves an empty page to automated clients; dates come from search results on acs.org.
+- id: acs-prf-doctoral-new-investigator
+  title: ACS Petroleum Research Fund Doctoral New Investigator (DNI) Grants
+  funder: American Chemical Society Petroleum Research Fund
+  type: award
+  url: https://www.acs.org/funding/grants/petroleum-research-fund/programs/doctoral-new-investigator-grants.html
+  url_status: 200
+  applicant_regions: [us]
+  host_countries: [us]
+  career_stage: [faculty]
+  fields: chemistry and related sciences
+  summary: "Two-year $110,000 research grants for new assistant professors at US institutions (search snippet)."
+  eligibility_note: "Search snippet: regularly appointed faculty at US academic institutions within the first three years of their first assistant-professor appointment."
+  cycle: several rounds a year
+  next_deadline: 2027-03-12
+  deadline_evidence: "search_snippet: 'The next submission window will be from Monday, February 15, 2027, to Friday, March 12, 2027' — https://www.acs.org/funding/grants/petroleum-research-fund/programs/doctoral-new-investigator-grants.html (page renders empty to automated clients; an ACS programs overview listed an older 9 October 2026 date)"
+  verified_on: 2026-10-28
+
+# rescorp.org answered curl with HTTP 429 on a single request; content read through WebFetch.
+- id: rcsa-cottrell-scholar-award
+  title: Cottrell Scholar Award
+  funder: Research Corporation for Science Advancement
+  type: award
+  url: https://rescorp.org/cottrell-scholars/cottrell-scholar-award/
+  url_status: 429
+  applicant_regions: [us, ca]
+  host_countries: [us, ca]
+  career_stage: [faculty]
+  fields: physical sciences (research plus teaching; check page for eligible departments)
+  summary: "Three-year $120,000 awards for early-career teacher-scholars supporting both research and educational activities."
+  eligibility_note: "Early-career tenure-track faculty at US or Canadian research universities or primarily undergraduate institutions; the eligible appointment year shifts each cycle."
+  cycle: annual
+  # Page: 2026-cycle deadline was July 1, 2026; "application process for 2027 Cottrell Scholar Awards is closed".
+  verified_on: 2026-10-28
+
+- id: chateaubriand-fellowship-stem
+  title: Chateaubriand Fellowship (STEM and Health)
+  funder: Embassy of France in the United States
+  type: fellowship
+  url: https://chateaubriand-fellowship.org/stem-application/
+  url_status: 200
+  applicant_regions: [us]
+  host_countries: [fr]
+  career_stage: [phd]
+  fields: STEM, biology and health
+  summary: "Supports PhD students at US universities to carry out 4–9 months of their doctoral research in a French laboratory, strengthening French–US collaborations."
+  eligibility_note: "Enrolled in a PhD programme at a US university; US citizenship not required; French and dual French citizens are not eligible."
+  cycle: annual
+  next_deadline: 2027-01-18
+  deadline_evidence: "'Application deadline: January 18, 2027 at 11:59 pm EST' — https://chateaubriand-fellowship.org/stem-application/"
+  verified_on: 2026-10-28
+
+# ---------------------------------------------------------------- Canada
+# Banting Postdoctoral Fellowships and Vanier CGS no longer accept applications (their official
+# sites redirect readers to the harmonized programs below).
+- id: canada-postdoctoral-research-award
+  title: Canada Postdoctoral Research Award (CPRA)
+  funder: CIHR, NSERC and SSHRC (Canada Research Training Awards Suite)
+  type: fellowship
+  url: https://nserc-crsng.canada.ca/en/funding-opportunity/canada-postdoctoral-research-award-program
+  url_status: 200
+  applicant_regions: [ca, international]
+  host_countries: []
+  career_stage: [postdoc]
+  fields: health, natural sciences and engineering, social sciences and humanities
+  summary: "Tri-agency postdoctoral award ($70,000 per year for 24 months) replacing the former agency postdoctoral programmes and the Banting fellowships."
+  eligibility_note: "Degree requirements completed no more than three years before 1 September of the application year; non-Canadians must have a Canadian doctoral or postdoctoral link; up to 20% of awards go to international applicants."
+  cycle: annual
+  # Page: "Application deadline CIHR: September 16, NSERC: October 17, SSHRC: September 10" (no year printed).
+  verified_on: 2026-10-28
+
+- id: canada-graduate-research-scholarship-doctoral
+  title: Canada Graduate Research Scholarship – Doctoral (CGRS D)
+  funder: CIHR, NSERC and SSHRC (Canada Research Training Awards Suite)
+  type: fellowship
+  url: https://nserc-crsng.canada.ca/en/funding-opportunity/canada-graduate-research-scholarship-doctoral-program
+  url_status: 200
+  applicant_regions: [ca]
+  host_countries: []
+  career_stage: [phd]
+  fields: health, natural sciences and engineering, social sciences and humanities
+  summary: "Tri-agency doctoral scholarship ($40,000 per year) replacing the Vanier and agency doctoral scholarships."
+  eligibility_note: "International applicants must be registered in a doctoral programme at an eligible Canadian institution; applications go through the Canadian institution, often well before the agency deadline."
+  cycle: annual
+  verified_on: 2026-10-28
+
+# ---------------------------------------------------------------- United Kingdom
+- id: royal-society-university-research-fellowship
+  title: Royal Society University Research Fellowship (URF)
+  funder: The Royal Society
+  type: fellowship
+  url: https://royalsociety.org/grants/university-research/
+  url_status: 200
+  applicant_regions: [international]
+  host_countries: [gb, ie]
+  career_stage: [early_career]
+  fields: natural sciences
+  summary: "Eight-year fellowships (up to £1.9 million) for outstanding early-career researchers to build an independent research career in the UK or Ireland."
+  eligibility_note: "Three to eight years of research experience since the PhD by the closing date; any nationality; Irish applicants are funded by Research Ireland."
+  cycle: annual
+  # Page: 2027 round dates listed as 14 July 2026 and 09 September 2026 (round now closed).
+  verified_on: 2026-10-28
+
+- id: ukri-future-leaders-fellowships
+  title: UKRI Future Leaders Fellowships
+  funder: UK Research and Innovation
+  type: fellowship
+  url: https://www.ukri.org/opportunity/future-leaders-fellowship-round-11/
+  url_status: 200
+  applicant_regions: [international]
+  host_countries: [gb]
+  career_stage: [early_career]
+  fields: all disciplines
+  summary: "Long fellowships for researchers and innovators transitioning to or establishing independence, hosted by UK universities, businesses or other eligible organisations."
+  eligibility_note: "Must be based at, and supported by, an eligible UK organisation; no rule on currently holding a permanent post."
+  cycle: unknown
+  # Round 11 academic-hosted track closed 16 June 2026; a non-academic (Innovate UK) track was reported
+  # by search to close 4 November 2026 (not checked on the page). Round 12 not announced.
+  verified_on: 2026-10-28
+
+- id: wellcome-early-career-awards
+  title: Wellcome Early-Career Awards
+  funder: Wellcome
+  type: fellowship
+  url: https://wellcome.org/research-funding/schemes/wellcome-early-career-awards
+  url_status: 200
+  applicant_regions: [international]
+  host_countries: [gb]
+  career_stage: [postdoc, early_career]
+  fields: any discipline relevant to Wellcome's remit (including discovery research in life and physical sciences)
+  summary: "Salary plus up to £400,000 research expenses, usually for five years, for early-career researchers to develop an independent research identity."
+  eligibility_note: "PhD (viva passed) or equivalent experience, usually no more than three years of postdoctoral experience; from 29 October 2026 only lead applicants at administering organisations in the UK or in low- and middle-income countries in Africa, South Asia and South-East Asia."
+  cycle: rolling
+  # Page: "There are no deadlines for applications to this scheme. Applications can be submitted at any time."
+  verified_on: 2026-10-28
+
+# leverhulme.ac.uk returns 403 (Cloudflare) to curl and WebFetch; facts from search results on that domain.
+- id: leverhulme-early-career-fellowships
+  title: Leverhulme Early Career Fellowships
+  funder: The Leverhulme Trust
+  type: fellowship
+  url: https://www.leverhulme.ac.uk/early-career-fellowships
+  url_status: 403
+  applicant_regions: [gb]
+  host_countries: [gb]
+  career_stage: [postdoc, early_career]
+  fields: all disciplines
+  summary: "36-month fellowships at UK universities for early-career researchers to develop their research profile; about 145 fellowships in 2027."
+  eligibility_note: "Search snippet: doctoral thesis submitted within four years of the closing date; applicants without a UK degree need a UK academic post that started at least four months before the deadline."
+  cycle: annual
+  next_deadline: 2027-02-18
+  deadline_evidence: "search_snippet: Leverhulme closing-dates table lists 'Early Career Fellowships 18 February 2027', applications submitted by the host university by 4pm — https://www.leverhulme.ac.uk/closing-dates (403 to automated clients; a 'Schemes at a glance' snippet showing 28 January 2027 appears to refer to Emeritus Fellowships)"
+  verified_on: 2026-10-28
+
+- id: royal-commission-1851-research-fellowship
+  title: 1851 Research Fellowship
+  funder: Royal Commission for the Exhibition of 1851
+  type: fellowship
+  url: https://royalcommission1851.org/fellowships/research-fellowships
+  url_status: 200
+  applicant_regions: [international]
+  host_countries: [gb]
+  career_stage: [postdoc]
+  fields: physical and biological sciences, mathematics, applied science, engineering
+  summary: "Three-year fellowships for early-career scientists and engineers of exceptional promise to conduct research of their own instigation; around eight to nine awards a year."
+  eligibility_note: "No more than 2.5 years of postdoctoral experience by 31 January 2027 (exceptions only in exceptional circumstances); PhD held before 31 December 2027; the FAQ addresses overseas candidates."
+  cycle: annual
+  next_deadline: 2027-01-20
+  deadline_evidence: "'The application form for 2027 is now live. The deadline is 20 January 2027 at Midday GMT.' — https://royalcommission1851.org/research-fellowships-frequently-asked-questions"
+  verified_on: 2026-10-28
+
+- id: raeng-research-fellowships
+  title: Royal Academy of Engineering Research Fellowships
+  funder: Royal Academy of Engineering
+  type: fellowship
+  url: https://raeng.org.uk/programmes-and-prizes/programmes/uk-grants-and-prizes/support-for-research/research-fellowships
+  url_status: 200
+  applicant_regions: [gb]
+  host_countries: [gb]
+  career_stage: [postdoc, early_career]
+  fields: engineering
+  summary: "Up to £800,000 over five years for early-career engineering researchers at UK universities, via an expression of interest then invited full application."
+  eligibility_note: "At a UK university or UKRI-eligible research organisation; PhD awarded no more than four years and six months before the expression-of-interest deadline."
+  cycle: annual
+  # Page: "Submit an expression of interest (EoI) by 25 June" (no year printed; 2026/27 round).
+  verified_on: 2026-10-28
+
+# ---------------------------------------------------------------- Germany
+- id: dfg-walter-benjamin-programme
+  title: DFG Walter Benjamin Programme
+  funder: Deutsche Forschungsgemeinschaft (DFG)
+  type: fellowship
+  url: https://www.dfg.de/en/research-funding/funding-opportunities/programmes/individual/walter-benjamin
+  url_status: 200
+  applicant_regions: [de]
+  host_countries: []
+  career_stage: [postdoc]
+  fields: all disciplines
+  summary: "Funds early-career postdoctoral researchers to carry out their own project, as a position in Germany or a fellowship abroad, usually for up to two years."
+  eligibility_note: "Early-career postdocs; funding abroad requires integration into the German research system (e.g. three years working in Germany) or German schooling and education with limited time abroad."
+  cycle: rolling
+  # Page: "Proposals may be submitted at any time."
+  verified_on: 2026-10-28
+
+- id: dfg-emmy-noether-programme
+  title: DFG Emmy Noether Programme
+  funder: Deutsche Forschungsgemeinschaft (DFG)
+  type: award
+  url: https://www.dfg.de/en/research-funding/funding-opportunities/programmes/individual/emmy-noether
+  url_status: 200
+  applicant_regions: [de]
+  host_countries: [de]
+  career_stage: [postdoc, early_career]
+  fields: all disciplines
+  summary: "Six years of funding for exceptionally qualified early-career researchers to lead an independent junior research group in Germany and qualify for a professorship."
+  eligibility_note: "Normally up to 4 years after the doctorate and at least two years of postdoctoral experience."
+  cycle: rolling
+  # Page: "Proposals may be submitted at any time."
+  verified_on: 2026-10-28
+
+- id: humboldt-feodor-lynen-research-fellowship
+  title: Feodor Lynen Research Fellowship
+  funder: Alexander von Humboldt Foundation
+  type: fellowship
+  url: https://www.humboldt-foundation.de/en/apply/sponsorship-programmes/feodor-lynen-research-fellowship
+  url_status: 200
+  applicant_regions: [de]
+  host_countries: []
+  career_stage: [postdoc, early_career]
+  fields: all disciplines
+  summary: "Supports postdoctoral (6–24 months) and experienced researchers from Germany to conduct research abroad with a host from the Humboldt Network."
+  eligibility_note: "German citizens, or non-Germans working academically in Germany; postdocs within four years of the doctorate."
+  cycle: several rounds a year
+  # Page: selection committee meets every February, June and October; no fixed deadlines published.
+  verified_on: 2026-10-28
+
+# ---------------------------------------------------------------- Switzerland
+- id: snsf-ambizione
+  title: SNSF Ambizione (final call)
+  funder: Swiss National Science Foundation (SNSF)
+  type: award
+  url: https://www.snf.ch/en/N18L3oGWomTSSGkF/funding/careers/ambizione
+  url_status: 200
+  applicant_regions: [ch, international]
+  host_countries: [ch]
+  career_stage: [postdoc, early_career]
+  fields: all disciplines
+  summary: "Up to four years of salary and project funds for early-career researchers to lead an independent project at a Swiss higher education institution; the 2026 call is the last before the new Postdoc Grant scheme (2028)."
+  eligibility_note: "No later than four years after the doctorate; open to researchers from Switzerland and abroad under adjusted criteria for the final call; Ambizione applicants are excluded from SNSF Starting Grants 2027."
+  cycle: annual
+  next_deadline: 2026-11-03
+  deadline_evidence: "'Submission deadline: 3 November 2026, 5:00:00 p.m. (CET)' — https://www.snf.ch/en/N18L3oGWomTSSGkF/funding/careers/ambizione"
+  verified_on: 2026-10-28
+
+- id: snsf-postdoc-mobility
+  title: SNSF Postdoc.Mobility
+  funder: Swiss National Science Foundation (SNSF)
+  type: fellowship
+  url: https://www.snf.ch/en/XIZpfY3iVS5KRRoD/funding/careers/postdoc-mobility
+  url_status: 200
+  applicant_regions: [ch]
+  host_countries: []
+  career_stage: [postdoc]
+  fields: all disciplines
+  summary: "Fellowships for postdocs from Switzerland to do research abroad, with an optional return grant; final submission deadline August 2027, then replaced by the Postdoc Grant."
+  eligibility_note: "Swiss citizen, permanent settlement permit or partner of a Swiss citizen, otherwise a Swiss doctoral degree; submission up to 3 years after the doctoral exam."
+  cycle: several rounds a year
+  next_deadline: 2027-02-02
+  deadline_evidence: "'Submission deadline:02.02.2027 17:00 CET' — https://www.snf.ch/en/XIZpfY3iVS5KRRoD/funding/careers/postdoc-mobility"
+  verified_on: 2026-10-28
+
+- id: snsf-starting-grants
+  title: SNSF Starting Grants
+  funder: Swiss National Science Foundation (SNSF)
+  type: award
+  url: https://www.snf.ch/en/B9wb55x8qyNWmy1n/news/snsf-starting-grants-2027
+  url_status: 200
+  applicant_regions: [ch]
+  host_countries: [ch]
+  career_stage: [early_career, faculty]
+  fields: all disciplines
+  summary: "The SNSF's highest career-funding level, for researchers who want to lead their own project and team in Switzerland; parallel ERC Starting Grant applications are allowed."
+  eligibility_note: "Several years of research experience after the doctorate; Ambizione 2026 applicants are excluded."
+  cycle: annual
+  next_deadline: 2027-05-04
+  deadline_evidence: "'Submission deadline: 04.05.2027 17:00 CEST'; 'The call will be launched on 1 February 2027' — https://www.snf.ch/en/B9wb55x8qyNWmy1n/news/snsf-starting-grants-2027"
+  verified_on: 2026-10-28
+
+# ---------------------------------------------------------------- France
+- id: anr-aapg-jcjc
+  title: ANR Generic Call – Young Researchers (JCJC) instrument
+  funder: Agence nationale de la recherche (ANR)
+  type: award
+  url: https://anr.fr/en/call-for-proposals-details/call/aapg-2027-generic-call-for-proposals/
+  url_status: 200
+  applicant_regions: [fr]
+  host_countries: [fr]
+  career_stage: [early_career]
+  fields: all disciplines
+  summary: "The JCJC instrument of the ANR generic call funds projects led by young researchers in France, through a two-step (pre-proposal then full proposal) process."
+  eligibility_note: ""
+  cycle: annual
+  # AAPG 2027 step 1 closed (14 October 2026 per search of anr.fr); step 2 for retained JCJC pre-proposals
+  # is announced as end of March 2027 with the exact date to be published.
+  verified_on: 2026-10-28
+
+# ---------------------------------------------------------------- Netherlands
+- id: nwo-veni-science
+  title: NWO Talent Programme Veni (Science domain)
+  funder: Dutch Research Council (NWO)
+  type: award
+  url: https://www.nwo.nl/en/calls/nwo-talent-programme-veni-science-2026
+  url_status: 200
+  applicant_regions: [international]
+  host_countries: [nl]
+  career_stage: [postdoc, early_career]
+  fields: natural sciences (other Veni domains exist for SSH, AES and ZonMw)
+  summary: "Up to €320,000 for recently graduated PhDs to develop their own ideas for three years at a Dutch research organisation."
+  eligibility_note: "Open to candidates from the Netherlands or abroad within a fixed PhD-date window; pre-proposal required."
+  cycle: annual
+  # 2026 round: pre-proposals closed 1 September 2026; full proposals (invited only) due 26 January 2027.
+  verified_on: 2026-10-28
+
+- id: nwo-rubicon
+  title: NWO Rubicon
+  funder: Dutch Research Council (NWO)
+  type: fellowship
+  url: https://www.nwo.nl/en/calls/rubicon-2026-3
+  url_status: 200
+  applicant_regions: [nl]
+  host_countries: []
+  career_stage: [phd, postdoc]
+  fields: all disciplines
+  summary: "Funds 12–24 months of postdoctoral research at an excellent research institute outside the Netherlands for recent PhDs from Dutch research organisations."
+  eligibility_note: "PhD from an NWO-recognised Dutch research organisation, awarded within 12 months before the deadline or still in progress; one Rubicon application per person."
+  cycle: several rounds a year
+  next_deadline: 2026-12-01
+  deadline_evidence: "'The deadline for this round is Tuesday 1 December 2026 at 14:00:00 hours CET.' — https://www.nwo.nl/en/calls/rubicon-2026-3"
+  verified_on: 2026-10-28
+
+# ---------------------------------------------------------------- Nordics
+- id: rcf-academy-research-fellowship
+  title: Academy Research Fellowship (Research Council of Finland)
+  funder: Research Council of Finland
+  type: fellowship
+  url: https://www.aka.fi/en/research-funding/apply-for-funding/calls-for-applications/for-researchers/2027-academy-research-fellowships-all-research-fields/
+  url_status: 200
+  applicant_regions: [fi]
+  host_countries: [fi]
+  career_stage: [postdoc, early_career]
+  fields: all research fields
+  summary: "Four-year funding (1 Sep 2027–31 Aug 2031) for researchers 2–7 years after their first doctorate to become independent research leaders."
+  eligibility_note: "First doctorate 2–7 years before the start of the calendar year closest to the deadline; must not hold a permanent senior research position."
+  cycle: annual
+  next_deadline: 2026-11-11
+  deadline_evidence: "'Call closes: 11 Nov 2026 at 23.59 Finnish time' — https://www.aka.fi/en/research-funding/apply-for-funding/calls-for-applications/for-researchers/2027-academy-research-fellowships-all-research-fields/"
+  verified_on: 2026-10-28
+
+- id: vr-international-postdoc-natural-engineering
+  title: Swedish Research Council International Postdoc (natural and engineering sciences)
+  funder: Swedish Research Council (Vetenskapsrådet)
+  type: fellowship
+  url: https://www.vr.se/english/applying-for-funding/calls/2025-11-11-international-postdoc-within-natural-and-engineering-sciences-autumn-call.html
+  url_status: 200
+  applicant_regions: [se]
+  host_countries: []
+  career_stage: [postdoc]
+  fields: natural and engineering sciences
+  summary: "Lets newly qualified researchers with a Swedish doctorate work abroad under secure employment with a Swedish organisation, 18–36 months."
+  eligibility_note: "Doctorate from a Swedish university no more than 2 years before the deadline; application together with a Swedish administering organisation."
+  cycle: several rounds a year
+  # Autumn 2026 call ran 19 August – 15 September 2026 (closed). URL is call-specific and changes each round.
+  verified_on: 2026-10-28
+
+- id: dff-international-postdoctoral-grant
+  title: DFF International Postdoctoral Grant
+  funder: Independent Research Fund Denmark (DFF)
+  type: fellowship
+  url: https://dff.dk/en/apply-for-funding/see-what-you-can-apply-for/current-funding-opportunities/instruments/2026/november/dff-international-postdoctoral-grant-e26/
+  url_status: 200
+  applicant_regions: [dk]
+  host_countries: []
+  career_stage: [phd, postdoc]
+  fields: all disciplines
+  summary: "Two-year grants for early-career researchers with a Danish PhD to spend at least 12 consecutive months at a research institution abroad."
+  eligibility_note: "PhD from a Danish institution within 3 years before the deadline (or thesis submitted within 12 months after it)."
+  cycle: annual
+  next_deadline: 2026-11-05
+  deadline_evidence: "Instrument page deadline field '05. November 2026' — https://dff.dk/en/apply-for-funding/see-what-you-can-apply-for/current-funding-opportunities/instruments/2026/november/dff-international-postdoctoral-grant-e26/ (search results add 12:00 noon)"
+  verified_on: 2026-10-28
+
+- id: carlsberg-internationalisation-fellowships
+  title: Carlsberg Foundation Internationalisation Fellowships
+  funder: Carlsberg Foundation
+  type: fellowship
+  url: https://www.carlsbergfondet.dk/en/news/internationalisation-fellowships-offered-to-researchers-at-postdoctoral-level/
+  url_status: 200
+  applicant_regions: [dk]
+  host_countries: []
+  career_stage: [postdoc]
+  fields: basic research (fields funded by the Carlsberg Foundation)
+  summary: "Two- to three-year fellowships combining a research stay abroad with a reintegration period at a Danish research institution, for early-career postdocs."
+  eligibility_note: ""
+  cycle: annual
+  # 2026 deadline was 1 April 2026 (passed). URL is the 2026 call announcement; the scheme page changes yearly.
+  verified_on: 2026-10-28
+
+# ---------------------------------------------------------------- Japan
+- id: jsps-research-fellowships-young-scientists
+  title: JSPS Research Fellowships for Young Scientists (DC1, DC2, PD, RPD, CPD)
+  funder: Japan Society for the Promotion of Science (JSPS)
+  type: fellowship
+  url: https://www.jsps.go.jp/english/e-pd/
+  url_status: 200
+  applicant_regions: [jp]
+  host_countries: [jp]
+  career_stage: [phd, postdoc]
+  fields: all fields
+  summary: "Stipends and research grants for doctoral students (DC1/DC2) and postdocs (PD, restart RPD, cross-border CPD) in Japan."
+  eligibility_note: "DC: enrolled in a doctoral course in Japan; PD: within 5 years of the doctorate and moving to a different institution; citizen or permanent resident of Japan."
+  cycle: annual
+  verified_on: 2026-10-28
+
+- id: jsps-overseas-research-fellowships
+  title: JSPS Overseas Research Fellowships
+  funder: Japan Society for the Promotion of Science (JSPS)
+  type: fellowship
+  url: https://www.jsps.go.jp/english/e-ab/
+  url_status: 200
+  applicant_regions: [jp]
+  host_countries: []
+  career_stage: [postdoc]
+  fields: all fields
+  summary: "Gives excellent young Japanese researchers the opportunity to carry out long-term research at an overseas university or institute; a Restart Research Abroad track serves researchers returning after life events."
+  eligibility_note: "Young Japanese researchers with a doctorate (or in a doctoral programme in Japan, per the July 2026 guideline)."
+  cycle: annual
+  verified_on: 2026-10-28
+
+- id: riken-special-postdoctoral-researchers
+  title: RIKEN Special Postdoctoral Researcher (SPDR) Program
+  funder: RIKEN
+  type: fellowship
+  url: https://www.riken.jp/en/careers/programs/spdr/
+  url_status: 200
+  applicant_regions: [jp]
+  host_countries: [jp]
+  career_stage: [postdoc]
+  fields: natural sciences in RIKEN research fields
+  summary: "Three-year fixed-term positions giving young, creative scientists autonomous and independent research at RIKEN with access to its facilities."
+  eligibility_note: "Nationality and degree-age rules are in the annual call document (not checked)."
+  cycle: annual
+  # Page: "Applications for the FY 2027 Special Postdoctoral Researcher (SPDR) Program have been closed."
+  verified_on: 2026-10-28
+
+- id: jst-presto
+  title: JST PRESTO (Precursory Research for Embryonic Science and Technology)
+  funder: Japan Science and Technology Agency (JST)
+  type: award
+  url: https://www.jst.go.jp/kisoken/presto/en/
+  url_status: 200
+  applicant_regions: [jp]
+  host_countries: [jp]
+  career_stage: [early_career, faculty]
+  fields: strategic research areas set yearly (e.g. FY2026 exposome area)
+  summary: "Individual-type research grants for researchers in Japan within strategic research areas, building networks of young researchers."
+  eligibility_note: ""
+  cycle: annual
+  # FY2026 call closed (page notes June 2, 2026). Research areas change each fiscal year.
+  verified_on: 2026-10-28
+
+# ---------------------------------------------------------------- China
+# nsfc.gov.cn sends an incomplete TLS certificate chain; curl and WebFetch both fail verification.
+# Facts below come from search results restricted to nsfc.gov.cn (2026 call guideline).
+- id: nsfc-research-fund-international-young-scientists
+  title: NSFC Research Fund for International Scientists – Young Scientists (RFIS-I)
+  funder: National Natural Science Foundation of China (NSFC)
+  type: award
+  url: https://www.nsfc.gov.cn/english/site_1/international/D6/2026/01-20/502.html
+  url_status: tls_error
+  applicant_regions: [international]
+  host_countries: [cn]
+  career_stage: [postdoc, early_career]
+  fields: all natural sciences
+  summary: "One- or two-year research funding for international young scientists working at NSFC-registered host institutions in mainland China."
+  eligibility_note: "Search snippet (2026 guideline): doctorate within the past 6 years plus basic-research or postdoctoral experience; one award per RFIS tier."
+  cycle: annual
+  verified_on: 2026-10-28
+
+# ---------------------------------------------------------------- South Korea
+- id: nrf-korea-sejong-science-fellowship
+  title: Sejong Science Fellowship
+  funder: National Research Foundation of Korea (NRF) / Ministry of Science and ICT
+  type: fellowship
+  url: https://eng.nrf.re.kr/page/5301bb32-ad33-4031-8de1-a8b3275956a2
+  url_status: 200
+  applicant_regions: [kr, international]
+  host_countries: [kr]
+  career_stage: [postdoc, early_career]
+  fields: science and engineering
+  summary: "Supports young scientists including postdocs to pursue their own research (domestic track, about 130 million won a year for up to 5 years), plus overseas-training and return-and-recruitment tracks."
+  eligibility_note: "Within 7 years of the doctorate or under 39; domestic and overseas tracks are for Korean nationals with a Korean doctorate; the return-and-recruitment track admits holders of foreign doctorates, including foreign nationals."
+  cycle: annual
+  # The NRF English page is a long programme catalogue; Sejong is one section. The 2026 call was announced
+  # in November 2025 (per search of nrf.re.kr / msit.go.kr); the 2027 call was not yet found.
+  verified_on: 2026-10-28
+
+# ---------------------------------------------------------------- Singapore
+- id: nrf-singapore-fellowship
+  title: Singapore NRF Fellowship
+  funder: National Research Foundation Singapore
+  type: fellowship
+  url: https://www.nrf.gov.sg/grants/nrff/
+  url_status: 200
+  applicant_regions: [international]
+  host_countries: [sg]
+  career_stage: [early_career]
+  fields: all areas of science and technology
+  summary: "Five-year fellowships with a research grant for early-career researchers to carry out independent research in Singapore."
+  eligibility_note: "Researchers of all nationalities may apply; detailed rules are in the IGMS guidelines (researchgrant.gov.sg)."
+  cycle: annual
+  # Page: NRF "invites applications once a year"; dates are published on IGMS, not on this page.
+  verified_on: 2026-10-28
+
+# ---------------------------------------------------------------- Australia
+# arc.gov.au and nhmrc.gov.au did not answer curl or WebFetch from this host (HTTP/2 reset, then timeouts).
+- id: arc-decra
+  title: ARC Discovery Early Career Researcher Award (DECRA)
+  funder: Australian Research Council
+  type: fellowship
+  url: https://www.arc.gov.au/funding-research/funding-schemes/discovery-program/discovery-early-career-researcher-award-decra
+  url_status: timeout
+  applicant_regions: [au]
+  host_countries: [au]
+  career_stage: [early_career]
+  fields: all disciplines within the ARC remit
+  summary: "Salary contribution plus project funding for early-career researchers at Australian universities (per the ARC DE26 selection report)."
+  eligibility_note: ""
+  cycle: annual
+  # Search of arc.gov.au: DE26 round opened January 2025 and closed March 2025; DE28 guidelines not found yet.
+  verified_on: 2026-10-28
+
+- id: nhmrc-investigator-grants
+  title: NHMRC Investigator Grants (Emerging Leadership)
+  funder: National Health and Medical Research Council
+  type: fellowship
+  url: https://www.nhmrc.gov.au/funding/find-funding/investigator-grants
+  url_status: timeout
+  applicant_regions: [au]
+  host_countries: [au]
+  career_stage: [postdoc, early_career]
+  fields: health and medical research
+  summary: "Five-year salary and research support for health and medical researchers, with Emerging Leadership levels for early-career investigators."
+  eligibility_note: "Search snippet: Emerging Leadership restricted to researchers no more than 10 years post-PhD on 1 March of the application year."
+  cycle: annual
+  # Search of nhmrc.gov.au: 2027 round opened 3 June 2026 and closed 29 July 2026.
+  verified_on: 2026-10-28
+
+# ---------------------------------------------------------------- India
+- id: anrf-national-postdoctoral-fellowship
+  title: ANRF National Post Doctoral Fellowship (N-PDF)
+  funder: Anusandhan National Research Foundation (formerly SERB)
+  type: fellowship
+  url: https://anrfonline.in/ANRF/npdf?HomePage=New
+  url_status: 200
+  applicant_regions: [in]
+  host_countries: [in]
+  career_stage: [postdoc]
+  fields: science and engineering
+  summary: "Two-year postdoctoral fellowships with a mentor at an Indian institution."
+  eligibility_note: "Indian citizen; upper age limit 35 (relaxations apply); within five years of the PhD viva; at least two published papers."
+  cycle: unknown
+  verified_on: 2026-10-28
+
+- id: anrf-ramanujan-fellowship
+  title: Ramanujan Fellowship
+  funder: Anusandhan National Research Foundation (formerly SERB)
+  type: fellowship
+  url: https://anrfonline.in/ANRF/Ramanujan_fellowship?HomePage=New
+  url_status: 200
+  applicant_regions: [international]
+  host_countries: [in]
+  career_stage: [early_career]
+  fields: science and engineering
+  summary: "Five-year fellowship for Indian or Indian-origin scientists and engineers abroad to take up research positions in India."
+  eligibility_note: "Indian or Indian-origin scientists working abroad, below 40; submitted as a nomination form naming a nominator; lapses if the fellow takes a permanent post."
+  cycle: unknown
+  verified_on: 2026-10-28

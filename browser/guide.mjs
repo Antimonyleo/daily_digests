@@ -1,6 +1,7 @@
-export function initializeQuickGuide({document, hasSeen, remember, openSection, restore}) {
+export function initializeQuickGuide({document, hasSeen, remember, openSection}) {
   const dialog = document.getElementById('quick-guide');
-  const welcome = document.getElementById('welcome-guide');
+  // First visit: Guide carries the primary style until the guide has been seen.
+  const guideButton = document.getElementById('open-guide');
   const steps = [...dialog.querySelectorAll('[data-guide-step]')];
   let step = 0;
   function showStep(index, focus = true) {
@@ -14,14 +15,11 @@ export function initializeQuickGuide({document, hasSeen, remember, openSection, 
     dialog.scrollTop = 0;
     if (focus) steps[step].querySelector('h1').focus();
   }
-  function dismiss() { welcome.hidden = true; remember(); }
+  function dismiss() { delete guideButton.dataset.firstRun; remember(); }
   function open() {
     showStep(0, false); dialog.showModal(); steps[0].querySelector('h1').focus();
   }
-  document.getElementById('open-guide').onclick = open;
-  document.getElementById('welcome-guide-open').onclick = open;
-  document.getElementById('welcome-dismiss').onclick = dismiss;
-  document.getElementById('welcome-restore').onclick = restore;
+  guideButton.onclick = open;
   document.getElementById('close-guide').onclick = () => dialog.close();
   document.getElementById('guide-finish').onclick = () => dialog.close();
   document.getElementById('guide-previous').onclick = () => showStep(Math.max(0, step - 1));
@@ -31,5 +29,7 @@ export function initializeQuickGuide({document, hasSeen, remember, openSection, 
   for (const button of dialog.querySelectorAll('[data-guide-action]')) button.onclick = () => {
     dialog.close(); openSection(button.dataset.guideAction);
   };
-  return {open, showWelcome(present) { welcome.hidden = present || hasSeen(); }};
+  return {open, showWelcome(present) {
+    if (present || hasSeen()) delete guideButton.dataset.firstRun; else guideButton.dataset.firstRun = '';
+  }};
 }

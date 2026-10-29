@@ -147,6 +147,13 @@ class SourceSpec(BaseModel):
     # Readers fetch the sources for their country's regions; an empty list
     # serves every reader, and a country with no known region fetches all.
     applicant_regions: list[str] = Field(default_factory=list)
+    # Fellowship and award calls. They appear in Events & Calls when that
+    # section is on, and in Funding & Opportunities when only funding is on.
+    calls: bool = False
+    # Sources whose terms allow personal use but forbid public re-posting. The
+    # local app reads them for its own reader; the public website and its
+    # daily snapshot leave them out.
+    local_only: bool = False
     # OpenAlex source (venue) ids for the ``openalex_venues`` kind — a retrieval
     # channel that pulls recent articles directly from specific high-value
     # journals (e.g. ACS Nano, JACS) whose native RSS is Cloudflare-blocked.

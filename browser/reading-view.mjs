@@ -125,7 +125,7 @@ export function extractReadingView(document, now = new Date()) {
     items:Array.from(document.querySelectorAll('.item[data-section]'), node => ({
       section:text(node.closest('.section-block') || node, '.section-heading') || node.dataset.section,
       title:text(node, '.title-link'), url:node.querySelector('.title-link')?.getAttribute('href') || '',
-      meta:text(node, '.meta'), summary:text(node, '.summary-primary .summary-text, .summary'),
+      meta:[text(node, '.meta'), text(node, '.item-kicker .publication-label')].filter(Boolean).join(' · '), summary:text(node, '.summary-primary .summary-text, .summary'),
       why:summaryField(node, 'Why read'), caveat:summaryField(node, 'Caveat'),
       reason:text(node, '.match-topic, .reason-line'), opportunity:lines(node, '.opportunity-facts'),
       uncertainty:text(node, '.topic-support, [data-reading-uncertainty]'),

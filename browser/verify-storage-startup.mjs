@@ -132,6 +132,7 @@ try {
     const restored = JSON.parse(exported.body);
     for (const [name, value] of Object.entries(fixture.files)) assert.equal(restored.files[name], value, `Restore/export must preserve ${name} exactly`);
     report.checks.push('all seeded SQLite, NumPy, profile and environment bytes survive restore/export');
+    await page.locator('#open-more').click();
     await page.locator('#open-data-settings').click();
     await page.locator('#browser-data-menu > summary').click();
     const [backup] = await Promise.all([page.waitForEvent('download'), page.locator('#export').click()]);

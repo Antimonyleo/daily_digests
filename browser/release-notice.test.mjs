@@ -18,11 +18,11 @@ function run(options) {
       querySelector: selector => { const name = /name="([^"]+)"/.exec(selector)?.[1]; return name in options.metas ? { content: options.metas[name] } : null; } },
     fetch: async () => ({ ok: true, json: async () => structuredClone(options.manifest) }),
     localStorage: { getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value) },
-    publicSourceFreshness: () => null, runtimeStarted: false, ready: true, URL, importMetaUrl: 'https://example.test/app.mjs',
+    publicSourceFreshness: () => options.freshness ?? null, runtimeStarted: false, ready: true, URL, importMetaUrl: 'https://example.test/app.mjs',
   };
   const body = source.slice(start, end).replace(/import\.meta\.url/g, 'importMetaUrl');
-  runInNewContext(body + '\nglobalThis.__check = checkRelease;', sandbox);
-  return { nodes, storage, check: sandbox.__check };
+  runInNewContext(body + '\nglobalThis.__check = checkRelease; globalThis.__inUse = markSourcesInUse;', sandbox);
+  return { nodes, storage, check: sandbox.__check, markSourcesInUse: sandbox.__inUse };
 }
 
 const notes = [
@@ -79,4 +79,25 @@ test('a page from before app releases still compares whole builds', async () => 
     manifest: { build_id: 'build-b', app_release: 'app-b', release_notes: notes } });
   await check();
   assert.equal(nodes['release-notice'].hidden, false);
+});
+
+test('source age waits until a brew uses those records, then keeps the same facts', async () => {
+  const message = 'Some public sources were last collected 21 hours ago; earlier successful records are being reused. Check source coverage after brewing.';
+  const { nodes, check, markSourcesInUse } = run({ metas, seen: '2026.10.27', freshness: { level: 'warning', hours: 21, message },
+    manifest: { build_id: 'build-a', app_release: 'app-a', release_notes: notes.slice(1) } });
+  await check();
+  assert.equal(nodes['source-freshness'].hidden, true, 'No warning before anything is brewed');
+  markSourcesInUse();
+  assert.equal(nodes['source-freshness'].hidden, false);
+  assert.equal(nodes['source-freshness'].textContent, message);
+  await check();
+  assert.equal(nodes['source-freshness'].hidden, false, 'A later update check keeps it while relevant');
+});
+
+test('fresh sources stay quiet even during a brew', async () => {
+  const { nodes, check, markSourcesInUse } = run({ metas, seen: '2026.10.27', freshness: { level: 'fresh', hours: 2, message: '' },
+    manifest: { build_id: 'build-a', app_release: 'app-a', release_notes: notes.slice(1) } });
+  markSourcesInUse();
+  await check();
+  assert.equal(nodes['source-freshness'].hidden, true);
 });

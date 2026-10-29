@@ -416,6 +416,52 @@ def load_profile(path: str | None = None) -> Profile:
         raise ValueError(f"Profile at {p} is invalid: {exc}") from exc
 
 
+def local_sources_path(settings: Settings | None = None) -> Path:
+    """The reader's own source additions and changes, beside their database.
+
+    Updates replace ``config/sources.yaml`` but never write ``data/``, so edits
+    kept here survive every update.
+    """
+    return Path((settings or get_settings()).db_path).parent / "sources.local.yaml"
+
+
+def merge_local_sources(data: dict, local: object, *, origin: str = "sources.local.yaml") -> dict:
+    """Apply the reader's source changes over the shipped list.
+
+    An entry named like a shipped source changes that source's fields, or
+    switches it off with ``enabled: false``; any other entry is added to its
+    section.
+    """
+    if not isinstance(local, dict):
+        raise ValueError(f"{origin} must be a YAML mapping of sections, got {type(local).__name__}")
+    order = [(section, dict(entry)) for section, entries in data.items() for entry in entries or []]
+    by_name = {entry.get("name"): position for position, (_section, entry) in enumerate(order)}
+    switched_off: set[int] = set()
+    for section, entries in local.items():
+        if not isinstance(entries, list):
+            raise ValueError(f"{origin}: {section} must be a list of sources")
+        for entry in entries:
+            if not isinstance(entry, dict) or not entry.get("name"):
+                raise ValueError(f"{origin}: every source under {section} needs a name")
+            entry = dict(entry)
+            enabled = entry.pop("enabled", True) is not False
+            position = by_name.get(entry["name"])
+            if position is None:
+                if enabled:
+                    by_name[entry["name"]] = len(order)
+                    order.append((section, entry))
+            elif not enabled:
+                switched_off.add(position)
+            else:
+                switched_off.discard(position)
+                order[position] = (section, {**order[position][1], **entry})
+    merged: dict[str, list[dict]] = {}
+    for position, (section, entry) in enumerate(order):
+        if position not in switched_off:
+            merged.setdefault(section, []).append(entry)
+    return merged
+
+
 def load_sources(path: str | None = None) -> list[SourceSpec]:
     settings = get_settings()
     p = Path(path or settings.sources_path)
@@ -428,6 +474,9 @@ def load_sources(path: str | None = None) -> list[SourceSpec]:
     data = yaml.safe_load(raw) or {}
     if not isinstance(data, dict):
         raise ValueError(f"sources.yaml must be a YAML mapping, got {type(data).__name__}")
+    local = local_sources_path(settings)
+    if path is None and local.is_file():
+        data = merge_local_sources(data, yaml.safe_load(local.read_text()) or {}, origin=str(local))
     out: list[SourceSpec] = []
     for section, entries in data.items():
         for entry in entries or []:

@@ -229,6 +229,14 @@ For an explicitly offline historical fixture only,
 the snapshot's recorded collection time. Leave this unset for release checks;
 an expired fixture is not a publishable release.
 
+Three checks run by hand, without a build or provider. `verify-cached-shell.mjs`
+opens a fictional saved reading desk against a served site
+(`DAILYDIGEST_BROWSER_URL`) and checks its Display menu and lifecycle.
+`verify-reading-fidelity.mjs` renders saved reading views through
+`reading-view.mjs`, and `verify-article-figure.mjs` serves local images to check
+the article-figure loader: no referrer, a plain retry for hosts without CORS,
+and the direct link when an image fails.
+
 `verify-ranking-parity.mjs` runs complete local extractive Brews for eight captured
 research fields and two opposite topic-priority configurations. It records every
 candidate's numeric features, eligibility stages, selection and order, along with
@@ -399,9 +407,25 @@ or mailbox password to a different endpoint or account are rejected before repla
 Writes are serialized only after private state changes, including reading
 impressions and votes during a brew. Quota failures show a persistent warning;
 read-only pages remain usable. Protect browser storage requests persistence,
-but browser permission and backup practices still matter. The one-time reminder
-requests browser persistence only on an explicit click. The browser manages the
+but browser permission and backup practices still matter. After the first
+completed brew the app requests persistence once by itself in browsers that
+decide quietly (Chrome, Edge, Safari); Firefox would show a permission prompt,
+so there it stays an explicit click on the reminder. Where storage is not
+protected and no backup file can be linked (Safari, for example, may clear
+site data after about a week without a visit), the backup reminder appears
+after three days instead of seven and says why. The browser manages the
 storage directory; portable backups can be saved in a folder the reader chooses.
+
+The reading desk is stored per browser profile and per web address (the
+IndexedDB name includes the site path). Opening DailyDigest at a different
+address, for example after a repository rename or on a custom domain, shows an
+empty desk; its first screen offers **Restore a backup instead**, and a backup
+file restores everything. Backups use the `dailydigest-browser-v1` format; a
+future format change registers an upgrade step (`SNAPSHOT_UPGRADES` in
+`runtime.py`) so older backups keep restoring, and a backup from a newer
+release asks for a reload rather than failing silently. Display choices (theme,
+Compact view, Pip) are kept in `data/ui_prefs.json` as well as localStorage, so
+they travel with backups.
 Other project sites
 on the same hostname share a security origin; a dedicated hostname provides
 actual isolation.
@@ -524,9 +548,16 @@ people should use separate browser profiles. Import and companion restore replac
 state; they do not merge independently accumulated feedback. An installed shortcut
 does not promise offline startup or background computation.
 
-Configured research sources span different fields unevenly. Funding covers the US
-(Grants.gov, NIH Guide) and Europe (EU Funding & Tenders); events come from EMBL
-and EMBO. These sections are not exhaustive.
+Configured research sources span different fields unevenly. Funding follows the
+reader's country: the US (Grants.gov, NIH Guide), the EU and associated
+countries (EU Funding & Tenders), the UK (UKRI) and Switzerland (SNSF). Events &
+Calls draws on EMBL, EMBO, Nature Conferences and directly readable APIs, plus
+page-based organisers (Keystone, Cold Spring Harbor, Wellcome Connecting Science,
+ISSCR, CRS, FEBS, FASEB and Engineering Conferences International) and the
+national research councils through the daily public snapshot, and hand-checked
+lists of fellowships, awards and flagship meetings. The Biophysical Society's
+terms forbid public re-posting, so its meetings appear only in local installs.
+These sections are not exhaustive.
 The interface states these limits before opt-in and retains conservative eligibility.
 
 For scheduled/manual source refreshes, the Pages workflow maintains one recurring

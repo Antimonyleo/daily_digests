@@ -8,7 +8,7 @@ from __future__ import annotations
 import re
 
 
-ARTICLE_EVIDENCE_VERSION = "article-evidence-v2"
+ARTICLE_EVIDENCE_VERSION = "article-evidence-v3"
 _BREAK = re.compile(r"(?<=[.!?;])\s+")
 _VALIDATION = re.compile(r"\b(?:validat(?:e|ed|ions?|ing)|evaluat(?:e|ed|ions?|ing)|test(?:ed|ing)?|benchmark(?:ed|ing)?)\b", re.I)
 _PERFORMED = re.compile(r"\b(?:validated|evaluated|tested|benchmarked|we\s+(?:validate|evaluate|test|benchmark)|(?:validation|evaluation|testing)\s+(?:results|accuracy|performance|confirmed|confirms)|(?:validation|evaluation|testing)\s+was\s+(?:performed|conducted))\b", re.I)
@@ -27,6 +27,8 @@ _SHARED = re.compile(r"\bwe\s+(?:make|made|provide|release|share|deposit)(?:d)?\
 _LINKED = re.compile(r"\b" + _RESOURCE + r"\s*:\s*https?://", re.I)
 _USED_EXTERNAL = re.compile(r"\b(?:we (?:used?|employed?|applied)|using|downloaded)\b", re.I)
 _LIMITATION = re.compile(r"\b(?:limitations?|limited to|small sample|may not generalize|lack of|not assessed|not evaluated|does not account|did not assess|did not evaluate)\b", re.I)
+# "Addresses key limitations of conventional LNPs" names a problem this work solves, not its own limitation.
+_ADDRESSED_LIMITATION = re.compile(r"\b(?:address(?:es|ed|ing)?|overcom(?:e|es|ing)|overcame|circumvent(?:s|ed|ing)?|solv(?:e|es|ed|ing)|mitigat(?:e|es|ed|ing)|resolv(?:e|es|ed|ing)|bypass(?:es|ed|ing)?|surmount(?:s|ed|ing)?|beyond)\b[^.;]{0,40}\blimitations?\b|\blimitations? (?:of|in|with) (?:conventional|current|existing|previous|prior|traditional|standard|state-of-the-art)\b", re.I)
 _URL = re.compile(r"https?://[^\s<>]+", re.I)
 _BIBLIOGRAPHIC = re.compile(r"^\s*(?:doi\s*:|https?://|published online\b|publication date\s*:|copyright\b|©)", re.I)
 
@@ -34,6 +36,13 @@ _BIBLIOGRAPHIC = re.compile(r"^\s*(?:doi\s*:|https?://|published online\b|public
 def _spans(text):
     start = 0
     for end in [match.start() for match in _BREAK.finditer(text)] + [len(text)]:
+        # "(66.5% pos. F4/80+ cells)" is one sentence, but only when the
+        # bracket closes soon after this break: an unclosed one must not
+        # merge the rest of the abstract.
+        closing = text.find(")", end)
+        if (end < len(text) and text[start:end].count("(") > text[start:end].count(")")
+                and 0 <= closing - end <= 120):
+            continue
         raw = text[start:end]
         quote = raw.strip()
         if quote:
@@ -85,7 +94,9 @@ def assess_article_evidence(title, abstract, *, full_text=None):
                     "availability": "upon_request" if re.search(r"\b(?:upon|on)\s+(?:reasonable\s+)?request\b", quote, re.I) else "asserted_available",
                     "links": [match.group().rstrip(".,;)") for match in _URL.finditer(quote)],
                 })
-        if not background and _LIMITATION.search(quote):
+        # A limitation this work overcomes is not its own; the rest of the
+        # sentence can still state one ("..., it is limited to murine models").
+        if not background and _LIMITATION.search(_ADDRESSED_LIMITATION.sub(" ", quote)):
             dimensions["limitations"]["claims"].append({**claim, "kind": "stated_limitation"})
     for dimension in dimensions.values():
         if dimension["claims"]:

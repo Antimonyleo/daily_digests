@@ -91,7 +91,14 @@
     if (state.installed && seen && newer(state.current, seen)) {
       title.textContent = `DailyDigest was updated to ${state.current}.`;
       showReleases([state.installed]);
-      message.textContent = "";
+      // Say what the update kept aside: the data copy and replaced hand edits.
+      const last = state.last_update || {}, edited = last.edited || [], kept = [];
+      if (last.data_backup) kept.push(`A copy of your data from before the update is in ${last.data_backup}.`);
+      if (edited.length) {
+        kept.push(`The new version replaced your edits to ${edited.join(", ")}; your copies are in ${last.backup}/files.`);
+        if (edited.includes("config/sources.yaml")) kept.push("Add your own sources to data/sources.local.yaml instead, so updates keep them.");
+      }
+      message.textContent = kept.join(" ");
       applyButton.hidden = true;
       later.textContent = "Got it";
       root.hidden = false;

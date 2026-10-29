@@ -174,6 +174,33 @@ def test_ingest_all_aborts_when_every_enabled_opportunity_provider_fails(monkeyp
         pipeline_mod.ingest_all(days=2, section_settings=settings)
 
 
+def test_bundled_lists_cannot_hide_failed_event_providers(monkeypatch):
+    """Hand-kept meetings always load; they must not stand in for live sources."""
+    from dailydigest import pipeline as pipeline_mod
+
+    specs = [
+        SimpleNamespace(name="Research", kind="custom", section="research"),
+        SimpleNamespace(name="EMBO Events", kind="embo_events", section="events"),
+        SimpleNamespace(name="Flagship meetings", kind="curated_events", section="events"),
+    ]
+
+    class Source:
+        def fetch(self, spec, days=2):
+            del days
+            if spec.kind == "embo_events":
+                raise RuntimeError("provider unavailable")
+            return [SimpleNamespace(section=spec.section, url=f"https://example.com/{spec.kind}")]
+
+    settings = SimpleNamespace(include_events=True, top_events=5, top_research=10)
+    monkeypatch.setattr(pipeline_mod, "init_db", lambda: None)
+    monkeypatch.setattr(pipeline_mod, "load_sources", lambda: specs)
+    monkeypatch.setattr(pipeline_mod, "dispatch_source", lambda _spec: Source())
+    monkeypatch.setattr(pipeline_mod.health, "record", lambda _rows: None)
+
+    with pytest.raises(RuntimeError, match="Events source coverage is degraded"):
+        pipeline_mod.ingest_all(days=2, section_settings=settings)
+
+
 def test_ingest_all_reports_healthy_empty_deadline_section(monkeypatch):
     """No official matches are visible without being mislabeled as a failure."""
     from dailydigest import pipeline as pipeline_mod

@@ -6,11 +6,18 @@ import { initializeQuickGuide } from './guide.mjs';
 import { createLinkedBackup, linkedBackupStore, createBackupScheduler } from './linked-backup.mjs';
 import { prepareDefaultCPU, readComputeChoice } from './cpu-startup.mjs';
 
-export function backupReminderDue({lastExport, firstOpen, now = Date.now()}) {
+export function backupReminderDue({lastExport, firstOpen, now = Date.now(), days = 7}) {
   const exported = lastExport ? new Date(lastExport).getTime() : NaN;
   const first = firstOpen ? Number(firstOpen) : NaN;
   const last = Number.isFinite(exported) ? exported : first;
-  return Number.isFinite(last) && now - last >= 7 * 86400000;
+  return Number.isFinite(last) && now - last >= days * 86400000;
+}
+
+// Firefox answers a storage-protection request with a permission prompt, so
+// it stays the reader's click there. Other browsers decide quietly, and
+// DailyDigest asks for them once the first digest is brewed.
+export function quietStorageProtection(userAgent = '') {
+  return !/firefox|fxios/i.test(userAgent);
 }
 
 export async function backupFileText(file) {
@@ -108,6 +115,12 @@ export function friendlyLoadingStatus(stage, detail = '') {
   return messages[stage] ? messages[stage] + (stage === 'Computing embeddings' && detail ? ` ${detail}` : '') : [stage, detail].filter(Boolean).join(' · ');
 }
 
+/** The app's own face: the @font-face rule already shipped in the shared reading styles. */
+export function sharedFontFace(styles) {
+  return /@font-face\s*\{[^}]*\}/.exec(styles || '')?.[0] || '';
+}
+
+/** Reader wording for the build-stamped first-download size; keeps the measured figure. */
 export function skipToReadingDesk(event, frame, startup) {
   event.preventDefault(); // A focus target must not replace the hash-router URL.
   const target = frame.hidden ? startup : frame.contentDocument?.querySelector('main') || frame;
@@ -520,6 +533,10 @@ async function boot() {
     document.documentElement.dataset.theme = localStorage.getItem('dailydigest-theme')
       || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
   } catch { document.documentElement.dataset.theme = 'light'; }
+  // Same face as the reading desk, from bytes this page already loaded; no extra request.
+  const fontFace = sharedFontFace(SHARED_READING_STYLES);
+  if (fontFace) { const face = document.createElement('style'); face.textContent = fontFace; document.head.append(face); }
+  const downloadSize = document.getElementById('download-size');
   const startup = document.getElementById('startup');
   document.querySelector('.skip-link').onclick = event => skipToReadingDesk(event, frame, startup);
   const status = document.getElementById('status');
@@ -548,12 +565,55 @@ async function boot() {
     menu.open = true;
     menu.scrollIntoView({block:'nearest'});
   }
+  const moreToggle = document.getElementById('open-more');
+  const moreMenu = document.getElementById('more-menu');
+  const setMoreMenu = (open, {focus = false} = {}) => {
+    moreMenu.hidden = !open; moreToggle.setAttribute('aria-expanded', String(open));
+    if (open && focus) moreMenu.querySelector('button:not(:disabled)')?.focus();
+  };
+  moreToggle.onclick = () => setMoreMenu(moreMenu.hidden);
+  // Tab moves through the items as ordinary buttons; arrows and Escape are shortcuts.
+  document.querySelector('.more-menu').addEventListener('keydown', event => {
+    if (event.key === 'Escape' && !moreMenu.hidden) { event.preventDefault(); setMoreMenu(false); moreToggle.focus(); return; }
+    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+    if (event.target === moreToggle && moreMenu.hidden) { event.preventDefault(); setMoreMenu(true, {focus:true}); return; }
+    const items = [...moreMenu.querySelectorAll('button:not(:disabled)')];
+    if (!items.length || moreMenu.hidden) return;
+    event.preventDefault();
+    const index = items.indexOf(document.activeElement), down = event.key === 'ArrowDown';
+    items[index < 0 ? (down ? 0 : items.length - 1) : (index + (down ? 1 : items.length - 1)) % items.length].focus();
+  });
+  // Capture: close and move focus to More before the item acts, so a dialog it
+  // opens returns focus to a visible control when it closes.
+  moreMenu.addEventListener('click', event => {
+    if (!event.target.closest('button')) return;
+    setMoreMenu(false); moreToggle.focus({preventScroll:true});
+  }, true);
+  document.addEventListener('click', event => {
+    if (!moreMenu.hidden && !event.target.closest?.('.more-menu')) setMoreMenu(false);
+  });
+  // Tabbing out of the menu (including into the reading frame) closes it.
+  document.querySelector('.more-menu').addEventListener('focusout', event => {
+    const wrapper = event.currentTarget;
+    setTimeout(() => {
+      if (!moreMenu.hidden && document.hasFocus() && !wrapper.contains(document.activeElement)) setMoreMenu(false);
+    }, 0);
+  });
   document.getElementById('open-data-settings').onclick = () => openDataSection('data');
   document.getElementById('close-data-settings').onclick = () => dataSettings.close();
   document.getElementById('open-backup').onclick = () => openDataSection('backup');
   document.getElementById('open-guide').onclick = () => openDataSection('guide');
   document.getElementById('backup-reminder-open').onclick = () => openDataSection('backup');
-  for (const id of ['open-backup', 'open-guide', 'open-data-settings']) {
+  // Restore goes straight to the file picker once restoring is possible; before
+  // that it opens Backup & transfer, which explains when Restore becomes available.
+  document.getElementById('open-restore').onclick = () => {
+    const input = document.getElementById('import');
+    if (dataControlsReady && !input.disabled) input.click(); else openDataSection('backup');
+  };
+  // A desk is saved per browser and per web address, so a reader arriving at a
+  // new address (or browser) sees an empty one: offer their backup first.
+  document.getElementById('startup-restore').onclick = () => document.getElementById('open-restore').click();
+  for (const id of ['open-backup', 'open-guide', 'open-data-settings', 'open-more', 'open-restore']) {
     document.getElementById(id).disabled = false;
   }
   const topicDraftForm = document.getElementById('startup-topics-form');
@@ -592,15 +652,20 @@ async function boot() {
   const backupKey = `dailydigest:last-backup:${location.pathname}`;
   const backupSnoozeKey = `dailydigest:backup-snooze:${location.pathname}`;
   let firstBrewBackupDue = false;
+  // Unprotected storage with no linked-file option (Safari, for one) can be
+  // cleared after about a week without a visit: remind sooner and say why.
+  let storageAtRisk = false;
   const remindBackup = value => {
     try {
       const firstKey = `dailydigest:first-open:${location.pathname}`;
       let first = localStorage.getItem(firstKey);
       if (!first) { first = String(Date.now()); localStorage.setItem(firstKey, first); }
       const snoozed = Number(localStorage.getItem(backupSnoozeKey)) > Date.now();
-      const stale = !snoozed && (backupReminderDue({lastExport:value, firstOpen:first}) || firstBrewBackupDue && !value);
+      const stale = !snoozed && (backupReminderDue({lastExport:value, firstOpen:first, days: storageAtRisk ? 3 : 7}) || firstBrewBackupDue && !value);
       document.getElementById('backup-reminder').hidden = !stale;
-      document.getElementById('backup-reminder-text').textContent = value
+      document.getElementById('backup-reminder-text').textContent = storageAtRisk
+        ? 'This browser may clear its saved reading desk after about a week without a visit. Download a backup to keep a copy outside it.'
+        : value
         ? 'Your last backup export started over a week ago. Keep a recent copy outside this browser.'
         : 'Keep a copy of your reading desk before switching browsers or profiles. Download a backup or link a backup file.';
     } catch { /* Optional reminder cannot block startup. */ }
@@ -634,7 +699,6 @@ async function boot() {
     if (storageWarning && (message.includes('saved in this browser') || message.startsWith('Saved in this profile'))) message = 'Your reading desk · changes need a backup';
     status.textContent = message; status.title = message;
     if (!startup.hidden) startupStatus.textContent = message;
-    status.setAttribute('aria-label', message);
     if (announce && announcement.textContent !== message) announcement.textContent = message;
   };
   const toolbar = document.querySelector('.browser-bar');
@@ -664,7 +728,10 @@ async function boot() {
   };
   // Keep the topic draft usable during the brief, one-time CPU preparation.
   hasSavedDesk(indexedDB, `dailydigest:${new URL('.', import.meta.url).pathname}`)
-    .then(present => { if (!present && !startupFailedForDraft()) topicDraftForm.hidden = false; }).catch(() => {});
+    .then(present => {
+      if (!present) document.querySelector('[data-startup-stage="data"]').textContent = 'Setting up your reading';
+      if (!present && !startupFailedForDraft()) topicDraftForm.hidden = false;
+    }).catch(() => {});
   let cpuStartup = {isolate: isolationRequested, reload: false};
   try {
     cpuStartup = await prepareDefaultCPU({navigator, storage: localStorage, session: sessionStorage,
@@ -713,6 +780,15 @@ async function boot() {
     } catch { /* A disposable reading copy must never block the authoritative desk. */ }
   };
   let computeBusy = false, dismissedRelease = '', welcomeChecked = false;
+  // Public-source age matters once a brew uses those records: on the Brew page,
+  // while brewing and after a brew. Before that it is worry with nothing to do.
+  let sourceFreshness = null, sourceFreshnessRelevant = false;
+  const showSourceFreshness = () => {
+    const sourceNotice = document.getElementById('source-freshness');
+    const message = sourceFreshnessRelevant ? sourceFreshness?.message || '' : '';
+    sourceNotice.textContent = message; sourceNotice.hidden = !message;
+  };
+  const markSourcesInUse = () => { sourceFreshnessRelevant = true; showSourceFreshness(); };
   const releaseNotice = document.getElementById('release-notice');
   const releaseReload = document.getElementById('release-reload');
   const releaseDismiss = document.getElementById('release-dismiss');
@@ -764,9 +840,8 @@ async function boot() {
       const response = await fetch(manifestURL, { cache: 'no-store' });
       if (!response.ok) return;
       const manifest = await response.json();
-      const freshness = publicSourceFreshness(manifest.public_sources);
-      const sourceNotice = document.getElementById('source-freshness');
-      sourceNotice.textContent = freshness?.message || ''; sourceNotice.hidden = !freshness?.message;
+      sourceFreshness = publicSourceFreshness(manifest.public_sources);
+      showSourceFreshness();
       // The public-data refresh rebuilds the site twice a day without changing
       // the application; brews already read the newer snapshot, so only an
       // application release is announced. Older manifests compare whole builds.
@@ -803,7 +878,7 @@ async function boot() {
   let frameNavigation = 0;
   let activePath = '/';
   let computeTimer, latestCompute, computeReceivedAt, lastAnnouncement;
-  const computeNotice = 'Brew runs locally on this device. Keep this tab open until it finishes. Change computation mode in Data & compute.';
+  const computeNotice = 'Brew runs locally on this device. Keep this tab open until it finishes. Change computation mode under More, then Data & compute.';
   frame.addEventListener('load', () => {
     frame.contentWindow.postMessage({ type: 'compute-config', token, message: computeNotice }, location.origin);
     sendCompanionCapabilities();
@@ -822,7 +897,7 @@ async function boot() {
     if (scrollPositions.has(activePath)) frame.contentWindow.scrollTo(0, scrollPositions.get(activePath));
     if (frame.contentDocument?.title) document.title = frame.contentDocument.title + ' · DailyDigest';
     frame.contentDocument?.addEventListener('click', () => {
-      for (const menu of document.querySelectorAll('.browser-bar > details[open]')) menu.open = false;
+      for (const toggle of document.querySelectorAll('.browser-bar [aria-expanded="true"]')) toggle.click();
     });
     trackSetupDraft(frame.contentDocument?.querySelector('form[action="/setup"]'),
       value => { dirtySetup = value; }, {initiallyDirty:dirtySetup});
@@ -838,6 +913,7 @@ async function boot() {
       topicDraft.value = '';
       draftSubmitted = false;
     }
+    if (/^\/(?:run|done)(?:[/?]|$)/.test(activePath)) markSourcesInUse();
     void cacheReadingView();
   });
   const displayCompute = () => {
@@ -906,7 +982,7 @@ async function boot() {
   const guide = initializeQuickGuide({document,
     hasSeen: () => { try { return localStorage.getItem(guideKey) === 'seen'; } catch { return false; } },
     remember: () => { try { localStorage.setItem(guideKey, 'seen'); } catch { /* optional guide history */ } },
-    openSection:openDataSection, restore:() => document.getElementById('import').click()});
+    openSection:openDataSection});
   const linkedBackup = createLinkedBackup(linkedBackupStore(indexedDB, `dailydigest:backup-file:${new URL('.', import.meta.url).pathname}`));
   const linkedStatus = document.getElementById('linked-backup-status');
   const automaticBackup = document.getElementById('automatic-backup');
@@ -1177,6 +1253,7 @@ async function boot() {
       if (path.split('?')[0] === '/done') {
         firstBrewBackupDue = true;
         try { remindBackup(localStorage.getItem(backupKey)); } catch { /* optional reminder */ }
+        void protectAfterFirstBrew();
       }
       dirtySetup = path.split('?')[0] === '/setup' && options.method?.toUpperCase() === 'POST';
       const generation = headers.get('x-dailydigest-generation');
@@ -1195,7 +1272,7 @@ async function boot() {
       document.getElementById('backup-runtime-notice').hidden = true;
       startup.dataset.state = 'ready';
       setStatus(setupValidation ? 'Settings need correction · changes have not been saved.'
-        : headers.get('x-dailydigest-storage') === 'pending' ? 'Saving recent changes…' : 'Saved in this profile · Backup');
+        : headers.get('x-dailydigest-storage') === 'pending' ? 'Saving recent changes…' : 'Saved in this profile');
       if (response.status < 400 && options.method && options.method.toUpperCase() !== 'GET') scheduleLinkedBackup();
     } catch (error) { if (version === navigation) report(error); }
     finally { if (version === navigation && !awaitingFrame) { frame.inert = false; frame.removeAttribute('aria-busy'); } }
@@ -1236,6 +1313,7 @@ async function boot() {
       document.getElementById('startup').dataset.durationMs = String(Math.round(data.totalMs));
     } else if (data.type === 'compute-state') {
       computeBusy = data.busy; setReleaseState();
+      if (data.busy) markSourcesInUse();
       if (data.busy) document.getElementById('compute-apply').disabled = true;
       else scheduleLinkedBackup();
       document.getElementById('write-linked-backup').disabled = !ready || computeBusy;
@@ -1254,7 +1332,7 @@ async function boot() {
       const notice = document.getElementById('storage-warning');
       notice.textContent = storageWarning; notice.hidden = !storageWarning;
       document.getElementById('storage-status').textContent = storageWarning || 'Your latest changes are saved in this browser.';
-      if (storageWarning) setStatus('Storage needs attention. Open Data & compute, then Backup to save your changes.');
+      if (storageWarning) setStatus('Storage needs attention. Open More, then Backup & transfer to save your changes.');
     }
     else if (data.type === 'error' && !data.id) report(new Error(data.message || data.error || 'Python startup failed'));
   });
@@ -1272,7 +1350,7 @@ async function boot() {
     hasUnflushedEdits = false;
     void cacheReadingView();
     if (data.generation === frameGeneration) {
-      setStatus('Saved in this profile · Backup');
+      setStatus('Saved in this profile');
       frame.contentWindow?.postMessage({type:'storage-committed', token}, location.origin);
     }
   } });
@@ -1295,6 +1373,8 @@ async function boot() {
         }
         firstBrewBackupDue = true;
         try { remindBackup(localStorage.getItem(backupKey)); } catch { /* optional reminder */ }
+        void protectAfterFirstBrew();
+        markSourcesInUse();
       }
       else if (data.type === 'navigate') {
         const path = localPath(data.path, activePath);
@@ -1401,9 +1481,24 @@ async function boot() {
     storageNotice.hidden = true;
     try { localStorage.setItem(storagePromptKey, 'dismissed'); } catch { /* optional reminder */ }
   }
+  async function protectAfterFirstBrew() {
+    const askedKey = `dailydigest:storage-auto:${location.pathname}`;
+    try {
+      if (!navigator.storage?.persist || await navigator.storage.persisted?.()) return;
+      if (!quietStorageProtection(navigator.userAgent) || localStorage.getItem(askedKey)) return;
+      localStorage.setItem(askedKey, new Date().toISOString());
+      await navigator.storage.persist();
+      await refreshStorageProtection();
+    } catch { /* The banner and Data & compute still offer it. */ }
+  }
   async function refreshStorageProtection() {
     try {
       const granted = Boolean(await navigator.storage?.persisted?.());
+      const atRisk = !granted && typeof window.showSaveFilePicker !== 'function';
+      if (atRisk !== storageAtRisk) {
+        storageAtRisk = atRisk;
+        try { remindBackup(localStorage.getItem(backupKey)); } catch { /* optional reminder */ }
+      }
       document.getElementById('storage-status').textContent = granted ? 'Persistent storage is enabled.' : 'Stored on this device. Export a backup before clearing browser data.';
       document.getElementById('protect-storage').disabled = granted || !navigator.storage?.persist;
       let dismissed = false;

@@ -216,7 +216,7 @@ def render_digest(
                     "publication_label": publication_label(row) if key == "research" else "",
                     "related_commentaries": companions.get(row.id, []),
                     "opportunity": (
-                        opportunity_display(item_metadata(row), opportunity_profile)
+                        opportunity_display(item_metadata(row), opportunity_profile, key)
                         if key in {"opportunities", "events"}
                         else None
                     ),

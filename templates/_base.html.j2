@@ -7,14 +7,19 @@
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="icon" href="/app-icon.svg" type="image/svg+xml">
 <script>
-  try {
-    const savedTheme = localStorage.getItem("dailydigest-theme");
+  (() => {
+    // This browser's choice wins; the copy in data/ui_prefs.json covers a new
+    // device or a restored backup, and is brought up to date with this one.
+    const filed = {{ (ui_prefs() if ui_prefs is defined else {})|tojson }};
+    const stored = key => { try { return localStorage.getItem(`dailydigest-${key}`); } catch (_) { return null; } };
+    const pick = key => stored(key) || filed[key] || "";
+    const theme = pick("theme");
     const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-    document.documentElement.dataset.theme = savedTheme || (prefersDark ? "dark" : "light");
-    const savedDisplay = localStorage.getItem("dailydigest-display");
-    document.documentElement.dataset.display = savedDisplay === "compact" ? "compact" : "comfortable";
-    document.documentElement.dataset.pip = localStorage.getItem("dailydigest-pip") === "hidden" ? "hidden" : "visible";
-  } catch (_) {}
+    document.documentElement.dataset.theme = theme === "dark" || theme === "light" ? theme : (prefersDark ? "dark" : "light");
+    document.documentElement.dataset.display = pick("display") === "compact" ? "compact" : "comfortable";
+    document.documentElement.dataset.pip = pick("pip") === "hidden" ? "hidden" : "visible";
+    window.ddUiPrefsBehind = ["theme", "display", "pip"].filter(key => stored(key) && stored(key) !== filed[key]);
+  })();
 </script>
 <title>{% block title %}DailyDigest{% endblock %}</title>
 <style>
@@ -25,6 +30,7 @@
   .article-figure figure { margin: 8px 0; }
   .article-figure img { display: block; width: auto; max-width: 100%; height: auto; max-height: 70vh; object-fit: contain; }
   .article-figure img[hidden], .figure-unavailable[hidden] { display: none; }
+  .article-figure:not([open]) .figure-hide, .article-figure[open] .figure-show { display: none; }
   .figure-retry { min-height: 44px; padding: 4px 12px; color: var(--accent); background: var(--card); border: 1px solid var(--border); border-radius: 6px; cursor: pointer; }
   .article-figure figcaption, .figure-hint { color: var(--muted); font-size: 12px; }
   @media print { .article-figure { display: none; } }
@@ -227,6 +233,16 @@
     window.scrollTo({ top: 0, behavior: smooth ? "smooth" : "auto" });
     document.getElementById("page-content").focus({ preventScroll: true });
   });
+  // Keep data/ui_prefs.json in step with this browser, so backups carry it.
+  const prefsToken = {{ (update_csrf_token() if update_csrf_token is defined else "")|tojson }};
+  function savePrefs(prefs) {
+    const query = new URLSearchParams(prefs).toString();
+    if (!prefsToken || !query) return;
+    fetch(`/ui-prefs?${query}`, {method: "POST", headers: {"X-CSRF-Token": prefsToken}}).catch(() => {});
+  }
+  try {
+    savePrefs(Object.fromEntries((window.ddUiPrefsBehind || []).map(key => [key, localStorage.getItem(`dailydigest-${key}`)])));
+  } catch (_) {}
   function applyTheme(theme) {
     const dark = theme === "dark";
     root.dataset.theme = dark ? "dark" : "light";
@@ -237,6 +253,7 @@
   themeButton.addEventListener("click", () => {
     const next = root.dataset.theme === "dark" ? "light" : "dark";
     try { localStorage.setItem("dailydigest-theme", next); } catch (_) {}
+    savePrefs({theme: next});
     applyTheme(next);
   });
 
@@ -251,6 +268,7 @@
   displayButton.addEventListener("click", () => {
     const next = root.dataset.display === "compact" ? "comfortable" : "compact";
     try { localStorage.setItem("dailydigest-display", next); } catch (_) {}
+    savePrefs({display: next});
     applyDisplay(next);
   });
 
@@ -265,6 +283,7 @@
   pipButton.addEventListener("click", () => {
     const next = root.dataset.pip === "hidden" ? "visible" : "hidden";
     try { localStorage.setItem("dailydigest-pip", next); } catch (_) {}
+    savePrefs({pip: next});
     applyPip(next);
     document.dispatchEvent(new Event("pipvisibilitychange"));
   });
@@ -309,6 +328,14 @@
       image.src = image.dataset.src;
     };
     image.addEventListener('error', () => {
+      // Many publisher hosts (Wiley among them) send no CORS header, so the
+      // cookieless request fails; retry once as a plain image, still without a referrer.
+      if (state === 'loading' && image.hasAttribute('crossorigin')) {
+        image.removeAttribute('crossorigin');
+        image.removeAttribute('src');
+        image.src = image.dataset.src;
+        return;
+      }
       state = 'error';
       image.hidden = true;
       unavailable.hidden = false;

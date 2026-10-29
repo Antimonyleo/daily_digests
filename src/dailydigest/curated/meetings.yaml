@@ -1,0 +1,573 @@
+# Hand-kept list read by dailydigest.ingest.curated. Facts come from official
+# pages (checked on each entry's verified_on date). Refresh deadlines and
+# meeting dates monthly; see the README section on curated lists.
+# DailyDigest curated list: flagship meetings whose organisers block automated access
+# Compiled 2026-10-28. Only events starting on or after 2026-11-05.
+# Rechecked 2026-10-28: grc.org answers non-browser clients (including its MeetingSearch.ashx
+# endpoint) with a reCAPTCHA page, and mrs.org, rsc.org and cell.com with Cloudflare challenges
+# (acs.org with an Incapsula page), so none of these is read automatically; keep them here.
+# ECI, Biophysical Society and FASEB meetings come from their own adapters, not this list.
+#
+# evidence_kind:
+#   page            read from the organiser's own data (for GRC: the JSON search endpoint behind
+#                   grc.org/conferences.aspx, fetched once, ResultCount 399 for 2027).
+#   search_snippet  organiser page blocks automated clients; dates come from web-search results
+#                   restricted to the organiser's own domain (paraphrased by the search tool).
+# format: GRC, MRS, ACS, Faraday Discussions, AIChE and Cell Press symposia are listed as in_person;
+#   none of the sources read here state a virtual option, but this was not checked page by page.
+# deadline: set only where an upcoming (not past) abstract/application date was stated. GRC
+#   application deadlines live on each conference page and were not fetched.
+
+# ---------------------------------------------------------------- Gordon Research Conferences (2027)
+- id: grc-2027-rna-nanotechnology
+  title: "RNA Nanotechnology (Gordon Research Conference)"
+  organizer: Gordon Research Conferences
+  url: https://www.grc.org/rna-nanotechnology-conference/2027/
+  start: 2027-01-10
+  end: 2027-01-15
+  location: "Ventura, California, United States (Four Points Sheraton / Holiday Inn Express)"
+  format: in_person
+  event_type: conference
+  topics: "RNA Nanotechnology: Integrating RNA Structure, Chemistry, Delivery, and AI to Advance Therapeutics and Diagnostics."
+  evidence_kind: page
+  evidence: "grc.org search data for the conference listing: DateDisplay 'January 10 - 15, 2027', SiteName 'Four Points Sheraton / Holiday Inn Express', SiteCity 'Ventura' — https://www.grc.org/MeetingSearch.ashx (feeds https://www.grc.org/conferences.aspx; page https://www.grc.org/rna-nanotechnology-conference/2027/)"
+  verified_on: 2026-10-28
+
+- id: grc-2027-peptide-materials
+  title: "Peptide Materials (Gordon Research Conference)"
+  organizer: Gordon Research Conferences
+  url: https://www.grc.org/peptide-materials-conference/2027/
+  start: 2027-01-17
+  end: 2027-01-22
+  location: "Oxnard, California, United States (Staybridge Suites Oxnard - River Ridge)"
+  format: in_person
+  event_type: conference
+  topics: "Peptide Materials: Design, Synthesis, Structure, and Applications."
+  evidence_kind: page
+  evidence: "grc.org search data for the conference listing: DateDisplay 'January 17 - 22, 2027', SiteName 'Staybridge Suites Oxnard - River Ridge', SiteCity 'Oxnard' — https://www.grc.org/MeetingSearch.ashx (feeds https://www.grc.org/conferences.aspx; page https://www.grc.org/peptide-materials-conference/2027/)"
+  verified_on: 2026-10-28
+
+- id: grc-2027-rna-editing
+  title: "RNA Editing (Gordon Research Conference)"
+  organizer: Gordon Research Conferences
+  url: https://www.grc.org/rna-editing-conference/2027/
+  start: 2027-03-07
+  end: 2027-03-12
+  location: "Ventura, California, United States (Ventura Beach Marriott)"
+  format: in_person
+  event_type: conference
+  topics: "RNA Editing: Innovations in RNA Modification and Editing: Mechanisms, Technologies, and Applications."
+  evidence_kind: page
+  evidence: "grc.org search data for the conference listing: DateDisplay 'March 7 - 12, 2027', SiteName 'Ventura Beach Marriott', SiteCity 'Ventura' — https://www.grc.org/MeetingSearch.ashx (feeds https://www.grc.org/conferences.aspx; page https://www.grc.org/rna-editing-conference/2027/)"
+  verified_on: 2026-10-28
+
+- id: grc-2027-glycobiology
+  title: "Glycobiology (Gordon Research Conference)"
+  organizer: Gordon Research Conferences
+  url: https://www.grc.org/glycobiology-conference/2027/
+  start: 2027-03-14
+  end: 2027-03-19
+  location: "Ventura, California, United States (Four Points Sheraton / Holiday Inn Express)"
+  format: in_person
+  event_type: conference
+  topics: "Glycobiology: Revealing Functional Glycan Diversity in Biology."
+  evidence_kind: page
+  evidence: "grc.org search data for the conference listing: DateDisplay 'March 14 - 19, 2027', SiteName 'Four Points Sheraton / Holiday Inn Express', SiteCity 'Ventura' — https://www.grc.org/MeetingSearch.ashx (feeds https://www.grc.org/conferences.aspx; page https://www.grc.org/glycobiology-conference/2027/)"
+  verified_on: 2026-10-28
+
+- id: grc-2027-self-assembly-and-supramolecular-chemistry
+  title: "Self-Assembly and Supramolecular Chemistry (Gordon Research Conference)"
+  organizer: Gordon Research Conferences
+  url: https://www.grc.org/self-assembly-and-supramolecular-chemistry-conference/2027/
+  start: 2027-05-09
+  end: 2027-05-14
+  location: "Les Diablerets, Vaud (fr), Switzerland (Les Diablerets Conference Center)"
+  format: in_person
+  event_type: conference
+  topics: "Self-Assembly and Supramolecular Chemistry: Programming Dynamic Function Using Molecular Self-Organization."
+  evidence_kind: page
+  evidence: "grc.org search data for the conference listing: DateDisplay 'May 9 - 14, 2027', SiteName 'Les Diablerets Conference Center', SiteCity 'Les Diablerets' — https://www.grc.org/MeetingSearch.ashx (feeds https://www.grc.org/conferences.aspx; page https://www.grc.org/self-assembly-and-supramolecular-chemistry-conference/2027/)"
+  verified_on: 2026-10-28
+
+- id: grc-2027-label-free-single-molecule-sensing
+  title: "Label-Free Single Molecule Sensing (Gordon Research Conference)"
+  organizer: Gordon Research Conferences
+  url: https://www.grc.org/label-free-single-molecule-sensing-conference/2027/
+  start: 2027-06-06
+  end: 2027-06-11
+  location: "Easton, Massachusetts, United States (Stonehill College)"
+  format: in_person
+  event_type: conference
+  topics: "Label-Free Single Molecule Sensing: Label-Free Approaches to Observe Single Biomolecules for Biophysics and Biotechnology."
+  evidence_kind: page
+  evidence: "grc.org search data for the conference listing: DateDisplay 'June 6 - 11, 2027', SiteName 'Stonehill College', SiteCity 'Easton' — https://www.grc.org/MeetingSearch.ashx (feeds https://www.grc.org/conferences.aspx; page https://www.grc.org/label-free-single-molecule-sensing-conference/2027/)"
+  verified_on: 2026-10-28
+
+- id: grc-2027-physics-and-chemistry-of-microfluidics
+  title: "Physics and Chemistry of Microfluidics (Gordon Research Conference)"
+  organizer: Gordon Research Conferences
+  url: https://www.grc.org/physics-and-chemistry-of-microfluidics-conference/2027/
+  start: 2027-06-06
+  end: 2027-06-11
+  location: "Lucca (Barga), Lucca, Italy (Renaissance Tuscany Il Ciocco)"
+  format: in_person
+  event_type: conference
+  topics: "Physics and Chemistry of Microfluidics: Miniaturization Driving Innovation in Fundamental and Translational Sciences."
+  evidence_kind: page
+  evidence: "grc.org search data for the conference listing: DateDisplay 'June 6 - 11, 2027', SiteName 'Renaissance Tuscany Il Ciocco', SiteCity 'Lucca (Barga)' — https://www.grc.org/MeetingSearch.ashx (feeds https://www.grc.org/conferences.aspx; page https://www.grc.org/physics-and-chemistry-of-microfluidics-conference/2027/)"
+  verified_on: 2026-10-28
+
+- id: grc-2027-plasmonically-powered-processes
+  title: "Plasmonically Powered Processes (Gordon Research Conference)"
+  organizer: Gordon Research Conferences
+  url: https://www.grc.org/plasmonically-powered-processes-conference/2027/
+  start: 2027-06-06
+  end: 2027-06-11
+  location: "Ventura, California, United States (Ventura Beach Marriott)"
+  format: in_person
+  event_type: conference
+  topics: "Plasmonically Powered Processes: Connecting Structures, Dynamics, and Functions."
+  evidence_kind: page
+  evidence: "grc.org search data for the conference listing: DateDisplay 'June 6 - 11, 2027', SiteName 'Ventura Beach Marriott', SiteCity 'Ventura' — https://www.grc.org/MeetingSearch.ashx (feeds https://www.grc.org/conferences.aspx; page https://www.grc.org/plasmonically-powered-processes-conference/2027/)"
+  verified_on: 2026-10-28
+
+- id: grc-2027-polymers
+  title: "Polymers (Gordon Research Conference)"
+  organizer: Gordon Research Conferences
+  url: https://www.grc.org/polymers-conference/2027/
+  start: 2027-06-06
+  end: 2027-06-11
+  location: "South Hadley, Massachusetts, United States (Mount Holyoke College)"
+  format: in_person
+  event_type: conference
+  topics: "Polymers: Accelerating Polymer Discovery: Synthesis, Structure, and Function."
+  evidence_kind: page
+  evidence: "grc.org search data for the conference listing: DateDisplay 'June 6 - 11, 2027', SiteName 'Mount Holyoke College', SiteCity 'South Hadley' — https://www.grc.org/MeetingSearch.ashx (feeds https://www.grc.org/conferences.aspx; page https://www.grc.org/polymers-conference/2027/)"
+  verified_on: 2026-10-28
+
+- id: grc-2027-bioorganic-chemistry
+  title: "Bioorganic Chemistry (Gordon Research Conference)"
+  organizer: Gordon Research Conferences
+  url: https://www.grc.org/bioorganic-chemistry-conference/2027/
+  start: 2027-06-13
+  end: 2027-06-18
+  location: "Andover, New Hampshire, United States (Proctor Academy)"
+  format: in_person
+  event_type: conference
+  topics: "Bioorganic Chemistry: Chemical Biology Translating Discovery at the Bench and Into the Clinic."
+  evidence_kind: page
+  evidence: "grc.org search data for the conference listing: DateDisplay 'June 13 - 18, 2027', SiteName 'Proctor Academy', SiteCity 'Andover' — https://www.grc.org/MeetingSearch.ashx (feeds https://www.grc.org/conferences.aspx; page https://www.grc.org/bioorganic-chemistry-conference/2027/)"
+  verified_on: 2026-10-28
+
+- id: grc-2027-cancer-nanotechnology
+  title: "Cancer Nanotechnology (Gordon Research Conference)"
+  organizer: Gordon Research Conferences
+  url: https://www.grc.org/cancer-nanotechnology-conference/2027/
+  start: 2027-06-20
+  end: 2027-06-25
+  location: "Waterville Valley, New Hampshire, United States (Waterville Valley)"
+  format: in_person
+  event_type: conference
+  topics: "Cancer Nanotechnology: Delivering Across the Nanoscale Continuum."
+  evidence_kind: page
+  evidence: "grc.org search data for the conference listing: DateDisplay 'June 20 - 25, 2027', SiteName 'Waterville Valley', SiteCity 'Waterville Valley' — https://www.grc.org/MeetingSearch.ashx (feeds https://www.grc.org/conferences.aspx; page https://www.grc.org/cancer-nanotechnology-conference/2027/)"
+  verified_on: 2026-10-28
+
+- id: grc-2027-crystal-growth-and-assembly
+  title: "Crystal Growth and Assembly (Gordon Research Conference)"
+  organizer: Gordon Research Conferences
+  url: https://www.grc.org/crystal-growth-and-assembly-conference/2027/
+  start: 2027-06-20
+  end: 2027-06-25
+  location: "Manchester, New Hampshire, United States (Southern New Hampshire University)"
+  format: in_person
+  event_type: conference
+  topics: "Crystal Growth and Assembly: Future Directions in Predictive Synthesis of Ordered Materials."
+  evidence_kind: page
+  evidence: "grc.org search data for the conference listing: DateDisplay 'June 20 - 25, 2027', SiteName 'Southern New Hampshire University', SiteCity 'Manchester' — https://www.grc.org/MeetingSearch.ashx (feeds https://www.grc.org/conferences.aspx; page https://www.grc.org/crystal-growth-and-assembly-conference/2027/)"
+  verified_on: 2026-10-28
+
+- id: grc-2027-preclinical-form-and-formulation-for-drug-discovery
+  title: "Preclinical Form and Formulation for Drug Discovery (Gordon Research Conference)"
+  organizer: Gordon Research Conferences
+  url: https://www.grc.org/preclinical-form-and-formulation-for-drug-discovery-conference/2027/
+  start: 2027-06-20
+  end: 2027-06-25
+  location: "Lewiston, Maine, United States (Bates College)"
+  format: in_person
+  event_type: conference
+  topics: "Preclinical Form and Formulation for Drug Discovery: Formulation at Interfaces of Discovery: AI-Native Design, Barrier Biology, and Emerging Modalities."
+  evidence_kind: page
+  evidence: "grc.org search data for the conference listing: DateDisplay 'June 20 - 25, 2027', SiteName 'Bates College', SiteCity 'Lewiston' — https://www.grc.org/MeetingSearch.ashx (feeds https://www.grc.org/conferences.aspx; page https://www.grc.org/preclinical-form-and-formulation-for-drug-discovery-conference/2027/)"
+  verified_on: 2026-10-28
+
+- id: grc-2027-nucleic-acids
+  title: "Nucleic Acids (Gordon Research Conference)"
+  organizer: Gordon Research Conferences
+  url: https://www.grc.org/nucleic-acids-conference/2027/
+  start: 2027-06-27
+  end: 2027-07-02
+  location: "Newry, Maine, United States (Jordan Hotel at Sunday River)"
+  format: in_person
+  event_type: conference
+  topics: "Nucleic Acids: DNA and RNA: Chemistry, Structure, Mechanism and Function."
+  evidence_kind: page
+  evidence: "grc.org search data for the conference listing: DateDisplay 'June 27 - July 2, 2027', SiteName 'Jordan Hotel at Sunday River', SiteCity 'Newry' — https://www.grc.org/MeetingSearch.ashx (feeds https://www.grc.org/conferences.aspx; page https://www.grc.org/nucleic-acids-conference/2027/)"
+  verified_on: 2026-10-28
+
+- id: grc-2027-nucleosides-nucleotides-and-oligonucleotides
+  title: "Nucleosides, Nucleotides and Oligonucleotides (Gordon Research Conference)"
+  organizer: Gordon Research Conferences
+  url: https://www.grc.org/nucleosides-nucleotides-and-oligonucleotides-conference/2027/
+  start: 2027-06-27
+  end: 2027-07-02
+  location: "Newport, Rhode Island, United States (Salve Regina University)"
+  format: in_person
+  event_type: conference
+  topics: "Nucleosides, Nucleotides and Oligonucleotides: Designing Nucleic Acids and Components: Bridging Chemistry, Biology, and Therapeutics."
+  evidence_kind: page
+  evidence: "grc.org search data for the conference listing: DateDisplay 'June 27 - July 2, 2027', SiteName 'Salve Regina University', SiteCity 'Newport' — https://www.grc.org/MeetingSearch.ashx (feeds https://www.grc.org/conferences.aspx; page https://www.grc.org/nucleosides-nucleotides-and-oligonucleotides-conference/2027/)"
+  verified_on: 2026-10-28
+
+- id: grc-2027-artificial-molecular-switches-and-motors
+  title: "Artificial Molecular Switches and Motors (Gordon Research Conference)"
+  organizer: Gordon Research Conferences
+  url: https://www.grc.org/artificial-molecular-switches-and-motors-conference/2027/
+  start: 2027-07-11
+  end: 2027-07-16
+  location: "New London, New Hampshire, United States (Colby-Sawyer College)"
+  format: in_person
+  event_type: conference
+  topics: "Artificial Molecular Switches and Motors: Leveraging Molecular Switches Towards Cooperative Phenomena."
+  evidence_kind: page
+  evidence: "grc.org search data for the conference listing: DateDisplay 'July 11 - 16, 2027', SiteName 'Colby-Sawyer College', SiteCity 'New London' — https://www.grc.org/MeetingSearch.ashx (feeds https://www.grc.org/conferences.aspx; page https://www.grc.org/artificial-molecular-switches-and-motors-conference/2027/)"
+  verified_on: 2026-10-28
+
+- id: grc-2027-synthetic-biology
+  title: "Synthetic Biology (Gordon Research Conference)"
+  organizer: Gordon Research Conferences
+  url: https://www.grc.org/synthetic-biology-conference/2027/
+  start: 2027-07-18
+  end: 2027-07-23
+  location: "Newry, Maine, United States (Grand Summit Hotel at Sunday River)"
+  format: in_person
+  event_type: conference
+  topics: "Synthetic Biology: Engineering Programmable Biological Systems Through Molecular, Cellular, and Computational Design."
+  evidence_kind: page
+  evidence: "grc.org search data for the conference listing: DateDisplay 'July 18 - 23, 2027', SiteName 'Grand Summit Hotel at Sunday River', SiteCity 'Newry' — https://www.grc.org/MeetingSearch.ashx (feeds https://www.grc.org/conferences.aspx; page https://www.grc.org/synthetic-biology-conference/2027/)"
+  verified_on: 2026-10-28
+
+- id: grc-2027-protein-engineering
+  title: "Protein Engineering (Gordon Research Conference)"
+  organizer: Gordon Research Conferences
+  url: https://www.grc.org/protein-engineering-conference/2027/
+  start: 2027-07-25
+  end: 2027-07-30
+  location: "Lewiston, Maine, United States (Bates College)"
+  format: in_person
+  event_type: conference
+  topics: "Protein Engineering: Integrating Design and Empirical Approaches for Protein Engineering."
+  evidence_kind: page
+  evidence: "grc.org search data for the conference listing: DateDisplay 'July 25 - 30, 2027', SiteName 'Bates College', SiteCity 'Lewiston' — https://www.grc.org/MeetingSearch.ashx (feeds https://www.grc.org/conferences.aspx; page https://www.grc.org/protein-engineering-conference/2027/)"
+  verified_on: 2026-10-28
+
+- id: grc-2027-biomaterials-and-tissue-engineering
+  title: "Biomaterials and Tissue Engineering (Gordon Research Conference)"
+  organizer: Gordon Research Conferences
+  url: https://www.grc.org/biomaterials-and-tissue-engineering-conference/2027/
+  start: 2027-08-01
+  end: 2027-08-06
+  location: "Ventura, California, United States (Ventura Beach Marriott)"
+  format: in_person
+  event_type: conference
+  topics: "Biomaterials and Tissue Engineering: Bridging the Gap Between the Bench and Commercialization."
+  evidence_kind: page
+  evidence: "grc.org search data for the conference listing: DateDisplay 'August 1 - 6, 2027', SiteName 'Ventura Beach Marriott', SiteCity 'Ventura' — https://www.grc.org/MeetingSearch.ashx (feeds https://www.grc.org/conferences.aspx; page https://www.grc.org/biomaterials-and-tissue-engineering-conference/2027/)"
+  verified_on: 2026-10-28
+
+- id: grc-2027-medicinal-chemistry
+  title: "Medicinal Chemistry (Gordon Research Conference)"
+  organizer: Gordon Research Conferences
+  url: https://www.grc.org/medicinal-chemistry-conference/2027/
+  start: 2027-08-01
+  end: 2027-08-06
+  location: "New London, New Hampshire, United States (Colby-Sawyer College)"
+  format: in_person
+  event_type: conference
+  topics: "Medicinal Chemistry: Shaping the Future of Therapeutic Discovery Through Technology, Strategy and Innovation."
+  evidence_kind: page
+  evidence: "grc.org search data for the conference listing: DateDisplay 'August 1 - 6, 2027', SiteName 'Colby-Sawyer College', SiteCity 'New London' — https://www.grc.org/MeetingSearch.ashx (feeds https://www.grc.org/conferences.aspx; page https://www.grc.org/medicinal-chemistry-conference/2027/)"
+  verified_on: 2026-10-28
+
+- id: grc-2027-molecular-and-cellular-biology-of-lipids
+  title: "Molecular and Cellular Biology of Lipids (Gordon Research Conference)"
+  organizer: Gordon Research Conferences
+  url: https://www.grc.org/molecular-and-cellular-biology-of-lipids-conference/2027/
+  start: 2027-08-01
+  end: 2027-08-06
+  location: "Waterville Valley, New Hampshire, United States (Waterville Valley)"
+  format: in_person
+  event_type: conference
+  topics: "Molecular and Cellular Biology of Lipids: Lipids Under Stress Across Synthesis, Signaling, and Organelles."
+  evidence_kind: page
+  evidence: "grc.org search data for the conference listing: DateDisplay 'August 1 - 6, 2027', SiteName 'Waterville Valley', SiteCity 'Waterville Valley' — https://www.grc.org/MeetingSearch.ashx (feeds https://www.grc.org/conferences.aspx; page https://www.grc.org/molecular-and-cellular-biology-of-lipids-conference/2027/)"
+  verified_on: 2026-10-28
+
+- id: grc-2027-nanoporous-materials-and-their-applications
+  title: "Nanoporous Materials and Their Applications (Gordon Research Conference)"
+  organizer: Gordon Research Conferences
+  url: https://www.grc.org/nanoporous-materials-and-their-applications-conference/2027/
+  start: 2027-08-01
+  end: 2027-08-06
+  location: "Andover, New Hampshire, United States (Proctor Academy)"
+  format: in_person
+  event_type: conference
+  topics: "Nanoporous Materials and Their Applications: Porous Materials: Redefining Limits through Advanced Synthesis and Characterization."
+  evidence_kind: page
+  evidence: "grc.org search data for the conference listing: DateDisplay 'August 1 - 6, 2027', SiteName 'Proctor Academy', SiteCity 'Andover' — https://www.grc.org/MeetingSearch.ashx (feeds https://www.grc.org/conferences.aspx; page https://www.grc.org/nanoporous-materials-and-their-applications-conference/2027/)"
+  verified_on: 2026-10-28
+
+- id: grc-2027-high-throughput-chemistry-and-chemical-biology
+  title: "High Throughput Chemistry and Chemical Biology (Gordon Research Conference)"
+  organizer: Gordon Research Conferences
+  url: https://www.grc.org/high-throughput-chemistry-and-chemical-biology-conference/2027/
+  start: 2027-08-08
+  end: 2027-08-13
+  location: "New London, New Hampshire, United States (Colby-Sawyer College)"
+  format: in_person
+  event_type: conference
+  topics: "High Throughput Chemistry and Chemical Biology: Accelerating Discovery Science at Scale with New Chemistry, Technologies, and Biological Approaches."
+  evidence_kind: page
+  evidence: "grc.org search data for the conference listing: DateDisplay 'August 8 - 13, 2027', SiteName 'Colby-Sawyer College', SiteCity 'New London' — https://www.grc.org/MeetingSearch.ashx (feeds https://www.grc.org/conferences.aspx; page https://www.grc.org/high-throughput-chemistry-and-chemical-biology-conference/2027/)"
+  verified_on: 2026-10-28
+
+- id: grc-2027-soft-condensed-matter-physics
+  title: "Soft Condensed Matter Physics (Gordon Research Conference)"
+  organizer: Gordon Research Conferences
+  url: https://www.grc.org/soft-condensed-matter-physics-conference/2027/
+  start: 2027-08-15
+  end: 2027-08-20
+  location: "New London, New Hampshire, United States (Colby-Sawyer College)"
+  format: in_person
+  event_type: conference
+  topics: "Soft Condensed Matter Physics: Emergent Function in Soft and Living Matter: Classical Foundations, Learning, Adaptation, and Control."
+  evidence_kind: page
+  evidence: "grc.org search data for the conference listing: DateDisplay 'August 15 - 20, 2027', SiteName 'Colby-Sawyer College', SiteCity 'New London' — https://www.grc.org/MeetingSearch.ashx (feeds https://www.grc.org/conferences.aspx; page https://www.grc.org/soft-condensed-matter-physics-conference/2027/)"
+  verified_on: 2026-10-28
+
+# ---------------------------------------------------------------- Materials Research Society
+# mrs.org returns 403 (Cloudflare) to curl and WebFetch. Dates from search results on mrs.org.
+- id: mrs-fall-2026
+  title: "2026 MRS Fall Meeting & Exhibit"
+  organizer: Materials Research Society
+  url: https://www.mrs.org/meetings-events/annual-meetings/2026-mrs-fall-meeting
+  start: 2026-11-29
+  end: 2026-12-04
+  location: "Boston, Massachusetts, United States (Hynes Convention Center and Sheraton Boston Hotel)"
+  format: in_person
+  event_type: meeting
+  topics: "Multi-symposium materials research meeting (the 2026 Fall programme includes, e.g., symposium SB09 Biomaterials for Regenerative Engineering)."
+  evidence_kind: search_snippet
+  evidence: "search_snippet (mrs.org): meeting 'November 29 to December 4, 2026' at the Hynes Convention Center and adjacent Sheraton Boston Hotel; event-information page start Nov 29 7:00 AM ET, end Dec 4 5:00 PM ET (one symposium page says Dec 5) — https://www.mrs.org/meetings-events/annual-meetings/2026-mrs-fall-meeting"
+  verified_on: 2026-10-28
+
+- id: mrs-spring-2027
+  title: "2027 MRS Spring Meeting & Exhibit"
+  organizer: Materials Research Society
+  url: https://www.mrs.org/meetings-events/annual-meetings/2027-mrs-spring-meeting-exhibit
+  start: 2027-04-05
+  end: 2027-04-09
+  location: "Seattle, Washington, United States (Summit at the Seattle Convention Center and Hyatt Regency Seattle)"
+  format: in_person
+  event_type: meeting
+  topics: "Multi-symposium materials research meeting covering the breadth of materials science."
+  evidence_kind: search_snippet
+  evidence: "search_snippet (mrs.org): 'April 5–9, 2027, in Seattle, Washington'; symposia Tuesday April 6 to Friday April 9; regular abstract deadline was October 14, 2026 (passed) — https://www.mrs.org/meetings-events/annual-meetings/2027-mrs-spring-meeting-exhibit"
+  verified_on: 2026-10-28
+
+# ---------------------------------------------------------------- American Chemical Society
+# acs.org serves a ~800-byte bot page to curl and an empty page to WebFetch. Dates from search results on acs.org.
+- id: acs-spring-2027
+  title: "ACS Spring 2027"
+  organizer: American Chemical Society
+  url: https://www.acs.org/events/spring.html
+  start: 2027-03-21
+  end: 2027-03-25
+  location: "New Orleans, Louisiana, United States"
+  format: in_person
+  event_type: meeting
+  topics: "ACS national meeting with programming from all ACS technical divisions (e.g. Biochemistry and Chemical Biology, Analytical Chemistry, Agricultural and Food Chemistry)."
+  evidence_kind: search_snippet
+  evidence: "search_snippet (acs.org future-meetings table and ACS Spring page): 'New Orleans, LA | March 21-25' 2027; most divisions' abstract deadline 2026-09-28 (passed, confirmed on https://callforabstracts.acs.org/acsspring2027) — https://www.acs.org/events/acs-meetings/future-meetings.html"
+  verified_on: 2026-10-28
+
+- id: acs-fall-2027
+  title: "ACS Fall 2027"
+  organizer: American Chemical Society
+  url: https://www.acs.org/events/acs-meetings/future-meetings.html
+  start: 2027-08-22
+  end: 2027-08-26
+  location: "San Diego, California, United States"
+  format: in_person
+  event_type: meeting
+  topics: "ACS national meeting with programming from all ACS technical divisions (e.g. Biochemistry and Chemical Biology, Analytical Chemistry, Agricultural and Food Chemistry)."
+  evidence_kind: search_snippet
+  evidence: "search_snippet (acs.org future-meetings page and programming timeline): ACS Fall 2027 'August 22 - 26. Location: San Diego, CA' — https://www.acs.org/events/acs-meetings/future-meetings.html"
+  verified_on: 2026-10-28
+
+# ---------------------------------------------------------------- Royal Society of Chemistry: Faraday Discussions
+# rsc.org returns 403 (Cloudflare) to curl and WebFetch. Dates from search results on rsc.org.
+# Faraday Discussions publish speakers' papers in advance; delegates are expected in person.
+- id: faraday-discussion-2027-corrosion
+  title: "Corrosion from fundamentals to extremes Faraday Discussion"
+  organizer: Royal Society of Chemistry
+  url: https://www.rsc.org/events/find-an-event/corrosion-from-fundamentals-to-extremes-faraday-discussion
+  start: 2027-04-07
+  end: 2027-04-09
+  location: "Manchester, United Kingdom"
+  format: in_person
+  event_type: meeting
+  deadline: 2027-01-27
+  deadline_type: abstract
+  topics: "Physical and environmental chemistry of corrosion, including extreme environments in nuclear, hydrogen, battery, offshore renewable and solar technologies."
+  evidence_kind: search_snippet
+  evidence: "search_snippet (rsc.org event page): '7–9 April 2027' in Manchester; poster abstracts 'due by 27 January 2027'; oral abstracts closed 20 July 2026 — https://www.rsc.org/events/find-an-event/corrosion-from-fundamentals-to-extremes-faraday-discussion"
+  verified_on: 2026-10-28
+
+- id: faraday-discussion-2027-sers
+  title: "Surface-Enhanced Raman Scattering Faraday Discussion"
+  organizer: Royal Society of Chemistry
+  url: https://www.rsc.org/events/find-an-event/surface-enhanced-raman-scattering-faraday-discussion
+  start: 2027-04-14
+  end: 2027-04-16
+  location: "London, United Kingdom"
+  format: in_person
+  event_type: meeting
+  deadline: 2027-02-01
+  deadline_type: abstract
+  topics: "Third Faraday Discussion on surface-enhanced Raman scattering (SERS) and its applications."
+  evidence_kind: search_snippet
+  evidence: "search_snippet (rsc.org event page): '14–16 April 2027' in London; poster abstracts due '1 February 2027'; oral abstracts closed 20 July 2026 — https://www.rsc.org/events/find-an-event/surface-enhanced-raman-scattering-faraday-discussion"
+  verified_on: 2026-10-28
+
+- id: faraday-discussion-2027-molecular-catalysis
+  title: "Understanding molecular catalysis through computation and experiment Faraday Discussion"
+  organizer: Royal Society of Chemistry
+  url: https://www.rsc.org/events/find-an-event/understanding-molecular-catalysis-through-computation-and-experiment-faraday-discussion
+  start: 2027-06-21
+  end: 2027-06-23
+  location: "St Andrews, United Kingdom"
+  format: in_person
+  event_type: meeting
+  topics: "Molecular catalysis studied by combining computation and experiment (catalysis and physical chemistry)."
+  evidence_kind: search_snippet
+  evidence: "search_snippet (rsc.org event page): '21–23 June 2027 in St Andrews, UK'; no abstract deadline surfaced — https://www.rsc.org/events/find-an-event/understanding-molecular-catalysis-through-computation-and-experiment-faraday-discussion"
+  verified_on: 2026-10-28
+
+- id: faraday-discussion-2027-aerosols
+  title: "Indoor-outdoor continuum of aerosols Faraday Discussion"
+  organizer: Royal Society of Chemistry
+  url: https://www.rsc.org/events/find-an-event/indoor-outdoor-continuum-of-aerosols-faraday-discussion
+  start: 2027-06-28
+  end: 2027-06-30
+  location: "Birmingham, United Kingdom"
+  format: in_person
+  event_type: meeting
+  topics: "Physico-chemical behaviour of aerosols moving between indoor and outdoor air: biomass burning, urban, large-scale and bio-aerosols, composition and toxicity."
+  evidence_kind: search_snippet
+  evidence: "search_snippet (rsc.org event page): '28–30 June 2027 in Birmingham, UK'; oral abstracts were due 12 October 2026 (passed) — https://www.rsc.org/events/find-an-event/indoor-outdoor-continuum-of-aerosols-faraday-discussion"
+  verified_on: 2026-10-28
+
+- id: faraday-discussion-2027-digital-chemistry
+  title: "Digital chemistry discovery Faraday Discussion"
+  organizer: Royal Society of Chemistry
+  url: https://www.rsc.org/events/find-an-event/digital-chemistry-discovery-faraday-discussion
+  start: 2027-09-08
+  end: 2027-09-10
+  location: "Edinburgh, United Kingdom"
+  format: in_person
+  event_type: meeting
+  deadline: 2027-06-28
+  deadline_type: abstract
+  topics: "Second Faraday Discussion on digital chemistry and its use in chemical discovery."
+  evidence_kind: search_snippet
+  evidence: "search_snippet (rsc.org event page): '8–10 September 2027' in Edinburgh; poster abstract deadline '28 June 2027'; oral abstract date not visible in snippet — https://www.rsc.org/events/find-an-event/digital-chemistry-discovery-faraday-discussion"
+  verified_on: 2026-10-28
+
+- id: faraday-discussion-2027-photothermal-materials
+  title: "Challenges and solutions for photothermal materials and applications Faraday Discussion"
+  organizer: Royal Society of Chemistry
+  url: https://www.rsc.org/events/find-an-event/challenges-and-solutions-for-photothermal-materials-and-applications-faraday-discussion
+  start: 2027-09-15
+  end: 2027-09-17
+  location: "London, United Kingdom"
+  format: in_person
+  event_type: meeting
+  deadline: 2026-12-14
+  deadline_type: abstract
+  topics: "Photothermal (light-to-heat) materials, their challenges and applications."
+  evidence_kind: search_snippet
+  evidence: "search_snippet (rsc.org event page): '15–17 September 2027' in London; 'Oral/paper abstracts are due by 14 December 2026'; poster deadline shown as '5 Julu 2027' (typo on page) — https://www.rsc.org/events/find-an-event/challenges-and-solutions-for-photothermal-materials-and-applications-faraday-discussion"
+  verified_on: 2026-10-28
+
+- id: faraday-discussion-2027-sustainable-catalysts
+  title: "Designing catalysts for a sustainable future Faraday Discussion"
+  organizer: Royal Society of Chemistry
+  url: https://www.rsc.org/events/find-an-event/designing-catalysts-for-a-sustainable-future-faraday-discussion
+  start: 2027-11-15
+  end: 2027-11-17
+  location: "London, United Kingdom"
+  format: in_person
+  event_type: meeting
+  topics: "Catalyst design for sustainability (catalysis and physical chemistry)."
+  evidence_kind: search_snippet
+  evidence: "search_snippet (rsc.org event page): 'Date 15–17 November 2027, Subject areas Catalysis, Physical, Location London, UK' — https://www.rsc.org/events/find-an-event/designing-catalysts-for-a-sustainable-future-faraday-discussion"
+  verified_on: 2026-10-28
+
+# ---------------------------------------------------------------- other flagship meetings that block automation
+# aiche.org and cell.com both return 403 (Cloudflare) to curl and WebFetch.
+- id: aiche-annual-meeting-2026
+  title: "2026 AIChE Annual Meeting"
+  organizer: American Institute of Chemical Engineers
+  url: https://www.aiche.org/conferences/aiche-annual-meeting/2026
+  start: 2026-11-08
+  end: 2026-11-12
+  location: "Minneapolis, Minnesota, United States (Minneapolis Convention Center)"
+  format: in_person
+  event_type: meeting
+  topics: "Annual meeting of the chemical engineering community across all AIChE programming areas."
+  evidence_kind: search_snippet
+  evidence: "search_snippet (aiche.org 2026 meeting and venue pages): 'November 8–12, 2026, at the Minneapolis Convention Center in Minneapolis, MN' — https://www.aiche.org/conferences/aiche-annual-meeting/2026"
+  verified_on: 2026-10-28
+
+- id: cell-press-symposium-2027-drugging-the-undruggable
+  title: "Cell Press Symposia: Drugging the undruggable"
+  organizer: Cell Press
+  url: https://www.cell.com/symposia
+  start: 2027-07-12
+  end: 2027-07-14
+  location: "Oxford, United Kingdom"
+  format: in_person
+  event_type: symposium
+  deadline: 2027-03-05
+  deadline_type: abstract
+  topics: "Approaches to drugging targets considered undruggable."
+  evidence_kind: search_snippet
+  evidence: "search_snippet (cell.com symposia listing and journal event boxes): 'Drugging the undruggable: July 12–14, Oxford, UK, abstract deadline March 5, 2027'; early registration May 7, 2027 — https://www.cell.com/symposia"
+  verified_on: 2026-10-28
+
+- id: cell-press-symposium-2027-functional-rnas
+  title: "Cell Press Symposia: Functional RNAs"
+  organizer: Cell Press
+  url: https://www.cell.com/symposia
+  start: 2027-10-25
+  end: 2027-10-27
+  location: "Geneva, Switzerland"
+  format: in_person
+  event_type: symposium
+  deadline: 2027-06-18
+  deadline_type: abstract
+  topics: "Functional RNAs; held with the University of Geneva and the Swiss Initiative for RNA & Disease."
+  evidence_kind: search_snippet
+  evidence: "search_snippet (cell.com symposia listing): 'Functional RNAs: October 25–27, Geneva, Switzerland', abstract deadline June 18, 2027; early registration August 13, 2027 — https://www.cell.com/symposia"
+  verified_on: 2026-10-28

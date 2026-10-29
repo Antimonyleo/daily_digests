@@ -79,7 +79,7 @@ export function capturePrivateSnapshot(names, readFile, {cache = new Map(), vers
     }
     return quote(name) + ': "' + encoded + '"';
   });
-  const payload = '{"format": "dailydigest-browser-v1", "files": {' + files.join(', ') + '}}';
+  const payload = '{"format": "' + SNAPSHOT_FORMAT + '", "files": {' + files.join(', ') + '}}';
   return { payload, warning: storedSizeWarning(payload, names) };
 }
 
@@ -96,10 +96,22 @@ function validBase64(value) {
   return true;
 }
 
+export const SNAPSHOT_FORMAT = 'dailydigest-browser-v1';
+// Formats the runtime can read: the current one plus each older format that
+// has an upgrade step in runtime.py (SNAPSHOT_UPGRADES). Add both together.
+export const READABLE_SNAPSHOT_FORMATS = new Set([SNAPSHOT_FORMAT]);
+
+export function snapshotFormatError(format) {
+  const found = /^dailydigest-browser-v(\d+)$/.exec(String(format ?? ''));
+  return found && Number(found[1]) > Number(SNAPSHOT_FORMAT.split('-v').pop())
+    ? 'This backup comes from a newer version of DailyDigest. Reload the page to get the newest version, then try again.'
+    : 'Unsupported DailyDigest backup format.';
+}
+
 export function validateRecoverySnapshot(payload, { enforceLimits = true, allowSettingsJournal = false } = {}) {
   const snapshot = JSON.parse(payload);
-  if (snapshot?.format !== 'dailydigest-browser-v1' || !snapshot.files ||
-      Array.isArray(snapshot.files) || typeof snapshot.files !== 'object') {
+  if (!READABLE_SNAPSHOT_FORMATS.has(snapshot?.format)) throw new Error(snapshotFormatError(snapshot?.format));
+  if (!snapshot.files || Array.isArray(snapshot.files) || typeof snapshot.files !== 'object') {
     throw new Error('Unsupported DailyDigest backup format.');
   }
   const names = Object.keys(snapshot.files);

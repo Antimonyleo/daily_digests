@@ -99,7 +99,7 @@ def test_evidence_roundtrips_through_real_store_and_web_details(tmp_path, monkey
     response = web.index(_request())
     assert response.status_code == 200
     html = response.body.decode()
-    for label in ("Contribution evidence", "Validation evidence", "Data/code availability", "Limitations"):
+    for label in ("Stated contribution", "Stated validation", "Data/code availability", "Stated limitations"):
         assert label in html
     assert "Author-reported claims; not independently verified." in html
     if reported:

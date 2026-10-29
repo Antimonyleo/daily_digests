@@ -12,9 +12,22 @@
 </head>
 <body>
   <a class="skip-link" href="#app">Skip to reading desk</a>
-  <aside id="welcome-guide" class="welcome-guide" aria-label="Getting started" hidden>
-    <button id="welcome-guide-open" type="button">Guide</button><button id="welcome-restore" type="button">Restore backup</button><button id="welcome-dismiss" type="button" aria-label="Dismiss getting-started shortcuts"><svg aria-hidden="true" viewBox="0 0 20 20" width="16" height="16"><path d="m5 5 10 10M15 5 5 15" fill="none" stroke="currentColor" stroke-width="1.5"/></svg></button>
-  </aside>
+  <header class="browser-bar">
+    <p class="browser-status"><span id="status">Opening your reading desk…</span></p>
+    <span id="announcements" class="visually-hidden" role="status" aria-live="polite" aria-atomic="true"></span>
+    <button id="install" type="button" hidden title="Install a DailyDigest browser app shortcut">Install</button>
+    <button id="open-guide" type="button" disabled>Guide</button>
+    <div class="more-menu">
+      <button id="open-more" type="button" aria-expanded="false" aria-controls="more-menu" disabled>More<svg aria-hidden="true" viewBox="0 0 20 20" width="14" height="14"><path d="m5 8 5 5 5-5" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+      <div id="more-menu" class="more-menu-panel" hidden>
+        <p class="more-menu-note">Saved in this browser profile. Other browsers and devices keep separate copies.</p>
+        <button id="open-backup" type="button" disabled>Backup &amp; transfer</button>
+        <button id="open-restore" type="button" disabled>Restore backup</button>
+        <button id="open-data-settings" type="button" disabled>Data &amp; compute</button>
+      </div>
+    </div>
+    <span id="storage-warning" class="storage-warning" role="alert" hidden></span>
+  </header>
   <main id="startup" aria-labelledby="startup-title">
     <p class="eyebrow">DailyDigest in your browser</p>
     <div id="tab-wait-actions" hidden>
@@ -30,9 +43,10 @@
       <p id="startup-topics-hint">Start typing while the app opens. One topic per line, up to ten. You can adjust topics and percentages before saving.</p>
       <button type="submit" id="startup-topics-continue">Continue with these topics</button>
       <p id="startup-topics-message" role="status"></p>
+      <p class="startup-restore">Used DailyDigest before, in another browser or at another web address? Its reading desk stayed there. <button type="button" id="startup-restore">Restore a backup instead</button></p>
     </form>
-    <ol id="startup-stages" aria-label="Startup stages"><li data-startup-stage="python">Python and libraries</li><li data-startup-stage="data">Your saved data</li><li data-startup-stage="ready">Reading desk ready</li></ol>
-    <details class="startup-details"><summary>First visit and local computing</summary><p><span id="download-size">The CPU model is about 66 MB, plus the Python runtime and libraries.</span> Downloads and article comparisons are cached. Keep this tab open while brewing; large collections of new papers take longer. Change modes in Data &amp; compute.</p></details>
+    <ol id="startup-stages" aria-label="Opening steps"><li data-startup-stage="python">Loading the app</li><li data-startup-stage="data">Opening your saved reading</li><li data-startup-stage="ready">Ready to read</li></ol>
+    <details class="startup-details"><summary>About the first visit</summary><p>The first visit downloads the app once, <span id="download-size">up to about 160 MB</span>. After that it opens from this browser’s saved copy, and papers it has already compared are remembered. Keep this tab open while brewing; a large batch of new papers takes longer. Speed options are under More, then Data &amp; compute.</p></details>
     <div class="desk-skeleton" aria-hidden="true"><span></span><span></span><span></span></div>
     <p id="startup-status">Warming up your reading desk. A fresh cup is on its way.</p>
     <button id="retry" hidden type="button">Retry startup</button>
@@ -61,14 +75,6 @@
   <aside id="source-freshness" class="storage-consent" role="status" hidden></aside>
   <aside id="release-notice" class="release-notice" role="status" hidden><span id="release-message">A new version of DailyDigest is ready.</span> <button id="release-reload" type="button">Update now</button><button id="release-dismiss" type="button">Later</button><div id="release-notes" class="release-notes" hidden></div></aside>
   <aside id="interruption-notice" class="storage-consent" role="status" hidden><p id="interruption-message"></p><button id="interruption-dismiss" type="button">Dismiss</button></aside>
-  <footer class="browser-bar">
-    <span id="storage-warning" class="storage-warning" role="alert" hidden></span>
-    <button id="open-backup" class="browser-status" type="button" disabled aria-label="Backup and transfer. Your data stays in this browser profile."><span id="status">Opening your reading desk…</span></button>
-    <span id="announcements" class="visually-hidden" role="status" aria-live="polite" aria-atomic="true"></span>
-    <button id="install" type="button" hidden title="Install a DailyDigest browser app shortcut">Install</button>
-    <button id="open-guide" type="button" disabled>Guide</button>
-    <button id="open-data-settings" type="button" disabled>Data &amp; compute</button>
-  </footer>
   <dialog id="quick-guide" aria-labelledby="quick-guide-title">
     <button id="close-guide" type="button">Back to reading</button>
     <p id="guide-position" class="eyebrow"></p>
@@ -91,7 +97,7 @@
     </section>
     <section data-guide-step hidden>
       <h1 tabindex="-1">Optional tools</h1>
-      <p>Data &amp; compute has GPU and multiple-core options. Availability depends on your browser and drivers. The app shows which mode it actually uses.</p>
+      <p>Data &amp; compute, under More, has GPU and multiple-core options. Availability depends on your browser and drivers. The app shows which mode it actually uses.</p>
       <p>Companion lets you use a supported Claude or Codex login, email, or scheduled brews. Install and run the helper on your computer, then connect it under Data &amp; compute. Browser reading works without it. Companion data transfers are manual and replace the destination reading desk.</p>
       <p>If startup fails, download the original data before restoring a backup or starting fresh. Recovery files may contain credentials.</p>
       <button type="button" data-guide-action="compute">Compute options</button><button type="button" data-guide-action="companion">Companion setup</button>

@@ -214,3 +214,13 @@ def test_figure_entry_names_the_declared_label_and_credits_the_feed():
         assert 'class="figure-unavailable" role="status" hidden' in html
     other = 'Graphical abstract' if label == 'Article image' else 'Article image'
     assert other not in html
+
+
+def test_figure_loader_retries_without_cors_for_hosts_that_refuse_it():
+    """Wiley sends no CORS header, so a crossorigin-only request never shows its TOC image."""
+    from pathlib import Path
+    base = (Path(__file__).parents[1] / 'templates' / '_base.html.j2').read_text()
+    loader = base[base.index("document.querySelectorAll('.article-figure')"):]
+    retry = loader.index("image.removeAttribute('crossorigin')")
+    assert retry < loader.index("state = 'error'"), 'retry once as a plain image before reporting failure'
+    assert "referrerpolicy" not in loader[retry:retry + 200]  # the no-referrer attribute stays on the img

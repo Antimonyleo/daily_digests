@@ -25,10 +25,17 @@ const endpoint = spec => {
     case 'nih_guide': return { url: 'https://search.grants.nih.gov/guide/api/data?' + new URLSearchParams({ perpage: '1', sort: 'reldate:desc', from: '0', query: 'nanoparticle', type: 'active,activenosis', parentic: 'all', primaryic: 'all', activitycodes: 'all', doctype: 'all', parentfoa: 'all', clinicaltrials: 'all', fields: 'all', spons: 'true', daterange: '01011991-' + new Date().toISOString().slice(5, 7) + new Date().toISOString().slice(8, 10) + new Date().toISOString().slice(0, 4) }) };
     case 'embl_events': return { url: spec.url + '?per_page=1&_fields=id,link' };
     case 'embo_events': return { url: spec.url };
+    case 'ukri_funding': case 'snsf_funding': case 'isscr_events': case 'keystone_events': case 'cshl_events':
+    case 'nature_conferences': case 'wellcome_cs_events': case 'crs_events': case 'febs_events':
+    case 'eci_events': case 'biophysics_events': case 'faseb_src_events': return { url: spec.url };
+    case 'curated_calls': case 'curated_events': return null; // Bundled lists; nothing to fetch.
     default: throw new Error('Unknown source kind: ' + spec.kind);
   }
 };
-const specs = Object.entries(config).flatMap(([section, rows]) => rows.map(spec => ({ section, name: spec.name, kind: spec.kind, ...endpoint(spec) })));
+const specs = Object.entries(config).flatMap(([section, rows]) => rows.flatMap(spec => {
+  const request = endpoint(spec);
+  return request ? [{ section, name: spec.name, kind: spec.kind, ...request }] : [];
+}));
 const supplementary = [
   { section: 'supplementary', name: 'PubMed abstract endpoint', kind: 'pubmed', url: 'https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=pubmed&id=31452104&retmode=xml&rettype=abstract' },
   { section: 'supplementary', name: 'ACS Crossref fallback', kind: 'openalex_venues', url: 'https://api.crossref.org/prefixes/10.1021/works?rows=1' },

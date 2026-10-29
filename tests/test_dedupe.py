@@ -122,6 +122,21 @@ class TestDedupeByUrl:
         result = dedupe_by_url(items)
         assert len(result) == 1
 
+    def test_meetings_sharing_a_listing_url_stay_apart_by_start_date(self):
+        # ECI rows without their own page, and Nature Conferences editions on
+        # one registration site, share a URL; copies of one meeting still merge.
+        def meeting(title, start, source="ECI"):
+            return Item(source=source, section="events", external_id=f"{title}-{start}",
+                        url="https://engconf.org/conferences/", title=title,
+                        metadata={"record_type": "event", "event_start": start})
+
+        items = [meeting("Nanomedicine", "2027-03-01"), meeting("Enzyme Engineering", "2027-05-10"),
+                 meeting("Nanomedicine", "2028-03-06"), meeting("Nanomedicine", "2027-03-01", "Copy")]
+        kept = dedupe_by_url(items)
+        assert [(row.title, row.metadata["event_start"]) for row in kept] == [
+            ("Nanomedicine", "2027-03-01"), ("Enzyme Engineering", "2027-05-10"), ("Nanomedicine", "2028-03-06")]
+        assert len(dedupe_ranking_candidates(items)) == 3
+
     def test_distinct_urls_all_kept(self):
         items = [
             _make_item("https://example.com/a"),

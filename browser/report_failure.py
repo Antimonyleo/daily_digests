@@ -7,9 +7,31 @@ from urllib.request import Request, urlopen
 
 ISSUE_TITLE = 'DailyDigest source refresh needs attention'
 ISSUE_MARKER = '<!-- dailydigest-recurring-refresh-alert-v1 -->'
+ACCESS_TITLE = 'DailyDigest browser source access changed'
+ACCESS_MARKER = '<!-- dailydigest-source-access-alert-v1 -->'
 
 
-def report_issue():
+def _refresh_body(run_url):
+    return ('A scheduled or manual source refresh failed. '
+            'The last successfully published site remains available, but its source records continue aging. '
+            'Records older than 48 hours are not used as fresh snapshot coverage.\n\n'
+            f'[Inspect the failed workflow]({run_url})\n\n'
+            'This issue is reused on repeated failures and closed after a successful strict refresh.')
+
+
+def _access_body(run_url):
+    # Only public source names and outcomes from the audit summary; no logs.
+    summary = os.environ.get('DAILYDIGEST_ACCESS_SUMMARY', '')
+    lines = [line for line in summary.splitlines() if line.startswith('- ')][:40]
+    return ('The daily browser audit could not read one or more sources that browser brews fetch '
+            'directly. Those sources will fail in browser brews until fixed; a section whose every '
+            'provider fails stops the brew and keeps the saved digest.\n\n'
+            + ('\n'.join(lines) + '\n\n' if lines else '')
+            + f'[Inspect the audit run]({run_url})\n\n'
+            'This issue is reused while access stays broken and closed after a clean audit.')
+
+
+def report_issue(title=ISSUE_TITLE, marker=ISSUE_MARKER, body=_refresh_body):
     """Maintain one public operational issue; never attach logs or reader state."""
     repository = os.environ.get('GITHUB_REPOSITORY', '')
     token = os.environ.get('GITHUB_TOKEN', '')
@@ -37,7 +59,7 @@ def report_issue():
             existing = next((row for row in issues if 'pull_request' not in row
                              and (row.get('user') or {}).get('login') == 'github-actions[bot]'
                              and (row.get('user') or {}).get('type') == 'Bot'
-                             and row.get('title') == ISSUE_TITLE and ISSUE_MARKER in (row.get('body') or '')), None)
+                             and row.get('title') == title and marker in (row.get('body') or '')), None)
             if existing or len(issues) < 100:
                 break
             page += 1
@@ -45,19 +67,15 @@ def report_issue():
         if result == 'success':
             if existing and existing.get('state') == 'open':
                 api(f'{endpoint}/{existing["number"]}', 'PATCH', {
-                    'state': 'closed', 'body': f'{ISSUE_MARKER}\n\nA strict scheduled or manual refresh recovered.\n\n[Successful workflow]({run_url})'})
-            print('Recurring refresh issue checked after a successful strict refresh.')
+                    'state': 'closed', 'body': f'{marker}\n\nThe check recovered.\n\n[Successful workflow]({run_url})'})
+            print('Recurring issue checked after a successful run.')
             return 0
-        payload = {'title': ISSUE_TITLE, 'body': f'{ISSUE_MARKER}\n\nA scheduled or manual source refresh failed. '
-                   'The last successfully published site remains available, but its source records continue aging. '
-                   'Records older than 48 hours are not used as fresh snapshot coverage.\n\n'
-                   f'[Inspect the failed workflow]({run_url})\n\n'
-                   'This issue is reused on repeated failures and closed after a successful strict refresh.'}
+        payload = {'title': title, 'body': f'{marker}\n\n{body(run_url)}'}
         if existing:
             api(f'{endpoint}/{existing["number"]}', 'PATCH', {**payload, 'state': 'open'})
         else:
             api(endpoint, 'POST', payload)
-        print('Recurring source refresh issue updated.')
+        print('Recurring issue updated.')
         return 0
     except (OSError, ValueError, KeyError, TypeError):
         print('::warning::The recurring refresh issue could not be updated. Check Actions and repository issue permissions.')
@@ -67,6 +85,8 @@ def report_issue():
 def main():
     if os.environ.get('DAILYDIGEST_ALERT_MODE') == 'github-issue':
         return report_issue()
+    if os.environ.get('DAILYDIGEST_ALERT_MODE') == 'source-access-issue':
+        return report_issue(ACCESS_TITLE, ACCESS_MARKER, _access_body)
     endpoint = os.environ.get('DAILYDIGEST_ALERT_WEBHOOK', '').strip()
     if not endpoint:
         print('::warning::Refresh failed. Configure DAILYDIGEST_ALERT_WEBHOOK for an optional alert, or enable repository Actions notifications. The published snapshot will continue aging.')

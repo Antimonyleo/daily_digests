@@ -339,14 +339,19 @@ async function openSection(section) {
   const details = frame().locator(`details.section-block[data-section="${section}"]`);
   if (await details.getAttribute('open') === null) await details.locator('summary.section-toggle').click();
 }
+// Data & compute lives in the shell's More menu.
+async function openDataSettings() {
+  if (await page.locator('#more-menu').isHidden()) await page.locator('#open-more').click();
+  await page.locator('#open-data-settings').click();
+}
 async function toggleMenu(id) {
   const open = await page.locator('#'+id).getAttribute('open') !== null;
-  if (!await page.locator('#data-settings').evaluate(node => node.open)) await page.locator('#open-data-settings').click();
+  if (!await page.locator('#data-settings').evaluate(node => node.open)) await openDataSettings();
   await page.locator('#'+id+' > summary').click();
   if (open) await page.locator('#close-data-settings').click();
 }
 async function openCompanionMenu() {
-  if (!await page.locator('#data-settings').evaluate(node => node.open)) await page.locator('#open-data-settings').click();
+  if (!await page.locator('#data-settings').evaluate(node => node.open)) await openDataSettings();
   if (await page.locator('#companion-menu').getAttribute('open') === null) await page.locator('#companion-menu > summary').click();
 }
 async function digestIdentity(digestId = '') {
@@ -1113,6 +1118,7 @@ try {
     await route('/', '.item[data-item-id]');
     await openSection('events');
     const eventCard = frame().locator('.item[data-section="events"]').first();
+    await eventCard.locator('.item-more > summary').click();  // Mark known lives under More.
     await eventCard.locator('.known-btn').click();
     await eventCard.locator('.known-btn[aria-pressed="true"]').waitFor({ state: 'attached' });
     const card = frame().locator('.item[data-section="research"]').first();
@@ -1134,7 +1140,8 @@ try {
     const archivedId=new URL(archivedPath,base).searchParams.get('digest_id');
     assert.equal((await frame().locator('.digest-date').textContent()).trim(),archivedId);
     await openSection('events');
-    await frame().locator('.item[data-section="events"] .known-btn[aria-pressed="true"]').waitFor();
+    // Mark known sits in the closed More menu, so the persisted state is attached, not shown.
+    await frame().locator('.item[data-section="events"] .known-btn[aria-pressed="true"]').waitFor({state:'attached'});
     await route('/saved', '.saved-card');
     const card = frame().locator(`.saved-card[data-item-id="${itemId}"]`);
     await card.locator('.vote-btn[data-grade="10"][aria-pressed="true"]').waitFor();
@@ -1317,6 +1324,8 @@ try {
     } finally {page.off('request', listener);}
   });
   await check('release-and-stale-source-notices-are-nondisruptive', async () => {
+    // Source age is shown once a brew would use those records, starting on the Brew page.
+    await route('/run', '#brew-button');
     const hash = await page.evaluate(() => location.hash);
     let stale = true;
     const handler = async request => {
@@ -1773,7 +1782,7 @@ try {
   await check('visible-backup-error-and-keyboard-recovery', async () => {
     const before = await digestIdentity();
     const dataMenu = page.locator('.device-sections > details:has(#export)');
-    if (!await page.locator('#data-settings').evaluate(node => node.open)) await page.locator('#open-data-settings').click();
+    if (!await page.locator('#data-settings').evaluate(node => node.open)) await openDataSettings();
     if (await dataMenu.getAttribute('open') === null) await dataMenu.locator(':scope > summary').click();
     await page.locator('#export').focus();
     await page.locator('#import').setInputFiles({ name: 'invalid-backup.json', mimeType: 'application/json', buffer: Buffer.from('{invalid') });

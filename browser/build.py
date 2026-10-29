@@ -86,6 +86,7 @@ def source_archive(output: Path, wheels: list[Path]) -> dict[str, str]:
         paths += list((ROOT / "templates").glob("*.j2"))
         paths += [ROOT / "config/sources.yaml", HERE / "network.py", ROOT / "templates/FONT-LICENSE.txt",
                   ROOT / "src/dailydigest/release_notes.json"]
+        paths += sorted((ROOT / "src/dailydigest/curated").glob("*.yaml"))
         for path in sorted(paths):
             if "__pycache__" in path.parts:
                 continue
@@ -292,7 +293,7 @@ def stamp_release(output: Path, build_id: str, app_release: str = "", version: s
                         if path.is_file() and "bge-small-webgpu" not in path.parts
                         and "semantic-models" not in path.parts)
     html = re.sub(r'(<span id="download-size">)[^<]*(</span>)',
-                  lambda match: match[1] + f"up to {math.ceil(initial_bytes / 1_000_000)} MB including the CPU model; cached files are reused" + match[2], html)
+                  lambda match: match[1] + f"up to {math.ceil(initial_bytes / 1_000_000)} MB" + match[2], html)
     index.write_text(html)
     app = output / "app.mjs"
     guard = """// One cache-busting reload repairs an HTML/application release mismatch.

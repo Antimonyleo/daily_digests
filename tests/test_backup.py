@@ -27,6 +27,8 @@ def test_backup_includes_committed_wal_and_explicit_sidecars_without_secrets(tmp
         assert (data / "digest.db-wal").stat().st_size > 0
         (data / "profile.yaml").write_text("bio: Private reader\n")
         (data / "vote_reasons.json").write_text('{"7": ["too_contextual"]}\n')
+        (data / "ui_prefs.json").write_text('{"theme": "dark"}\n')
+        (data / "sources.local.yaml").write_text("research: []\n")
         (data / ".env").write_text("LLM_API_KEY=not-for-backup\n")
         (data / "unknown-secret.txt").write_text("not-for-backup")
         config = tmp_path / "sources.yaml"
@@ -38,6 +40,8 @@ def test_backup_includes_committed_wal_and_explicit_sidecars_without_secrets(tmp
         assert (destination / "data" / "profile.yaml").read_bytes() == (data / "profile.yaml").read_bytes()
         assert (destination / "data" / "vote_reasons.json").read_bytes() == (data / "vote_reasons.json").read_bytes()
         assert (destination / "config" / "sources.yaml").read_bytes() == config.read_bytes()
+        for name in ("ui_prefs.json", "sources.local.yaml"):
+            assert (destination / "data" / name).read_bytes() == (data / name).read_bytes()
         assert not list(destination.rglob("*-wal"))
         assert not list(destination.rglob(".env"))
         assert not list(destination.rglob("unknown-secret.txt"))

@@ -220,6 +220,32 @@ class KnownItemRow(Base):
     __table_args__ = (UniqueConstraint("item_id", name="uq_known_items_item_id"),)
 
 
+class InterestedItemRow(Base):
+    """Funding, calls and events the reader marked Interested, to track deadlines.
+
+    Only an explicit click writes here. Tracking is independent of any one
+    digest: a tracked call keeps its deadline on the page after it stops being
+    selected, and even after it is marked known.
+    """
+
+    __tablename__ = "interested_items"
+
+    id = Column(Integer, primary_key=True)
+    item_id = Column(
+        Integer,
+        ForeignKey("items.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    created_at = Column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+
+    item = relationship("ItemRow")
+
+    __table_args__ = (UniqueConstraint("item_id", name="uq_interested_items_item_id"),)
+
+
 class CarryoverItemRow(Base):
     """Reading-mode overflow the reader chose to re-run against tomorrow's pool.
 
@@ -704,6 +730,51 @@ def known_item_ids(item_ids: Iterable[int]) -> set[int]:
         }
 
 
+def set_item_interested(item_id: int, interested: bool) -> bool:
+    """Idempotently track/untrack an item's deadline. False = no such item."""
+    init_db()
+    with session_scope() as s:
+        if s.get(ItemRow, int(item_id)) is None:
+            return False
+        if interested:
+            s.execute(
+                sqlite_insert(InterestedItemRow)
+                .values(item_id=int(item_id))
+                .on_conflict_do_nothing(index_elements=["item_id"])
+            )
+        else:
+            s.execute(delete(InterestedItemRow).where(InterestedItemRow.item_id == int(item_id)))
+    return True
+
+
+def interested_item_ids(item_ids: Iterable[int]) -> set[int]:
+    """Return the subset of item ids the reader marked Interested."""
+    ids = {int(item_id) for item_id in item_ids}
+    if not ids:
+        return set()
+    init_db()
+    with session_scope() as s:
+        return {
+            int(item_id)
+            for item_id in s.execute(
+                select(InterestedItemRow.item_id).where(InterestedItemRow.item_id.in_(ids))
+            ).scalars()
+        }
+
+
+def interested_items() -> list[ItemRow]:
+    """Every tracked item, detached, oldest mark first."""
+    init_db()
+    with session_scope() as s:
+        rows = list(s.scalars(
+            select(ItemRow).join(InterestedItemRow, InterestedItemRow.item_id == ItemRow.id)
+            .order_by(InterestedItemRow.created_at, InterestedItemRow.id)
+        ))
+        for row in rows:
+            s.expunge(row)
+        return rows
+
+
 def exclude_known_items(rows: list[ItemRow]) -> list[ItemRow]:
     """Drop rows the reader manually flagged as known.
 
@@ -976,6 +1047,12 @@ def upsert_items(items: Iterable[Item]) -> int:
                     row.authors = it.authors
                     row.published_at = it.published_at
                     row.metadata_json = metadata_json
+                    # A fellowship call moves between Funding and Events &
+                    # Calls with the reader's sections, so it stays visible when
+                    # one is switched off; the row id (and its ratings) stays
+                    # the same, and impressions keep the section they were
+                    # shown in.
+                    row.section = it.section
                     # Verification keeps open records in the candidate window;
                     # immutable snapshots below record each official version for
                     # ``opportunity_history``.
@@ -1352,12 +1429,13 @@ def exclude_previously_shown(
 
 
 def prune(days: int) -> int:
-    """Delete items older than ``days``, but preserve voted, saved, or known items.
+    """Delete items older than ``days``, but preserve voted, saved, known or tracked items.
 
     Voted items are kept so the LR ranker retains its training signal; saved
     items are kept so the reading archive remains durable after normal
     rotation; items flagged known are kept so a re-ingested funding call still
-    matches an existing row and stays suppressed; pinned carryover items are kept
+    matches an existing row and stays suppressed; Interested items are kept so
+    their deadlines stay tracked; pinned carryover items are kept
     so a promised extra ranking pass is not deleted before it happens. Retained
     impression history also protects candidates displaced by a later rebrew.
     Append-only feedback protects rated items even if a current vote is removed.
@@ -1369,6 +1447,7 @@ def prune(days: int) -> int:
         feedback_subq = select(FeedbackEventRow.item_id).distinct().scalar_subquery()
         bookmarked_subq = select(BookmarkRow.item_id).distinct().scalar_subquery()
         known_subq = select(KnownItemRow.item_id).distinct().scalar_subquery()
+        interested_subq = select(InterestedItemRow.item_id).distinct().scalar_subquery()
         carryover_subq = (
             select(CarryoverItemRow.item_id).distinct().scalar_subquery()
         )
@@ -1381,6 +1460,7 @@ def prune(days: int) -> int:
             ItemRow.id.not_in(feedback_subq),
             ItemRow.id.not_in(bookmarked_subq),
             ItemRow.id.not_in(known_subq),
+            ItemRow.id.not_in(interested_subq),
             ItemRow.id.not_in(carryover_subq),
             ItemRow.id.not_in(digest_item_subq),
             ItemRow.id.not_in(email_item_subq),
@@ -1396,6 +1476,7 @@ def prune(days: int) -> int:
                 ItemRow.fetched_at >= cutoff,
                 ItemRow.id.in_(voted_subq), ItemRow.id.in_(feedback_subq),
                 ItemRow.id.in_(bookmarked_subq), ItemRow.id.in_(known_subq),
+                ItemRow.id.in_(interested_subq),
                 ItemRow.id.in_(carryover_subq), ItemRow.id.in_(digest_item_subq),
                 ItemRow.id.in_(email_item_subq), ItemRow.id.in_(impression_item_subq),
             ))))

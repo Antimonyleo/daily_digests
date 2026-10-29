@@ -1,15 +1,16 @@
 {#- Optional feed-supplied image. "Graphical abstract" only when the feed declared
     it (display_figure sets the label); every other image is an "Article image".
     Nothing renders without an image: no empty frame, no "not found" chip.
-    The image is fetched only when the reader opens this disclosure, without
-    cookies (crossorigin=anonymous) or referrer. The loader in _base.html.j2
+    The image is fetched only when the reader opens this disclosure, without a
+    referrer, and first without cookies (crossorigin=anonymous); a host that
+    refuses that CORS request gets one plain image request. The loader in _base.html.j2
     keys on .figure-link, img[data-src], .figure-unavailable and .figure-retry;
     the cached reading view reads the summary text before " · ". -#}
 {% if item.figure %}
 {% set figure = item.figure %}
 <details class="article-figure" data-figure-kind="{{ figure.kind | default('article_preview') }}">
-  <summary><span class="figure-label">{{ figure.label }}</span> · <span class="figure-hint">show image</span></summary>
-  <p class="figure-hint">Showing it loads the image from the publisher’s host, without cookies or a referrer. Images never affect ranking.</p>
+  <summary><span class="figure-label">{{ figure.label }}</span> · <span class="figure-hint figure-show">show image</span><span class="figure-hint figure-hide">hide image</span></summary>
+  <p class="figure-hint">Showing it loads the image from the publisher’s host, without a referrer. Images never affect ranking.</p>
   <figure>
     <a class="figure-link" href="{{ figure.url }}" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer" aria-label="Open {{ figure.label|lower }} full size for {{ item.title }}">
       <img data-src="{{ figure.url }}" alt="{{ figure.alt or figure.label }}" loading="lazy" decoding="async" referrerpolicy="no-referrer" crossorigin="anonymous">

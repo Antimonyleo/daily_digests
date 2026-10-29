@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+import sys
 import time
 import uuid
 from collections import Counter
@@ -38,7 +39,7 @@ from .email_send import send_digest
 from .health import IngestStats
 from .ingest import dispatch_source
 from .models import Item
-from .opportunities import assess_opportunity, load_opportunity_profile
+from .opportunities import CALL_TYPES, assess_opportunity, load_opportunity_profile
 from .rank.profile import build_profile_matrix
 from .rank.ranker import (
     ScoreFeatureMap,
@@ -141,7 +142,9 @@ def _quality_gate(rows: list[ItemRow]) -> tuple[list[ItemRow], list[dict[str, An
         title = (r.title or "").strip()
         abstract = (r.abstract or "").strip()
         high_quality = is_high_quality_journal_source(r)
-        if len(title) < 15 and not high_quality:
+        # Meetings and calls carry official names ("Retroviruses", "NWO Rubicon").
+        official_name = (r.section or "").lower() in {"opportunities", "events"}
+        if len(title) < 15 and not high_quality and not official_name:
             drops.append(_audit_item(r, "quality_gate", "short title"))
             continue
         if _TITLE_BLOCKLIST.match(title):
@@ -373,13 +376,7 @@ def ingest_all(
     gap can be backfilled (bounded by each API and the ranking recency window).
     """
     init_db()
-    specs = _reader_funding_sources([
-        spec
-        for spec in load_sources()
-        if _section_enabled(
-            getattr(spec, "section", "research") or "research", section_settings
-        )
-    ], section_settings)
+    specs = _fetched_sources(section_settings)
     _emit(progress_callback, "ingest_start", {"sources": len(specs)})
     all_items: list[Item] = []
     stats: list[IngestStats] = []
@@ -396,10 +393,13 @@ def ingest_all(
     }
     personalized_responded: set[str] = set()
     successful_research_families: set[str] = set()
+    # Hand-kept lists ship with the app and always load, so they never count
+    # as a provider that responded: only networked sources can keep a section.
     configured_deadline_sections = {
         str(getattr(spec, "section", "") or "")
         for spec in specs
         if str(getattr(spec, "section", "") or "") in {"opportunities", "events"}
+        and getattr(spec, "kind", "") not in BUNDLED_SOURCE_KINDS
     }
     successful_deadline_sections: set[str] = set()
     nonempty_deadline_sections: set[str] = set()
@@ -483,9 +483,11 @@ def ingest_all(
         stats.append(stat)
         if stat.ok and str(spec.name) in personalized_sources:
             personalized_responded.add(str(spec.name))
+        fetched = _route_calls(spec, fetched, section_settings)
         all_items.extend(fetched)
         section = str(getattr(spec, "section", "") or "")
-        if stat.ok and section in configured_deadline_sections:
+        if (stat.ok and section in configured_deadline_sections
+                and getattr(spec, "kind", "") not in BUNDLED_SOURCE_KINDS):
             successful_deadline_sections.add(section)
             if fetched:
                 nonempty_deadline_sections.add(section)
@@ -631,15 +633,68 @@ def _research_source_family(spec: Any) -> str | None:
     return None
 
 
-def _reader_funding_sources(specs: list[Any], settings: Settings | None = None) -> list[Any]:
-    """Keep the funding sources that serve the reader's current country.
+def _fetched_sources(settings: Settings | None = None) -> list[Any]:
+    """The sources a brew fetches, each in the section it fills."""
+    return _reader_sources([
+        spec
+        for spec in (_call_section(spec, settings) for spec in load_sources())
+        if spec is not None and _section_enabled(
+            getattr(spec, "section", "research") or "research", settings
+        )
+    ], settings)
+
+
+def _call_section(spec: Any, settings: Settings | None = None) -> Any:
+    """Place a fellowship/award source in Events & Calls, else in funding.
+
+    Returns None when neither section is on, so the source is not fetched.
+    """
+    if not getattr(spec, "calls", False):
+        return spec
+    for section in ("events", "opportunities"):
+        if _section_enabled(section, settings):
+            return spec if spec.section == section else spec.model_copy(update={"section": section})
+    return None
+
+
+def _route_calls(spec: Any, items: list[Item], settings: Settings | None = None) -> list[Item]:
+    """Fellowships and awards are calls: list them in Events & Calls when it is on."""
+    events_on = _section_enabled("events", settings)
+    routed = []
+    for item in items:
+        metadata = getattr(item, "metadata", None)
+        metadata = metadata if isinstance(metadata, dict) else {}
+        is_call = getattr(item, "section", "") in {"opportunities", "events"} and metadata.get("record_type") != "event" and (
+            bool(getattr(spec, "calls", False))
+            or str(metadata.get("opportunity_type") or "").casefold().replace(" ", "_") in CALL_TYPES
+        )
+        if not is_call:
+            routed.append(item)
+            continue
+        section = "events" if events_on else "opportunities"
+        routed.append(item.model_copy(update={
+            "section": section, "metadata": {**metadata, "record_type": "call"},
+        }))
+    return routed
+
+
+# Source kinds read from files bundled with the app, with no network fetch.
+BUNDLED_SOURCE_KINDS = frozenset({"curated_calls", "curated_events"})
+
+
+def _reader_sources(specs: list[Any], settings: Settings | None = None) -> list[Any]:
+    """Keep the funding and call sources that serve the reader's current country.
 
     Coverage gates then judge only these, so a reader in Germany is not told
-    funding failed because a US-only service was down, and vice versa.
+    funding failed because a US-only service was down, and vice versa. The
+    website (Pyodide) also leaves out ``local_only`` sources, whose terms allow
+    personal use but not the public snapshot it would need to read them.
     """
+    if sys.platform == "emscripten":
+        specs = [spec for spec in specs if not getattr(spec, "local_only", False)]
     if not any(getattr(spec, "applicant_regions", None) for spec in specs):
         return specs
-    from .opportunities import funding_regions, load_opportunity_profile
+    from .opportunities import funding_regions, load_opportunity_profile, serves_reader
 
     try:
         country = load_opportunity_profile(
@@ -648,14 +703,7 @@ def _reader_funding_sources(specs: list[Any], settings: Settings | None = None) 
     except (OSError, ValueError):
         return specs
     regions = funding_regions(country)
-    if regions is None:
-        return specs
-    return [
-        spec for spec in specs
-        if getattr(spec, "section", "") != "opportunities"
-        or not getattr(spec, "applicant_regions", None)
-        or regions & {str(region).casefold() for region in spec.applicant_regions}
-    ]
+    return [spec for spec in specs if serves_reader(getattr(spec, "applicant_regions", None), regions)]
 
 
 def _source_request_group(spec: Any) -> str:
@@ -2340,11 +2388,9 @@ def run_all(
     health_summary: list[dict] | None = None
     try:
         summary = health.weekly_summary()
-        enabled_sources = {
-            spec.name
-            for spec in load_sources()
-            if _section_enabled(spec.section or "research", section_settings)
-        }
+        # The sources this brew fetched: calls moved into Funding count, and
+        # other countries' funders do not.
+        enabled_sources = {spec.name for spec in _fetched_sources(section_settings)}
         summary = [
             row for row in summary if str(row.get("source") or "") in enabled_sources
         ]

@@ -45,7 +45,7 @@ assert.equal(rendered.status, 0, rendered.stderr);
 const pages = JSON.parse(rendered.stdout);
 
 const hits = {}, seen = [];
-let flakyFailures = 1;
+let flakyFailures = 2;  // both the CORS attempt and its plain retry fail
 const server = createServer(async (request, response) => {
   const path = new URL(request.url, PAGE).pathname;
   if (path.startsWith('/img/')) {
@@ -109,15 +109,23 @@ try {
   assert.equal(hits['/img/ok.svg'], 1, 'a revisit restores the image from the HTTP cache');
   checks.push('cache restore: reopen and page revisit reuse the cached image (1 server request)');
 
-  for (const [title, path, reason] of [['Paper plain', '/img/nocors.svg', 'CORS refusal'], ['Paper missing', '/img/missing.png', '404']]) {
-    const node = card(title);
-    await node.locator('.article-figure summary').click();
-    await node.locator('.figure-unavailable').waitFor({state: 'visible'});
-    assert.ok(await node.locator('.article-figure img').isHidden(), `${reason}: no blank image area`);
-    assert.equal(await node.locator('.figure-unavailable a').getAttribute('href'), `${IMAGES}${path}`);
-    assert.equal(hits[path], 1);
-    checks.push(`${reason}: image hidden, fallback offers Retry and a direct link`);
-  }
+  // Hosts such as Wiley send no CORS header: one plain retry shows the image,
+  // still without a referrer, instead of leaving the figure unavailable.
+  const plain = card('Paper plain');
+  await plain.locator('.article-figure summary').click();
+  await page.waitForFunction(() => [...document.querySelectorAll('.article-figure img')].filter(i => i.complete && i.naturalWidth === 900).length >= 2);
+  assert.ok(await plain.locator('.figure-unavailable').isHidden());
+  assert.equal(hits['/img/nocors.svg'], 2, 'one CORS attempt, then one plain request');
+  assert.ok(seen.filter(row => row.path === '/img/nocors.svg').every(row => row.referer === ''), 'no referrer on either attempt');
+  checks.push('CORS refusal: one plain retry shows the image, still without a referrer');
+
+  const missing = card('Paper missing');
+  await missing.locator('.article-figure summary').click();
+  await missing.locator('.figure-unavailable').waitFor({state: 'visible'});
+  assert.ok(await missing.locator('.article-figure img').isHidden(), '404: no blank image area');
+  assert.equal(await missing.locator('.figure-unavailable a').getAttribute('href'), `${IMAGES}/img/missing.png`);
+  assert.equal(hits['/img/missing.png'], 2, 'the plain retry is the only extra request');
+  checks.push('404: image hidden, fallback offers Retry and a direct link');
 
   const flaky = card('Paper flaky');
   await flaky.locator('.article-figure summary').click();
@@ -125,7 +133,7 @@ try {
   await flaky.locator('.figure-retry').click();
   await page.waitForFunction(() => [...document.querySelectorAll('.article-figure img')].some(i => i.complete && i.naturalWidth === 600));
   assert.ok(await flaky.locator('.figure-unavailable').isHidden());
-  assert.equal(hits['/img/flaky.svg'], 2);
+  assert.equal(hits['/img/flaky.svg'], 3);
   checks.push('retry: a failed (503) image loads after Retry and the fallback disappears');
 
   // Cached reading path: the extractor keeps URL + label and never embeds <img>.

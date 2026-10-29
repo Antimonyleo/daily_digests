@@ -90,9 +90,9 @@ def test_unknown_evidence_collapses_but_real_quotes_remain():
         "article_evidence": {"dimensions": {"validation": {"claims": []}, "data_code": {"claims": []},
                                             "limitations": {"claims": [{"quote": "Small sample."}]}}},
     })
-    assert view["known"] == [{"label": "Contribution evidence", "quotes": ["Q1"]},
-                             {"label": "Limitations", "quotes": ["Small sample."]}]
-    assert view["unknown_text"] == "Validation evidence and Data/code availability"
+    assert view["known"] == [{"label": "Stated contribution", "quotes": ["Q1"]},
+                             {"label": "Stated limitations", "quotes": ["Small sample."]}]
+    assert view["unknown_text"] == "Stated validation and Data/code availability"
     assert web._evidence_view({}) is None
 
 
@@ -186,16 +186,84 @@ def test_card_order_compact_meta_and_caveat_only_in_details(monkeypatch, tmp_pat
     assert 'data-summary-label="Why read"' not in _card(html, plain_id)
 
 
-def test_funding_card_leads_with_amount_deadline_eligibility_and_link(monkeypatch, tmp_path):
+def test_funding_card_leads_with_deadline_amount_eligibility_and_link(monkeypatch, tmp_path):
     _store, web, (_paper, _plain, grant_id) = _seed(monkeypatch, tmp_path)
-    card = _card(_text_payload(web.index(_request("GET", "/"))), grant_id)
+    html = _text_payload(web.index(_request("GET", "/")))
+    card = _card(html, grant_id)
     facts = card.index('class="opportunity-facts"')
     assert facts < card.index("Supports consortium centres.")
-    for text in ("Up to $800,000", '<time datetime="2026-12-14">Dec 14</time>', "Open",
-                 "Eligibility needs verification", 'href="https://example.invalid/grant"',
-                 "Official call", "Add to calendar", "Mark known", "Save for later"):
+    deadline = '<time datetime="2026-12-14">Dec 14, 2026</time>'
+    assert card.index("Closes:") < card.index(deadline) < card.index("Up to $800,000"), "Deadline first, with its year"
+    for text in ('data-deadline="2026-12-14"', "Eligibility:</span> check the official call",
+                 'href="https://example.invalid/grant"', "Official call", "Add to calendar", "Mark known",
+                 "Save for later"):
         assert text in card, text
+    assert "verify official eligibility" not in card and "Eligibility needs verification" not in card
     assert "Potentially eligible" not in card  # no profile: never upgraded
+    assert 'class="interested-btn" type="button" aria-pressed="false"' in card
+    assert 'data-track-date="2026-12-14"' in card and 'data-interested="false"' in card
+
+
+def _strip(html):
+    start = html.index('class="coming-deadlines"')
+    return html[start:html.index("</aside>", start)]
+
+
+def test_only_interested_items_get_tracked_deadlines(monkeypatch, tmp_path):
+    _store, web, (paper_id, _plain, grant_id) = _seed(monkeypatch, tmp_path)
+    html = _text_payload(web.index(_request("GET", "/")))
+    # Nothing marked Interested: the strip is empty and hidden, and the card's
+    # countdown is hidden by the untracked-card rule.
+    assert "hidden>" in _strip(html).split("\n", 1)[0] and "<li" not in _strip(html)
+    assert '.item:not([data-interested="true"]) .opportunity-facts .deadline-countdown { display: none; }' in html
+    assert 'class="interested-btn' not in _card(html, paper_id)  # research has no deadline to track
+
+    headers = {"X-CSRF-Token": web._CSRF_TOKEN}
+    marked = web.interested_add(_request("POST", f"/interested/{grant_id}", headers=headers), grant_id)
+    assert json.loads(marked.body) == {"ok": True, "item_id": grant_id, "interested": True}
+    html = _text_payload(web.index(_request("GET", "/")))
+    strip = _strip(html)
+    assert "hidden>" not in strip.split("\n", 1)[0]
+    assert f'href="#item-{grant_id}" data-open-item="item-{grant_id}"' in strip
+    assert '<span class="coming-word">Closes</span> <time datetime="2026-12-14">Dec 14, 2026</time>' in strip
+    assert 'data-interested="true"' in _card(html, grant_id)
+    assert 'class="interested-btn active" type="button" aria-pressed="true"' in _card(html, grant_id)
+
+    # Tracking outlives the digest: a later day without the call still lists it,
+    # linking to the official page instead of a card that is not on that page.
+    monkeypatch.setattr(web, "_digest_id", lambda: "2026-11-01")
+    later = _strip(_text_payload(web.index(_request("GET", "/"))))
+    assert 'href="https://example.invalid/grant" target="_blank"' in later
+
+    saved = _text_payload(web.saved_items(_request("GET", "/saved")))
+    tracked = saved[saved.index('id="tracked"'):saved.index("</section>", saved.index('id="tracked"'))]
+    assert "Fixture funding call" in tracked and "Up to $800,000" in tracked
+    assert "Eligibility: check the official call" in tracked and "Stop tracking" in tracked
+
+    web.interested_remove(_request("DELETE", f"/interested/{grant_id}", headers=headers), grant_id)
+    assert "<li" not in _strip(_text_payload(web.index(_request("GET", "/"))))
+    assert 'id="tracked"' not in _text_payload(web.saved_items(_request("GET", "/saved")))
+
+
+def test_passed_tracked_deadline_leaves_the_strip_but_stays_on_saved(monkeypatch, tmp_path):
+    _store, web, (_paper, _plain, grant_id) = _seed(monkeypatch, tmp_path)
+    web.set_item_interested(grant_id, True)
+    monkeypatch.setattr(web, "_digest_id", lambda: "2026-12-15")
+    assert "<li" not in _strip(_text_payload(web.index(_request("GET", "/"))))
+    assert 'id="tracked"' in _text_payload(web.saved_items(_request("GET", "/saved")))
+
+
+def test_card_header_labels_top_left_then_venue_then_byline(monkeypatch, tmp_path):
+    _store, web, (paper_id, _plain, _grant) = _seed(monkeypatch, tmp_path)
+    card = _card(_text_payload(web.index(_request("GET", "/"))), paper_id)
+    kicker = card.index('class="item-kicker"')
+    assert kicker < card.index('<strong>DNA origami</strong>') < card.index('class="title-link"')
+    meta = re.search(r'<div class="meta">(.*?)</div>', card, re.S).group(1)
+    assert meta.lstrip().startswith('<span class="venue">bioRxiv</span>')
+    byline = meta[meta.index('class="meta-byline"'):]
+    assert re.search(r'<span class="authors">N\. E\. Robinson … W\. Zhang \(3 authors\)</span> \| <time datetime="2026-10-12">Oct 12</time>', byline)
+    # Copied and cached text still reads as one line.
+    assert '<span class="meta-break" aria-hidden="true"> · </span>' in meta
 
 
 def test_contents_tabs_and_controls_survive(monkeypatch, tmp_path):
@@ -254,3 +322,32 @@ def test_older_boilerplate_is_hidden_at_display_time_but_never_rewritten(monkeyp
     assert '<div class="summary-label">Purpose</div>' in _card(digest, grant_id)
     assert web._finding_label("research", "Review") == "Scope"
     assert web._finding_label("research", "Research article") == "Key finding"
+
+
+def test_evidence_quotes_cut_inside_brackets_are_completed_from_the_abstract():
+    from dailydigest import web
+
+    abstract = "We saw uptake (66.5% pos. F4/80+ macrophages). Our data show clearance."
+    view = web._evidence_view({"contribution_claims": {"claims": [{"quote": "We saw uptake (66.5% pos."}]}}, abstract)
+    assert view["known"][0]["quotes"] == ["We saw uptake (66.5% pos. F4/80+ macrophages)."]
+
+
+def test_tracked_date_moves_to_the_next_stage_then_the_meeting_start():
+    from dailydigest import web
+
+    meeting = {"deadline": "2026-11-01", "event_dates": "2027-01-11 – 2027-01-15"}
+    stages = {"deadlines": [{"type": "registration", "date": "2026-11-01"},
+                            {"type": "late registration", "date": "2026-12-01"}]}
+    before = web._tracked_date(meeting, True, stages, date(2026, 10, 20))
+    assert (before["iso"], before["word"]) == ("2026-11-01", "Deadline")
+    later_stage = web._tracked_date(meeting, True, stages, date(2026, 11, 2))
+    assert (later_stage["iso"], later_stage["word"]) == ("2026-12-01", "Deadline")
+    starts = web._tracked_date(meeting, True, stages, date(2026, 12, 2))
+    assert (starts["iso"], starts["word"]) == ("2027-01-11", "Starts")
+    over = web._tracked_date(meeting, True, stages, date(2027, 2, 1))
+    assert over["iso"] == "2027-01-11"  # passed: listed on Saved, not the strip
+    call = web._tracked_date({"deadline": "2026-11-01"}, False, {"deadlines": [{"date": "2027-03-05"}]},
+                             date(2026, 11, 2))
+    assert (call["iso"], call["word"]) == ("2027-03-05", "Closes")
+    passed_call = web._tracked_date({"deadline": "2026-11-01"}, False, {}, date(2026, 11, 2))
+    assert (passed_call["iso"], passed_call["word"]) == ("2026-11-01", "Closes")

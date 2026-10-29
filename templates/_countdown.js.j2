@@ -1,0 +1,6 @@
+  // Countdowns use the reader's date at viewing time, so a cached page never goes stale.
+  const todayUtc=(()=>{const now=new Date();return Date.UTC(now.getFullYear(),now.getMonth(),now.getDate());})();
+  const daysUntil=iso=>{const [year,month,day]=String(iso||'').split('-').map(Number);return Math.round((Date.UTC(year,month-1,day)-todayUtc)/864e5);};
+  const countdownText=days=>' · '+(days<0?'passed':days===0?'today':days===1?'tomorrow':days<14?`in ${days} days`:days<70?`in ${Math.round(days/7)} weeks`:`in ${Math.round(days/30.44)} months`);
+  // Highlighted from two weeks before the date.
+  const countdownSoon=days=>days>=0&&days<=14;

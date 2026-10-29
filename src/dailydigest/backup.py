@@ -17,7 +17,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
 
-_SIDECARS = ("profile.yaml", "opportunities.yaml", "vote_reasons.json")
+_SIDECARS = ("profile.yaml", "opportunities.yaml", "vote_reasons.json", "sources.local.yaml",
+             "ui_prefs.json")
 
 
 def _private_file(path: Path):
@@ -46,6 +47,7 @@ def create_backup(
     profile_paths: Iterable[str | Path] = (),
     config_paths: Iterable[str | Path] = (),
     credential_paths: Iterable[str | Path] = (),
+    allow_subfolder: bool = False,
 ) -> Path:
     """Back up stopped-app state into a new directory outside ``data_dir``.
 
@@ -57,6 +59,9 @@ def create_backup(
 
     A complete backup has ``manifest.json``. Failure leaves an incomplete
     directory for inspection and never overwrites or automatically deletes it.
+    ``allow_subfolder`` lets the destination sit inside ``data_dir`` (the
+    pre-update copy in ``data/update-backups``); only the named files are
+    copied, so a backup never includes another.
     """
     source_dir = Path(data_dir).resolve(strict=True)
     if not source_dir.is_dir():
@@ -65,7 +70,7 @@ def create_backup(
     if requested_destination.is_symlink():
         raise ValueError("Backup destination must not be a symlink")
     target = requested_destination.resolve()
-    if target == source_dir or target.is_relative_to(source_dir):
+    if target == source_dir or (target.is_relative_to(source_dir) and not allow_subfolder):
         raise ValueError("Backup destination must be outside the source data directory")
     if target.exists():
         raise FileExistsError(target)

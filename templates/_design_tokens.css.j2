@@ -4,7 +4,7 @@
     --panel: #fbfcf9;
     --border: #dde3dc;
     --control-border: #79877d;
-    --muted: #657169;
+    --muted: #5b665f;
     --text: #15221b;
     --accent: #256f52;
     --accent-strong: #174d39;
@@ -55,3 +55,5 @@
     --ambient-blue: rgba(92, 145, 179, 0.07);
     --ambient-dot: rgba(146, 210, 172, 0.11);
   }
+  /* Browser-default placeholder grey falls below 4.5:1 on dark fields. */
+  ::placeholder { color: var(--muted); opacity: 1; }
