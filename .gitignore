@@ -40,3 +40,7 @@ htmlcov/
 .playwright-mcp/
 # Program files replaced by the one-click updater
 .update-backups/
+
+# Local design-tool review artifacts
+.impeccable/
+.lavish/
