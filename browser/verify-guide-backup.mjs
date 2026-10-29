@@ -331,7 +331,9 @@ try {
   report.checks.push('all guide steps fit a 390 px viewport and can be dismissed');
 
   const unsupported=await context();await unsupported.addInitScript(()=>{window.showSaveFilePicker=undefined;});
-  const fallback=await newPage(unsupported);await fallback.goto(base+'#/setup');
+  // A fresh profile can reload once while it prepares the CPU; wait for the
+  // desk so the menu is not opened on the page that reload replaces.
+  const fallback=await newPage(unsupported);await fallback.goto(base+'#/setup');await ready(fallback);
   await shellAction(fallback,'open-backup');
   await fallback.locator('#linked-backup-status').filter({hasText:'Download backup and Restore backup'}).waitFor();
   assert.equal(await fallback.locator('#link-backup').isHidden(),true);
