@@ -571,7 +571,7 @@ try {
     });
     assert.equal(await page.evaluate(() => window.__storagePermissionCalls), 0);
     await toggleMenu('browser-data-menu');
-    assert.match(await page.locator('#browser-data-menu').textContent(), /browser manages the local storage directory/);
+    assert.match(await page.locator('#browser-data-menu').textContent(), /browser decides where this data lives/);
     assert.equal(await page.locator('#protect-storage').isHidden(),true,'Advanced storage controls start collapsed');
     await page.locator('#browser-data-menu .data-tools > details > summary').click();
     assert.equal(await page.locator('#protect-storage').isVisible(),true);
@@ -1581,7 +1581,7 @@ try {
     await openSettingsGroup('summary-options');
     assert.equal(await frame().locator('input[name="llm_backend"][value="claude_cli"]').isDisabled(), true);
     assert.equal(await frame().locator('input[name="llm_backend"][value="codex_cli"]').isDisabled(), true);
-    assert.match(await frame().locator('[data-companion-note]').first().textContent(), /connect a browser companion/);
+    assert.match(await frame().locator('[data-companion-note]').first().textContent(), /this needs the Companion/);
     await openCompanionMenu();
     await page.locator('#companion-endpoint').fill('http://127.0.0.1:8768');
     await page.locator('#companion-token').fill('fictional-acceptance-token');
@@ -1590,7 +1590,7 @@ try {
     assert.deepEqual(companionRequests.map(row => row.path), ['/health']);
     await frame().locator('input[name="llm_backend"][value="claude_cli"]:not([disabled])').waitFor({state:'attached'});
     assert.equal(await frame().locator('input[name="llm_backend"][value="codex_cli"]').isDisabled(), true);
-    assert.match(await frame().locator('[data-companion-note]').first().textContent(), /Connected companion supports/);
+    assert.match(await frame().locator('[data-companion-note]').first().textContent(), /Runs through your connected Companion/);
     await route('/', '.item[data-section="research"]');
     assert.equal(await page.locator('#companion-token').inputValue(), '');
     const status = await page.evaluate(() => window.__rpc({ type: 'companion-status' }));
@@ -1609,7 +1609,7 @@ try {
     assert.equal(JSON.parse(companionSnapshot).format, 'dailydigest-browser-v1');
     await page.locator('#companion-inbound').click();
     await page.waitForFunction(() => document.getElementById('companion-status').textContent.includes('Email feedback processed'));
-    assert.match(await page.locator('#companion-status').textContent(), /1 upvotes, 0 downvotes/);
+    assert.match(await page.locator('#companion-status').textContent(), /1 upvote, 0 downvotes/);
     await frame().locator('.item[data-section="research"]').first().locator('.vote-btn[data-grade="70"][aria-pressed="true"]').waitFor();
     assert.ok(companionRequests.some(row => row.path === '/inbound/ack'), 'Mailbox ACK must follow committed native browser feedback.');
     const reload = page.waitForEvent('framenavigated', { predicate: changedFrame => changedFrame === page.mainFrame() });
@@ -1617,7 +1617,7 @@ try {
     await reload; await startup();
     await openCompanionMenu();
     await page.locator('#companion-disconnect').click();
-    await page.waitForFunction(() => document.getElementById('companion-status').textContent.includes('No companion'));
+    await page.waitForFunction(() => document.getElementById('companion-status').textContent.includes('No Companion'));
     assert.equal(await page.locator('#companion-email').isDisabled(), true);
     await route('/setup', '#interest-editor');
     assert.equal(await frame().locator('input[name="llm_backend"][value="claude_cli"]').isDisabled(), true);

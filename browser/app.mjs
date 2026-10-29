@@ -450,7 +450,7 @@ function frameBridge(token, path, origin, publicBase) {
     if (field) {
       const notice = document.createElement('p');
       notice.className = 'hint';
-      notice.textContent = 'API keys entered here are stored in this browser. A Companion can keep provider credentials on your own computer instead. Portable backups exclude credentials unless you choose to include them.';
+      notice.textContent = 'An API key entered here is saved in this browser. To keep it on your own computer instead, set it up in the Companion. Backups leave keys out unless you choose to include them.';
       field.parentElement.append(notice);
     }
     notify({type:'frame-ready'});
@@ -1111,11 +1111,24 @@ async function boot() {
         }
       }
       document.getElementById('sync-credentials').closest('label').hidden = !configured || !capabilities.state;
-      document.getElementById('companion-summary-help').hidden = !configured || !capabilities.summarize?.length;
+      document.getElementById('companion-summary-help').hidden = !configured || !(capabilities.summarize || []).some(name => name !== 'extractive');
       document.getElementById('companion-schedule-help').hidden = !configured || !capabilities.scheduler;
-      const labels = { summarize: 'summaries', email: 'email', inbound: 'email feedback', state: 'state transfer', scheduler: 'scheduled brews' };
-      const names = Object.keys(labels).filter(key => Array.isArray(capabilities[key]) ? capabilities[key].length : capabilities[key]).map(key => labels[key]);
-      companionStatus.textContent = configured ? `Connected to ${result.endpoint}. Available: ${names.join(', ') || 'no optional services'}.` : 'No companion configured.';
+      // Name what is missing and how to turn it on, so a quiet capability is not a mystery.
+      const services = [
+        ['summarize', 'summaries', 'sign in to claude or codex, or set an API key, on that computer'],
+        ['email', 'email', 'add RESEND_API_KEY, DIGEST_FROM and DIGEST_TO to its .env'],
+        ['inbound', 'email replies', 'add IMAP_USER and IMAP_PASSWORD to its .env'],
+        ['scheduler', 'scheduled brews', 'restart it with --state-dir and --schedule'],
+      ];
+      // Every Companion offers local extractive summaries; only AI providers count here.
+      const providerNames = { api: 'API', anthropic: 'Claude API', claude_cli: 'Claude Code', codex_cli: 'Codex' };
+      const providers = (capabilities.summarize || []).filter(name => providerNames[name]).map(name => providerNames[name]);
+      const has = key => key === 'summarize' ? providers.length > 0 : Boolean(capabilities[key]);
+      const ready = services.filter(([key]) => has(key)).map(([key, label]) => key === 'summarize' ? `${label} (${providers.join(', ')})` : label);
+      const missing = services.filter(([key]) => !has(key)).map(([, label, how]) => `${label} (${how})`);
+      companionStatus.textContent = configured
+        ? `Connected to ${result.endpoint}. Ready: ${ready.join(', ') || 'nothing yet'}.${missing.length ? ` Not set up: ${missing.join('; ')}.` : ''}`
+        : 'No Companion connected.';
     } catch (error) { companionStatus.textContent = error.message; }
   }
   let computeApplying = false;
@@ -1591,15 +1604,15 @@ async function boot() {
   for (const action of ['email', 'inbound', 'push', 'pull']) {
     const button = document.getElementById(`companion-${action}`);
     button.onclick = async () => {
-      if (action === 'email' && !confirm('Send your latest saved digest to the recipient configured on your companion?')) return;
+      if (action === 'email' && !confirm('Email your latest digest to the address set on your Companion?')) return;
       const includeCredentials = action === 'push' && document.getElementById('sync-credentials').checked;
-      if (action === 'push' && !confirm(`Send this browser’s profile, feedback and reading history to your companion? ${includeCredentials ? 'This also sends saved API keys and credentials.' : 'Saved API keys and credentials are excluded.'}`)) return;
-      if (action === 'pull' && !await confirmRestore('Replace this browser’s data with Companion state? Changes are not merged.')) return;
+      if (action === 'push' && !confirm(`Send your interests, ratings and reading history to your Companion? This replaces the copy it has. ${includeCredentials ? 'Saved API keys and passwords are included.' : 'Saved API keys and passwords stay here.'}`)) return;
+      if (action === 'pull' && !await confirmRestore('Replace the reading desk here with the Companion’s copy? Nothing is merged, so ratings made here since you last sent it are not in that copy.')) return;
       button.disabled = true;
-      companionStatus.textContent = 'Running requested companion action…';
+      companionStatus.textContent = 'Running requested Companion action…';
       try {
         if (action === 'push') await settleRenderedEdits(frame);
-        if (action === 'pull') restoreProgress('Restoring Companion data… Keep this tab open.');
+        if (action === 'pull') restoreProgress('Getting the Companion’s copy… Keep this tab open.');
         const apply = () => companionCall({ type: `companion-${action}`, ...(action === 'pull' ? { overwrite: true } : {}), ...(action === 'push' ? { includeCredentials } : {}) });
         const result = await (action === 'pull' ? replaceWithCopiesPaused(apply) : apply());
         if (action === 'pull' && result.reload) { rememberImportNotice(result); location.reload(); return; }
@@ -1607,9 +1620,10 @@ async function boot() {
           const up = Number(result.votes_up || 0);
           const down = Number(result.votes_down || 0);
           const unresolved = Number(result.unresolved_messages || 0);
-          companionStatus.textContent = `Email feedback processed: ${up} upvotes, ${down} downvotes.${unresolved ? ` ${unresolved} messages need review.` : ''}${result.errors?.length ? ' ' + result.errors.join(' ') : ''}`;
+          const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+          companionStatus.textContent = `Email feedback processed: ${plural(up, 'upvote')}, ${plural(down, 'downvote')}.${unresolved ? ` ${plural(unresolved, 'message')} need${unresolved === 1 ? 's' : ''} review.` : ''}${result.errors?.length ? ' ' + result.errors.join(' ') : ''}`;
           if (up + down > 0) await navigate(activePath);
-        } else companionStatus.textContent = action === 'email' ? 'Latest digest sent.' : action === 'push' ? 'Browser state sent.' : 'Companion state restored. Reload to open it.';
+        } else companionStatus.textContent = action === 'email' ? 'Latest digest sent.' : action === 'push' ? 'Reading desk sent to your Companion.' : 'Companion copy restored. Reload to open it.';
       } catch (error) { restoreProgress(''); companionStatus.textContent = error.message; }
       finally { button.disabled = false; }
     };
@@ -1701,7 +1715,7 @@ async function boot() {
     setStatus('Ready to read');
     document.getElementById('compute-support').textContent = 'Open controls to choose acceleration.';
     document.getElementById('compute-status').textContent = 'Computation is paused while you read the saved digest.';
-    companionStatus.textContent = 'Open controls to connect a companion.';
+    companionStatus.textContent = 'Open controls to connect a Companion.';
     document.getElementById('backup-runtime-notice').hidden = false;
     checkRelease();
   } else {

@@ -31,22 +31,22 @@
   <main id="startup" aria-labelledby="startup-title">
     <p class="eyebrow">DailyDigest in your browser</p>
     <div id="tab-wait-actions" hidden>
-      <p>Your reading desk is safe. Only one tab can edit it at a time. Switching saves the other tab first; an active brew or unsaved settings must be finished there.</p>
+      <p>DailyDigest is open in another tab, and only one tab can use it at a time. Your data is safe. Switching here saves the other tab first; if it is brewing or has unsaved settings, finish those there.</p>
       <button id="use-this-tab" type="button">Use this tab instead</button>
     </div>
     <div class="tea-cup" aria-hidden="true"><span class="steam s1"></span><span class="steam s2"></span><span class="steam s3"></span><span class="cup-bowl"></span><span class="cup-handle"></span></div>
     <h1 id="startup-title">Putting the kettle on…</h1>
-    <p>Your research reading desk runs on this device. This browser profile keeps your interests, ratings and saved papers. Switching profiles or browsers opens a separate reading desk.</p>
+    <p>DailyDigest runs on this device. Your interests, ratings and saved papers stay in this browser profile; another browser or profile has its own separate copy.</p>
     <form id="startup-topics-form" hidden>
       <label for="startup-topics">What would you like to read about?</label>
       <textarea id="startup-topics" rows="3" maxlength="1800" placeholder="Induced proximity&#10;Asymmetric catalysis&#10;RNA delivery" aria-describedby="startup-topics-hint"></textarea>
-      <p id="startup-topics-hint">Start typing while the app opens. One topic per line, up to ten. You can adjust topics and percentages before saving.</p>
+      <p id="startup-topics-hint">One topic per line, up to ten. You can type while the app loads and refine them on the next page.</p>
       <button type="submit" id="startup-topics-continue">Continue with these topics</button>
       <p id="startup-topics-message" role="status"></p>
-      <p class="startup-restore">Used DailyDigest before, in another browser or at another web address? Its reading desk stayed there. <button type="button" id="startup-restore">Restore a backup instead</button></p>
+      <p class="startup-restore">Used DailyDigest in another browser or at another address? That data stays there until you bring a backup over. <button type="button" id="startup-restore">Restore a backup instead</button></p>
     </form>
     <ol id="startup-stages" aria-label="Opening steps"><li data-startup-stage="python">Loading the app</li><li data-startup-stage="data">Opening your saved reading</li><li data-startup-stage="ready">Ready to read</li></ol>
-    <details class="startup-details"><summary>About the first visit</summary><p>The first visit downloads the app once, <span id="download-size">up to about 160 MB</span>. After that it opens from this browser’s saved copy, and papers it has already compared are remembered. Keep this tab open while brewing; a large batch of new papers takes longer. Speed options are under More, then Data &amp; compute.</p></details>
+    <details class="startup-details"><summary>About the first visit</summary><p>The first visit downloads the app once, <span id="download-size">up to about 160 MB</span>. Later visits open from this browser’s copy and reuse the comparisons already made. Keep this tab open while brewing; a big batch of new papers takes longer. To speed it up, see More, then Data &amp; compute.</p></details>
     <div class="desk-skeleton" aria-hidden="true"><span></span><span></span><span></span></div>
     <p id="startup-status">Warming up your reading desk. A fresh cup is on its way.</p>
     <button id="retry" hidden type="button">Retry startup</button>
@@ -80,26 +80,27 @@
     <p id="guide-position" class="eyebrow"></p>
     <section data-guide-step>
       <h1 id="quick-guide-title" tabindex="-1">Start with your interests</h1>
-      <p>Add a few research topics or load an example and edit it. Use alternative terms for abbreviations and other names for the same topic. Percentages are optional; when you use them, they must add up to 100%.</p>
-      <p>Choose Standard for up to 15 papers, or Short for fewer. Brewing runs on your device; keep the tab open until it finishes.</p>
+      <p>Add a few research topics, or load an example and edit it. Under Other names, add abbreviations and synonyms. Priorities are optional; if you set them, they add up to 100%.</p>
+      <p>Then brew. Brewing runs on this device, so keep the tab open until it finishes. Choose a size first: Standard shows up to 15 picks, Short about five, Full every qualified pick.</p>
     </section>
     <section data-guide-step hidden>
       <h1 tabindex="-1">Make the digest yours</h1>
-      <p>Rate papers to tell DailyDigest what helps. Save papers to revisit them. For familiar papers you want to see less often, choose Less relevant, then Not new to me. Funding and event cards offer Mark known. Each pick shows the topic it matched.</p>
-      <p>Saved papers and earlier digests stay in your reading desk. Check source coverage to see which sources responded and how old their data is.</p>
+      <p>Rate papers so DailyDigest learns what helps you, and save the ones you want to come back to. Each pick shows which of your topics it matched. For a paper you already know, choose Less relevant, then Not new to me.</p>
+      <p>On funding and event cards, Interested tracks the deadline under Coming deadlines and on the Saved page; Mark known (under More) stops showing the card.</p>
+      <p>Earlier digests stay available from the date picker. The source check at the end of each digest shows which sources answered and how fresh their data is.</p>
     </section>
     <section data-guide-step hidden>
       <h1 tabindex="-1">Keep a copy you can restore</h1>
-      <p>This browser profile saves your data automatically. Other browsers, profiles and devices have separate storage. DailyDigest has no account sync.</p>
-      <p>Download a backup, then restore it in the other browser. Restoring replaces its reading desk; it does not merge changes. Backups exclude saved API keys and passwords unless you include them.</p>
-      <p>You can also link a backup file in a folder you choose, where supported. This profile remembers the file and checks access on startup. Another browser must link it separately. Automatic copies work while the tab is open; they are not live sync.</p>
+      <p>Your data saves automatically, but only in this browser profile. There is no account, and nothing syncs between browsers or devices.</p>
+      <p>To move, download a backup here and restore it in the other browser. Restoring replaces what is there; it does not merge. Backups leave out API keys and passwords unless you include them.</p>
+      <p>Some browsers can also keep a backup file in a folder you choose and update it while this tab is open.</p>
       <button type="button" data-guide-action="backup">Backup &amp; transfer</button>
     </section>
     <section data-guide-step hidden>
       <h1 tabindex="-1">Optional tools</h1>
-      <p>Data &amp; compute, under More, has GPU and multiple-core options. Availability depends on your browser and drivers. The app shows which mode it actually uses.</p>
-      <p>Companion lets you use a supported Claude or Codex login, email, or scheduled brews. Install and run the helper on your computer, then connect it under Data &amp; compute. Browser reading works without it. Companion data transfers are manual and replace the destination reading desk.</p>
-      <p>If startup fails, download the original data before restoring a backup or starting fresh. Recovery files may contain credentials.</p>
+      <p><strong>Faster brewing.</strong> More, then Data &amp; compute, can use your GPU or several CPU cores, if your browser supports it.</p>
+      <p><strong>Companion.</strong> A web page can’t run programs on your computer, send email or brew after you close it. The Companion is a small helper you run on your own computer to do those jobs for this page: summaries with your Claude Code or Codex sign-in, emailing your digest, and brewing on a schedule. It is not remote access, and you don’t need it to read here.</p>
+      <p><strong>If startup fails,</strong> download the original data first, then restore a backup or start fresh. That file may contain credentials.</p>
       <button type="button" data-guide-action="compute">Compute options</button><button type="button" data-guide-action="companion">Companion setup</button>
     </section>
     <nav class="guide-navigation" aria-label="Quick guide"><button id="guide-previous" type="button">Previous</button><button id="guide-next" type="button">Next</button><button id="guide-finish" type="button" hidden>Done</button></nav>
@@ -112,37 +113,41 @@
     <details id="compute-menu">
       <summary>Compute</summary>
       <div class="data-tools">
-        <p>Brewing runs on your device. Choose optional acceleration for new text comparisons.</p>
+        <p>Brewing runs on this device. A GPU or extra CPU cores can speed up comparing new papers with your interests.</p>
         <form id="compute-form">
           <label for="compute-mode">Local computation</label>
           <select id="compute-mode" aria-describedby="compute-support" disabled>
             <option value="cpu">CPU · one core</option>
-            <option value="gpu">Use GPU acceleration (experimental, opt-in)</option>
             <option value="multicore">CPU · up to four cores</option>
+            <option value="gpu">GPU (experimental)</option>
           </select>
           <p id="compute-support">Checking this browser’s capabilities…</p>
           <button id="compute-apply" disabled type="submit">Apply and reload</button>
         </form>
         <button id="test-gpu" type="button" disabled>Test GPU</button><p id="gpu-test-result" role="status"></p>
         <p id="compute-status" role="status">Preparing local CPU computation…</p>
-        <details><summary>More about computing</summary><p>Choose a mode, then Apply and reload. Finish or stop an active brew first. Acceleration speeds new text comparisons; fetching and other work still use the CPU. Cached comparisons need no acceleration, and the existing digest does not change when you switch.</p>
-        <p>CPU and GPU can select different borderline papers. Switching modes can require recalculating saved text comparisons.</p>
-        <p>First-time GPU setup downloads a separate model export, about 133 MB.</p>
-        <p>Brewing uses processor and memory and can increase heat, fan noise and battery use. Thousands of new articles may take 20 minutes or more on one CPU core. GPU support is experimental while hardware performance is being verified across devices. CPU fallback keeps the same ranking rules.</p></details>
+        <details><summary>More about computing</summary><p>Choose a mode, then Apply and reload; finish or stop any brew first. Only comparing new papers gets faster: fetching still uses the CPU, saved comparisons are reused, and your current digest stays as it is.</p>
+        <p>GPU mode downloads a separate model once, about 133 MB. It can pick slightly different borderline papers than CPU mode, and switching may recompute saved comparisons. If the GPU fails, DailyDigest falls back to the CPU with the same ranking rules.</p>
+        <p>Brewing works the processor hard and can raise heat, fan noise and battery use. Thousands of new papers can take 20 minutes or more on one CPU core.</p></details>
       </div>
     </details>
     <details id="companion-menu">
       <summary>Companion <span class="optional-label">(optional)</span></summary>
       <div class="data-tools">
-        <p>An optional helper on your computer connects this page to your Claude or Codex login, email and scheduled brews. Skip it to read in the browser.</p>
+        <p>A web page can’t run programs on your computer, send email or keep brewing after you close it. The Companion is a small helper you run on your own computer that does these jobs for this page:</p>
+        <ul class="companion-uses">
+          <li>summaries with your signed-in Claude Code or Codex, or an API key kept on your computer;</li>
+          <li>emailing your digest, and reading email replies as ratings;</li>
+          <li>brewing on a schedule while this browser is closed.</li>
+        </ul>
+        <p>It is not remote access. It listens only on your computer and answers only this site, with your token. You don’t need it to read here, and if you read in the DailyDigest app on your computer rather than on this website, you don’t need it at all.</p>
         <ol class="companion-steps">
-          <li>Install the local DailyDigest app on your computer. For Claude or Codex summaries, sign in to its CLI there.</li>
-          <li>Start the helper and leave it running: <code class="companion-command">dd companion --allowed-origin https://antimonyleo.github.io</code><button id="copy-companion-command" type="button">Copy command</button></li>
-          <li>Copy the server URL and token from its startup message into the fields below. The message also gives the token file location for later use.</li>
+          <li>Install the DailyDigest app on your computer. For Claude Code or Codex, sign in to <code>claude</code> or <code>codex</code> there; for email, add <code>RESEND_API_KEY</code>, <code>DIGEST_FROM</code> and <code>DIGEST_TO</code> to the app’s <code>.env</code> file.</li>
+          <li>Start the helper and leave it running: <code class="companion-command">dd companion --allowed-origin https://antimonyleo.github.io</code><button id="copy-companion-command" type="button">Copy command</button> For scheduled brews, add <code>--state-dir</code> with a folder for its copy, and <code>--schedule</code>.</li>
+          <li>It prints an address (usually <code>http://127.0.0.1:8768</code>) and the path of a token file. Enter the address below, and paste the token from that file.</li>
         </ol>
-        <p>The helper receives selected paper metadata and a short research profile for summaries. Send browser state separately for scheduled brews; this transfers your profile, feedback and history. Credentials are excluded unless you choose to include them.</p>
-        <p>Connect only to a helper you trust.</p>
-        <p id="shared-origin-warning">Other project sites under this GitHub Pages account share access to saved browser credentials. A separate app domain would keep that storage separate.</p>
+        <p>For summaries, the Companion receives the same paper details and short profile any summary provider gets. Scheduled brews work on a copy of your reading desk that you send it; credentials stay out unless you include them. Connect only to a helper you trust.</p>
+        <p id="shared-origin-warning">Other sites under this github.io address share this browser’s storage, including any saved credentials. Keeping API keys on the Companion avoids that.</p>
         <form id="companion-form">
           <label for="companion-endpoint">Local server URL</label>
           <input id="companion-endpoint" type="url" required placeholder="http://127.0.0.1:8768" autocomplete="url">
@@ -151,15 +156,15 @@
           <button id="companion-connect" disabled type="submit">Connect and test</button>
           <button id="companion-disconnect" disabled type="button">Disconnect</button>
         </form>
-        <p id="companion-status" role="status">No companion configured.</p>
-        <p id="companion-summary-help" hidden>Select a provider supported by your companion in Settings to use its summaries during a brew. Provider credentials stay on the companion.</p>
-        <p id="companion-schedule-help" hidden>For scheduled brews, send browser state once and keep the companion running. Restore companion state to retrieve its latest digest.</p>
+        <p id="companion-status" role="status">No Companion connected.</p>
+        <p id="companion-summary-help" hidden>To use it for summaries, choose one of its providers under Settings, then Summaries. Its credentials stay on your computer.</p>
+        <p id="companion-schedule-help" hidden>Scheduled brews use the reading desk you last sent, so keep the Companion running. Getting its copy back replaces the reading desk here (a recovery copy is kept), so ratings made here since your last send are lost from it.</p>
         <div class="companion-actions">
-          <label><input id="sync-credentials" type="checkbox"> Include credentials when sending browser state</label>
+          <label><input id="sync-credentials" type="checkbox"> Include saved API keys and passwords when sending</label>
           <button id="companion-email" disabled type="button">Send latest digest email</button>
-          <button id="companion-inbound" disabled type="button">Import email feedback</button>
-          <button id="companion-push" disabled type="button">Send browser state</button>
-          <button id="companion-pull" disabled type="button">Restore companion state</button>
+          <button id="companion-inbound" disabled type="button">Import email replies as ratings</button>
+          <button id="companion-push" disabled type="button">Send reading desk to Companion</button>
+          <button id="companion-pull" disabled type="button">Get Companion’s latest copy</button>
         </div>
       </div>
     </details>
@@ -181,16 +186,16 @@
           <label id="automatic-backup-label" hidden><input id="automatic-backup" type="checkbox"> Update this copy automatically while this tab is open</label>
           <p id="linked-backup-help">Copies run about a minute after changes, when no brew is running. Credentials are excluded. Another browser must link the file separately and restore it. If that file changes elsewhere, automatic copying stops so it cannot overwrite those changes.</p>
         </section>
-        <details><summary>More about storage</summary><p>Other project sites on this hostname share its security origin. Use separate browser profiles for separate readers.</p>
+        <details><summary>More about storage</summary><p>Other sites under this github.io address share this browser’s storage. Give each person their own browser profile.</p>
         <p id="storage-status" role="status">Checking storage protection…</p>
-        <p>Your browser manages the local storage directory on macOS, Windows and Linux. Protect storage to reduce automatic clearing; export a backup to keep a copy in a folder you choose. No account is required.</p>
+        <p>Your browser decides where this data lives and may clear it when disk space runs low. Protecting storage makes that less likely; a downloaded backup is the only copy you fully control.</p>
         <p id="storage-usage"></p>
         <p id="backup-status">No backup export recorded on this device.</p>
         <button id="protect-storage" type="button">Protect browser storage</button>
         <button id="retained-recovery" type="button" hidden>Download previous recovery copy</button>
         <p id="retained-recovery-help" hidden>Recovery copies can include credentials. Keep the downloaded file private.</p>
         <label><input id="include-credentials" type="checkbox"> Include saved API keys and credentials in backup</label>
-        <p>Portable backups exclude credentials by default. You may need to configure a provider again on another device.</p>
+        <p>Without this, you set up any summary provider again after restoring on another device.</p>
         </details>
       </div>
     </details>

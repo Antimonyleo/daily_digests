@@ -330,8 +330,8 @@ def test_advanced_interests_and_coverage_limits_are_discoverable(monkeypatch, tm
     assert "open" not in fields["paper-examples"][0]
     assert "open" not in fields["advanced-interests"][0]
     assert "Grants.gov" in html and "EMBL" in html
-    assert "not exhaustive" in html
-    assert "browser companion" in html.lower()
+    assert "Not every funder is covered" in html and "Not every organiser is covered" in html
+    assert "this needs the companion" in html.lower()
     assert 'id="settings-save-status"' in html
 
 

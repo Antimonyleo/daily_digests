@@ -1381,7 +1381,7 @@ def lr_training_status() -> dict[str, object]:
             "Preference ranking active · ratings apply to your next brew." if preference_active
             else "Topic similarity mode · preference fusion is off." if mode == 'cosine'
             else "Preference weights unavailable · topic-similarity fallback." if training_status == 'model_missing'
-            else f"{signed} helpful ratings · feedback builds gradually · {remaining} to unlock preference ranking."
+            else f"{signed} helpful rating{'' if signed == 1 else 's'} · {remaining} more to unlock preference ranking."
         ),
         "vote_counts": counts,
         "min_votes_for_lr": MIN_VOTES_FOR_LR,

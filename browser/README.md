@@ -289,6 +289,16 @@ browser backup export/import also works without one. Default extractive
 summaries are local. Optional HTTP model services require explicit configuration
 and usable CORS; provider secrets are never built into the public application.
 
+**What the Companion is for.** A static web page cannot run programs on the
+reader's computer, send email, read a mailbox or brew after the tab closes.
+`dd companion` is a small helper the reader runs on their own computer to do
+those jobs for the website: Claude Code, Codex or API summaries with credentials
+kept on that computer, email delivery and reply ratings, and scheduled brews. It
+listens on localhost, answers only the allowed origin with a token, and never
+receives a normal brew. Readers who use the native app do not need it. Once
+connected, the Companion panel names what is ready and, for each missing
+service, the setting that turns it on.
+
 API, Anthropic and local CLI summaries, email delivery, inbound feedback and private state transfer
 are implemented through `browser/companion.py`, enabled only when explicitly
 configured. The browser applies email reply votes to its own dated digest before
@@ -434,8 +444,9 @@ actual isolation.
 
 The Guide button opens a short walkthrough of setup, brewing, feedback, storage,
 recovery, compute and Companion. New readers see a small introduction with a
-restore option. They can dismiss it and reopen the guide at any time. The footer
-storage button opens Backup & transfer. Setup also links to the guide and backups.
+restore option. They can dismiss it and reopen the guide at any time. The top
+bar's More menu opens Backup & transfer, Restore backup and Data & compute.
+Setup also links to the guide and backups.
 
 Each browser profile has its own working reading desk. Signing into Chrome or
 installing the browser shortcut does not connect it to another profile or device.
@@ -614,10 +625,13 @@ brew. A release notice never reloads a running brew automatically.
 
 ## Reader experience and evaluation
 
-The footer keeps one status line and **Data & compute**, which opens a single
-keyboard-accessible view for acceleration, backups, storage protection and the
-optional Companion. First-visit Setup defaults to Research only, gives topics
-equal shares and keeps individual percentage editing optional. Existing readers
+The top bar keeps one status line, **Guide** and **More**; More, then **Data &
+compute**, opens a single keyboard-accessible view for acceleration, backups,
+storage protection and the optional Companion. First-visit Setup defaults to
+Research only and has one list of sections, under Digest sections, whose summary
+names the sections that are on. Brew stays in the phone's first view right after
+the topics, and the rows below it sit under an Optional settings label. Topics get
+equal shares and individual percentage editing stays optional. Existing readers
 keep their enabled sections and priorities. Example profiles remain editable.
 
 Cards show available authors, publication status and the recorded matching topic.

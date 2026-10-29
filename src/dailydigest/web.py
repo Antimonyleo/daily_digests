@@ -2816,6 +2816,7 @@ def setup_get(request: Request) -> Response:
             "first_run": not _profile_exists(),
             "errors": [],
             "csrf_token": _CSRF_TOKEN,
+            "browser_mode": BROWSER_MODE,
         },
     )
     response.headers["Cache-Control"] = "no-store"
@@ -2923,6 +2924,7 @@ async def setup_post(request: Request) -> Response:
                 "first_run": not _profile_exists(),
                 "errors": display_errors,
                 "csrf_token": _CSRF_TOKEN,
+                "browser_mode": BROWSER_MODE,
             },
             status_code=400,
         )

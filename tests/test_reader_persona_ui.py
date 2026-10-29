@@ -95,6 +95,6 @@ def test_guide_describes_the_available_known_paper_feedback_path():
     source = (Path(__file__).resolve().parents[1] / "browser/index.html").read_text()
     guide = source.split('id="quick-guide"', 1)[1].split("</dialog>", 1)[0]
     assert "Less relevant, then Not new to me" in guide
-    assert "Funding and event cards offer Mark known" in guide
+    assert "On funding and event cards" in guide and "Mark known" in guide
     assert "mark a paper as known" not in guide
     assert 'data-reason="already_known"' in feedback_html("already_known")

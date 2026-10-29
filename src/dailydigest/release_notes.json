@@ -2,6 +2,18 @@
   "schema": 1,
   "releases": [
     {
+      "version": "2026.10.29",
+      "date": "2026-10-29",
+      "title": "Clearer first visit, guide and Companion",
+      "notes": [
+        "First visit has one list of sections: the duplicate Also show checkboxes are gone, Digest sections names what is on, and the settings below Brew are labelled Optional settings.",
+        "The guide, start page and Data & compute were rewritten to be shorter and plainer, and the guide now explains Interested.",
+        "The Companion now explains what it is for: a helper on your own computer for Claude Code or Codex summaries, email and scheduled brews. It is not remote access. Its setup steps now say where the token is and which options scheduled brews and email need.",
+        "Once connected, the Companion lists what is ready and how to turn on the rest; Claude Code and Codex show (needs Companion) on the website instead of being silently greyed out.",
+        "Smaller fixes: '1 helpful rating' grammar, the Saved page names the real Save button, and settings labels such as Add topic and About you are clearer."
+      ]
+    },
+    {
       "version": "2026.10.28",
       "date": "2026-10-28",
       "title": "Fellowships, awards and tracked deadlines, matched to your country",

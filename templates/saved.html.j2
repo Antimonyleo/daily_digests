@@ -80,10 +80,10 @@
   </div>
   {% else %}
   <div class="empty-archive">
-    {% if query %}No saved items match “{{ query }}”.{% else %}Nothing saved yet. Use “Save for later” on any digest item.{% endif %}
+    {% if query %}No saved items match “{{ query }}”.{% else %}Nothing saved yet. Use Save on any digest item to keep it here.{% endif %}
   </div>
   {% endif %}
-  <details class="saved-rating-help"><summary>About ratings</summary><p>Ratings guide future recommendations. Less relevant and Not relevant lower their priority; reasons distinguish topic fit, difficulty and access.</p></details>
+  <details class="saved-rating-help"><summary>About ratings</summary><p>Ratings shape future digests. Less relevant and Not relevant push similar papers down; the reason you pick tells DailyDigest whether it was the topic, the level or access.</p></details>
   {% if pages > 1 %}<nav class="saved-actions" aria-label="Saved reading pages">
     {% if previous_page %}<a class="btn" href="{{ previous_page }}">Previous page</a>{% endif %}
     <span>Page {{ page }} of {{ pages }}</span>

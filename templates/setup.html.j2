@@ -40,11 +40,7 @@
   #topics { min-height: 245px; font-size: 15px; }
   textarea::placeholder, input::placeholder { color: var(--muted); opacity: 1; }
   .example-note { color: var(--muted); font-size: 12px; line-height: 1.5; margin: 8px 0; }
-  .welcome-sections { display: grid; gap: 2px; margin: 14px 0 6px; padding: 0; border: 0; }
-  .welcome-sections legend { margin-bottom: 4px; padding: 0; color: var(--text); font-weight: 600; }
-  .welcome-sections label { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; margin: 0; font-weight: 500; }
-  .welcome-sections input { width: 18px; height: 18px; margin: 0; accent-color: var(--accent); }
-  .welcome-section-note { color: var(--muted); font-weight: 400; }
+  .optional-settings-label { margin: 32px 0 4px; color: var(--muted); font-size: 13px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
   .example-start { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 8px; align-items: center; }
   .example-start label { grid-column: 1 / -1; margin-bottom: 0; }
   .example-start select { min-width: 0; }
@@ -190,7 +186,7 @@
   .settings-refined #priority-options > summary { min-height: 38px; padding: 9px 0; }
   .settings-refined #priority-options > summary { font-size: 13px; font-weight: 500; }
   .settings-refined .settings-row { position: relative; border: 0; border-top: 1px solid var(--border); margin: 0; padding: 0; }
-  .settings-refined .settings-row > summary { display: grid; grid-template-columns: 190px minmax(0, 1fr) 12px; align-items: center; gap: 12px; padding: 16px 0; margin: 0; min-height: 58px; list-style: none; color: var(--text); font-size: 19px; font-weight: 700; line-height: 1.35; }
+  .settings-refined .settings-row > summary { display: grid; grid-template-columns: 220px minmax(0, 1fr) 12px; align-items: center; gap: 12px; padding: 16px 0; margin: 0; min-height: 58px; list-style: none; color: var(--text); font-size: 19px; font-weight: 700; line-height: 1.35; }
   .settings-refined .settings-row > summary::-webkit-details-marker { display: none; }
   .settings-refined .settings-row > summary::after { content: ''; width: 7px; height: 7px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(45deg); justify-self: end; margin-right: 2px; }
   .settings-refined .settings-row[open] > summary::after { transform: rotate(225deg); }
@@ -267,7 +263,7 @@
       <div id="interest-editor" hidden>
         <div id="interest-rows"></div>
         <details id="priority-options" class="settings-disclosure"{% if errors %} open{% endif %}><summary>Set topic priorities (optional)</summary><p class="hint">Topics start with equal shares. Adjust individual percentages above when useful; the total must be 100%.</p></details>
-        <div class="interest-actions"><button type="button" class="btn" id="add-interest">Add interest</button><button type="button" class="btn priority-control" id="even-interests">Distribute evenly</button><button type="button" class="btn priority-control" id="normalize-interests">Normalize to 100%</button><output class="priority-control" id="interest-total" aria-live="polite"></output></div>
+        <div class="interest-actions"><button type="button" class="btn" id="add-interest">Add topic</button><button type="button" class="btn priority-control" id="even-interests">Distribute evenly</button><button type="button" class="btn priority-control" id="normalize-interests">Normalize to 100%</button><output class="priority-control" id="interest-total" aria-live="polite"></output></div>
         <p class="hint priority-control">Give each topic a percentage. The total must be 100%. Use Distribute evenly or Normalize to 100% to adjust the shares.</p>
       </div>
       <textarea id="topic-details" name="topic_details" hidden disabled>{{ form.topic_details | default('') }}</textarea>
@@ -286,13 +282,6 @@
         </select>
         <button class="btn" id="use-example-profile" type="button">Load example</button>
       </div>
-      {% endif %}
-      {% if first_run | default(not form.topics) %}
-      <fieldset class="welcome-sections" id="welcome-sections">
-        <legend>Also show (optional)</legend>
-        <label><input type="checkbox" data-mirror-section="include_opportunities"> <span>Funding &amp; Opportunities <span class="welcome-section-note">· grants and calls</span></span></label>
-        <label><input type="checkbox" data-mirror-section="include_events"> <span>Events &amp; Calls <span class="welcome-section-note">· conferences, fellowships and awards</span></span></label>
-      </fieldset>
       {% endif %}
       <p class="example-note" id="example-profile-note">{% if not form.topics %}Examples are editable starting points. {% endif %}Nothing is saved until you save your settings.</p>
       <label for="bio">Current research or learning goal (optional)</label>
@@ -343,12 +332,7 @@
     </div>
     <div class="step">
       <h2>What’s in your digest</h2>
-      <label title="Look up public DOIs in Europe PMC and Crossref for publication types and linked commentary. Your profile and ratings stay local.">
-        <input type="hidden" name="publication_enrichment" value="false">
-        <input type="checkbox" name="publication_enrichment" value="true"{% if form.publication_enrichment == 'true' %} checked{% endif %}>
-        Verify article types online
-      </label>
-      <p class="hint">Research is always included. Choose which additional sections you want to read.</p>
+      <p class="hint">Research is always included. Turn on any other sections you want.</p>
       <div class="section-options">
         <div class="section-option section-required">
           <div>
@@ -455,7 +439,7 @@
               </span>
               <label class="section-name" for="include_opportunities">Funding &amp; Opportunities</label>
             </div>
-            <p class="section-desc">Research grants for your current country: Grants.gov and the NIH Guide for the US; EU Funding &amp; Tenders (Horizon Europe, ERC, EIC) for the EU and associated countries, including the UK and Switzerland; national funders such as UKRI and SNSF. Fellowships and awards are listed under Events &amp; Calls when that section is on. Coverage is not exhaustive, and eligibility needs official-source verification.</p>
+            <p class="section-desc">Grants for researchers in your country: Grants.gov and NIH (US), EU Funding &amp; Tenders (EU and associated countries, including the UK and Switzerland), and national funders such as UKRI and SNSF. Not every funder is covered; check eligibility at the source.</p>
           </div>
           <div class="count-field">
             <label for="top_opportunities">Maximum opportunities items</label>
@@ -475,7 +459,7 @@
               </span>
               <label class="section-name" for="include_events">Events &amp; Calls</label>
             </div>
-            <p class="section-desc">Conferences, workshops and courses from EMBL, EMBO, Keystone, Cold Spring Harbor, FASEB and other organisers, worldwide and online, plus fellowship and award calls for your current country and international schemes such as MSCA, HFSP and EMBO. Coverage is not exhaustive; verify dates and eligibility at the official source.</p>
+            <p class="section-desc">Conferences, workshops and courses (EMBL, EMBO, Keystone, Cold Spring Harbor, FASEB and others, in person and online), plus fellowships and awards such as MSCA, HFSP and EMBO. Not every organiser is covered; check dates and eligibility at the source.</p>
           </div>
           <div class="count-field">
             <label for="top_events">Maximum events items</label>
@@ -484,10 +468,17 @@
           </div>
         </div>
       </div>
+      <div class="hint">The numbers are maximums. A digest shows fewer when there aren’t enough strong matches.</div>
+      <label class="article-type-check">
+        <input type="hidden" name="publication_enrichment" value="false">
+        <input type="checkbox" name="publication_enrichment" value="true" aria-describedby="article-type-hint"{% if form.publication_enrichment == 'true' %} checked{% endif %}>
+        Verify article types online
+      </label>
+      <p class="hint" id="article-type-hint">Looks up each pick’s DOI in Europe PMC and Crossref to tell reviews, comments and corrections apart from research papers. Only DOIs are sent; your profile and ratings stay here.</p>
       <div class="opportunity-profile" id="opportunity-profile"
            {% if form.include_opportunities != "true" and form.include_events != "true" %}hidden{% endif %}>
-        <h3>About you for opportunity matching</h3>
-        <p class="hint">These details stay on this device. Your research interests above are reused for matching, so you do not need to describe your research again.</p>
+        <h3>Your details for funding and event matching</h3>
+        <p class="hint">Used only to match calls and events to you, and kept on this device. Your research topics are reused, so there’s no need to describe your research again.</p>
         <div class="field-grid">
           <div>
             <label for="opportunity-career-stage">Career stage</label>
@@ -542,7 +533,6 @@
           </div>
         </details>
       </div>
-      <div class="hint">Item counts are caps; DailyDigest will show fewer when there are not enough strong candidates.</div>
     </div>
 
     <details class="step settings-disclosure" id="summary-options"{% if errors %} open{% endif %}>
@@ -550,7 +540,8 @@
       <summary>How to summarize
         <span class="disclosure-note">Current choice: <span id="summary-current">{{ summary_labels.get(form.llm_backend, "Local extractive") }}</span></span>
       </summary>
-      <p class="hint">Native mode can use local commands and configured providers directly. Browser mode can reach APIs directly or through the browser companion; signed-in CLI commands need a connected companion. Extractive summaries stay on this device in either mode.</p>
+      {% if browser_mode %}<p class="hint">Local extractive summaries are made in this browser. API methods send a short excerpt of each pick to the provider you choose. Signed-in Claude Code and Codex run on your computer, so the website needs the Companion for them (More, then Data &amp; compute).</p>
+      {% else %}<p class="hint">Local extractive summaries are made on this computer. The other methods send a short excerpt of each pick to the provider you choose.</p>{% endif %}
       <div class="backends">
         <label class="backend-opt" data-value="extractive">
           <input type="radio" name="llm_backend" value="extractive"
@@ -588,8 +579,8 @@
         </label>
       </div>
 
-      <details class="settings-disclosure"><summary>What is sent for AI summaries?</summary>
-        <p class="hint">Your chosen provider receives selected article titles, sources, sections, dates, internal item IDs, abstract excerpts (up to 1,500 characters), and derived contribution, claim and evidence labels. Personalization includes the first 400 characters of your current research or learning goal and up to 20 core topics; derived labels may also name your configured topics. Catch-up briefings include up to 60 titles and sources and the number of days away. Extractive stays local.</p>
+      <details class="settings-disclosure"><summary>What does an AI provider receive?</summary>
+        <p class="hint">For each pick: its title, source, section, date, an internal ID, up to 1,500 characters of the abstract, and short contribution, claim and evidence labels (which may name your topics). For personalisation: up to 20 of your topics and the first 400 characters of your research goal. A catch-up briefing adds up to 60 titles and sources and how many days you were away. Local extractive sends nothing.</p>
       </details>
 
       <div class="api-fields" id="api-fields"{% if form.llm_backend == "extractive" %} hidden{% endif %}>
@@ -1064,7 +1055,7 @@
     const isCli = v === "claude_cli" || v === "codex_cli";
     if (providerSelect) {
       providerSelect.value = v;
-      providerDescription.textContent = v === 'extractive' ? '' : (sel.closest('label').querySelector('.desc')?.textContent.trim() || '');
+      providerDescription.textContent = v === 'extractive' ? '' : [...sel.closest('label').querySelectorAll('.desc')].map(node => node.textContent.trim()).join(' ');
     }
     summaryCurrent.textContent = v === "extractive" ? "Local extractive" : sel.closest("label").querySelector("strong").textContent;
     apiFields.hidden = !(isApi || isCli);
@@ -1138,7 +1129,7 @@
       const label = radio.closest('label');
       let note = label.querySelector('[data-companion-note]');
       if (!note) { note = document.createElement('div'); note.className = 'desc'; note.dataset.companionNote = ''; label.append(note); }
-      note.textContent = available ? 'Connected companion supports this command.' : 'Unavailable: connect a browser companion with this command installed and signed in, or choose Extractive.';
+      note.textContent = available ? 'Runs through your connected Companion.' : 'On the website this needs the Companion, running on a computer where this command is signed in (More, then Data & compute).';
     }
   });
 
@@ -1217,19 +1208,8 @@
   const sections = document.querySelector('.section-options').closest('.step');
   const sectionGroup = settingsRow('digest-sections', 'Digest sections'); sections.before(sectionGroup); sectionGroup.append(sections);
   sections.querySelector('h2').hidden = true;
-  // First use names the optional sections beside the topics; each mirrors its real switch.
-  document.querySelectorAll('[data-mirror-section]').forEach(mirror => {
-    const toggle = document.getElementById(mirror.dataset.mirrorSection);
-    if (!toggle) { mirror.closest('label').hidden = true; return; }
-    mirror.checked = toggle.checked;
-    mirror.addEventListener('change', () => {
-      toggle.checked = mirror.checked; toggle.dispatchEvent(new Event('change', {bubbles: true}));
-      if (mirror.checked) sectionGroup.open = true;  // Opportunity matching asks for career stage and country.
-    });
-    toggle.addEventListener('change', () => { mirror.checked = toggle.checked; });
-  });
   const advanced = document.getElementById('advanced-interests'); advanced.classList.add('settings-row');
-  advanced.querySelector('summary').replaceChildren(...labelWithValue('Examples & interests', ''));
+  advanced.querySelector('summary').replaceChildren(...labelWithValue('Examples & background', ''));
   advanced.querySelector('summary').title = 'Add useful paper titles and background topics to refine matching.';
   const papers = document.getElementById('paper-examples'); advanced.prepend(papers); papers.open = true; papers.classList.add('embedded-paper-examples');
   const authorGroup = settingsRow('author-settings', 'Researchers to follow');
@@ -1252,10 +1232,17 @@
   providerChoice.append(providerLabel, providerSelect);
   const backendCards = summaryGroup.querySelector('.backends'); backendCards.before(providerChoice, providerDescription); backendCards.hidden = true;
   providerSelect.addEventListener('change', () => { const radio = [...radios].find(field => field.value === providerSelect.value); radio.checked = true; radio.dispatchEvent(new Event('change', {bubbles: true})); });
-  window.addEventListener('dd-companion-capabilities', () => { for (const option of providerSelect.options) option.disabled = [...radios].find(radio => radio.value === option.value)?.disabled || false; });
+  window.addEventListener('dd-companion-capabilities', () => {
+    for (const option of providerSelect.options) {
+      option.dataset.label ||= option.textContent;
+      option.disabled = [...radios].find(radio => radio.value === option.value)?.disabled || false;
+      option.textContent = option.disabled ? `${option.dataset.label} (needs Companion)` : option.dataset.label;
+    }
+    refresh();
+  });
   refresh();
   const profileGroup = document.getElementById('profile-options'); profileGroup.classList.add('settings-row');
-  profileGroup.querySelector('summary').replaceChildren(...labelWithValue('Research context', ''));
+  profileGroup.querySelector('summary').replaceChildren(...labelWithValue('About you', ''));
   profileGroup.querySelector('summary').title = 'Your current goal, name and topics to see less often.';
   const bio = document.getElementById('bio'); profileGroup.querySelector('summary').after(document.querySelector('label[for="bio"]'), bio, document.getElementById('bio-hint'));
   const actions = document.querySelector('.settings-actions');
@@ -1269,18 +1256,24 @@
     examples.querySelector('label').textContent = 'Field';
     document.getElementById('example-profile-note').hidden = true;
   }
-  if (firstUse) { document.querySelector('.lede').textContent = 'Add a research topic to get started.'; topicStep.after(actions); }
+  // First use: Brew stays in the first view; everything after it is labelled optional.
+  if (firstUse) {
+    document.querySelector('.lede').textContent = 'Add a research topic and brew. Everything else is optional and can be changed later.';
+    const optional = document.createElement('h2'); optional.className = 'optional-settings-label'; optional.textContent = 'Optional settings';
+    topicStep.after(actions); actions.after(optional);
+  }
   if ({{ 'true' if errors else 'false' }}) for (const group of [sectionGroup, authorGroup, advanced, profileGroup, summaryGroup]) group.open = true;
+  const sectionNames = {include_industry: 'Industry', include_ai: 'AI tools', include_regulatory: 'Clinical', include_world: 'World', include_opportunities: 'Funding', include_events: 'Events'};
   function updateSettingsSummaries() {
-    const enabled = [...document.querySelectorAll('input[role="switch"]')].filter(toggle => toggle.checked).length + 1;
-    sectionGroup.querySelector('.settings-value').textContent = `${enabled} section${enabled === 1 ? '' : 's'}`;
+    const enabled = [...document.querySelectorAll('input[role="switch"]')].filter(toggle => toggle.checked).map(toggle => sectionNames[toggle.id]);
+    sectionGroup.querySelector('.settings-value').textContent = enabled.length ? ['Research', ...enabled].join(' · ') : 'Research only · add funding, events and more';
     const authors = author.value.split('\n').filter(value => value.trim());
-    authorGroup.querySelector('.settings-value').textContent = authors.length ? `${authors.length} researcher${authors.length === 1 ? '' : 's'}` : '';
+    authorGroup.querySelector('.settings-value').textContent = authors.length ? `${authors.length} researcher${authors.length === 1 ? '' : 's'}` : 'None yet';
     const seeds = document.getElementById('seed_works').value.split('\n').filter(value => value.trim()).length;
     const background = context.value.split('\n').filter(value => value.trim()).length;
-    advanced.querySelector(':scope > summary .settings-value').textContent = [seeds ? `${seeds} example${seeds === 1 ? '' : 's'}` : '', background ? `${background} background topic${background === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ');
+    advanced.querySelector(':scope > summary .settings-value').textContent = [seeds ? `${seeds} example${seeds === 1 ? '' : 's'}` : '', background ? `${background} background topic${background === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ') || 'Papers you liked, nearby fields';
     const bio = document.getElementById('bio').value.trim();
-    profileGroup.querySelector('.settings-value').textContent = bio.length > 72 ? bio.slice(0, 71) + '…' : bio;
+    profileGroup.querySelector('.settings-value').textContent = bio ? (bio.length > 72 ? bio.slice(0, 71) + '…' : bio) : 'Your goal, name, topics to see less';
   }
   settingsForm.addEventListener('input', updateSettingsSummaries); settingsForm.addEventListener('change', updateSettingsSummaries); updateSettingsSummaries();
   document.querySelectorAll('#browser-storage-note button').forEach(button => button.classList.add('btn'));

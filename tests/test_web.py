@@ -339,8 +339,8 @@ def test_setup_page_renders_accessible_optional_section_switches(monkeypatch):
     assert 'id="user-timezone"' in html
     assert "Intl.DateTimeFormat().resolvedOptions().timeZone" in html
     assert "Optional matching preferences" in html
-    assert "research interests above are reused" in html
-    assert "About you for opportunity matching" in html
+    assert "Your research topics are reused" in html
+    assert "Your details for funding and event matching" in html
     assert 'id="top_ai"' in html
     assert "AI tools &amp; methods" in html
     assert "Clinical &amp; Regulatory" in html
@@ -2887,8 +2887,8 @@ def test_settings_offer_native_api_and_signed_in_cli_summarizers(monkeypatch, tm
     assert "Signed-in Codex" in body
     assert "API billing" in body
     assert "chat subscription" in body.lower()
-    assert "first 400 characters of your current research or learning goal" in body
-    assert "up to 20 core topics" in body
+    assert "first 400 characters of your research goal" in body
+    assert "up to 20 of your topics" in body
 
 
 def test_setup_saves_signed_in_cli_backend_without_api_credentials(tmp_path, monkeypatch):
