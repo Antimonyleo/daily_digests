@@ -2,6 +2,14 @@
   "schema": 1,
   "releases": [
     {
+      "version": "2026.10.30",
+      "date": "2026-10-30",
+      "title": "Security updates",
+      "notes": [
+        "Updated dependencies for the local app, optional Hugging Face models and browser runtime to address reported security vulnerabilities."
+      ]
+    },
+    {
       "version": "2026.10.29.1",
       "date": "2026-10-29",
       "title": "An easier start and clearer Companion setup",

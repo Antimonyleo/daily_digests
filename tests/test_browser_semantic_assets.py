@@ -177,7 +177,8 @@ def test_full_build_manifest_identifies_lazy_semantic_assets_and_ships_engine(tm
     assert './reading-view.mjs?build=' + report['build_id'] in (output / 'worker.mjs').read_text()
     # A pure-Python dependency update must invalidate application/bytecode URLs.
     requirements = browser / 'requirements-browser.txt'
-    requirements.write_text(requirements.read_text().replace('filelock==3.29.0', 'filelock==3.30.0'))
+    requirements.write_text('\n'.join('filelock==0.0.0' if line.startswith('filelock==') else line
+                             for line in requirements.read_text().splitlines()) + '\n')
     updated = builder.build(tmp_path / 'updated-dependencies')
     assert updated['build_id'] != report['build_id']
     assert updated['app_release'] != report['app_release']
