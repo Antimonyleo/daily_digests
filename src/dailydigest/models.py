@@ -150,9 +150,9 @@ class SourceSpec(BaseModel):
     # Fellowship and award calls. They appear in Events & Calls when that
     # section is on, and in Funding & Opportunities when only funding is on.
     calls: bool = False
-    # Sources whose terms allow personal use but forbid public re-posting. The
-    # local app reads them for its own reader; the public website and its
-    # daily snapshot leave them out.
+    # Sources only the local app can read: their terms allow personal use but
+    # forbid public re-posting, or the publisher refuses both the snapshot
+    # collector and browsers. The public website and its snapshot leave them out.
     local_only: bool = False
     # OpenAlex source (venue) ids for the ``openalex_venues`` kind — a retrieval
     # channel that pulls recent articles directly from specific high-value

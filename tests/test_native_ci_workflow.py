@@ -15,7 +15,7 @@ def test_native_ci_covers_linux_and_existing_cross_platform_launcher_modules():
     assert workflow["permissions"] == {"contents": "read"}
     jobs = workflow["jobs"]
     linux = jobs["linux"]
-    assert linux["runs-on"] == "ubuntu-latest"
+    assert linux["runs-on"] == "ubuntu-24.04"
     commands = [step["run"] for step in linux["steps"] if "run" in step]
     assert "uv sync --frozen --group dev" in commands
     assert "uv run --no-sync ruff check --select F,B src tests" in commands

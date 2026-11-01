@@ -2,6 +2,17 @@
   "schema": 1,
   "releases": [
     {
+      "version": "2026.11.1",
+      "date": "2026-11-01",
+      "title": "Sturdier sources",
+      "notes": [
+        "PNAS is back: its feed now refuses automated readers, so papers come from OpenAlex instead, with the same journal name and ranking.",
+        "On the website, EMBL Events works again. EMBL, EMBO and Nature Conferences now come from the daily public copy, so a change on the organiser's site no longer breaks them.",
+        "The website no longer tries Import AI, which never loaded there; the local app still reads it.",
+        "The daily source check now also reports any source the website can reach neither directly nor through the daily public copy."
+      ]
+    },
+    {
       "version": "2026.10.30",
       "date": "2026-10-30",
       "title": "Security updates",

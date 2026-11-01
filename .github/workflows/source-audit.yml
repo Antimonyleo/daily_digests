@@ -1,10 +1,11 @@
 name: DailyDigest browser source access
 
 # A real Chrome probes every configured source from the Pages origin. Sources
-# the browser fetches directly must stay readable (CORS and transport); feeds
-# carried by the daily public snapshot are recorded but do not fail the check.
-# A change such as an upstream API refusing CORS preflight opens one issue
-# before readers meet it, and the issue closes after a clean audit.
+# the browser fetches directly must stay readable (CORS and transport). Sources
+# the daily public snapshot carries must have a usable published record, or
+# else a direct read that works. A change such as an upstream API refusing CORS
+# preflight, or a feed the collector can no longer read, opens one issue, and
+# the issue closes after a clean audit.
 on:
   schedule:
     - cron: '41 7 * * *'
@@ -20,17 +21,17 @@ concurrency:
 jobs:
   audit:
     if: ${{ github.ref == 'refs/heads/main' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
       contents: read
       issues: write
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
         with:
           enable-cache: true
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: '24'
           cache: npm
@@ -44,11 +45,18 @@ jobs:
         run: |
           mkdir -p .source-audit
           origin=https://antimonyleo.github.io/daily_digests/
-          node browser/source-audit.mjs "$origin" .source-audit/report.json
-          if ! uv run --no-sync python browser/check_source_access.py .source-audit/report.json --summary .source-audit/summary.md; then
-            sleep 60
+          audit() {
+            # A missing snapshot is judged as unavailable, not skipped.
+            curl --fail --location --silent --show-error --max-time 60 \
+              --output .source-audit/public-sources.json "${origin}assets/public-sources.json" \
+              || rm -f .source-audit/public-sources.json
             node browser/source-audit.mjs "$origin" .source-audit/report.json
-            uv run --no-sync python browser/check_source_access.py .source-audit/report.json --summary .source-audit/summary.md || echo "failed=true" >> "$GITHUB_OUTPUT"
+            uv run --no-sync python browser/check_source_access.py .source-audit/report.json \
+              --snapshot .source-audit/public-sources.json --summary .source-audit/summary.md
+          }
+          if ! audit; then
+            sleep 60
+            audit || echo "failed=true" >> "$GITHUB_OUTPUT"
           fi
           cat .source-audit/summary.md >> "$GITHUB_STEP_SUMMARY"
           {

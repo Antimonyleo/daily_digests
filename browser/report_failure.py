@@ -23,9 +23,10 @@ def _access_body(run_url):
     # Only public source names and outcomes from the audit summary; no logs.
     summary = os.environ.get('DAILYDIGEST_ACCESS_SUMMARY', '')
     lines = [line for line in summary.splitlines() if line.startswith('- ')][:40]
-    return ('The daily browser audit could not read one or more sources that browser brews fetch '
-            'directly. Those sources will fail in browser brews until fixed; a section whose every '
-            'provider fails stops the brew and keeps the saved digest.\n\n'
+    return ('The daily browser audit found sources that browser brews cannot reach: the browser '
+            'cannot read them directly, and the daily snapshot has no usable copy. Those sources '
+            'fail in browser brews until fixed; a section whose every provider fails stops the '
+            'brew and keeps the saved digest.\n\n'
             + ('\n'.join(lines) + '\n\n' if lines else '')
             + f'[Inspect the audit run]({run_url})\n\n'
             'This issue is reused while access stays broken and closed after a clean audit.')

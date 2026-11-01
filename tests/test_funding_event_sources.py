@@ -284,6 +284,25 @@ def test_configured_sources_load_with_their_adapters():
     assert specs["EU Funding & Tenders"].applicant_regions == ["eu"]
 
 
+def test_every_source_kind_resolves_and_snapshot_listings_ignore_the_reader():
+    import inspect
+
+    from dailydigest.config import load_sources
+    from dailydigest.ingest.base import _ADAPTERS, SNAPSHOT_PAGE_KINDS, source_class
+
+    for kind in _ADAPTERS:
+        assert callable(source_class(kind).fetch), kind
+    with pytest.raises(ValueError, match="Unknown source kind"):
+        source_class("not_a_kind")
+    assert {spec.kind for spec in load_sources("config/sources.yaml")} <= set(_ADAPTERS)
+    # A snapshot copy is shared by every reader, so these adapters may use
+    # neither a profile nor the reader's look-back window.
+    for kind in SNAPSHOT_PAGE_KINDS:
+        assert "del days" in inspect.getsource(source_class(kind).fetch), kind
+    assert not any(spec.profile_driven for spec in load_sources("config/sources.yaml")
+                   if spec.kind in SNAPSHOT_PAGE_KINDS)
+
+
 def test_same_notice_or_event_from_two_providers_is_one_pick():
     from dailydigest.dedupe import candidate_identity_keys
     from dailydigest.models import Item

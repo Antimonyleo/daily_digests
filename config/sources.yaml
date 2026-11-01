@@ -57,12 +57,14 @@ research:
     quality_tier: top
     prestige_score: 1.0
     impact_floor: 7.0
-  - name: PNAS
-    kind: rss
-    url: https://www.pnas.org/action/showFeed?type=etoc&feed=rss&jc=pnas
-    quality_tier: high
-    prestige_score: 0.9
-    impact_floor: 7.0
+  # The PNAS RSS feed answers HTTP 403 to automated readers (local installs
+  # and the snapshot collector alike, since 2026-10-31), so PNAS is read by
+  # venue from OpenAlex. Items keep the journal name and its "high" tier.
+  - name: PNAS (via OpenAlex)
+    kind: openalex_venues
+    polite_email: noreply@example.com
+    venue_ids:
+      - S125754415   # Proceedings of the National Academy of Sciences
   # eLife has swapped which feed works. Earlier `recent.xml` returned 406 and
   # `ahead.xml` worked; on 2026-10-28 `ahead.xml` returned 406 to the reader's
   # browser User-Agent and held only 2 stale items, while `recent.xml`
@@ -387,12 +389,15 @@ ai:
     kind: rss
     url: https://thegradient.pub/rss/
     quality_tier: trusted-news
-  # The Substack copy of the same newsletter; jack-clark.net refuses the
-  # snapshot collector's datacenter address with HTTP 403.
+  # The Substack copy of the same newsletter. Substack and jack-clark.net
+  # refuse the snapshot collector's datacenter address with HTTP 403, and the
+  # feed allows no browser (CORS) reads, so the website cannot reach it.
+  # Local installs read it directly.
   - name: Import AI (Jack Clark)
     kind: rss
     url: https://importai.substack.com/feed
     quality_tier: trusted-news
+    local_only: true
   - name: Latent Space
     kind: rss
     url: https://www.latent.space/feed
@@ -488,8 +493,9 @@ events:
     kind: embo_events
     url: https://www.embo.org/wp-json/embo/v1/events/new
     lookahead_days: 365
-  # Organiser listings read from their pages. Except Nature Conferences, which
-  # browsers read directly, these reach browsers through the daily snapshot.
+  # Organiser listings read from their pages. These and the EMBL and EMBO
+  # listings above reach browsers through the daily snapshot, with a direct
+  # read as the fallback.
   - name: Nature Conferences
     kind: nature_conferences
     url: https://conferences.nature.com/

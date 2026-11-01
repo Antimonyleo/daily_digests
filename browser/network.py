@@ -394,17 +394,12 @@ def install_public_source_fallback(snapshot_url, *, loader=None, now=None):
         fetch._public_snapshot_original = original
         return fetch
 
-    from dailydigest.ingest.event_pages import (
-        CRSEventsSource, CSHLEventsSource, ECIEventsSource, FASEBConferencesSource,
-        FEBSEventsSource, ISSCREventsSource, KeystoneEventsSource, WellcomeConnectingScienceSource,
-    )
-    from dailydigest.ingest.national_funding import SNSFFundingSource, UKRIFundingSource
+    from dailydigest.ingest.base import SNAPSHOT_PAGE_KINDS, source_class
 
-    # Reinstalling updates the URL/cache without stacking wrappers. Funding and
-    # event pages lack CORS access, so the browser reads them from the snapshot.
-    for source in (RSSSource, ArxivSource, BiorxivSource, UKRIFundingSource, SNSFFundingSource,
-                   ISSCREventsSource, KeystoneEventsSource, CSHLEventsSource,
-                   WellcomeConnectingScienceSource, CRSEventsSource, FEBSEventsSource,
-                   ECIEventsSource, FASEBConferencesSource):
+    # Reinstalling updates the URL/cache without stacking wrappers. Public
+    # funding and event listings are read from the snapshot first, so a site
+    # that withdraws CORS access does not break browser brews.
+    for source in (RSSSource, ArxivSource, BiorxivSource,
+                   *(source_class(kind) for kind in sorted(SNAPSHOT_PAGE_KINDS))):
         original = getattr(source.fetch, "_public_snapshot_original", source.fetch)
         source.fetch = wrap(original)

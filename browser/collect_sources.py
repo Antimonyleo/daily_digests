@@ -20,16 +20,18 @@ import time
 
 import yaml
 
+from dailydigest.ingest.base import SNAPSHOT_PAGE_KINDS
+
+# Public funding and event listings (``dailydigest.ingest.base``). They are
+# identical for every reader, so the daily collection carries them whether or
+# not the site allows browser (CORS) reads today. Sources marked ``local_only``
+# (terms forbid public re-posting) are never collected; the website does not
+# read them either.
+PAGE_KINDS = set(SNAPSHOT_PAGE_KINDS)
 # Kinds whose configured, non-profile queries are reproduced from the snapshot.
 # Profile-driven, author-driven and OpenAlex venue sources stay live: venue
 # queries are profile-independent but routinely hit the 120-item cap, so the
 # native selection under a different window cannot be reproduced exactly.
-# Funding and event pages without browser (CORS) access. They are public and
-# identical for every reader, so the daily collection carries them as well.
-# Sources marked ``local_only`` (terms forbid public re-posting) are never
-# collected; the website does not read them either.
-PAGE_KINDS = {"ukri_funding", "snsf_funding", "isscr_events", "keystone_events", "cshl_events",
-              "wellcome_cs_events", "crs_events", "febs_events", "eci_events", "faseb_src_events"}
 SNAPSHOT_KINDS = {"rss", "arxiv", "biorxiv", *PAGE_KINDS}
 # Publication still requires these kinds; a preprint-server outage leaves its
 # record failed (readers fetch it directly) instead of blocking RSS/arXiv.

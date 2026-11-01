@@ -132,14 +132,15 @@ def test_every_actual_configured_public_source_section_can_publish(tmp_path):
 
 
 def test_local_only_sources_never_enter_the_public_snapshot(tmp_path):
-    # The Biophysical Society's terms forbid public re-posting; local installs
-    # still read it, the public collection and website do not.
+    # The Biophysical Society's terms forbid public re-posting, and Import AI
+    # refuses the collector's datacenter address; local installs still read
+    # both, the public collection and website do not.
     config = Path(__file__).parents[1] / 'config/sources.yaml'
     names = {spec.name for spec in collector.public_specs(config)}
-    assert 'Biophysical Society Meetings' not in names
+    assert 'Biophysical Society Meetings' not in names and 'Import AI (Jack Clark)' not in names
     from dailydigest.config import load_sources
     local_only = {spec.name for spec in load_sources(str(config)) if spec.local_only}
-    assert local_only == {'Biophysical Society Meetings'}
+    assert local_only == {'Biophysical Society Meetings', 'Import AI (Jack Clark)'}
     custom = tmp_path / 'sources.yaml'
     custom.write_text('events:\n'
                       '  - {name: Shared, kind: crs_events, url: "https://example.test/a"}\n'
