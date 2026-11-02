@@ -2,6 +2,18 @@
   "schema": 1,
   "releases": [
     {
+      "version": "2026.11.2",
+      "date": "2026-11-02",
+      "title": "More accurate funding and fewer hidden items",
+      "notes": [
+        "Grants.gov calls no longer show today as their deadline when the notice explains its closing date in words; only a complete stated date is used.",
+        "Marking a call or meeting Known, or rating a paper, no longer hides a different item that only shares its title, such as a reissued funding notice or next year's meeting.",
+        "Fellowships whose official page could not be read are no longer labelled verified, and NIH institutional training grants are no longer listed as individual fellowships.",
+        "A quiet day with no openFDA approvals is no longer reported as a source failure, and partial ClinicalTrials.gov and EU Funding results are marked as partial.",
+        "Stopping or timing out a scheduled Companion brew now also stops the brew itself, and switching tabs waits for a large reading desk to finish saving."
+      ]
+    },
+    {
       "version": "2026.11.1",
       "date": "2026-11-01",
       "title": "Sturdier sources",

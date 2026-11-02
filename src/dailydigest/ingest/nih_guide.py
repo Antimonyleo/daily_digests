@@ -26,7 +26,9 @@ FUNDING_DOCTYPES = {"RFA", "PA", "PAR", "PAS"}
 _FOLDERS = {"RFA": "rfa-files", "PA": "pa-files", "PAR": "pa-files", "PAS": "pa-files"}
 _TAG_RE = re.compile(r"<[^>]+>")
 # Fellowship and career-development activity codes.
-_FELLOWSHIP_CODES = re.compile(r"^(?:F\d\d|K\d\d|K99|T\d\d|R00)$")
+# Individual fellowships and career awards. T-series training grants and K12
+# are awarded to institutions, which then appoint trainees; they stay grants.
+_FELLOWSHIP_CODES = re.compile(r"^(?:F\d\d|K(?!12)\d\d|K99|R00)$")
 
 
 @retry(

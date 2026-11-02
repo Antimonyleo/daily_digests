@@ -10,9 +10,10 @@ from typing import Any
 
 import httpx
 from dateutil import parser as date_parser
-from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
+from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from ..models import Item, SourceSpec
+from ._retry import transient_http_error
 from ._terms import profile_search_terms
 
 _TAG_RE = re.compile(r"<[^>]+>")
@@ -21,7 +22,7 @@ _TAG_RE = re.compile(r"<[^>]+>")
 @retry(
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=1, min=2, max=10),
-    retry=retry_if_exception_type((httpx.HTTPError, httpx.TimeoutException)),
+    retry=retry_if_exception(transient_http_error),
     reraise=True,
 )
 def _post_json(url: str, payload: dict[str, Any]) -> dict:
@@ -47,20 +48,28 @@ def _plain_text(value: object) -> str:
     return re.sub(r"\s+", " ", html.unescape(text)).strip()
 
 
+# Two unrelated defaults: a date that keeps either one's day, month or year
+# was incomplete in the source text ("on the listed due date", "30 days
+# prior") and must not become a deadline.
+_DEFAULTS = (datetime(1901, 1, 1), datetime(1902, 2, 2))
+
+
 def _date(value: object) -> date | None:
     text = str(value or "").strip()
     if not text:
         return None
     try:
-        return date_parser.parse(
+        first, second = (date_parser.parse(
             text,
             fuzzy=True,
+            default=default,
             # Preserve the source's calendar deadline; no timezone conversion
             # is needed, including for generic abbreviations such as "ET".
             ignoretz=True,
-        ).date()
+        ).date() for default in _DEFAULTS)
     except (ValueError, TypeError, OverflowError):
         return None
+    return first if first == second else None
 
 
 def _datetime(value: object) -> datetime | None:
@@ -158,11 +167,14 @@ class GrantsGovSource:
             # The search index may lag an extension or correction. Verify the
             # current detail deadline before applying the date horizon.
             deadline = hit_deadline
+            # Structured dates first; the free-text explanations only when
+            # they state one complete date.
             for value in (
-                synopsis.get("responseDateDesc"),
                 synopsis.get("responseDate"),
+                synopsis.get("responseDateStr"),
                 synopsis.get("estApplicationResponseDate"),
                 synopsis.get("estApplicationResponseDateStr"),
+                synopsis.get("responseDateDesc"),
                 detail.get("originalDueDateDesc"),
             ):
                 parsed_deadline = _date(value)

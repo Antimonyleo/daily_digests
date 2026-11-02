@@ -344,7 +344,7 @@ def test_api_connection_check_requires_explicit_csrf_post_and_does_not_save(monk
     monkeypatch.setattr(web, "_ENV_PATH", tmp_path / ".env")
     monkeypatch.setattr(web, "_get_profile_path", lambda: tmp_path / "profile.yaml")
     values = {"llm_backend": "api", "llm_base_url": "https://example.test/v1", "llm_model": "example", "llm_api_key": "test-secret"}
-    with TestClient(web.app) as client:
+    with TestClient(web.app, base_url="http://127.0.0.1") as client:
         assert client.request("GET", "/setup/test-connection").status_code == 405
         assert client.request("POST", "/setup/test-connection", data=values).status_code == 403
         assert calls == []
@@ -383,7 +383,7 @@ def test_api_connection_check_keeps_masked_saved_key_at_its_provider(monkeypatch
     calls = []
     monkeypatch.setattr(web, "SETTINGS", SimpleNamespace(llm_backend="api", llm_base_url="https://saved.example/v1", llm_api_key="saved-secret"))
     monkeypatch.setattr(provider_check, "check_api_connection", lambda **kwargs: calls.append(kwargs) or {"ok": False, "message": "Test result."})
-    with TestClient(web.app) as client:
+    with TestClient(web.app, base_url="http://127.0.0.1") as client:
         response = client.request("POST", "/setup/test-connection", data={
             "llm_backend": "api", "llm_base_url": base_url, "llm_api_key": "***", "llm_model": "example",
         }, headers={"X-CSRF-Token": web._CSRF_TOKEN})

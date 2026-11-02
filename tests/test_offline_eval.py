@@ -400,3 +400,12 @@ def test_invalid_recorded_static_row_count_falls_back_to_weights(bad):
     snapshot["profile_static_rows"] = bad
     frozen = oe.freeze_run(snapshot, stage="first_shot_proxy")
     assert frozen.freeze_notes["static_profile"] == "static_rows_verified_by_profile_weights"
+
+
+def test_overrides_that_replay_cannot_recompute_are_refused():
+    venue = oe.EvalConfig.parse({"name": "venue", "settings": {"venue_relevance_credit": 0.2}})
+    assert oe.unreplayable_overrides(venue) == []
+    for knob, value in [("negative_interest_weight", 2.0), ("top_research", 10),
+                        ("min_topic_relevance", 0.3), ("topic_priority_bonus_scale", 0.0)]:
+        config = oe.EvalConfig.parse({"name": knob, "settings": {knob: value}})
+        assert oe.unreplayable_overrides(config) == [knob]

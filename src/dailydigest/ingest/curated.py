@@ -97,8 +97,9 @@ class CuratedCallsSource:
                     "record_type": "call",
                     "opportunity_type": kind if kind in CALL_TYPES else "fellowship",
                     "status": "open" if deadline else "recurring",
-                    # An entry with no check date is not presented as verified.
-                    "official": checked is not None,
+                    # Verified only when the official page itself was read on
+                    # the check date; facts from search snippets are not.
+                    "official": checked is not None and row.get("url_status") == 200,
                     "verified_at": checked,
                     "funder": str(row.get("funder") or "").strip(),
                     "deadline": deadline.isoformat() if deadline else None,

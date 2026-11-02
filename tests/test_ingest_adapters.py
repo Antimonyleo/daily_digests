@@ -65,6 +65,22 @@ def test_clinicaltrials_follows_next_page_token(monkeypatch):
     assert items[0].external_id == "NCT0001"
     assert items[1].external_id == "NCT0002"
     assert any("pageToken" in c for c in calls), "second page was never fetched"
+    source = ClinicalTrialsSource()
+    source.fetch(_spec(name="ClinicalTrials", kind="clinicaltrials"))
+    diagnostic = source.last_fetch_diagnostics["queries"][0]
+    assert diagnostic["truncated"] is False and diagnostic["returned_count"] == 2
+
+    def later_page_fails(url, params):
+        if "pageToken" in params:
+            raise RuntimeError("timeout")
+        return page1
+
+    monkeypatch.setattr("dailydigest.ingest.clinicaltrials._get_json", later_page_fails)
+    items = source.fetch(_spec(name="ClinicalTrials", kind="clinicaltrials"))
+    diagnostic = source.last_fetch_diagnostics["queries"][0]
+    assert [item.external_id for item in items] == ["NCT0001"]
+    assert diagnostic["truncated"] is True and diagnostic["stop_reason"] == "failure"
+    assert "timeout" in diagnostic["failure"]
 
 
 def test_clinicaltrials_stops_at_max_items(monkeypatch):
@@ -688,7 +704,12 @@ def test_grants_gov_missing_official_response_is_a_source_failure(monkeypatch, s
 
 
 @pytest.mark.parametrize("search_deadline", ["08/01/2026", "10/01/2026"])
-@pytest.mark.parametrize("description", ["", "See full announcement for details"])
+@pytest.mark.parametrize("description", [
+    "", "See full announcement for details",
+    # Free-text explanations that name no complete date must not become one.
+    "Electronically submitted applications must be submitted no later than 5:00 PM local time on the listed due date.",
+    "Letters of intent due 30 days prior", "Applications accepted on a rolling basis through 2027",
+])
 def test_grants_gov_uses_updated_official_deadline_over_search_index(monkeypatch, search_deadline, description):
     from dailydigest.ingest.grants_gov import GrantsGovSource
 
@@ -713,6 +734,22 @@ def test_grants_gov_uses_updated_official_deadline_over_search_index(monkeypatch
 
     assert len(items) == 1
     assert items[0].metadata["deadline"] == "2026-10-15"
+
+
+def test_grants_gov_free_text_without_a_complete_date_keeps_the_search_deadline(monkeypatch):
+    from dailydigest.ingest.grants_gov import GrantsGovSource
+
+    def fake_post(url, _payload):
+        if url.endswith("/search2"):
+            return {"data": {"oppHits": [{"id": 7, "title": "RNA award", "closeDate": "12/01/2026"}]}}
+        return {"data": {"opportunityTitle": "RNA award", "synopsis": {
+            "responseDateDesc": "Applications are due by 5:00 PM on the listed due date."}}}
+
+    monkeypatch.setattr("dailydigest.ingest.grants_gov._post_json", fake_post)
+    monkeypatch.setattr("dailydigest.ingest.grants_gov._today", lambda: date(2026, 8, 10))
+    items = GrantsGovSource().fetch(
+        _spec(name="Grants.gov", kind="grants_gov", section="opportunities", query="RNA"))
+    assert [item.metadata["deadline"] for item in items] == ["2026-12-01"]
 
 
 @pytest.mark.filterwarnings("error::dateutil.parser.UnknownTimezoneWarning")

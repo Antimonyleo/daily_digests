@@ -11,7 +11,10 @@ from __future__ import annotations
 import json
 import hashlib
 import logging
+import os
 import re
+import sys
+import tempfile
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -698,7 +701,43 @@ def _update_rocchio(item_id: int | None = None, vote_value: int | None = None, g
 # defensible floor for an 11-feature model — below it the LR over-parameterizes.
 # Single source of truth: reference this constant in docs/code, do not hardcode.
 MIN_VOTES_FOR_LR = 30
-_VOTE_REASONS_LOCK = Lock()
+class _VoteReasonsLock:
+    """Serialize vote_reasons.json across threads and processes.
+
+    The web server, CLI votes and a CLI brew's maintenance all rewrite the
+    file; a thread lock alone let another process write back a stale copy.
+    """
+
+    def __init__(self) -> None:
+        self._thread = Lock()
+        self._file = None
+
+    def __enter__(self):
+        self._thread.acquire()
+        try:
+            if sys.platform != "emscripten":  # one process per browser tab
+                from filelock import FileLock
+
+                path = _vote_reasons_path()
+                path.parent.mkdir(parents=True, exist_ok=True)
+                self._file = FileLock(str(path) + ".lock", timeout=30)
+                self._file.acquire()
+        except BaseException:
+            self._file = None
+            self._thread.release()
+            raise
+        return self
+
+    def __exit__(self, *_exc) -> None:
+        file_lock, self._file = self._file, None
+        try:
+            if file_lock is not None:
+                file_lock.release()
+        finally:
+            self._thread.release()
+
+
+_VOTE_REASONS_LOCK = _VoteReasonsLock()
 _FEEDBACK_MUTATION_LOCK = Lock()
 
 
@@ -758,9 +797,13 @@ def _write_vote_reasons(data: dict) -> None:
 def _replace_vote_reasons(content: bytes) -> None:
     path = _vote_reasons_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".json.tmp")
-    tmp.write_bytes(content)
-    tmp.replace(path)
+    descriptor, temporary = tempfile.mkstemp(dir=path.parent, prefix=".vote_reasons.", suffix=".tmp")
+    try:
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(content)
+        os.replace(temporary, path)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
 
 
 @contextmanager

@@ -799,7 +799,7 @@ def _exclude_identity_siblings(
     """Apply item-level feedback to duplicate rows from another provider."""
     if not excluded_ids:
         return rows
-    from .dedupe import candidate_identity_keys
+    from .dedupe import _title_copy_evidence, candidate_identity_keys
 
     # Feedback remains binding after its original provider row leaves the
     # candidate window or an earlier pipeline gate removes that row.
@@ -807,19 +807,32 @@ def _exclude_identity_siblings(
         excluded_rows = s.execute(
             select(ItemRow).where(ItemRow.id.in_(excluded_ids))
         ).scalars().all()
-    excluded_keys = {
-        key
-        for row in excluded_rows
-        for key in candidate_identity_keys(row)
-    }
+    # Durable keys (DOI, PMID, arXiv, URL, notice number, event edition) name
+    # one work. A same-day title alone counts only when dedupe would also join
+    # the pair, so feedback never hides a reissued call, another edition or a
+    # different paper that happens to share a title.
+    durable: set[str] = set()
+    by_title: dict[str, list[ItemRow]] = {}
+    for excluded in excluded_rows:
+        for key in candidate_identity_keys(excluded):
+            if key.startswith("title_day:"):
+                by_title.setdefault(key, []).append(excluded)
+            else:
+                durable.add(key)
+
+    def is_sibling(row: ItemRow) -> bool:
+        keys = candidate_identity_keys(row)
+        if durable.intersection(keys):
+            return True
+        return any(
+            _title_copy_evidence(row, keys, [excluded])
+            for key in keys for excluded in by_title.get(key, ())
+        )
+
     return [
         row
         for row in rows
-        if row.id is None
-        or (
-            int(row.id) not in excluded_ids
-            and not excluded_keys.intersection(candidate_identity_keys(row))
-        )
+        if row.id is None or (int(row.id) not in excluded_ids and not is_sibling(row))
     ]
 
 

@@ -89,7 +89,7 @@ def test_spelling_route_is_explicit_csrf_protected_and_does_not_save(monkeypatch
     profile.write_text("bio: Original reader\nkeywords: [induced provimity]\n")
     monkeypatch.setattr(web, "_get_profile_path", lambda: profile)
     before = profile.read_bytes()
-    with TestClient(web.app) as client:
+    with TestClient(web.app, base_url="http://127.0.0.1") as client:
         path = "/setup/check-wording?" + urlencode({"topic": "induced provimity"})
         assert client.request("GET", path).status_code == 405
         assert client.request("POST", path).status_code == 403
@@ -111,7 +111,7 @@ def test_spelling_route_rejects_empty_or_long_topics_before_network(monkeypatch,
         pytest.fail("Invalid topic must not reach the provider")
 
     monkeypatch.setattr(spelling, "suggest_topic_spelling", forbidden)
-    with TestClient(web.app) as client:
+    with TestClient(web.app, base_url="http://127.0.0.1") as client:
         response = client.request("POST", "/setup/check-wording", params={"topic": topic},
                                headers={"x-csrf-token": web._CSRF_TOKEN})
     assert response.status_code in {400, 422}
@@ -125,7 +125,7 @@ def test_spelling_route_reports_unavailability_without_provider_details(monkeypa
         raise spelling.SpellingUnavailable("internal provider details")
 
     monkeypatch.setattr(spelling, "suggest_topic_spelling", unavailable)
-    with TestClient(web.app) as client:
+    with TestClient(web.app, base_url="http://127.0.0.1") as client:
         response = client.request("POST", "/setup/check-wording", params={"topic": "assymetric catalysis"},
                                headers={"x-csrf-token": web._CSRF_TOKEN})
     assert response.status_code == 503
@@ -152,7 +152,7 @@ def test_accepted_correction_saves_the_same_topic_for_search_and_ranking(monkeyp
                 "previous_name": "induced provimity",
                 "aliases": ["molecular glue"], "description": "Validated design methods."}}),
             "llm_backend": "extractive", "user_tz": "UTC"}
-    with TestClient(web.app) as client:
+    with TestClient(web.app, base_url="http://127.0.0.1") as client:
         response = client.request("POST", "/setup", data=form, follow_redirects=False)
     assert response.status_code == 303
     profile = config.load_profile(str(profile_path))

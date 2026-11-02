@@ -289,6 +289,35 @@ def _angewandte_twins(doi: str, other: str) -> bool:
                 and _ANGEWANDTE_TWIN_DOI_RE.sub("", doi) == _ANGEWANDTE_TWIN_DOI_RE.sub("", other))
 
 
+def _item_metadata(it: Any) -> dict:
+    metadata = getattr(it, "metadata", None)
+    if isinstance(metadata, dict):
+        return metadata
+    try:
+        metadata = json.loads(str(getattr(it, "metadata_json", "") or "{}"))
+    except (TypeError, ValueError):
+        return {}
+    return metadata if isinstance(metadata, dict) else {}
+
+
+def _deadline_records_differ(a: Any, b: Any) -> bool:
+    """Two calls or events whose official notice numbers or start dates differ.
+
+    A reissued funding notice or next year's meeting edition often repeats the
+    title exactly; the title alone must not make them one record.
+    """
+    sections = {"opportunities", "events"}
+    if getattr(a, "section", "") not in sections or getattr(b, "section", "") not in sections:
+        return False
+    first, second = _item_metadata(a), _item_metadata(b)
+    for field in ("official_id", "event_start"):
+        left = str(first.get(field) or "").strip().upper()
+        right = str(second.get(field) or "").strip().upper()
+        if left and right and left != right:
+            return True
+    return False
+
+
 def _title_copy_evidence(it: Any, keys: list[str], group: list[Any]) -> int:
     """How well a same-day title match supports joining ``it`` to a copy group.
 
@@ -300,6 +329,8 @@ def _title_copy_evidence(it: Any, keys: list[str], group: list[Any]) -> int:
     doi, authors = _own_doi(keys), _author_list(it)
     evidence = 1
     for other in group:
+        if _deadline_records_differ(it, other):
+            return 0
         other_doi = _own_doi(candidate_identity_keys(other, include_publication_links=False))
         other_authors = _author_list(other)
         if authors and other_authors:

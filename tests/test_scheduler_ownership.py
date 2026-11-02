@@ -207,9 +207,11 @@ def test_coordinator_stops_while_filesystem_job_is_blocked(settings, tmp_path, r
         assert marker.exists(), failure
         began = time.monotonic()
         stop.set()
-        thread.join(12)
+        # The supervisor waits out the coordinator's own stop sequence first.
+        bound = companion.COORDINATOR_STOP_GRACE + companion.CHILD_STOP_GRACE + 2
+        thread.join(bound)
         assert not thread.is_alive(), 'Scheduling thread retained uncooperative filesystem work'
-        assert time.monotonic() - began < 12
+        assert time.monotonic() - began < bound
         assert not failure, failure
         assert status['last_status'] == 'stopped'
         assert status['workspace_retained'] is True

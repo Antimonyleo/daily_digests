@@ -261,6 +261,23 @@ class EvalConfig:
         return cls(value["name"], weight, settings)
 
 
+def unreplayable_overrides(config: EvalConfig) -> list[str]:
+    """Overrides whose effect replay takes from the record instead of recomputing.
+
+    Replay reuses the recorded negative-interest penalty, topic-priority bonus
+    and section budgets, so changing their knobs would report "no difference"
+    without testing the change.
+    """
+    return sorted(key for key in config.settings if key in _REPLAYED_FROM_RECORD
+                  or key.startswith(("top_", "min_", "max_")))
+
+
+_REPLAYED_FROM_RECORD = frozenset({
+    "negative_interest_weight", "negative_interest_margin", "topic_priority_bonus_scale",
+    "adaptive_section_sizes",
+})
+
+
 def _frozen_settings(snapshot: dict, config: EvalConfig, scoring_mode: str):
     """Recorded ranking settings plus explicit overrides; never .env or os.environ."""
     from ..config import Settings
@@ -546,6 +563,9 @@ def rescore_run(run: FrozenRun, config: EvalConfig, *, embeddings: FrozenEmbeddi
 
     meta = run.snapshot_meta
     settings = _frozen_settings(meta, config, run.scoring_mode)
+    reused = unreplayable_overrides(config)
+    if reused:
+        raise IncompleteReplay(f"offline replay reuses recorded values for {reused}")
     if getattr(settings, "semantic_matching", False) or getattr(settings, "within_day_dedupe", False) \
             or float(getattr(settings, "contribution_order_strength", 0.0)) \
             or getattr(settings, "contribution_reranker_path", ""):

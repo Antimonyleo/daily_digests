@@ -57,7 +57,7 @@ def test_rebinding_saved_secret_requires_explicit_key_before_any_write(
     writes = []
     monkeypatch.setattr(web, '_write_private_yaml', lambda *a: writes.append('profile'))
     monkeypatch.setattr(web, '_write_env_file', lambda *a: writes.append('credentials'))
-    with TestClient(web.app) as client:
+    with TestClient(web.app, base_url="http://127.0.0.1") as client:
         response = client.request('POST', '/setup', data=_form(
             web, backend=selected_backend, base_url=selected_url, key=key), follow_redirects=False)
     assert response.status_code == 400
@@ -70,7 +70,7 @@ def test_rebinding_saved_secret_requires_explicit_key_before_any_write(
 @pytest.mark.parametrize('key', ['***', ''])
 def test_unchanged_api_endpoint_preserves_saved_secret(monkeypatch, tmp_path, base_url, key):
     web, _, env = _prepare(monkeypatch, tmp_path)
-    with TestClient(web.app) as client:
+    with TestClient(web.app, base_url="http://127.0.0.1") as client:
         response = client.request('POST', '/setup', data=_form(web, base_url=base_url, key=key), follow_redirects=False)
     assert response.status_code == 303
     assert web._read_env_file(env)['LLM_API_KEY'] == 'fixture-origin-key'
@@ -79,7 +79,7 @@ def test_unchanged_api_endpoint_preserves_saved_secret(monkeypatch, tmp_path, ba
 @pytest.mark.parametrize('backend', ['api', 'anthropic'])
 def test_explicit_new_key_allows_provider_change(monkeypatch, tmp_path, backend):
     web, _, env = _prepare(monkeypatch, tmp_path)
-    with TestClient(web.app) as client:
+    with TestClient(web.app, base_url="http://127.0.0.1") as client:
         response = client.request('POST', '/setup', data=_form(web, backend=backend,
             base_url='https://different-provider.example/v1', key='fixture-new-key'), follow_redirects=False)
     assert response.status_code == 303
@@ -91,7 +91,7 @@ def test_explicit_new_key_allows_provider_change(monkeypatch, tmp_path, backend)
 def test_leaving_api_then_returning_cannot_implicitly_reuse_key(monkeypatch, tmp_path, backend):
     web, profile, env = _prepare(monkeypatch, tmp_path)
     monkeypatch.setenv('LLM_API_KEY', 'fixture-origin-key')
-    with TestClient(web.app) as client:
+    with TestClient(web.app, base_url="http://127.0.0.1") as client:
         first = client.request('POST', '/setup', data=_form(web, backend=backend), follow_redirects=False)
         assert first.status_code == 303
         before = profile.read_bytes(), env.read_bytes()

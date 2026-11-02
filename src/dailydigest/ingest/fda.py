@@ -8,12 +8,13 @@ from typing import Any
 import httpx
 from tenacity import (
     retry,
-    retry_if_exception_type,
+    retry_if_exception,
     stop_after_attempt,
     wait_exponential,
 )
 
 from ..models import Item, SourceSpec
+from ._retry import transient_http_error
 
 logger = logging.getLogger(__name__)
 
@@ -21,12 +22,21 @@ logger = logging.getLogger(__name__)
 @retry(
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=1, min=2, max=10),
-    retry=retry_if_exception_type((httpx.HTTPError, httpx.TimeoutException)),
-    reraise=False,
+    retry=retry_if_exception(transient_http_error),
+    reraise=True,
 )
 def _get_json(url: str, params: dict[str, str]) -> dict:
     with httpx.Client(timeout=20.0, follow_redirects=True, headers={"User-Agent": "dailydigest/0.1"}) as client:
         resp = client.get(url, params=params)
+        if resp.status_code == 404:
+            # openFDA answers a search with no matches (a quiet weekend) with
+            # 404 NOT_FOUND. That is an empty official result, not an outage.
+            try:
+                code = (resp.json().get("error") or {}).get("code")
+            except (ValueError, AttributeError):
+                code = None
+            if code == "NOT_FOUND":
+                return {"results": []}
         resp.raise_for_status()
         return resp.json()
 

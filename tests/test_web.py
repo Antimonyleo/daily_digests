@@ -27,7 +27,7 @@ def _request(
     json_body: dict | None = None,
 ) -> Request:
     body = b""
-    request_headers = {"host": "testserver"}
+    request_headers = {"host": "127.0.0.1"}
     if form is not None:
         body = urlencode(form).encode("utf-8")
         request_headers["content-type"] = "application/x-www-form-urlencoded"
@@ -1850,17 +1850,24 @@ def test_index_marks_latest_run_impressions_viewed(tmp_path, monkeypatch):
         model_version="v-test",
     )
 
+    def viewed():
+        with store_mod.session_scope() as s:
+            rows = (
+                s.query(store_mod.ImpressionRow)
+                .filter_by(digest_id="2026-05-05", run_id=run_id)
+                .all()
+            )
+            assert rows
+            return {r.viewed for r in rows}
+
+    # A page another website opened is not the reader viewing the digest.
+    response = web.index(_request("GET", "/", headers={"sec-fetch-site": "cross-site"}))
+    assert response.status_code == 200
+    assert viewed() == {False}
+
     response = web.index(_request("GET", "/"))
     assert response.status_code == 200
-
-    with store_mod.session_scope() as s:
-        rows = (
-            s.query(store_mod.ImpressionRow)
-            .filter_by(digest_id="2026-05-05", run_id=run_id)
-            .all()
-        )
-        assert rows
-        assert all(r.viewed is True for r in rows)
+    assert viewed() == {True}
 
 
 def test_index_uses_confidence_not_relative_rank_for_priority_filtering(

@@ -61,6 +61,23 @@ def test_eu_topics_keep_only_future_deadlines_and_official_pages(monkeypatch):
     assert two_stage.metadata["official"] is True and two_stage.metadata["eligibility_tags"] == []
 
 
+def test_eu_funding_reports_a_partial_read(monkeypatch):
+    from dailydigest.ingest import eu_funding
+
+    topic = _eu_topic("HORIZON-MSCA-2027-PF-01-01", "MSCA Postdoctoral Fellowships", ["2027-09-09"])
+    monkeypatch.setattr(eu_funding, "_today", lambda: TODAY)
+    source = eu_funding.EUFundingSource()
+    # Missing totals keep paging, and running out of pages is reported.
+    monkeypatch.setattr(eu_funding, "_search", lambda page, programme, division="": {"results": [topic]})
+    source.fetch(_spec(name="EU Funding & Tenders", kind="eu_funding", lookahead_days=400))
+    diagnostic = source.last_fetch_diagnostics["queries"][0]
+    assert diagnostic["truncated"] is True and diagnostic["stop_reason"] == "page_budget"
+    monkeypatch.setattr(eu_funding, "_search", lambda page, programme, division="": {
+        "totalResults": 1, "results": [topic]})
+    source.fetch(_spec(name="EU Funding & Tenders", kind="eu_funding", lookahead_days=400))
+    assert source.last_fetch_diagnostics["queries"][0]["truncated"] is False
+
+
 def test_eu_search_is_a_cors_simple_multipart_request(monkeypatch):
     import httpx
 
@@ -400,6 +417,9 @@ def test_curated_calls_state_only_official_deadlines_and_their_countries(monkeyp
         {"id": "hfsp-postdoc", "title": "HFSP Postdoctoral Fellowships", "funder": "HFSP", "type": "fellowship",
          "url": "https://www.hfsp.org/funding/postdoctoral-fellowships", "applicant_regions": ["international"],
          "career_stage": ["postdoc"], "summary": "Frontier life-science research abroad.", "cycle": "annual",
+         "url_status": 200, "verified_on": "2026-10-28"},
+        {"id": "bif-phd", "title": "BIF PhD Fellowships", "url": "https://bifonds.example.org/gone",
+         "url_status": 404, "eligibility_note": "Recent PhD start (search snippet; verify on the site).",
          "verified_on": "2026-10-28"},
         {"id": "ukri-flf", "title": "UKRI Future Leaders Fellowships", "funder": "UKRI", "type": "fellowship",
          "url": "https://www.ukri.org/opportunity/future-leaders-fellowships/", "applicant_regions": ["gb"],
@@ -414,7 +434,8 @@ def test_curated_calls_state_only_official_deadlines_and_their_countries(monkeyp
     items = curated.CuratedCallsSource().fetch(_spec(name="Fellowships and awards", kind="curated_calls",
                                                      section="events", calls=True, lookahead_days=365))
     by_id = {item.external_id: item for item in items}
-    assert set(by_id) == {"curated-hfsp-postdoc", "curated-ukri-flf", "curated-old-round", "curated-leverhulme-ecf"}
+    assert set(by_id) == {"curated-hfsp-postdoc", "curated-ukri-flf", "curated-old-round", "curated-leverhulme-ecf",
+                          "curated-bif-phd"}
     assert by_id["curated-leverhulme-ecf"].metadata["deadline"] is None, "Only deadlines read on the official page"
     hfsp = by_id["curated-hfsp-postdoc"].metadata
     assert hfsp["status"] == "recurring" and hfsp["deadline"] is None and hfsp["applicant_regions"] == ["international"]
@@ -425,6 +446,7 @@ def test_curated_calls_state_only_official_deadlines_and_their_countries(monkeyp
     assert by_id["curated-old-round"].metadata["deadline"] is None, "A past round leaves the recurring scheme"
     assert hfsp["official"] is True and hfsp["verified_at"].startswith("2026-10-28")
     assert ukri["official"] is False and ukri["verified_at"] is None, "No check date: not shown as verified"
+    assert by_id["curated-bif-phd"].metadata["official"] is False, "Facts not read on a working official page"
 
 
 def test_curated_meetings_keep_upcoming_dates_only(monkeypatch):
@@ -548,3 +570,10 @@ def test_health_and_ingest_judge_the_same_sources_in_their_filled_sections(monke
     chosen = {spec.name: spec.section for spec in pipeline._fetched_sources(funding_only)}
     # With Events off, fellowships are fetched into Funding, so their health counts.
     assert chosen == {"Grants.gov": "opportunities", "MSCA Postdoctoral Fellowships": "opportunities"}
+
+
+def test_nih_institutional_training_grants_are_not_individual_fellowships():
+    from dailydigest.ingest.nih_guide import _FELLOWSHIP_CODES
+
+    assert all(_FELLOWSHIP_CODES.match(code) for code in ("F31", "F32", "K01", "K99", "R00"))
+    assert not any(_FELLOWSHIP_CODES.match(code) for code in ("T32", "T35", "K12", "R01"))

@@ -8,13 +8,14 @@ from datetime import datetime, timedelta, timezone
 import httpx
 from tenacity import (
     retry,
-    retry_if_exception_type,
+    retry_if_exception,
     stop_after_attempt,
     wait_exponential,
 )
 
 from ..dedupe import _canonical_doi
 from ..models import Item, SourceSpec
+from ._retry import transient_http_error
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +28,7 @@ _MAX_ROWS = 2000
 @retry(
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=1, min=2, max=10),
-    retry=retry_if_exception_type((httpx.HTTPError, httpx.TimeoutException)),
+    retry=retry_if_exception(transient_http_error),
     reraise=False,
 )
 def _get_json(client: httpx.Client, url: str) -> dict:

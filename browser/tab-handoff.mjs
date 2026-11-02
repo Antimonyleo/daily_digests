@@ -1,5 +1,7 @@
 /** Control messages only: private reading state never crosses this channel. */
-export function createTabHandoff({channel, id, owns, release, timeoutMs = 10000}) {
+// timeoutMs bounds reaching the owning tab. Once it accepts, saving a large
+// desk may take longer, so the requester waits up to releaseTimeoutMs.
+export function createTabHandoff({channel, id, owns, release, timeoutMs = 10000, releaseTimeoutMs = 120000}) {
   let pending = null, releasing = false;
   const finish = result => {
     if (!pending) return;
@@ -10,10 +12,14 @@ export function createTabHandoff({channel, id, owns, release, timeoutMs = 10000}
     if (!data || typeof data.requestId !== 'string') return;
     if (data.type === 'handoff-result' && data.receiver === id && data.requestId === pending?.id) {
       finish({ok:data.ok === true, message:typeof data.message === 'string' ? data.message : ''});
+    } else if (data.type === 'handoff-accepted' && data.receiver === id && data.requestId === pending?.id) {
+      clearTimeout(pending.timer);
+      pending.timer = setTimeout(() => finish({ok:false, message:'The other DailyDigest tab is still saving. Wait a moment, then retry here.'}), releaseTimeoutMs);
     } else if (data.type === 'handoff-request' && data.requester !== id && owns()) {
       const reply = (ok, message = '') => channel.postMessage({type:'handoff-result', requestId:data.requestId, receiver:data.requester, ok, message});
       if (releasing) { reply(false, 'Another tab switch is already finishing. Try again in a moment.'); return; }
       releasing = true;
+      channel.postMessage({type:'handoff-accepted', requestId:data.requestId, receiver:data.requester});
       try { await release(); reply(true); }
       catch (error) { reply(false, error.message || 'The other tab could not save its changes.'); }
       finally { releasing = false; }

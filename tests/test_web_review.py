@@ -22,11 +22,18 @@ def test_loopback_guard_rejects_hostnames_with_loopback_prefix(host):
     assert response.status_code == 403
 
 
-@pytest.mark.parametrize("host", ["localhost", "127.0.0.1", "127.0.0.2", "::1", "testserver"])
+@pytest.mark.parametrize("host", ["localhost", "127.0.0.1", "127.0.0.2", "::1"])
 def test_loopback_guard_accepts_local_hosts(host):
     from dailydigest import web
 
     assert web._is_local_host(host)
+
+
+def test_loopback_guard_rejects_the_test_client_default_host():
+    from dailydigest import web
+
+    # Starlette's test host is a single-label name a LAN resolver could answer.
+    assert not web._is_local_host("testserver")
 
 
 @pytest.mark.parametrize("origin", ["http://localhost:9000", "https://localhost:8000", "http://["])

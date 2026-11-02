@@ -44,3 +44,18 @@ test('unresponsive or older tabs time out without forcing the storage lock', asy
   const open=channels();const second=createTabHandoff({channel:open(),id:'second',owns:()=>false,timeoutMs:10});
   const result=await second.request();assert.equal(result.ok,false);assert.match(result.message,/other.*tab/i);
 });
+
+test('a slow release after acceptance still completes the switch', async () => {
+  const open=channels();let owned=true;
+  createTabHandoff({channel:open(),id:'owner',owns:()=>owned,release:async()=>{await new Promise(done=>setTimeout(done,80));owned=false;}});
+  const second=createTabHandoff({channel:open(),id:'second',owns:()=>false,timeoutMs:20,releaseTimeoutMs:1000});
+  const result=await second.request();
+  assert.equal(result.ok,true);assert.equal(owned,false);
+});
+
+test('an unresponsive tab still times out quickly', async () => {
+  const open=channels();
+  const second=createTabHandoff({channel:open(),id:'second',owns:()=>false,timeoutMs:20,releaseTimeoutMs:1000});
+  const result=await second.request();
+  assert.equal(result.ok,false);assert.match(result.message,/Could not reach/);
+});

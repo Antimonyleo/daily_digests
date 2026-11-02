@@ -394,7 +394,8 @@ def install_public_source_fallback(snapshot_url, *, loader=None, now=None):
         fetch._public_snapshot_original = original
         return fetch
 
-    from dailydigest.ingest.base import SNAPSHOT_PAGE_KINDS, source_class
+    from dailydigest.ingest.base import source_class
+    from dailydigest.snapshot_kinds import SNAPSHOT_PAGE_KINDS
 
     # Reinstalling updates the URL/cache without stacking wrappers. Public
     # funding and event listings are read from the snapshot first, so a site

@@ -167,3 +167,20 @@ def test_duplicate_or_aliased_reason_ids_block_updates_without_loss(feedback, co
     assert path.read_bytes() == content
     assert votes.get_vote_value(item_id) == -1
     assert store.load_feedback_events() == before
+
+
+def test_vote_reasons_lock_excludes_other_processes_and_writes_atomically(tmp_path, monkeypatch):
+    import filelock
+
+    from dailydigest import votes
+
+    path = tmp_path / "vote_reasons.json"
+    monkeypatch.setattr(votes, "_vote_reasons_path", lambda: path)
+    with votes._VOTE_REASONS_LOCK:
+        # Another process (a CLI vote or brew maintenance) must wait.
+        with pytest.raises(filelock.Timeout):
+            filelock.FileLock(str(path) + ".lock", timeout=0).acquire()
+        votes._write_vote_reasons({"7": ["too broad"]})
+    filelock.FileLock(str(path) + ".lock", timeout=0).acquire()
+    assert votes._load_vote_reasons() == {"7": ["too broad"]}
+    assert not list(tmp_path.glob("*.tmp"))

@@ -117,6 +117,10 @@ class EUFundingSource:
         horizon = today + timedelta(days=spec.lookahead_days)
         seen: set[str] = set()
         items: list[Item] = []
+        diagnostic: dict[str, Any] = {"query": division or programme, "attempted": True,
+                                      "returned_count": 0, "total_available": None,
+                                      "truncated": False, "stop_reason": "exhausted", "failure": None}
+        self.last_fetch_diagnostics = {"queries": [diagnostic], "returned_count": 0}
         for page in range(1, self.MAX_PAGES + 1):
             payload = _search(page, programme, division)
             results = payload.get("results")
@@ -130,9 +134,18 @@ class EUFundingSource:
                     continue
                 if item is not None:
                     items.append(item)
-            total = int(payload.get("totalResults") or 0)
-            if not results or page * 100 >= total:
+            try:
+                total = int(payload["totalResults"])
+            except (KeyError, TypeError, ValueError):
+                total = None  # Unknown: read on until a page comes back empty.
+            diagnostic["total_available"] = total
+            if not results or (total is not None and page * 100 >= total):
                 break
+        else:
+            # Results are not sorted by deadline, so later pages may hold
+            # open topics; the health report must show the read was partial.
+            diagnostic.update(truncated=True, stop_reason="page_budget")
+        diagnostic["returned_count"] = self.last_fetch_diagnostics["returned_count"] = len(items)
         return items
 
     def _item(self, spec: SourceSpec, metadata: dict[str, Any], today: date,

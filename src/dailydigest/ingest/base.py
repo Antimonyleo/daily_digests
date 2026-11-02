@@ -4,6 +4,7 @@ from importlib import import_module
 from typing import Protocol
 
 from ..models import Item, SourceSpec
+from ..snapshot_kinds import SNAPSHOT_PAGE_KINDS  # noqa: F401 - re-exported
 
 
 class Source(Protocol):
@@ -42,19 +43,6 @@ _ADAPTERS = {
     "biophysics_events": ("event_pages", "BiophysicalSocietyEventsSource"),
     "faseb_src_events": ("event_pages", "FASEBConferencesSource"),
 }
-
-# Public funding and event listings that are identical for every reader: they
-# take no profile and ignore the look-back window. The browser deployment's
-# daily snapshot carries them, so a site that changes or drops its CORS headers
-# does not break browser brews; readers fall back to a direct fetch when the
-# snapshot record is missing, failed or stale. Sources marked ``local_only``
-# are still never collected.
-SNAPSHOT_PAGE_KINDS = frozenset({
-    "ukri_funding", "snsf_funding", "embl_events", "embo_events", "isscr_events",
-    "keystone_events", "cshl_events", "nature_conferences", "wellcome_cs_events",
-    "crs_events", "febs_events", "eci_events", "faseb_src_events",
-})
-
 
 def source_class(kind: str) -> type:
     try:

@@ -119,7 +119,7 @@ def test_setup_saves_optional_details_and_legacy_weights(tmp_path, monkeypatch):
                       'llm_backend': 'extractive', 'user_tz': 'UTC'}).encode()
     async def receive():
         return {'type': 'http.request', 'body': body, 'more_body': False}
-    request = Request({'type': 'http', 'method': 'POST', 'path': '/setup', 'query_string': b'', 'headers': [(b'host', b'testserver'), (b'content-type', b'application/x-www-form-urlencoded')], 'client': ('testclient', 1), 'server': ('testserver', 80), 'scheme': 'http'}, receive)
+    request = Request({'type': 'http', 'method': 'POST', 'path': '/setup', 'query_string': b'', 'headers': [(b'host', b'127.0.0.1'), (b'content-type', b'application/x-www-form-urlencoded')], 'client': ('testclient', 1), 'server': ('testserver', 80), 'scheme': 'http'}, receive)
     assert asyncio.run(web.setup_post(request)).status_code == 303
     saved = yaml.safe_load(path.read_text())
     assert saved['keywords'] == ['Target protein degradation', 'Induce proximity']

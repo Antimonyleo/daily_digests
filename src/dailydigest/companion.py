@@ -230,7 +230,17 @@ def _write_private(path, payload, *, should_cancel=None):
         Path(temporary).unlink(missing_ok=True)
 
 
-def _stop_scheduled_process(process):
+# Nested limits must be strictly shorter inside. The coordinator stops its own
+# brew (terminate, up to CHILD_STOP_GRACE, then kill its process group) before
+# the supervisor gives up on the coordinator, so a brew in its own session is
+# never orphaned. The brew's timeout leaves the coordinator time to export.
+CHILD_STOP_GRACE = 5
+COORDINATOR_STOP_GRACE = 2 * CHILD_STOP_GRACE + 2
+SCHEDULED_JOB_TIMEOUT = 1800
+SCHEDULED_BREW_TIMEOUT = SCHEDULED_JOB_TIMEOUT - 120
+
+
+def _stop_scheduled_process(process, grace=CHILD_STOP_GRACE):
     """Allow native cleanup, then bound termination of the outer process tree."""
     graceful = False
     if os.name == 'nt':
@@ -250,7 +260,7 @@ def _stop_scheduled_process(process):
         except ProcessLookupError:
             pass
         try:
-            graceful = process.wait(timeout=5) >= 0
+            graceful = process.wait(timeout=grace) >= 0
         except subprocess.TimeoutExpired:
             pass
         # The session ID remains ours even if its leader exited during cleanup.
@@ -265,7 +275,7 @@ def _stop_scheduled_process(process):
     return graceful
 
 
-def _run_scheduled_process(command, *, cwd, env, stop=None, timeout=1800):
+def _run_scheduled_process(command, *, cwd, env, stop=None, timeout=SCHEDULED_BREW_TIMEOUT):
     if stop is not None and stop.is_set():
         raise RuntimeError('Scheduled brew stopped before starting')
     process = subprocess.Popen(
@@ -471,7 +481,7 @@ def _run_scheduled_job(store, settings, lock, status, source_path, *, stop, comm
                 text=True, start_new_session=True,
             )
             status.update(last_status='running', error=None)
-            deadline = time.monotonic() + 1800
+            deadline = time.monotonic() + SCHEDULED_JOB_TIMEOUT
             transferred = Event()
             received, transfer_errors = [], []
 
@@ -491,7 +501,7 @@ def _run_scheduled_job(store, settings, lock, status, source_path, *, stop, comm
                 if stop.is_set():
                     raise RuntimeError('Scheduled job stopped')
                 if time.monotonic() >= deadline:
-                    raise subprocess.TimeoutExpired(process.args, 1800)
+                    raise subprocess.TimeoutExpired(process.args, SCHEDULED_JOB_TIMEOUT)
                 if transferred.wait(.2):
                     break
             if transfer_errors:
@@ -507,7 +517,7 @@ def _run_scheduled_job(store, settings, lock, status, source_path, *, stop, comm
             # descendants after forced termination. Never remove its files here.
             try:
                 if process is not None:
-                    _stop_scheduled_process(process)
+                    _stop_scheduled_process(process, grace=COORDINATOR_STOP_GRACE)
             except (OSError, subprocess.TimeoutExpired):
                 pass
             status.update(last_status='stopped' if stop.is_set() else 'failed',

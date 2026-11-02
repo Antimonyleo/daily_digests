@@ -1299,7 +1299,7 @@ def _host_name(host_header: str | None) -> str:
 
 
 def _is_local_host(host: str) -> bool:
-    if host in {"localhost", "testserver"}:
+    if host == "localhost":
         return True
     try:
         return ipaddress.ip_address(host).is_loopback
@@ -2056,7 +2056,10 @@ def index(request: Request, digest_id: str = "") -> Response:
                     "emoji": section_meta["emoji"],
                 }
             )
-    if brewed:
+    # Another website can open this page as a top-level navigation; only the
+    # reader's own visits (typed, bookmarked or from this app) count as views.
+    own_visit = request.headers.get("sec-fetch-site", "none") in {"none", "same-origin"}
+    if brewed and own_visit:
         # The reader is viewing this digest: flag its latest run's impressions as
         # viewed. Measurement-only; best-effort so a logging hiccup never blocks
         # the page render.

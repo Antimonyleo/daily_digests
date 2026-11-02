@@ -8,12 +8,13 @@ from typing import Any
 import httpx
 from tenacity import (
     retry,
-    retry_if_exception_type,
+    retry_if_exception,
     stop_after_attempt,
     wait_exponential,
 )
 
 from ..models import Item, SourceSpec
+from ._retry import transient_http_error
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +22,7 @@ logger = logging.getLogger(__name__)
 @retry(
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=1, min=2, max=10),
-    retry=retry_if_exception_type((httpx.HTTPError, httpx.TimeoutException)),
+    retry=retry_if_exception(transient_http_error),
     reraise=False,
 )
 def _get_json(url: str, params: dict[str, str]) -> dict:
@@ -70,6 +71,13 @@ class ClinicalTrialsSource:
 
         out: list[Item] = []
         page_token: str | None = None
+        # A later page failing or the item cap keeps the pages already read,
+        # but the source health must show the result is partial.
+        diagnostic: dict[str, Any] = {
+            "query": spec.condition or "recent updates", "attempted": True,
+            "returned_count": 0, "truncated": False, "stop_reason": "exhausted", "failure": None,
+        }
+        self.last_fetch_diagnostics = {"queries": [diagnostic], "returned_count": 0}
         while len(out) < self.MAX_ITEMS:
             if page_token:
                 params["pageToken"] = page_token
@@ -85,6 +93,8 @@ class ClinicalTrialsSource:
                         type(e).__name__,
                         str(e)[:200],
                     )
+                    diagnostic.update(truncated=True, stop_reason="failure",
+                                      failure=f"{type(e).__name__}: {str(e)[:200]}")
                     break
                 raise RuntimeError(
                     f"{name} fetch failed: {type(e).__name__}: {str(e)[:200]}"
@@ -95,6 +105,7 @@ class ClinicalTrialsSource:
             studies: list[dict[str, Any]] = payload.get("studies") or []
             for study in studies:
                 if len(out) >= self.MAX_ITEMS:
+                    diagnostic.update(truncated=True, stop_reason="item_cap")
                     break
                 item = self._parse_study(study, spec)
                 if item is not None:
@@ -104,6 +115,10 @@ class ClinicalTrialsSource:
             if not next_token or next_token == page_token:
                 break
             page_token = next_token
+        else:
+            if page_token:
+                diagnostic.update(truncated=True, stop_reason="item_cap")
+        diagnostic["returned_count"] = self.last_fetch_diagnostics["returned_count"] = len(out)
         return out
 
     def _parse_study(self, study: dict[str, Any], spec: SourceSpec) -> Item | None:

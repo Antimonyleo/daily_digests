@@ -11,8 +11,10 @@ on:
 permissions:
   contents: read
 
+# One queue per branch: GitHub keeps a single pending run per group, so a
+# shared group let a dev push cancel a waiting main deploy or scheduled refresh.
 concurrency:
-  group: dailydigest-pages
+  group: dailydigest-pages-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:

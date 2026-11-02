@@ -174,6 +174,55 @@ def test_reviewed_and_known_flags_suppress_cross_source_doi_siblings(monkeypatch
     assert {row.external_id for row in known_kept} == {"pm-1", "oa-1"}
 
 
+def test_feedback_does_not_hide_distinct_records_that_share_a_title(monkeypatch, tmp_path):
+    """A reissued call, another meeting edition or a different paper keeps its place."""
+    from dailydigest.dedupe import dedupe_ranking_candidates
+    from dailydigest.models import Item
+
+    store_mod = _reset_store(tmp_path, monkeypatch)
+    now = datetime.now(timezone.utc)
+    grant = "NIH Research Project Grant (Parent R01 Clinical Trial Not Allowed)"
+    workshop = "EMBO Workshop on Protein Design"
+    store_mod.upsert_items([
+        Item(source="Grants.gov", section="opportunities", external_id="PA-25-301",
+             url="https://grants.example/PA-25-301", title=grant, published_at=None,
+             metadata={"official_id": "PA-25-301", "deadline": "2026-11-20"}),
+        Item(source="Grants.gov", section="opportunities", external_id="PA-26-100",
+             url="https://grants.example/PA-26-100", title=grant, published_at=None,
+             metadata={"official_id": "PA-26-100", "deadline": "2029-05-01"}),
+        Item(source="EMBO Events", section="events", external_id="w2026",
+             url="https://embo.example/w2026", title=workshop, published_at=None,
+             metadata={"record_type": "event", "event_start": "2026-12-01"}),
+        Item(source="EMBO Events", section="events", external_id="w2027",
+             url="https://embo.example/w2027", title=workshop, published_at=None,
+             metadata={"record_type": "event", "event_start": "2027-12-01"}),
+        Item(source="PubMed", section="research", external_id="paper-a", url="https://pubmed.example/a",
+             title="Programmable RNA scaffolds", authors="Alice Smith", published_at=now,
+             metadata={"doi": "10.5555/aaa"}),
+        Item(source="OpenAlex", section="research", external_id="paper-b", url="https://openalex.example/b",
+             title="Programmable RNA scaffolds", authors="Bob Jones", published_at=now,
+             metadata={"doi": "10.5555/bbb"}),
+        # The same paper from a feed with no DOI or authors is still a copy.
+        Item(source="Feed", section="research", external_id="paper-a-feed", url="https://feed.example/a",
+             title="Programmable RNA scaffolds", published_at=now),
+    ])
+    rows = store_mod.recent_items(days=3)
+    by_external = {row.external_id: row for row in rows}
+    assert {row.external_id for row in dedupe_ranking_candidates(
+        [by_external[key] for key in ("PA-25-301", "PA-26-100", "w2026", "w2027")])} == {
+        "PA-25-301", "PA-26-100", "w2026", "w2027"}
+
+    store_mod.set_item_known(int(by_external["PA-25-301"].id), True)
+    store_mod.set_item_known(int(by_external["w2027"].id), True)
+    assert {row.external_id for row in store_mod.exclude_known_items(rows)} == {
+        "PA-26-100", "w2026", "paper-a", "paper-b", "paper-a-feed"}
+
+    with store_mod.session_scope() as session:
+        session.add(store_mod.VoteRow(item_id=by_external["paper-a"].id, value=-1))
+    kept = {row.external_id for row in store_mod.exclude_reviewed_items(rows)}
+    assert "paper-b" in kept and "paper-a" not in kept and "paper-a-feed" not in kept
+
+
 @pytest.mark.parametrize("feedback", ["known", "dismissed"])
 def test_feedback_suppresses_sibling_when_original_is_outside_candidate_pool(
     monkeypatch, tmp_path, feedback

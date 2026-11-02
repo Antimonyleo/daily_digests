@@ -50,3 +50,50 @@ def test_fda_custom_query_with_explicit_date_is_not_rewritten(monkeypatch):
     FDASource().fetch(spec)
 
     assert captured["search"] == custom
+
+
+def _mock_client(monkeypatch, handler):
+    import httpx
+
+    calls = []
+
+    class Client:
+        def __init__(self, **_kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return False
+
+        def get(self, url, params=None):
+            request = httpx.Request("GET", url, params=params)
+            calls.append(request)
+            response = handler(request)
+            response.request = request
+            return response
+
+    monkeypatch.setattr("dailydigest.ingest.fda.httpx.Client", Client)
+    return calls
+
+
+def test_openfda_no_matches_is_an_empty_result_not_a_failure(monkeypatch):
+    import httpx
+
+    calls = _mock_client(monkeypatch, lambda request: httpx.Response(
+        404, json={"error": {"code": "NOT_FOUND", "message": "No matches found!"}}))
+    spec = SourceSpec(name="openFDA", kind="fda_api", section="regulatory")
+    assert FDASource().fetch(spec) == []
+    assert len(calls) == 1
+
+
+def test_openfda_permanent_client_error_fails_without_retries(monkeypatch):
+    import httpx
+    import pytest
+
+    calls = _mock_client(monkeypatch, lambda request: httpx.Response(400, json={"error": {"code": "BAD_REQUEST"}}))
+    spec = SourceSpec(name="openFDA", kind="fda_api", section="regulatory")
+    with pytest.raises(RuntimeError, match="openFDA fetch failed"):
+        FDASource().fetch(spec)
+    assert len(calls) == 1

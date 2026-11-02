@@ -20,9 +20,10 @@ import time
 
 import yaml
 
-from dailydigest.ingest.base import SNAPSHOT_PAGE_KINDS
+# Import-free, so settings stay unloaded until isolated_settings() runs.
+from dailydigest.snapshot_kinds import SNAPSHOT_PAGE_KINDS
 
-# Public funding and event listings (``dailydigest.ingest.base``). They are
+# Public funding and event listings (``dailydigest.snapshot_kinds``). They are
 # identical for every reader, so the daily collection carries them whether or
 # not the site allows browser (CORS) reads today. Sources marked ``local_only``
 # (terms forbid public re-posting) are never collected; the website does not
