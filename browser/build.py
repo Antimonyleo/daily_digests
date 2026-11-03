@@ -11,6 +11,8 @@ import math
 import re
 import shutil
 import subprocess
+import time
+import urllib.error
 import urllib.request
 import uuid
 import zipfile
@@ -33,12 +35,34 @@ PYODIDE_PACKAGES = [
 ]
 
 
+def retrying(fetch, attempts: int = 3, pause: float = 10):
+    """Retry a public download through brief CDN or registry outages.
+
+    Client errors other than 429 are final; checksums are still verified by
+    the caller, so a retry cannot admit different bytes.
+    """
+    for attempt in range(attempts):
+        try:
+            return fetch()
+        except urllib.error.HTTPError as exc:
+            if attempt == attempts - 1 or (exc.code < 500 and exc.code != 429):
+                raise
+        except OSError:
+            if attempt == attempts - 1:
+                raise
+        time.sleep(pause * (attempt + 1))
+
+
 def download(url: str, target: Path, sha256: str | None = None) -> Path:
     target.parent.mkdir(parents=True, exist_ok=True)
     if not target.exists():
         temporary = target.with_suffix(target.suffix + ".part")
-        with urllib.request.urlopen(url, timeout=120) as response, temporary.open("wb") as f:
-            shutil.copyfileobj(response, f)
+
+        def fetch():
+            with urllib.request.urlopen(url, timeout=120) as response, temporary.open("wb") as f:
+                shutil.copyfileobj(response, f)
+
+        retrying(fetch)
         temporary.replace(target)
     if sha256 and hashlib.sha256(target.read_bytes()).hexdigest() != sha256:
         raise ValueError(f"Dependency checksum mismatch: {target.name}")
@@ -69,8 +93,12 @@ def pure_package_files(cache: Path):
         if not line or line.startswith("#"):
             continue
         name, version = line.split("==")
-        with urllib.request.urlopen(f"https://pypi.org/pypi/{name}/{version}/json", timeout=30) as r:
-            record = json.load(r)
+
+        def metadata(url=f"https://pypi.org/pypi/{name}/{version}/json"):
+            with urllib.request.urlopen(url, timeout=30) as r:
+                return json.load(r)
+
+        record = retrying(metadata)
         candidates = [r for r in record["urls"] if r["filename"].endswith("-none-any.whl")]
         if not candidates:
             raise ValueError(f"No pure Python wheel: {name}=={version}")

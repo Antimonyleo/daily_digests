@@ -145,3 +145,52 @@ def test_recurring_alert_ignores_human_spoofs_and_pull_requests(monkeypatch):
     ])
     assert module.main() == 0
     assert calls[-1].full_url.endswith('/issues/42')
+
+
+def test_issue_api_retries_one_server_error(monkeypatch):
+    from urllib.error import HTTPError
+
+    module = load()
+    issue_environment(monkeypatch)
+    monkeypatch.setattr(module.time, 'sleep', lambda _seconds: None)
+    replies = issue_transport(module, monkeypatch, [])
+    inner = module.urlopen
+    failures = []
+
+    def flaky(request, timeout):
+        if not failures:
+            failures.append(request)
+            raise HTTPError(request.full_url, 502, 'Bad Gateway', {}, None)
+        return inner(request, timeout)
+
+    monkeypatch.setattr(module, 'urlopen', flaky)
+    assert module.main() == 0
+    assert len(failures) == 1 and [req.get_method() for req in replies] == ['GET', 'POST']
+
+
+def test_unfinished_audit_is_not_described_as_broken_access(monkeypatch):
+    module = load()
+    monkeypatch.setenv('DAILYDIGEST_ACCESS_INCOMPLETE', 'true')
+    monkeypatch.setenv('DAILYDIGEST_ACCESS_SUMMARY', '- The audit did not finish; see the run log.')
+    body = module._access_body('https://github.com/example/digest/actions/runs/1')
+    assert 'could not finish' in body and 'cannot reach' not in body
+
+
+def test_issue_creation_is_not_retried_to_avoid_duplicates(monkeypatch):
+    from urllib.error import HTTPError
+
+    module = load()
+    issue_environment(monkeypatch)
+    monkeypatch.setattr(module.time, 'sleep', lambda _seconds: None)
+    issue_transport(module, monkeypatch, [])
+    inner, posts = module.urlopen, []
+
+    def failing_post(request, timeout):
+        if request.get_method() == 'POST':
+            posts.append(request)
+            raise HTTPError(request.full_url, 502, 'Bad Gateway', {}, None)
+        return inner(request, timeout)
+
+    monkeypatch.setattr(module, 'urlopen', failing_post)
+    assert module.main() == 1
+    assert len(posts) == 1

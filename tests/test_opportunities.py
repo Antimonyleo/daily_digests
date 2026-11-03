@@ -461,3 +461,53 @@ def test_structured_profile_affects_only_opportunity_ordering(monkeypatch):
     assert features[_row_feature_key(matching)]["opportunity_profile_score"] == 1.0
     assert "postdoctoral researcher" in embedded_queries[0]
     assert "United States" in embedded_queries[0]
+
+
+def _reader(institution, country="United States"):
+    from dailydigest.opportunities import OpportunityProfile
+
+    return OpportunityProfile(**{**_profile_payload(), "institution_type": institution, "country": country,
+                                 "opportunity_types": [], "minimum_lead_days": 0})
+
+
+@pytest.mark.parametrize("institution, tag", [
+    ("government lab", "Native American tribal governments (Federally recognized)"),
+    ("government research institute", "Public and State controlled institutions of higher education"),
+    ("government research institute", "State governments"),
+    ("nonprofit research institute", "Private institutions of higher education"),
+    ("university", "Nonprofits having a 501(c)(3) status with the IRS, other than institutions of higher education"),
+])
+def test_applicant_types_naming_another_type_are_not_affirmative(institution, tag):
+    from dailydigest.opportunities import assess_opportunity
+
+    metadata = {"status": "open", "official": True, "eligibility_tags": [tag]}
+    assert assess_opportunity(metadata, _reader(institution)).eligibility != "likely"
+
+
+@pytest.mark.parametrize("institution, tag", [
+    ("university", "Public and State controlled institutions of higher education"),
+    ("nonprofit research institute", "Nonprofits having a 501(c)(3) status with the IRS, other than institutions of higher education"),
+    ("small company", "Small businesses"),
+])
+def test_matching_official_applicant_type_is_still_likely(institution, tag):
+    from dailydigest.opportunities import assess_opportunity
+
+    metadata = {"status": "open", "official": True, "eligibility_tags": [tag]}
+    assert assess_opportunity(metadata, _reader(institution)).eligibility == "likely"
+
+
+@pytest.mark.parametrize("country", ["U.S.A.", "America", "usa"])
+def test_any_us_spelling_keeps_domestic_only_calls(country):
+    from dailydigest.opportunities import assess_opportunity
+
+    metadata = {"status": "open", "eligibility_description": "U.S. only."}
+    assert assess_opportunity(metadata, _reader("university", country)).actionable
+
+
+def test_expired_announcement_without_a_deadline_is_not_actionable():
+    from dailydigest.opportunities import assess_opportunity
+
+    metadata = {"status": "open", "deadline": None, "expires": "2026-10-30"}
+    result = assess_opportunity(metadata, _reader("university"), today=date(2026, 11, 3))
+    assert not result.actionable and "expired" in result.reason
+    assert assess_opportunity(metadata, _reader("university"), today=date(2026, 10, 30)).actionable

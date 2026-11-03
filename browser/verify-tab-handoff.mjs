@@ -66,6 +66,11 @@ try{
         if(pending.has(data.id)){pending.get(data.id)(data);pending.delete(data.id);}});
     }};
   });
+  // A released rating is processed by the worker, which may still be busy
+  // preparing the cold local model just after startup ("Preparing the local
+  // model"); on a shared runner that alone can exceed the 30 s default. Drains
+  // keep their exact expected end state, with a bound matching startup readiness.
+  const drain={timeout:180000};
   async function page(){const p=await context.newPage();p.setDefaultTimeout(30000);p.on('pageerror',e=>report.errors.push(e.stack));return p;}
   async function ready(p){await p.waitForFunction(()=>window.__ready && document.querySelector('#app')?.hidden===false && document.querySelector('#startup')?.dataset.state==='ready',undefined,{timeout:180000});await p.waitForFunction(()=>typeof document.querySelector('#app')?.contentDocument?.defaultView?.ddNavigate==='function');}
   async function route(p,path,selector){await p.evaluate(path=>{window.__old=document.querySelector('#app').contentDocument;document.querySelector('#app').contentWindow.ddNavigate(path);},path);
@@ -85,7 +90,7 @@ try{
   assert.equal(await first.locator('#app').evaluate(node=>node.inert),true);
   assert.equal(await first.evaluate(()=>document.querySelector('#app').contentDocument===window.__old),true);
   await config(first,{hold:false,release:true});
-  await first.waitForFunction(()=>!document.querySelector('#app').contentWindow.ddHasPendingRatings?.());
+  await first.waitForFunction(()=>!document.querySelector('#app').contentWindow.ddHasPendingRatings?.(),undefined,drain);
   // A bounded refusal is safe; retry after the committed queue drains.
   if(await first.locator('#app-error').isVisible()){await first.locator('#dismiss-error').click();await route(first,'/setup','#interest-editor');}
   else await first.frameLocator('#app').locator('#interest-editor').waitFor();
@@ -105,13 +110,13 @@ try{
   // A cold model on a real network can legitimately outlast the bounded drain.
   // Refusal must retain the owner and vote; retry only after the vote finishes.
   const switched=await Promise.race([
-    first.locator('#startup[data-state="moved"]').waitFor().then(()=>true),
-    second.locator('#startup-status').filter({hasText:'still finishing an action'}).waitFor().then(()=>false),
+    first.locator('#startup[data-state="moved"]').waitFor(drain).then(()=>true),
+    second.locator('#startup-status').filter({hasText:'still finishing an action'}).waitFor(drain).then(()=>false),
   ]);
   if(!switched){
     await oneOwner(first);
-    await first.frameLocator('#app').locator('.vote-btn[data-grade="100"][aria-pressed="true"]').first().waitFor();
-    await first.waitForFunction(()=>!document.querySelector('#app').contentWindow.ddHasPendingRatings?.());
+    await first.frameLocator('#app').locator('.vote-btn[data-grade="100"][aria-pressed="true"]').first().waitFor(drain);
+    await first.waitForFunction(()=>!document.querySelector('#app').contentWindow.ddHasPendingRatings?.(),undefined,drain);
     await second.locator('#use-this-tab').click();
     report.slowActionRefusedSafely=true;
   }

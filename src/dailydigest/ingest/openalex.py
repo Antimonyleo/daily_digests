@@ -5,6 +5,7 @@ import html
 import json
 import logging
 import re
+import time
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from typing import Any
@@ -77,11 +78,8 @@ def _recent_acs_titles(
     headers = {"User-Agent": "dailydigest/0.1"}
     if polite_email:
         headers["User-Agent"] += f" (mailto:{polite_email})"
-    try:
-        payload = _get_crossref_json(_CROSSREF_ACS_WORKS, params, headers)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Crossref ACS title cleanup unavailable: %s", exc)
-        return {}
+    # Raises on failure, so lru_cache keeps only successful loads.
+    payload = _get_crossref_json(_CROSSREF_ACS_WORKS, params, headers)
 
     titles: dict[str, str] = {}
     for item in (payload.get("message") or {}).get("items") or []:
@@ -94,6 +92,12 @@ def _recent_acs_titles(
     return titles
 
 
+# A failed load is skipped for a while rather than retried for every ACS
+# paper in the brew, and rather than cached for the life of the server.
+_ACS_RETRY_AFTER_SECONDS = 600
+_acs_failed_at: dict[tuple[str, str, str], float] = {}
+
+
 def _repair_acs_title(
     title: str,
     doi: str,
@@ -104,7 +108,17 @@ def _repair_acs_title(
 ) -> str:
     if not doi.startswith("10.1021/"):
         return title
-    return _recent_acs_titles(window_start, window_end, polite_email).get(doi, title)
+    key = (window_start, window_end, polite_email)
+    if time.monotonic() - _acs_failed_at.get(key, -_ACS_RETRY_AFTER_SECONDS) < _ACS_RETRY_AFTER_SECONDS:
+        return title
+    try:
+        titles = _recent_acs_titles(window_start, window_end, polite_email)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Crossref ACS title cleanup unavailable: %s", exc)
+        _acs_failed_at[key] = time.monotonic()
+        return title
+    _acs_failed_at.pop(key, None)
+    return titles.get(doi, title)
 
 
 def _reconstruct_abstract(inverted: dict[str, list[int]] | None) -> str:

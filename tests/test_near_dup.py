@@ -160,3 +160,31 @@ def test_no_recent_digests_is_noop(monkeypatch):
 def test_empty_candidates():
     kept, dropped = exclude_recent_near_duplicates([], settings=_settings())
     assert kept == [] and dropped == []
+
+
+
+def _deadline_call(source: str, url: str):
+    from dailydigest.models import Item
+
+    return Item(source=source, section="opportunities", external_id="PA-25-422", url=url,
+                title="Ruth L. Kirschstein NRSA Individual Postdoctoral Fellowship (Parent F32)",
+                abstract="Supports postdoctoral training in health-related research.",
+                metadata={"official_id": "PA-25-422", "deadline": "2026-12-08", "status": "open"})
+
+
+def test_open_call_shown_under_another_source_is_not_hidden(monkeypatch):
+    # Yesterday Grants.gov was down, so the NIH Guide copy was shown; today
+    # dedupe picks the Grants.gov copy. Like exclude_previously_shown, an
+    # earlier display must not hide an open call.
+    from sqlalchemy import select
+
+    store_mod.upsert_items([_deadline_call("NIH Guide", "https://grants.nih.gov/grants/guide/pa-files/PA-25-422.html")])
+    store_mod.upsert_items([_deadline_call("Grants.gov", "https://www.grants.gov/search-results-detail/123")])
+    with store_mod.session_scope() as session:
+        rows = {row.source: row for row in session.scalars(select(store_mod.ItemRow))}
+        for row in rows.values():
+            session.expunge(row)
+    store_mod.write_digest("2026-11-02", [("F1", rows["NIH Guide"].id)])
+    monkeypatch.setattr(near_dup_mod, "embed_item_rows", lambda found: np.ones((len(found), 4), dtype=np.float32))
+    kept, dropped = exclude_recent_near_duplicates([rows["Grants.gov"]], exclude_digest_id="2026-11-03")
+    assert kept == [rows["Grants.gov"]] and dropped == []

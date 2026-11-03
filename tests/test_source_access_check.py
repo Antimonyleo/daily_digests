@@ -36,10 +36,32 @@ def test_unreadable_or_unprobed_direct_source_fails(tmp_path, monkeypatch):
         {"name": "EMBO Events", "section": "events", "outcome": "readable_http_success", "status": 200},
         {"name": "Nature", "section": "research", "outcome": "cors_blocked"},
     ]}
-    failures, missing, aging = check.judge(report, direct)
+    failures, missing, aging, busy = check.judge(report, direct)
     assert [name for name, *_ in failures] == ["Grants.gov"] and missing == ["NIH Guide"] and aging == []
     clean = {"results": [{"name": name, "section": "x", "outcome": "readable_http_success"} for name in direct]}
-    assert check.judge(clean, direct) == ([], [], [])
+    assert check.judge(clean, direct) == ([], [], [], [])
+
+
+def test_busy_upstream_is_reported_but_a_real_block_still_fails():
+    # A readable 429 or 5xx proves the browser path works (run 41207406391
+    # failed on OpenAlex 429 from GitHub's shared runner addresses).
+    direct = {name: object() for name in ("OpenAlex", "EU", "NIH", "Gone", "Slow")}
+    report = {"results": [
+        {"name": "OpenAlex", "section": "x", "outcome": "readable_rate_limit", "status": 429},
+        {"name": "EU", "section": "x", "outcome": "readable_http_error", "status": 503},
+        {"name": "NIH", "section": "x", "outcome": "cors_blocked"},
+        {"name": "Gone", "section": "x", "outcome": "readable_http_error", "status": 404},
+        {"name": "Slow", "section": "x", "outcome": "timeout"},
+    ]}
+    failures, missing, aging, busy = check.judge(report, direct)
+    assert sorted(name for name, *_ in failures) == ["Gone", "NIH", "Slow"]
+    assert [name for name, *_ in busy] == ["EU", "OpenAlex"]
+    # A carried source without a usable record still fails, however busy upstream is.
+    carried = {"EMBL Events": _carried("EMBL Events", "embl_events")}
+    busy_read = {"results": [{"name": "EMBL Events", "section": "events",
+                              "outcome": "readable_rate_limit", "status": 429}]}
+    failures, _, _, busy = check.judge(busy_read, {}, carried, None, now=NOW)
+    assert [name for name, *_ in failures] == ["EMBL Events"] and busy == []
 
 
 NOW = datetime(2026, 11, 1, 12, tzinfo=timezone.utc)
@@ -73,7 +95,7 @@ def test_snapshot_sources_need_a_usable_record_or_a_direct_read():
     report = {"results": [{"name": name, "section": spec.section, **blocked} for name, spec in specs.items()]}
     # A failed record still works when the browser can read the feed itself.
     report["results"][2] = {"name": "eLife", "section": "research", "outcome": "readable_http_success"}
-    failures, missing, aging = check.judge(report, {}, specs, snapshot, now=NOW)
+    failures, missing, aging, _busy = check.judge(report, {}, specs, snapshot, now=NOW)
     reasons = {name: outcome for name, outcome, *_ in failures}
     assert set(reasons) == {"PNAS", "Old", "Moved", "Absent"} and missing == []
     assert "collection failed: RuntimeError: 403" in reasons["PNAS"] and "cors_blocked" in reasons["PNAS"]

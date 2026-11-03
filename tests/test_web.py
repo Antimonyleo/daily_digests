@@ -2151,6 +2151,25 @@ def test_setup_post_rejects_env_newline_injection(tmp_path, monkeypatch):
     assert not (tmp_path / ".env").exists()
 
 
+def test_setup_post_rejects_values_dotenv_would_expand(tmp_path, monkeypatch):
+    # python-dotenv expands ${NAME} in any quoting, so the key would be
+    # silently changed on the next start.
+    from dailydigest import web
+
+    monkeypatch.setattr(web, "_get_profile_path", lambda: tmp_path / "profile.yaml")
+    monkeypatch.setattr(web, "_ENV_PATH", tmp_path / ".env")
+    response = asyncio.run(web.setup_post(_request("POST", "/setup", form={
+        "_csrf_token": web._CSRF_TOKEN, "bio": "Researcher.", "topics": "RNA | 10",
+        "llm_backend": "api", "llm_base_url": "https://api.openai.com/v1",
+        "llm_model": "gpt-4o-mini", "llm_api_key": "sk-ab${HOME}cd"})))
+    assert response.status_code == 400
+    assert "API key cannot contain ${" in _text_payload(response)
+    assert not (tmp_path / ".env").exists()
+    with pytest.raises(ValueError):
+        web._format_env_value("sk-${HOME}")
+    assert web._format_env_value("cost$5") == '"cost$5"'
+
+
 def test_vote_api_requires_csrf_and_latest_vote_wins(tmp_path, monkeypatch):
     from dailydigest import config as config_mod
     from dailydigest import store as store_mod
@@ -3055,6 +3074,7 @@ def test_opportunity_calendar_export_uses_structured_dates(tmp_path, monkeypatch
     assert response.status_code == 200
     assert response.media_type == "text/calendar"
     assert "DTSTART;VALUE=DATE:20260910" in text
+    assert re.search(r"\r\nDTSTAMP:\d{8}T\d{6}Z\r\n", text), "RFC 5545 requires DTSTAMP"
     assert "DTEND;VALUE=DATE:20260913" in text
     assert "RNA design workshop\\, practical session" in text
 

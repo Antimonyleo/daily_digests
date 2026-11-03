@@ -37,7 +37,7 @@ def test_dependency_advisories_block_checks_and_publication():
 
 def test_release_permissions_checks_and_failure_reporting():
     workflow = yaml.load((Path(__file__).resolve().parents[1]/'.github/workflows/browser-pages.yml').read_text(), Loader=yaml.BaseLoader)
-    assert workflow['permissions'] == {'contents': 'read'}
+    assert workflow['permissions'] == {'contents': 'read', 'actions': 'read'}
     jobs = workflow['jobs']
     assert jobs['deploy']['needs'] == 'build'
     assert jobs['deploy']['permissions'] == {'pages': 'write', 'id-token': 'write'}
@@ -145,3 +145,31 @@ def test_only_main_can_publish_or_update_production_refresh_incidents():
     assert 'if' not in workflow['jobs']['build']
     for name in ('deploy', 'notify-failure', 'refresh-status'):
         assert "github.ref == 'refs/heads/main'" in workflow['jobs'][name]['if']
+
+
+def test_scheduled_refresh_skips_code_checks_only_after_this_commit_passed_on_push():
+    workflow = yaml.load((Path(__file__).resolve().parents[1] / '.github/workflows/browser-pages.yml').read_text(), Loader=yaml.BaseLoader)
+    steps = workflow['jobs']['build']['steps']
+    scope = next(step for step in steps if step.get('id') == 'scope')
+    assert 'event=push&status=success' in scope['run'] and 'github.sha' in scope['run']
+    assert 'full=true' in scope['run']
+    gated = "steps.scope.outputs.full == 'true'"
+    for marker in ('pytest', 'node --test', 'npm audit ', 'verify-pip.mjs', 'verify-guide-backup.mjs',
+                   'verify-daily-release.mjs', 'verify-tab-handoff.mjs'):
+        step = next(step for step in steps if marker in step.get('run', ''))
+        assert gated in step.get('if', ''), marker
+    # verify-browser.mjs reads the acceptance fixtures, so they are always prepared.
+    for marker in ('collect_sources.py', 'python browser/build.py', 'make_test_fixture.py', 'verify-browser.mjs'):
+        step = next(step for step in steps if marker in step.get('run', ''))
+        assert 'if' not in step, marker
+
+
+def test_issue_bookkeeping_cannot_fail_a_run():
+    root = Path(__file__).resolve().parents[1] / '.github/workflows'
+    pages = yaml.load((root / 'browser-pages.yml').read_text(), Loader=yaml.BaseLoader)
+    audit = yaml.load((root / 'source-audit.yml').read_text(), Loader=yaml.BaseLoader)
+    for steps in (pages['jobs']['refresh-status']['steps'], audit['jobs']['audit']['steps']):
+        report = next(step for step in steps if 'report_failure.py' in step.get('run', ''))
+        assert report['continue-on-error'] == 'true'
+    run = next(step for step in audit['jobs']['audit']['steps'] if step.get('id') == 'audit')['run']
+    assert 'rm -f .source-audit/report.json' in run and '|| return 1' in run

@@ -97,11 +97,13 @@ try{
   await page.clock.setFixedTime(new Date(fixtureClock));
   page.on('dialog',async dialog=>{(report.dialogs ||= []).push({type:dialog.type(),message:dialog.message()});await dialog.accept();});
   page.on('pageerror',error=>report.errors.push(error.stack));
+  // Test RPCs below include full 40 MiB checkpoints and byte-for-byte export
+  // comparisons; on a shared runner these can legitimately exceed 30 s.
   await page.addInitScript(()=>{
     window.__workerStarts=0;window.__ready=false;window.__inflight=new Set();window.__completedPaths=[];
     const requests=new Map();
     const Native=Worker;window.Worker=class extends Native{constructor(...args){super(...args);window.__workerStarts++;
-      let rpcSequence=0;const rpcPending=new Map();window.__readingRPC=data=>new Promise((done,fail)=>{const id='reading-rpc-'+(++rpcSequence);const timer=setTimeout(()=>{rpcPending.delete(id);fail(Error('Timed out waiting for '+data.type));},30000);rpcPending.set(id,value=>{clearTimeout(timer);done(value);});this.postMessage({...data,id});});
+      let rpcSequence=0;const rpcPending=new Map();window.__readingRPC=data=>new Promise((done,fail)=>{const id='reading-rpc-'+(++rpcSequence);const timer=setTimeout(()=>{rpcPending.delete(id);fail(Error('Timed out waiting for '+data.type));},180000);rpcPending.set(id,value=>{clearTimeout(timer);done(value);});this.postMessage({...data,id});});
       this.addEventListener('message',({data})=>{if(data.type==='ready')window.__ready=true;if(data.type==='response'||data.type==='error'){
         if(rpcPending.has(data.id)){rpcPending.get(data.id)(data);rpcPending.delete(data.id);}
         window.__inflight.delete(data.id);if(requests.has(data.id)){window.__completedPaths.push(requests.get(data.id));requests.delete(data.id);}
@@ -154,9 +156,12 @@ try{
   const baseline=await page.evaluate(()=>window.__readingRPC({type:'flush-state'}));assert.equal(baseline.status,200);
   await page.evaluate(()=>window.__readingRPC({type:'reader-save-config',hold:true,mutate:true}));
   const responseStart=Date.now();
-  const fast=await Promise.race([page.evaluate(()=>window.__readingRPC({type:'request',method:'GET',path:'/setup'})),new Promise((_r,reject)=>setTimeout(()=>reject(Error('Route waited for a held checkpoint')),2000))]);
+  // The save stays held until the explicit release below, so a route that
+  // waited for it could never answer within this bound; the bound only has to
+  // cover a slow runner's normal route time, not a fixed latency budget.
+  const fast=await Promise.race([page.evaluate(()=>window.__readingRPC({type:'request',method:'GET',path:'/setup'})),new Promise((_r,reject)=>setTimeout(()=>reject(Error('Route waited for a held checkpoint')),30000))]);
   assert.equal(fast.status,200);report.routeDuringHeldSaveMs=Date.now()-responseStart;
-  const heldDeadline=Date.now()+30000;
+  const heldDeadline=Date.now()+120000;
   let held;
   do {
     held=JSON.parse((await page.evaluate(()=>window.__readingRPC({type:'reader-save-config'}))).body);
@@ -194,7 +199,7 @@ try{
   assert.equal((await page.evaluate(()=>window.__readingRPC({type:'flush-state'}))).status,200);
   console.log('reading benchmark: feedback confirmed');
   let projection;
-  const deadline=Date.now()+30000;
+  const deadline=Date.now()+120000;
   while(!(projection=await stored('reading-view')) && Date.now()<deadline) await page.waitForTimeout(50);
   assert.ok(projection, 'The digest must regenerate its reading copy after feedback commits');
   assert.ok(projection.items.some(item=>item.title===title));

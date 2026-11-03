@@ -297,15 +297,23 @@ def validate_report(report, *, now=None, min_fresh_fraction=0.5, allow_carry_for
     if len(eligible) < max(1, math.ceil(len(sources) * min_fresh_fraction)):
         raise ValueError(f"Public source coverage too low: {len(eligible)}/{len(sources)} "
                          + ("retained successes" if fallback else "fresh successes"))
+    retained_only = set()
     for field in ("kind", "section"):
         # Optional snapshot kinds may fail without blocking publication; their
         # readers see the failed record and fetch those sources directly.
+        # A required kind or section may be covered by a retained record that
+        # is still valid (under 48 hours, original fetched_at), so one upstream
+        # outage such as export.arxiv.org does not discard every fresh record.
         configured = {row[field] for row in sources.values() if row["kind"] in REQUIRED_KINDS}
-        successful = {sources[name][field] for name in eligible}
-        if configured - successful:
-            raise ValueError(f"Public source coverage missing {field}: {sorted(configured - successful)}")
+        covered = {sources[name][field] for name in healthy}
+        if configured - covered:
+            raise ValueError(f"Public source coverage missing {field}: {sorted(configured - covered)}")
+        if not fallback:
+            retained_only |= configured - {sources[name][field] for name in fresh}
     summary = {"sources": len(sources), "ok": len(healthy), "fresh_ok": len(fresh),
                "carried_forward": len(healthy - fresh)}
+    if retained_only:
+        summary["retained_only"] = sorted(retained_only)
     if "language_decisions" in report:
         # Optional accelerator. Another rule version is valid but ignored by
         # readers; a malformed map indicates a collector bug and is rejected.
@@ -440,10 +448,16 @@ def main():
         report = with_language_decisions(prepare_publication(report, previous, event=args.event))
         summary = publish(report, output, allow_carry_forward=args.event == "push")
     except ValueError as exc:
-        print(json.dumps({"status": "rejected", "error": str(exc)}))
+        print(json.dumps({"status": "rejected", "error": str(exc), "failures": {
+            name: source.get("error") for name, source in report.get("sources", {}).items()
+            if source.get("status") != "ok"}}))
         return 1
     failures = {name: source["error"] for name, source in report["sources"].items()
                 if source["status"] != "ok"}
+    if summary.get("retained_only"):
+        print("::warning::No fresh records for " + ", ".join(summary["retained_only"])
+              + "; published with their retained records, which expire 48 hours after fetching.",
+              file=sys.stderr)
     freshness_warning = None
     if summary["fresh_ok"] / summary["sources"] < 0.8:
         freshness_warning = (

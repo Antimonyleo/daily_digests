@@ -117,7 +117,7 @@ class GrantsGovSource:
     def fetch(self, spec: SourceSpec, days: int = 2) -> list[Item]:
         del days  # Opportunity selection uses a future deadline horizon instead.
         if spec.profile_driven:
-            terms = profile_search_terms(self.MAX_TERMS)
+            terms = profile_search_terms(self.MAX_TERMS)[: self.MAX_TERMS]
         else:
             # A pipe-separated `query` searches several phrases. Career awards and
             # fellowships are described by the AWARD, not by the research topic, so
@@ -158,11 +158,23 @@ class GrantsGovSource:
         today = _today()
         horizon = today + timedelta(days=spec.lookahead_days)
         items: list[Item] = []
+        # One opportunity the search index still lists but whose detail is
+        # gone (index lag) or failing must not discard every verified call.
+        # Unverified hits are skipped, never shown, and the read is partial.
+        detail_failures: list[str] = []
+        diagnostic: dict[str, Any] = {"query": " | ".join(terms), "attempted": True,
+                                      "returned_count": 0, "total_available": len(hits),
+                                      "truncated": False, "stop_reason": "exhausted", "failure": None}
+        self.last_fetch_diagnostics = {"queries": [diagnostic], "returned_count": 0}
         for hit in hits.values():
             hit_deadline = _date(hit.get("closeDate"))
-            detail = _post_json(self.DETAIL_URL, {"opportunityId": hit.get("id")}).get("data")
-            if not isinstance(detail, dict) or not detail:
-                raise RuntimeError(f"{spec.name} returned missing Grants.gov opportunity details")
+            try:
+                detail = _post_json(self.DETAIL_URL, {"opportunityId": hit.get("id")}).get("data")
+                if not isinstance(detail, dict) or not detail:
+                    raise RuntimeError(f"{spec.name} returned missing Grants.gov opportunity details")
+            except (httpx.HTTPError, RuntimeError, ValueError, AttributeError) as exc:
+                detail_failures.append(f"{type(exc).__name__}: {exc}"[:200])
+                continue
             synopsis = detail.get("synopsis") or detail.get("forecast") or {}
             # The search index may lag an extension or correction. Verify the
             # current detail deadline before applying the date horizon.
@@ -264,4 +276,11 @@ class GrantsGovSource:
                     metadata=metadata,
                 )
             )
+        if detail_failures:
+            if len(detail_failures) == len(hits):
+                raise RuntimeError(f"{spec.name} could not read any opportunity details: {detail_failures[0]}")
+            diagnostic.update(truncated=True, stop_reason="failure",
+                              failure=f"{len(detail_failures)} of {len(hits)} details unreadable; "
+                                      f"first: {detail_failures[0]}")
+        diagnostic["returned_count"] = self.last_fetch_diagnostics["returned_count"] = len(items)
         return items

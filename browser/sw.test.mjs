@@ -29,3 +29,18 @@ test('isolation is opt-in and scoped to this Pages project', async () => {
   assert.equal(await fetch('https://source.example/feed'), null);
   assert.equal(await harness(false)('https://example.test/daily_digests/worker.mjs'), null);
 });
+
+test('activation removes earlier builds\' caches for this scope only', async () => {
+  const handlers = {}, deleted = [];
+  const scope = 'https://example.test/daily_digests/';
+  const self = { location: { href: scope + 'sw.js' }, registration: { scope },
+    clients: { claim: async () => {} }, addEventListener: (event, handler) => { handlers[event] = handler; } };
+  const caches = { keys: async () => [`dailydigest-pages-install:${scope}:old-build`,
+    `dailydigest-pages-install:${scope}:v1`, 'dailydigest-pages-install:https://example.test/other/:old', 'unrelated'],
+  delete: async key => { deleted.push(key); return true; } };
+  runInNewContext(source, { self, URL, Response, Headers, caches, fetch: async () => new Response('') });
+  let done;
+  handlers.activate({ waitUntil: promise => { done = promise; } });
+  await done;
+  assert.deepEqual(deleted, [`dailydigest-pages-install:${scope}:old-build`]);
+});

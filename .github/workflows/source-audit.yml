@@ -46,17 +46,23 @@ jobs:
           mkdir -p .source-audit
           origin=https://antimonyleo.github.io/daily_digests/
           audit() {
+            # Never judge a report left over from the previous attempt.
+            rm -f .source-audit/report.json .source-audit/summary.md
             # A missing snapshot is judged as unavailable, not skipped.
             curl --fail --location --silent --show-error --max-time 60 \
               --output .source-audit/public-sources.json "${origin}assets/public-sources.json" \
               || rm -f .source-audit/public-sources.json
-            node browser/source-audit.mjs "$origin" .source-audit/report.json
+            node browser/source-audit.mjs "$origin" .source-audit/report.json || return 1
             uv run --no-sync python browser/check_source_access.py .source-audit/report.json \
               --snapshot .source-audit/public-sources.json --summary .source-audit/summary.md
           }
           if ! audit; then
             sleep 60
             audit || echo "failed=true" >> "$GITHUB_OUTPUT"
+          fi
+          if [ ! -s .source-audit/summary.md ]; then
+            echo "incomplete=true" >> "$GITHUB_OUTPUT"
+            echo '- The audit did not finish; see the run log.' > .source-audit/summary.md
           fi
           cat .source-audit/summary.md >> "$GITHUB_STEP_SUMMARY"
           {
@@ -68,9 +74,12 @@ jobs:
       # unavailable), so a broken audit raises the issue instead of going quiet.
       - name: Maintain source access issue
         if: ${{ !cancelled() && steps.audit.outcome != 'skipped' }}
+        # Issue bookkeeping must not fail the audit; the last step does that.
+        continue-on-error: true
         env:
           DAILYDIGEST_ALERT_MODE: source-access-issue
           DAILYDIGEST_REFRESH_RESULT: ${{ (steps.audit.outcome == 'failure' || steps.audit.outputs.failed == 'true') && 'failure' || 'success' }}
+          DAILYDIGEST_ACCESS_INCOMPLETE: ${{ (steps.audit.outcome == 'failure' || steps.audit.outputs.incomplete == 'true') && 'true' || '' }}
           DAILYDIGEST_ACCESS_SUMMARY: ${{ steps.audit.outcome == 'failure' && '- The audit did not finish; see the run log.' || steps.audit.outputs.summary }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python browser/report_failure.py

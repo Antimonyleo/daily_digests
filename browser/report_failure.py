@@ -2,6 +2,8 @@
 import json
 import os
 import re
+import time
+from urllib.error import HTTPError
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
@@ -12,7 +14,8 @@ ACCESS_MARKER = '<!-- dailydigest-source-access-alert-v1 -->'
 
 
 def _refresh_body(run_url):
-    return ('A scheduled or manual source refresh failed. '
+    return ('A scheduled or manual website build failed, so the public source snapshot was not '
+            'refreshed. The cause may be a source outage or a failed check; the run log names the step. '
             'The last successfully published site remains available, but its source records continue aging. '
             'Records older than 48 hours are not used as fresh snapshot coverage.\n\n'
             f'[Inspect the failed workflow]({run_url})\n\n'
@@ -23,6 +26,12 @@ def _access_body(run_url):
     # Only public source names and outcomes from the audit summary; no logs.
     summary = os.environ.get('DAILYDIGEST_ACCESS_SUMMARY', '')
     lines = [line for line in summary.splitlines() if line.startswith('- ')][:40]
+    if os.environ.get('DAILYDIGEST_ACCESS_INCOMPLETE') == 'true':
+        return ('The daily browser source audit could not finish (for example Chrome or the '
+                'website did not load), so source access is unknown rather than known to be broken.\n\n'
+                + ('\n'.join(lines) + '\n\n' if lines else '')
+                + f'[Inspect the audit run]({run_url})\n\n'
+                'This issue is reused while the audit keeps failing and closed after a clean audit.')
     return ('The daily browser audit found sources that browser brews cannot reach: the browser '
             'cannot read them directly, and the daily snapshot has no usable copy. Those sources '
             'fail in browser brews until fixed; a section whose every provider fails stops the '
@@ -48,8 +57,19 @@ def report_issue(title=ISSUE_TITLE, marker=ISSUE_MARKER, body=_refresh_body):
                           data=json.dumps(payload).encode() if payload is not None else None,
                           headers={'Authorization': f'Bearer {token}', 'Accept': 'application/vnd.github+json',
                                    'X-GitHub-Api-Version': '2022-11-28', 'Content-Type': 'application/json'})
-        with urlopen(request, timeout=10) as response:
-            return json.loads(response.read())
+        for attempt in range(2):
+            # One retry for a brief GitHub API outage; 4xx answers are final.
+            try:
+                with urlopen(request, timeout=10) as response:
+                    return json.loads(response.read())
+            # A retried POST could open a duplicate issue; GET and PATCH are safe.
+            except HTTPError as exc:
+                if attempt or exc.code < 500 or method == 'POST':
+                    raise
+            except OSError:
+                if attempt or method == 'POST':
+                    raise
+            time.sleep(5)
 
     try:
         page, existing = 1, None

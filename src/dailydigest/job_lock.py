@@ -15,7 +15,9 @@ def acquire_compute_lock(db_path: str, *, timeout: float = 0.0) -> FileLock:
     """Acquire the one-machine compute lock next to the configured database."""
     lock_path = Path(db_path).expanduser().resolve().parent / ".compute.lock"
     lock_path.parent.mkdir(parents=True, exist_ok=True)
-    lock = FileLock(str(lock_path))
+    # Not thread-local: the web updater takes the lock in its request and
+    # releases it from the update thread if the update stops.
+    lock = FileLock(str(lock_path), thread_local=False)
     try:
         lock.acquire(timeout=timeout)
     except Timeout as exc:

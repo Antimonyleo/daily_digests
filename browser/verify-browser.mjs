@@ -478,7 +478,9 @@ try {
     // that boundary, while Python is still loading and the warming UI is visible.
     await page.waitForFunction(() => Boolean(window.__appWorker));
     await page.locator('#startup .tea-cup').waitFor({ state: 'visible' });
-    await page.screenshot({ path: `${output}/warming-kettle.png`, fullPage: true });
+    // Evidence capture, taken while Python is loading: a busy runner can need
+    // longer than 30 s to produce the frame. The visible-state assert is above.
+    await page.screenshot({ path: `${output}/warming-kettle.png`, fullPage: true, timeout: 120000 });
     await page.emulateMedia({ reducedMotion: 'reduce' });
     assert.equal(await page.locator('#startup .steam').first().evaluate(node => getComputedStyle(node).animationName), 'none');
     await page.emulateMedia({ reducedMotion: 'no-preference' });

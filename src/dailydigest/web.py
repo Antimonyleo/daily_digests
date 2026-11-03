@@ -48,7 +48,7 @@ import threading
 import uuid
 from collections import Counter
 from contextlib import contextmanager
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from functools import wraps
 from pathlib import Path
 from time import monotonic
@@ -1390,6 +1390,7 @@ def calendar_item(request: Request, item_id: int) -> Response:
             "CALSCALE:GREGORIAN",
             "BEGIN:VEVENT",
             f"UID:dailydigest-{item_id}@localhost",
+            f"DTSTAMP:{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}",
             f"DTSTART;VALUE=DATE:{start:%Y%m%d}",
             f"DTEND;VALUE=DATE:{exclusive_end:%Y%m%d}",
             f"SUMMARY:{_ics_text(title)}",
@@ -1808,6 +1809,11 @@ def _format_env_value(value: str) -> str:
     val = str(value)
     if any(ch in val for ch in ("\r", "\n", "\0")):
         raise ValueError("environment values cannot contain line breaks")
+    if "${" in val:
+        # Settings load .env through python-dotenv, which expands ${NAME} in
+        # the unquoted and double-quoted values written here, so the saved
+        # value would come back changed.
+        raise ValueError("environment values cannot contain ${")
     if val == "" or _ENV_SAFE_RE.match(val):
         return val
     escaped = val.replace("\\", "\\\\").replace('"', '\\"')
@@ -1880,6 +1886,8 @@ def _validate_setup(form: dict[str, str]) -> list[str]:
     ):
         if _env_value_has_control_chars(form.get(key)):
             errors.append(f"{label} cannot contain line breaks.")
+        elif "${" in str(form.get(key) or ""):
+            errors.append(f"{label} cannot contain ${{ (it would be read back as a different value).")
     for key, label, enabled_key in (
         ("top_research", "Research items", None),
         ("top_industry", "Industry items", "include_industry"),
@@ -2386,6 +2394,9 @@ def _load_ui_prefs() -> dict[str, str]:
             if isinstance(value, str) and value in _UI_PREFS.get(key, ())}
 
 
+_UI_PREFS_LOCK = threading.Lock()
+
+
 @app.post("/ui-prefs")
 def ui_prefs_save(request: Request, theme: str = "", display: str = "", pip: str = "") -> JSONResponse:
     """Remember display choices beside the reader's other data."""
@@ -2393,10 +2404,11 @@ def ui_prefs_save(request: Request, theme: str = "", display: str = "", pip: str
     chosen = {key: value for key, value in (("theme", theme), ("display", display), ("pip", pip)) if value}
     if any(value not in _UI_PREFS[key] for key, value in chosen.items()):
         raise HTTPException(status_code=422, detail="unknown display choice")
-    prefs = _load_ui_prefs()
-    if chosen and {**prefs, **chosen} != prefs:
-        prefs.update(chosen)
-        _atomic_private_write(_ui_prefs_path(), json.dumps(prefs, sort_keys=True) + "\n")
+    with _UI_PREFS_LOCK:  # Two quick toggles must not drop one another.
+        prefs = _load_ui_prefs()
+        if chosen and {**prefs, **chosen} != prefs:
+            prefs.update(chosen)
+            _atomic_private_write(_ui_prefs_path(), json.dumps(prefs, sort_keys=True) + "\n")
     return JSONResponse(prefs)
 
 
@@ -2641,7 +2653,17 @@ def healthz() -> dict[str, str]:
 
 
 def _local_jobs_busy() -> bool:
-    return _BREW_LOCK.locked() or _COMPUTE_LOCK.locked()
+    if _BREW_LOCK.locked() or _COMPUTE_LOCK.locked():
+        return True
+    # A brew started from a terminal (`dd brew`) or another process holds
+    # only the machine-wide file lock.
+    try:
+        acquire_compute_lock(get_settings().db_path).release()
+    except ComputeBusyError:
+        return True
+    except OSError:
+        return False
+    return False
 
 
 @app.get("/update/status")
@@ -2657,17 +2679,27 @@ def update_apply(request: Request) -> JSONResponse:
     _require_csrf(request)
     # Hold both job locks from here until the process restarts, so no brew or
     # ranking job starts against half-replaced program files.
+    # The machine-wide file lock also keeps out a brew in another process
+    # (`dd brew` in a terminal); exec on restart closes it.
     brew = _BREW_LOCK.acquire(blocking=False)
     compute = brew and _COMPUTE_LOCK.acquire(blocking=False)
+    process_lock = None
+    if compute:
+        try:
+            process_lock = acquire_compute_lock(get_settings().db_path)
+        except (ComputeBusyError, OSError):
+            process_lock = None
 
     def release() -> None:
+        if process_lock is not None:
+            process_lock.release()
         if compute:
             _COMPUTE_LOCK.release()
         if brew:
             _BREW_LOCK.release()
 
     address = (request.url.hostname or "127.0.0.1", request.url.port or 8765)
-    state = updates.UPDATER.apply(busy=not compute, address=address, on_failure=release)
+    state = updates.UPDATER.apply(busy=process_lock is None, address=address, on_failure=release)
     return JSONResponse(state, headers={"Cache-Control": "no-store"})
 
 
@@ -3145,10 +3177,12 @@ def _kick_off_run(run_id: str, reading_mode: str) -> None:
         process_lock = None
         acquired = _BREW_LOCK.acquire(blocking=False)
         if not acquired:
+            restart = updates.UPDATER.phase == updates.RESTART_NEEDED
             _push(
                 {
                     "stage": "error",
-                    "payload": {"message": "Another brew is already running. Please wait for it to finish."},
+                    "payload": {"message": updates.UPDATER.message if restart else
+                                "Another brew is already running. Please wait for it to finish."},
                 }
             )
             return

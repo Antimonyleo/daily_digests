@@ -23,6 +23,8 @@ export function createSnapshotWriter({ generation, capture, save, ready = () => 
         return true;
       } catch (error) {
         lastError = error; retryAt = now() + 5000;
+        // Retry on its own; otherwise the desk stays unsaved until the next change.
+        clearTimeout(timer); timer = setTimeout(() => { timer = null; void flush(); }, 5000);
         warning(`Changes are available in this tab but could not be saved to browser storage: ${error.message || error}. Export a backup before closing this tab.`);
         return false;
       } finally { pending = null; }

@@ -10,6 +10,8 @@ on:
 
 permissions:
   contents: read
+  # Read-only: lets a scheduled refresh find this commit's push run.
+  actions: read
 
 # One queue per branch: GitHub keeps a single pending run per group, so a
 # shared group let a dev push cancel a waiting main deploy or scheduled refresh.
@@ -36,8 +38,36 @@ jobs:
           node-version: '24'
           cache: npm
           cache-dependency-path: prototypes/browser-compute/package-lock.json
+      # A scheduled refresh rebuilds the same commit with new public source
+      # data. Code checks already ran on that commit's push, so repeating them
+      # here only lets a timing flake or a new advisory block the data refresh.
+      # Without a successful push run for this commit, every check runs.
+      - name: Decide whether code checks already passed for this commit
+        id: scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          full=true
+          if [ "${{ github.event_name }}" = schedule ]; then
+            passed=$(gh api "repos/${{ github.repository }}/actions/workflows/browser-pages.yml/runs?head_sha=${{ github.sha }}&event=push&status=success&per_page=1" --jq '.total_count' 2>/dev/null || echo 0)
+            if [ "${passed:-0}" -gt 0 ]; then full=false; fi
+          fi
+          echo "full=$full" >> "$GITHUB_OUTPUT"
+          echo "Code checks for this run: $full"
+      # Checksum-verified public downloads (Pyodide, wheels, models); a
+      # cache hit avoids depending on every CDN being up for each refresh.
+      - name: Reuse verified build downloads
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            browser/.build-cache/wheels
+            browser/.build-cache/pyodide
+            browser/.build-cache/semantic-model
+            browser/.build-cache/gpu-model.onnx
+          key: dailydigest-build-downloads-${{ hashFiles('browser/build.py', 'browser/requirements-browser.txt', 'prototypes/browser-compute/package-lock.json', 'src/dailydigest/rank/semantic_assets.py') }}
       - run: uv sync --frozen --group dev
       - name: Python regression checks
+        if: ${{ steps.scope.outputs.full == 'true' }}
         run: uv run pytest -q
         env:
           HF_HUB_OFFLINE: "1"
@@ -47,10 +77,12 @@ jobs:
         working-directory: prototypes/browser-compute
         run: npm ci --ignore-scripts
       - name: Browser bridge checks
+        if: ${{ steps.scope.outputs.full == 'true' }}
         run: |
           node --test --test-isolation=none browser/*.test.mjs
           node --test --test-isolation=none prototypes/browser-compute/browser.test.mjs
       - name: Reject vulnerable Node dependencies
+        if: ${{ steps.scope.outputs.full == 'true' }}
         working-directory: prototypes/browser-compute
         run: npm audit --package-lock-only --audit-level=moderate
       - name: Prepare public model and runtime assets
@@ -67,22 +99,27 @@ jobs:
       - name: Build static application
         run: uv run python browser/build.py
       - name: Deferred startup and optional publisher figures
+        if: ${{ steps.scope.outputs.full == 'true' }}
         env:
           DAILYDIGEST_STARTUP_SITE: browser/dist
           DAILYDIGEST_STARTUP_REPORT: .full-review/startup-figures-ci
         run: node browser/verify-startup-figures.mjs
       - name: Large-checkpoint startup and recovery regression
+        if: ${{ steps.scope.outputs.full == 'true' }}
         env:
           DAILYDIGEST_STORAGE_SITE: browser/dist
           DAILYDIGEST_STORAGE_REPORT: .full-review/storage-startup-ci
         run: node browser/verify-storage-startup.mjs
+      # Always runs: the full browser acceptance below reads these fixtures.
       - name: Prepare isolated browser acceptance fixtures
         run: uv run python browser/make_test_fixture.py --output .full-review/browser-launch-2026-10-13
       - name: Settings priorities and hidden validation
+        if: ${{ steps.scope.outputs.full == 'true' }}
         env:
           DAILYDIGEST_SETTINGS_REPORT: .full-review/settings-priorities-ci
         run: node browser/verify-settings-priorities.mjs
       - name: Restored reading layout and interactions
+        if: ${{ steps.scope.outputs.full == 'true' }}
         env:
           DAILYDIGEST_READING_UI_REPORT: .full-review/reading-ui-ci
           DAILYDIGEST_SAVED_UI_REPORT: .full-review/saved-ui-ci
@@ -92,26 +129,31 @@ jobs:
           node browser/verify-saved-ui.mjs
           node browser/verify-pip.mjs
       - name: Complete daily reading and publication relationships
+        if: ${{ steps.scope.outputs.full == 'true' }}
         env:
           DAILYDIGEST_BREW_SITE: browser/dist
           DAILYDIGEST_BREW_FIXTURES: .full-review/browser-launch-2026-10-13
           DAILYDIGEST_BREW_REPORT: .full-review/daily-release-ci
         run: node browser/verify-daily-release.mjs
       - name: Quick guide and optional local backup copies
+        if: ${{ steps.scope.outputs.full == 'true' }}
         env:
           DAILYDIGEST_GUIDE_SITE: browser/dist
           DAILYDIGEST_GUIDE_REPORT: .full-review/guide-backup-ci
         run: node browser/verify-guide-backup.mjs
       - name: Instant saved reading view and on-demand controls
+        if: ${{ steps.scope.outputs.full == 'true' }}
         env:
           DAILYDIGEST_READING_SITE: browser/dist
           DAILYDIGEST_READING_REPORT: .full-review/reading-view-ci
         run: node browser/verify-reading-view.mjs
       - name: Two-tab handoff without lost feedback
+        if: ${{ steps.scope.outputs.full == 'true' }}
         env:
           DAILYDIGEST_TAB_SITE: browser/dist
           DAILYDIGEST_TAB_REPORT: .full-review/tab-handoff-ci
         run: node browser/verify-tab-handoff.mjs
+      # Always runs: it checks the site actually being published, new data included.
       - name: Full browser acceptance at the project subpath
         env:
           DAILYDIGEST_BROWSER_URL: http://127.0.0.1:8767/daily_digests/
@@ -171,6 +213,9 @@ jobs:
         with:
           ref: ${{ github.sha }}
       - name: Maintain recurring source refresh issue
+        # Issue bookkeeping must not turn a refresh red; a failed build
+        # already fails its own job.
+        continue-on-error: true
         env:
           DAILYDIGEST_ALERT_MODE: github-issue
           DAILYDIGEST_REFRESH_RESULT: ${{ needs.build.result == 'success' && needs.deploy.result == 'success' && 'success' || 'failure' }}

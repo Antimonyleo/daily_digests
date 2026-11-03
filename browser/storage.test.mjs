@@ -61,6 +61,20 @@ test('quota failure remains recoverable and warns without rejecting a valid requ
   assert.equal(warnings.at(-1), null);
 });
 
+test('a failed save retries by itself after the back-off', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  let saves = 0, fail = true;
+  const writer = createSnapshotWriter({ generation: () => 1, capture: () => 'state', now: Date.now,
+    save: async () => { saves++; if (fail) throw new Error('QuotaExceededError'); } });
+  assert.equal(await writer.flush(), false);
+  fail = false;
+  writer.schedule(); // Inside the back-off window: must not be lost.
+  t.mock.timers.tick(5000);
+  for (let i = 0; i < 5; i++) await Promise.resolve();
+  assert.equal(saves, 2);
+  assert.equal(writer.status().durable, true);
+});
+
 test('capture failure does not leave a permanently pending checkpoint', async () => {
   let fail = true;
   const writer = createSnapshotWriter({ generation: () => 1,

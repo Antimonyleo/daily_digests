@@ -38,6 +38,36 @@ sys.stdout.write(json.dumps({'/':web.index(request('/')).body.decode(),'/saved':
 assert.equal(rendered.status, 0, rendered.stderr);
 const pages = JSON.parse(rendered.stdout);
 await writeFile(resolve(output, 'pip.html'), pages['/']);
+// Chrome delivers touch and mouse moves to the page on the next animation
+// frame, after CDP has already acknowledged them; a slow runner can read the
+// DOM before that frame. Wait for the drag state the gesture must produce
+// (while the pointer is still down, or after release) instead of sampling once.
+async function dragState(target, dragging, detail = {}) {
+  try {
+    await target.waitForFunction(expected => document.querySelector('#tea-break').classList.contains('is-dragging') === expected,
+      dragging, {timeout: 10000});
+  } catch {
+    const state = await target.locator('#tea-break').evaluate(node => ({dragging: node.classList.contains('is-dragging'), rect: node.getBoundingClientRect().toJSON(),
+      pointerEvents: (window.__pipPointerLog || []).slice(-12)}));
+    assert.equal(state.dragging, dragging, JSON.stringify({...detail, dragState: state}));
+  }
+}
+// A viewport change reaches the page's resize handlers (which re-place Pip and
+// cancel any drag) on a later animation frame. Measure and touch only once
+// the cup has stayed put for a frame, as a reader would see it.
+async function settleLayout(target) {
+  await target.evaluate(async () => {
+    const frame = () => new Promise(done => requestAnimationFrame(() => done()));
+    let last = null;
+    for (let index = 0; index < 120; index++) {
+      await frame();
+      const box = document.querySelector('#tea-pet .pet-cup')?.getBoundingClientRect();
+      const key = box ? [box.x, box.y, box.width, box.height].join() : '';
+      if (key === last) return;
+      last = key;
+    }
+  });
+}
 const report = {scope: 'Production template, fictional empty desk; no Python browser worker or live sources.', checks: [], errors: []};
 const browser = await chromium.launch({executablePath: process.env.CHROME_PATH || '/usr/bin/google-chrome',
   headless: true, args: ['--no-sandbox'], env: {...process.env, TMPDIR: scratch}});
@@ -55,6 +85,17 @@ try {
       } catch { /* Missing assets are recorded by the browser. */ }
     }
     return route.fulfill({status: 404, body: 'No live services in this test'});
+  });
+  // Diagnostic only: the pointer sequence Pip received, reported if a drag check fails.
+  await context.addInitScript(() => {
+    window.__pipPointerLog = [];
+    for (const type of ['pointerdown', 'pointermove', 'pointerup', 'pointercancel', 'lostpointercapture', 'touchstart', 'touchcancel'])
+      addEventListener(type, event => {
+        if (event.pointerType === 'mouse' && type === 'pointermove') return;
+        window.__pipPointerLog.push({type, pointerType: event.pointerType, pip: Boolean(event.target?.closest?.('#tea-pet')),
+          target: event.target?.id || event.target?.className, x: Math.round(event.clientX), y: Math.round(event.clientY), t: Math.round(event.timeStamp)});
+        if (window.__pipPointerLog.length > 40) window.__pipPointerLog.shift();
+      }, {capture: true, passive: true});
   });
   const page = await context.newPage();
   page.on('pageerror', error => report.errors.push(String(error)));
@@ -82,6 +123,7 @@ try {
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
   await page.mouse.down();
   await page.mouse.move(box.x + box.width / 2 + 250, box.y + box.height / 2 - 200, {steps: 5});
+  await dragState(page, true);
   assert.equal(await note.isVisible(), true, 'The current fact must stay readable DURING dragging');
   assert.equal(await note.innerText(), fact);
   assert.equal(await page.locator('#tea-another').isVisible(), true);
@@ -122,7 +164,9 @@ try {
   await page.emulateMedia({reducedMotion: 'reduce'});
   for (const width of [390, 320]) {
     await page.setViewportSize({width, height: 844});
+    await settleLayout(page);
     await page.locator('#tea-break').scrollIntoViewIfNeeded();
+    await settleLayout(page);
     assert.equal(await pet.getAttribute('role'), 'button');
     assert.equal(await note.isVisible(), true);
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
@@ -136,12 +180,13 @@ try {
     const touch=await context.newCDPSession(page);
     await touch.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x:beforeTouch.x+beforeTouch.width*.25,y:beforeTouch.y+beforeTouch.height/2}]});
     await touch.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:20,y:200}]});
-    assert.equal(await page.locator('#tea-break').evaluate(node=>node.classList.contains('is-dragging')),true);
+    await dragState(page, true);
     assert.equal(await note.isVisible(),true,'Touch dragging also retains the current note');
     assert.equal(await note.innerText(),currentNote);
     const bubble=await page.locator('.tea-dialog').boundingBox();
     assert.ok(bubble.x>=7 && bubble.y>=7 && bubble.x+bubble.width<=width-7);
     await touch.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+    await dragState(page, false);
     await touch.detach();
     const hit=await page.locator('#tea-another').evaluate(button=>{
       const leaf=button.getBoundingClientRect(),dialog=document.querySelector('.tea-dialog').getBoundingClientRect();
@@ -248,6 +293,7 @@ try {
   for(const motion of ['reduce','no-preference'])for(const width of [390,320]){
     await page.emulateMedia({reducedMotion:motion});
     await page.setViewportSize({width,height:844});
+    await settleLayout(page);
     await page.evaluate(({width,motion})=>{
       const notes=JSON.parse(document.querySelector('#reading-personalization').textContent).notes;
       const digestId=`hit-target-${width}-${motion}`;
@@ -255,6 +301,7 @@ try {
       localStorage.setItem('dailydigest-pip-chat','open');
       mountPip(document.querySelector('#tea-break'),{digestId,notes});
     },{width,motion});
+    await settleLayout(page);
     await page.locator('#tea-pet .pet-cup').click({trial:true,position:{x:8,y:16}});
     const touch=await context.newCDPSession(page);
     for(const [index,point] of [{x:width/2,y:200},{x:width/2,y:270},{x:45,y:700},{x:width-45,y:110}].entries()){
@@ -265,11 +312,11 @@ try {
       assert.equal(grip.isCup,true,JSON.stringify({width,motion,point,grip}));
       await touch.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x:grip.x,y:grip.y}]});
       await touch.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[point]});
-      const dragState=await page.locator('#tea-break').evaluate(node=>({dragging:node.classList.contains('is-dragging'),rect:node.getBoundingClientRect().toJSON()}));
-      assert.equal(dragState.dragging,true,JSON.stringify({width,motion,point,grip,dragState}));
+      await dragState(page,true,{width,motion,point,grip});
       assert.equal(await note.isVisible(),true);
       assert.equal(await note.innerText(),currentNote);
       await touch.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+      await dragState(page,false,{width,motion,point,grip});
       const hit=await page.locator('#tea-another').evaluate(button=>{
         const leaf=button.getBoundingClientRect(),dialog=document.querySelector('.tea-dialog').getBoundingClientRect();
         const hits=[.2,.5,.8].flatMap(x=>[.2,.5,.8].map(y=>{const target=document.elementFromPoint(leaf.x+leaf.width*x,leaf.y+leaf.height*y);return button.contains(target);}));

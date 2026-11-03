@@ -371,6 +371,7 @@ def test_openalex_repairs_acs_title_spacing_from_crossref(monkeypatch):
     from dailydigest.ingest import openalex as openalex_mod
 
     openalex_mod._recent_acs_titles.cache_clear()
+    openalex_mod._acs_failed_at.clear()
 
     work = {
         "id": "https://openalex.org/W-ACS",
@@ -429,6 +430,7 @@ def test_openalex_title_cleanup_failure_keeps_the_paper(monkeypatch):
     from dailydigest.ingest import openalex as openalex_mod
 
     openalex_mod._recent_acs_titles.cache_clear()
+    openalex_mod._acs_failed_at.clear()
     work = {
         "id": "https://openalex.org/W-ACS-FALLBACK",
         "title": "FluorescentSelf-Assembled Nanoparticles",
@@ -466,6 +468,29 @@ def test_openalex_title_cleanup_failure_keeps_the_paper(monkeypatch):
 
     assert len(items) == 1
     assert items[0].title == "FluorescentSelf-Assembled Nanoparticles"
+
+
+def test_openalex_title_cleanup_recovers_after_a_failed_load(monkeypatch):
+    from dailydigest.ingest import openalex as openalex_mod
+
+    openalex_mod._recent_acs_titles.cache_clear()
+    openalex_mod._acs_failed_at.clear()
+    clock = [1000.0]
+    monkeypatch.setattr(openalex_mod.time, "monotonic", lambda: clock[0])
+    calls = []
+
+    def crossref(url, params, headers):
+        calls.append(url)
+        if len(calls) == 1:
+            raise RuntimeError("offline")
+        return {"message": {"items": [{"DOI": "10.1021/x", "title": ["Fixed Title"]}]}}
+
+    monkeypatch.setattr(openalex_mod, "_get_crossref_json", crossref)
+    repair = lambda: openalex_mod._repair_acs_title(  # noqa: E731
+        "Broken", "10.1021/x", window_start="a", window_end="b", polite_email="")
+    assert repair() == "Broken" and repair() == "Broken" and len(calls) == 1
+    clock[0] += openalex_mod._ACS_RETRY_AFTER_SECONDS
+    assert repair() == "Fixed Title" and repair() == "Fixed Title" and len(calls) == 2
 
 
 def test_openalex_profile_driven_upgrades_recognized_venue(monkeypatch):
@@ -701,6 +726,34 @@ def test_grants_gov_missing_official_response_is_a_source_failure(monkeypatch, s
         GrantsGovSource().fetch(
             _spec(name="Grants.gov", kind="grants_gov", section="opportunities", query="RNA")
         )
+
+
+def test_grants_gov_one_unreadable_detail_does_not_discard_verified_calls(monkeypatch):
+    import httpx
+
+    from dailydigest.ingest import grants_gov
+
+    monkeypatch.setattr(grants_gov, "_today", lambda: date(2026, 11, 3))
+
+    def fake_post(url, payload):
+        if url == grants_gov.GrantsGovSource.SEARCH_URL:
+            return {"data": {"oppHits": [
+                {"id": "1", "number": "A-1", "title": "Good call", "closeDate": "12/01/2026"},
+                {"id": "2", "number": "A-2", "title": "Gone call", "closeDate": "12/01/2026"},
+            ]}}
+        if payload["opportunityId"] == "2":  # Still in the index, detail gone.
+            request = httpx.Request("POST", url)
+            raise httpx.HTTPStatusError("404", request=request, response=httpx.Response(404, request=request))
+        return {"data": {"opportunityNumber": "A-1", "opportunityTitle": "Good call",
+                         "synopsis": {"responseDate": "Dec 01, 2026", "applicantTypes": []}}}
+
+    monkeypatch.setattr(grants_gov, "_post_json", fake_post)
+    source = grants_gov.GrantsGovSource()
+    spec = _spec(name="Grants.gov", kind="grants_gov", section="opportunities", query="RNA")
+    assert [item.external_id for item in source.fetch(spec)] == ["A-1"]
+    query = source.last_fetch_diagnostics["queries"][0]
+    assert query["truncated"] is True and query["stop_reason"] == "failure"
+    assert "1 of 2" in query["failure"]
 
 
 @pytest.mark.parametrize("search_deadline", ["08/01/2026", "10/01/2026"])

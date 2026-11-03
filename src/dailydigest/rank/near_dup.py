@@ -27,6 +27,8 @@ from .embedding_cache import embed_item_rows
 
 logger = logging.getLogger(__name__)
 _RESEARCH_VERSION_COOLDOWN_DAYS = 14
+# Mirrors pipeline.DEADLINE_SECTIONS (importing pipeline here would be circular).
+_DEADLINE_SECTIONS = frozenset({"opportunities", "events"})
 
 
 def _recently_shown_rows(
@@ -153,27 +155,31 @@ def exclude_recent_near_duplicates(
         return rows, dropped
     shown = (version_history if days_lookback == _RESEARCH_VERSION_COOLDOWN_DAYS
              else _recently_shown_rows(days_lookback, candidate_ids, exclude_digest_id))
-    if not shown:
+    # Like exclude_previously_shown: an earlier display never hides an open
+    # call or event, even under another source's near-identical copy.
+    candidates = [row for row in rows if (row.section or "") not in _DEADLINE_SECTIONS]
+    if not shown or not candidates:
         return rows, dropped
 
     try:
         shown_vecs = embed_item_rows(shown)
-        cand_vecs = embed_item_rows(rows)
+        cand_vecs = embed_item_rows(candidates)
     except Exception as e:  # noqa: BLE001
         logger.warning("near-dup embedding failed (%s); skipping", e)
         return rows, dropped
-    if shown_vecs.size == 0 or cand_vecs.size == 0 or cand_vecs.shape[0] != len(rows):
+    if shown_vecs.size == 0 or cand_vecs.size == 0 or cand_vecs.shape[0] != len(candidates):
         return rows, dropped
 
     sv = shown_vecs / (np.linalg.norm(shown_vecs, axis=1, keepdims=True) + 1e-9)
     cv = cand_vecs / (np.linalg.norm(cand_vecs, axis=1, keepdims=True) + 1e-9)
     sims = cv @ sv.T  # (n_candidates, n_shown)
-    max_sim = sims.max(axis=1) if sims.shape[1] > 0 else np.zeros(len(rows))
+    max_sim = sims.max(axis=1) if sims.shape[1] > 0 else np.zeros(len(candidates))
+    similarity = {id(row): float(ms) for row, ms in zip(candidates, max_sim, strict=True)}
 
     kept: list[ItemRow] = []
-    for row, ms in zip(rows, max_sim, strict=True):
-        if float(ms) >= threshold:
-            dropped.append(_audit(row, float(ms)))
+    for row in rows:
+        if similarity.get(id(row), -1.0) >= threshold:
+            dropped.append(_audit(row, similarity[id(row)]))
         else:
             kept.append(row)
     if dropped:

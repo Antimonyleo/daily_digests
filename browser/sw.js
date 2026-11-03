@@ -8,7 +8,12 @@ self.addEventListener('install', event => {
   event.waitUntil(caches.open(cacheName).then(cache => cache.addAll(assets)));
   self.skipWaiting();
 });
-self.addEventListener('activate', event => event.waitUntil(self.clients.claim()));
+// Each build names its own cache; drop earlier builds' caches for this scope.
+self.addEventListener('activate', event => event.waitUntil(caches.keys()
+  .then(keys => Promise.all(keys.filter(key => key.startsWith(`dailydigest-pages-install:${scope}:`) && key !== cacheName)
+    .map(key => caches.delete(key))))
+  .catch(() => {})
+  .then(() => self.clients.claim())));
 self.addEventListener('fetch', event => {
   // Isolation is enabled only by an explicit Compute choice. Keep the handler
   // inside this project and leave provider requests to normal browser CORS.

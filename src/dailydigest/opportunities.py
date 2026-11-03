@@ -86,13 +86,34 @@ class OpportunityAssessment:
     reason: str
 
 
-_INSTITUTION_MARKERS: dict[str, tuple[str, ...]] = {
-    "university": ("higher education", "university", "college"),
-    "nonprofit": ("nonprofit", "non-profit", "higher education"),
-    "company": ("small business", "for profit", "for-profit", "business"),
-    "government": ("government", "state", "county", "city", "township"),
-    "individual": ("individual",),
-}
+# Reader institution words, checked in this order ("nonprofit university" is a
+# university).
+_INSTITUTION_KINDS = ("university", "nonprofit", "company", "government", "individual")
+
+
+def _applicant_tag_kind(tag: str) -> str | None:
+    """The one reader institution kind an applicant-type tag admits, if any.
+
+    Grants.gov names each applicant type in full, and several names mention
+    another type ("Nonprofits ... other than institutions of higher
+    education", "Native American tribal governments"), so a tag is classified
+    once instead of substring-matched against every reader kind. State, local
+    and tribal government types do not establish eligibility for a reader's
+    government institution, which stays "needs review".
+    """
+    if "other than institutions of higher education" in tag:
+        return "nonprofit"
+    if any(word in tag for word in ("higher education", "university", "college")):
+        return "university"
+    if any(word in tag for word in ("government", "tribal", "housing authorit", "school district")):
+        return None
+    if "nonprofit" in tag or "non-profit" in tag:
+        return "nonprofit"
+    if any(word in tag for word in ("small business", "for profit", "for-profit", "business")):
+        return "company"
+    if "individual" in tag:
+        return "individual"
+    return None
 
 _OPPORTUNITY_TYPE_FAMILIES: dict[str, tuple[str, ...]] = {
     "grant": ("grant", "cooperative agreement", "funding opportunity"),
@@ -277,6 +298,12 @@ def assess_opportunity(
                 f"only {days_left} days remain; below preferred lead time",
             )
 
+    # A stored notice can outlive its announcement (NIH Guide notices with
+    # several due dates carry only an expiry date).
+    expires = _iso_date(metadata.get("expires"))
+    if expires is not None and expires < now:
+        return OpportunityAssessment(False, "unknown", "announcement has expired")
+
     if section_type == "event":
         event_start = _iso_date(metadata.get("event_start"))
         if event_start is not None:
@@ -308,7 +335,7 @@ def assess_opportunity(
     if not serves_reader(metadata.get("applicant_regions"), funding_regions(profile.country)):
         return OpportunityAssessment(False, "unlikely", "open to applicants in other countries")
     country = profile.country.casefold()
-    is_us = country in {"us", "u.s.", "usa", "united states", "united states of america"}
+    is_us = country_code(country) == "us"
     eligibility_text = str(metadata.get("eligibility_description") or "").casefold()
     # Only short affirmative clauses justify exclusion. Negated, qualified,
     # or more complex eligibility prose needs review, not substring inference.
@@ -335,18 +362,15 @@ def assess_opportunity(
         if official:
             return OpportunityAssessment(True, "likely", "call is open to broad applicant types")
         return OpportunityAssessment(True, "unknown", "verify eligibility on the official source")
-    if all("other" in tag or "see text" in tag for tag in tags):
+    # Grants.gov "Others (see text ...)"; not the "other than ..." in nonprofit types.
+    if all(tag.startswith("other") and not tag.startswith("other than") or "see text" in tag for tag in tags):
         return OpportunityAssessment(True, "unknown", "official eligibility text needs review")
 
     institution = profile.institution_type.casefold()
-    markers: tuple[str, ...] = ()
-    for key, values in _INSTITUTION_MARKERS.items():
-        if key in institution:
-            markers = values
-            break
-    if not markers:
+    kind = next((key for key in _INSTITUTION_KINDS if key in institution), None)
+    if kind is None or kind == "government":
         return OpportunityAssessment(True, "unknown", "institution type needs review")
-    if any(marker in tag for marker in markers for tag in tags):
+    if any(_applicant_tag_kind(tag) == kind for tag in tags):
         # Applicant-type tags and free text do not establish country eligibility;
         # even a mention of foreign institutions may explicitly exclude them.
         if not is_us:

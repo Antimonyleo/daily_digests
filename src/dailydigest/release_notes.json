@@ -2,6 +2,18 @@
   "schema": 1,
   "releases": [
     {
+      "version": "2026.11.3",
+      "date": "2026-11-03",
+      "title": "Fewer wrong eligibility labels and safer updates",
+      "notes": [
+        "Grants.gov calls are no longer marked Potentially eligible because an applicant type only mentions your kind of institution, such as a nonprofit call that excludes universities or a state government call for a government lab.",
+        "NIH announcements past their expiry date no longer appear as open calls, and one Grants.gov call whose details cannot be read no longer hides every other Grants.gov call.",
+        "An open call or meeting is no longer hidden for a week because a copy from another source was shown earlier.",
+        "Update now refuses to start while a brew started from a terminal is running, and if the automatic restart after an update fails, DailyDigest now asks you to restart it instead of reporting a brew that isn't running.",
+        "Settings no longer accept a value containing ${, which would have been read back as a different value; quick theme and density changes are both kept."
+      ]
+    },
+    {
       "version": "2026.11.2",
       "date": "2026-11-02",
       "title": "More accurate funding and fewer hidden items",

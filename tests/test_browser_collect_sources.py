@@ -153,14 +153,14 @@ def test_push_section_outage_reuses_previous_validated_snapshot(tmp_path):
     old_time = (NOW - timedelta(hours=30)).isoformat()
     for row in previous['sources'].values():
         row['fetched_at'] = old_time
-    fail(current, ['b'])  # A single-source section is unavailable.
+    fail(current, ['a', 'b', 'd'])  # Too few fresh records for a refresh.
     selected = collector.prepare_publication(current, previous, event='push', now=NOW)
     assert selected['publication']['mode'] == 'push-carry-forward'
     assert 'previous' in selected['publication']['warning'].lower()
     assert all(row['fetched_at'] == old_time for row in selected['sources'].values())
     assert all(row['carried_forward'] for row in selected['sources'].values())
     assert selected['sources']['b']['latest_attempt']['status'] == 'error'
-    assert selected['sources']['a']['latest_attempt']['status'] == 'ok'
+    assert selected['sources']['c']['latest_attempt']['status'] == 'ok'
     summary = collector.publish(selected, tmp_path / 'public.json', now=NOW,
                                 allow_carry_forward=True)
     assert summary['ok'] == 4 and summary['fresh_ok'] == 0
@@ -170,11 +170,32 @@ def test_push_section_outage_reuses_previous_validated_snapshot(tmp_path):
 
 
 @pytest.mark.parametrize('event', ['schedule', 'workflow_dispatch'])
-def test_refresh_section_outage_remains_strict(event):
-    current = report()
+def test_refresh_section_outage_without_a_valid_retained_record_remains_strict(event):
+    current, previous = report(), report()
     fail(current, ['b'])
-    with pytest.raises(ValueError, match='coverage missing section'):
-        collector.prepare_publication(current, report(), event=event, now=NOW)
+    previous['sources']['b']['fetched_at'] = (NOW - timedelta(hours=49)).isoformat()
+    for retained in (None, previous):
+        with pytest.raises(ValueError, match='coverage missing section'):
+            collector.prepare_publication(current, retained, event=event, now=NOW)
+
+
+@pytest.mark.parametrize('event', ['schedule', 'workflow_dispatch'])
+def test_refresh_keeps_fresh_records_when_one_required_section_is_only_retained(event):
+    # One upstream outage (e.g. export.arxiv.org) must not discard every fresh
+    # record; the retained record keeps its original age and still expires.
+    current, previous = report(), report()
+    old_time = (NOW - timedelta(hours=30)).isoformat()
+    previous['sources']['b']['fetched_at'] = old_time
+    fail(current, ['b'])
+    selected = collector.prepare_publication(current, previous, event=event, now=NOW)
+    assert 'publication' not in selected
+    assert selected['sources']['b']['carried_forward'] is True
+    assert selected['sources']['b']['fetched_at'] == old_time
+    assert selected['sources']['b']['latest_attempt']['status'] == 'error'
+    summary = collector.validate_report(selected, now=NOW)
+    assert summary['fresh_ok'] == 3 and summary['retained_only'] == ['industry']
+    with pytest.raises(ValueError, match='expired'):
+        collector.validate_report(selected, now=NOW + timedelta(hours=19))
 
 
 @pytest.mark.parametrize('previous', [None, {}])
@@ -257,7 +278,7 @@ def test_cli_wires_event_policy_without_live_collection(tmp_path, monkeypatch, c
     for data in (current, previous):
         for row in data['sources'].values():
             row['fetched_at'] = now
-    fail(current, ['b'])
+    fail(current, ['a', 'b', 'd'])
     previous_path = tmp_path / 'previous.json'
     previous_path.write_text(json.dumps(previous))
     output = tmp_path / 'public.json'
@@ -275,12 +296,13 @@ def test_cli_wires_event_policy_without_live_collection(tmp_path, monkeypatch, c
         assert json.loads(output.read_text())['sources']['b']['fetched_at'] == now
     else:
         assert logged['status'] == 'rejected'
+        assert set(logged['failures']) == {'a', 'b', 'd'}
         assert output.read_text() == 'retained old output'
 
 
 def test_malformed_previous_publication_metadata_is_rejected_cleanly():
     current, previous = report(), report()
-    fail(current, ['b'])
+    fail(current, ['a', 'b', 'd'])
     previous['publication'] = 'not an object'
     with pytest.raises(ValueError, match='previous.*invalid'):
         collector.prepare_publication(current, previous, event='push', now=NOW)

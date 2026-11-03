@@ -55,3 +55,27 @@ def test_display_choices_need_csrf_and_known_values(monkeypatch, tmp_path):
     assert web._load_ui_prefs() == {"display": "compact"}
     prefs_file.write_text("not json")
     assert web._load_ui_prefs() == {}
+
+
+def test_concurrent_display_choices_are_both_kept(monkeypatch, tmp_path):
+    import threading
+    import time
+
+    web = _web(monkeypatch, tmp_path)
+    headers = {"X-CSRF-Token": web._CSRF_TOKEN}
+    real_load = web._load_ui_prefs
+
+    def slow_load():
+        prefs = real_load()
+        time.sleep(0.05)  # Both requests read before either writes, without the lock.
+        return prefs
+
+    monkeypatch.setattr(web, "_load_ui_prefs", slow_load)
+    saves = [threading.Thread(target=web.ui_prefs_save, args=(_request("POST", "/ui-prefs", headers=headers),),
+                              kwargs=choice) for choice in ({"theme": "dark"}, {"display": "compact"})]
+    for save in saves:
+        save.start()
+    for save in saves:
+        save.join()
+    prefs_file = Path(web.get_settings().db_path).parent / "ui_prefs.json"
+    assert json.loads(prefs_file.read_text()) == {"display": "compact", "theme": "dark"}

@@ -169,6 +169,27 @@ def test_zip_update_replaces_program_files_only_and_restarts(tmp_path, monkeypat
     assert updates.current_version(root / "src/dailydigest/release_notes.json") == "2026.11.02"
 
 
+def test_failed_restart_after_update_keeps_locks_and_asks_for_a_restart(tmp_path, monkeypatch):
+    monkeypatch.setattr(updates, "_find_uv", lambda: "uv")
+    monkeypatch.setattr(updates.time, "sleep", lambda seconds: None)
+    root = _install(tmp_path)
+    failures = []
+    updater = _updater(root, _notes("2026.11.02", "2026.10.27"), _archive(_release_files()))
+
+    def no_restart(host, port):
+        raise OSError("start.ps1 is missing")
+
+    updater._restart = no_restart
+    updater.check_now()
+    updater._apply("archive", "2026.11.02", ("127.0.0.1", 8765), lambda: failures.append(True))
+    state = updater.status(busy=False)
+    # Locks stay held: the old code still running here must not brew over the new files.
+    assert failures == []
+    assert state["phase"] == updates.RESTART_NEEDED and "start it again" in state["message"]
+    assert state["can_apply"] is False
+    assert (root / "src/dailydigest/web.py").read_text() == "old = False\n", "the update itself stays"
+
+
 def test_failed_install_restores_every_file_and_keeps_running(tmp_path, monkeypatch):
     monkeypatch.setattr(updates, "_find_uv", lambda: "uv")
     root = _install(tmp_path)
@@ -334,6 +355,48 @@ def test_update_routes_are_local_and_csrf_protected(monkeypatch):
     web.update_apply(_request("POST", "/update/apply", headers={"x-csrf-token": web._CSRF_TOKEN}))
     assert fake.applied and fake.applied[0][0] is False
     assert not web._BREW_LOCK.locked() and not web._COMPUTE_LOCK.locked(), "Locks return when the update does not start"
+
+
+
+def test_update_waits_for_a_brew_in_another_process(monkeypatch):
+    import subprocess
+    import sys
+
+    from dailydigest import web
+    from dailydigest.config import get_settings
+    from tests.test_web import _request
+
+    applied = []
+
+    class Fake:
+        def apply(self, *, busy, address, on_failure):
+            applied.append(busy)
+            on_failure()
+            return {"phase": "idle"}
+
+        def maybe_check(self, enabled):
+            pass
+
+        def status(self, *, busy):
+            return {"busy": busy}
+
+    monkeypatch.setattr(web.updates, "UPDATER", Fake())
+    holder = subprocess.Popen([sys.executable, "-c", (
+        "import sys,time; sys.path.insert(0, 'src'); from dailydigest.job_lock import acquire_compute_lock as a; "
+        f"lock = a({get_settings().db_path!r}); print('held', flush=True); time.sleep(30)")],
+        stdout=subprocess.PIPE, text=True)
+    try:
+        assert holder.stdout.readline().strip() == "held"
+        assert json.loads(web.update_status(_request("GET", "/update/status")).body)["busy"] is True
+        web.update_apply(_request("POST", "/update/apply", headers={"x-csrf-token": web._CSRF_TOKEN}))
+        assert applied == [True]
+    finally:
+        holder.kill()
+        holder.wait()
+    assert not web._BREW_LOCK.locked() and not web._COMPUTE_LOCK.locked()
+    web.update_apply(_request("POST", "/update/apply", headers={"x-csrf-token": web._CSRF_TOKEN}))
+    assert applied == [True, False]
+    assert json.loads(web.update_status(_request("GET", "/update/status")).body)["busy"] is False
 
 
 def test_native_pages_carry_the_update_notice_and_browser_pages_do_not(monkeypatch):

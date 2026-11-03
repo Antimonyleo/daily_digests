@@ -563,7 +563,15 @@ class Updater:
         _prune_backups(root)
         self._set("restarting", "Restarting DailyDigest…")
         time.sleep(1.0)  # Let the browser read the restarting state first.
-        self._restart(*address)
+        try:
+            self._restart(*address)
+        except Exception as exc:  # noqa: BLE001
+            # The new files are in place, so nothing is rolled back. The job
+            # locks stay held: this process still runs the old code, and a
+            # brew here could import a mix of old and new modules.
+            logger.warning("Restart after update failed: %s", exc)
+            self._set(RESTART_NEEDED, "Updated, but DailyDigest couldn't restart itself. "
+                                      "Close it and start it again the usual way to brew.")
 
     def _copy_reader_data(self, backup: Path, summary: dict[str, Any]) -> None:
         """Copy the reader's data before any program file changes."""
@@ -603,6 +611,10 @@ def _http_get(url: str, limit: int) -> bytes:
                     raise ValueError("Update response exceeded its size limit")
                 chunks.append(chunk)
     return b"".join(chunks)
+
+
+# Phase after an update whose automatic restart failed.
+RESTART_NEEDED = "restart_needed"
 
 
 def restart_server(host: str, port: int) -> None:

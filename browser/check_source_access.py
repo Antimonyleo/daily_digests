@@ -31,6 +31,16 @@ SNAPSHOT_MAX_AGE = timedelta(hours=48)
 # Two missed twice-daily refreshes: still served, but close to expiring.
 SNAPSHOT_AGING = timedelta(hours=24)
 IDENTITY_FIELDS = ("kind", "section", "url", "category", "server")
+# The browser could read these answers, so CORS and transport work; the server
+# was only busy (429) or briefly failing (5xx). For directly fetched sources
+# they are reported, not failed. Timeouts and unreadable answers still fail,
+# and so does a carried source with no usable snapshot record.
+READABLE = "readable_http_success"
+
+
+def upstream_trouble(row):
+    return row.get("outcome") == "readable_rate_limit" or (
+        row.get("outcome") == "readable_http_error" and (row.get("status") or 0) >= 500)
 
 
 def website_sources(config_path):
@@ -78,15 +88,17 @@ def snapshot_age(snapshot, spec, now):
 
 
 def judge(report, direct, snapshot_specs=None, snapshot=None, now=None):
-    """Return (failures, missing, aging); failures are (name, outcome, status, error)."""
+    """Return (failures, missing, aging, busy); failures are (name, outcome, status, error)."""
     now = now or datetime.now(timezone.utc)
     rows = {row["name"]: row for row in report.get("results", []) if row.get("section") != "supplementary"}
-    failures, missing, aging = [], [], []
+    failures, missing, aging, busy = [], [], [], []
     for name in sorted(direct):
         row = rows.get(name)
         if row is None:
             missing.append(name)
-        elif row.get("outcome") != "readable_http_success":
+        elif upstream_trouble(row):
+            busy.append((name, row.get("outcome"), row.get("status")))
+        elif row.get("outcome") != READABLE:
             failures.append((name, row.get("outcome"), row.get("status"), (row.get("error") or "")[:120]))
     for name, spec in sorted((snapshot_specs or {}).items()):
         problem = snapshot_problem(snapshot, spec, now)
@@ -94,10 +106,12 @@ def judge(report, direct, snapshot_specs=None, snapshot=None, now=None):
         if problem is None:
             if snapshot_age(snapshot, spec, now) > SNAPSHOT_AGING:
                 aging.append(name)
-        elif row.get("outcome") != "readable_http_success":
+        elif row.get("outcome") != READABLE:
+            # Without a usable record a busy server is not enough: readers
+            # would get the same refusal.
             failures.append((name, f"{problem}; direct read {row.get('outcome') or 'not probed'}",
                              None, ""))
-    return failures, missing, aging
+    return failures, missing, aging, busy
 
 
 def load_snapshot(path):
@@ -120,7 +134,7 @@ def main(argv=None):
     direct = direct_sources(args.config)
     carried_specs = snapshot_sources(args.config) if args.snapshot else {}
     snapshot = load_snapshot(args.snapshot) if args.snapshot else None
-    failures, missing, aging = judge(report, direct, carried_specs, snapshot)
+    failures, missing, aging, busy = judge(report, direct, carried_specs, snapshot)
     lines = [f"Browser source access from {report.get('origin')} at {report.get('generatedAt')}",
              f"Direct sources checked: {len(direct)}; not probed: {len(missing)}"]
     if args.snapshot:
@@ -129,6 +143,10 @@ def main(argv=None):
     lines.append(f"Unreachable: {len(failures)}")
     lines += [f"- {name}: {outcome} {status or ''} {error}".rstrip() for name, outcome, status, error in failures]
     lines += [f"- {name}: not probed by the audit" for name in missing]
+    if busy:
+        lines.append("Readable but busy or briefly failing upstream (not counted as unreachable): "
+                     + "; ".join(f"{name} ({outcome} {status or ''})".replace(" )", ")")
+                                 for name, outcome, status in busy))
     if aging:
         lines.append(f"Snapshot records older than {SNAPSHOT_AGING.total_seconds() / 3600:.0f} hours "
                      "(still served; they expire at 48 hours): " + ", ".join(aging))

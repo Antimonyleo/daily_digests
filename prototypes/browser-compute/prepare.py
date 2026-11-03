@@ -12,6 +12,7 @@ import json
 from pathlib import Path
 import shutil
 import sys
+import time
 from types import SimpleNamespace
 import urllib.request
 from unittest.mock import patch
@@ -236,7 +237,19 @@ def main():
         record = lock["packages"][name]
         target = runtime_dir / record["file_name"]
         if not target.exists():
-            urllib.request.urlretrieve("https://cdn.jsdelivr.net/pyodide/v0.28.3/full/" + record["file_name"], target)
+            url = "https://cdn.jsdelivr.net/pyodide/v0.28.3/full/" + record["file_name"]
+            for attempt in range(3):  # Brief CDN outages; the checksum below still decides.
+                try:
+                    with urllib.request.urlopen(url, timeout=120) as response:
+                        data = response.read()
+                    break
+                except OSError:
+                    if attempt == 2:
+                        raise
+                    time.sleep(10 * (attempt + 1))
+            partial = target.with_suffix(target.suffix + ".part")
+            partial.write_bytes(data)
+            partial.replace(target)
         if hashlib.sha256(target.read_bytes()).hexdigest() != record["sha256"]:
             raise ValueError("Runtime dependency checksum mismatch: " + name)
         pending.extend(record.get("depends", []))
