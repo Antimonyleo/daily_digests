@@ -257,15 +257,21 @@ async function check(name, work) {
   } catch (error) {
     const pageState = await page.evaluate(() => {
       const iframe=document.querySelector('#app'),doc=iframe?.contentDocument;
+      const startup=document.getElementById('startup');
       const describe=node=>node?{tag:node.tagName,id:node.id,type:node.type,role:node.getAttribute('role'),label:node.getAttribute('aria-label')}:null;
       return {status:document.getElementById('status')?.textContent,hash:location.hash,text:doc?.body?.innerText,
+        // Why startup stalled: the page's own state and the worker's last messages.
+        startup:{state:startup?.dataset.state,title:document.getElementById('startup-title')?.textContent,
+          message:document.getElementById('startup-status')?.textContent,hidden:startup?.hidden,
+          notice:document.getElementById('reading-view-notice')?.hidden,retry:document.getElementById('retry')?.hidden},
+        workerTail:(window.__workerEvents||[]).slice(-12),
         focus:{outer:describe(document.activeElement),reading:describe(doc?.activeElement),frameInert:iframe?.inert,
           frameHidden:iframe?.hidden,dataSettingsOpen:document.querySelector('#data-settings')?.open,
           openDialogs:[...document.querySelectorAll('dialog[open]')].map(node=>node.id),
           openReadingGroups:[...doc?.querySelectorAll('details[open]')||[]].map(node=>node.id||node.className)}};
     }).catch(() => null);
     report.checks.push({ name, passed: false, elapsedMs: Math.round(performance.now() - started), error: error.stack, pageState });
-    console.log(JSON.stringify({ check: name, passed: false, error: error.message, stack:error.stack, focus:pageState?.focus }));
+    console.log(JSON.stringify({ check: name, passed: false, error: error.message, stack:error.stack, focus:pageState?.focus, startup:pageState?.startup, workerTail:pageState?.workerTail }));
     await page.screenshot({ path: `${output}/failure-${name.replace(/[^a-z0-9]/gi, '-')}.png`, fullPage: true }).catch(() => {});
     return null;
   } finally {
@@ -274,12 +280,30 @@ async function check(name, work) {
     await writeFile(`${output}/browser-acceptance.json`, JSON.stringify(report, null, 2));
   }
 }
+// A reload that leaves the desk neither ready nor failed has been seen twice on
+// scheduled runs and never reproduced locally. Report what the page and worker
+// were doing, then reload once as a reader would; a second stall still fails.
 async function startup() {
-  await page.waitForFunction(() => window.__workerReady || document.getElementById('reading-view-notice')?.hidden === false || document.getElementById('retry')?.hidden === false, undefined, { timeout: 300000 });
+  try { return await startupOnce(90000); }
+  catch (error) {
+    if (error.name !== 'TimeoutError') throw error;
+    const state = await page.evaluate(() => ({ status: document.getElementById('status')?.textContent,
+      startup: document.getElementById('startup')?.dataset.state, title: document.getElementById('startup-title')?.textContent,
+      message: document.getElementById('startup-status')?.textContent, workerReady: Boolean(window.__workerReady),
+      notice: document.getElementById('reading-view-notice')?.hidden, retry: document.getElementById('retry')?.hidden,
+      workerTail: (window.__workerEvents || []).slice(-15) })).catch(() => null);
+    (report.startupStalls ||= []).push(state);
+    console.log(`::warning::Startup stalled for 90 s; reloading once. ${JSON.stringify(state)}`);
+    await page.reload();
+    return startupOnce(300000);
+  }
+}
+async function startupOnce(timeout) {
+  await page.waitForFunction(() => window.__workerReady || document.getElementById('reading-view-notice')?.hidden === false || document.getElementById('retry')?.hidden === false, undefined, { timeout });
   // These checks exercise editable routes. The independent reading-view check
   // proves that refresh remains usable without starting the runtime at all.
   if (await page.locator('#reading-view-notice').isVisible()) await page.locator('#reading-view-open').click();
-  await page.waitForFunction(() => window.__workerReady || document.getElementById('retry')?.hidden === false, undefined, { timeout: 300000 });
+  await page.waitForFunction(() => window.__workerReady || document.getElementById('retry')?.hidden === false, undefined, { timeout });
   assert.equal(await page.evaluate(() => Boolean(window.__workerReady)), true, await page.locator('#startup-status').textContent());
   await page.locator('#app').waitFor({ state: 'visible' });
   await page.waitForFunction(() => {
